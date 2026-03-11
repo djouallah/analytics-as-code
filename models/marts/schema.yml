@@ -1,0 +1,77 @@
+version: 2
+
+models:
+  - name: fct_price
+    description: Price data from daily AEMO dispatch files
+    columns:
+      - name: REGIONID
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['QLD1', 'NSW1', 'VIC1', 'SA1', 'TAS1', 'WA1']
+      - name: SETTLEMENTDATE
+        tests:
+          - not_null
+      - name: file
+        tests:
+          - not_null
+
+  - name: fct_scada
+    description: SCADA data from daily AEMO dispatch files
+    columns:
+      - name: DUID
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_duid')
+              field: DUID
+              config:
+                severity: warn
+      - name: SETTLEMENTDATE
+        tests:
+          - not_null
+      - name: file
+        tests:
+          - not_null
+
+  - name: fct_price_today
+    description: Intraday price data from AEMO dispatch files
+    columns:
+      - name: REGIONID
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['QLD1', 'NSW1', 'VIC1', 'SA1', 'TAS1', 'WA1']
+      - name: SETTLEMENTDATE
+        tests:
+          - not_null
+      - name: file
+        tests:
+          - not_null
+
+  - name: fct_scada_today
+    description: Intraday SCADA data from AEMO dispatch files
+    columns:
+      - name: DUID
+        tests:
+          - not_null
+      - name: SETTLEMENTDATE
+        tests:
+          - not_null
+      - name: file
+        tests:
+          - not_null
+
+exposures:
+  - name: dashboard_summary
+    type: application
+    description: "Builds scada + price + dim_duid + dim_calendar into dashboard/energy.duckdb via scripts/cache_catalog.py"
+    depends_on:
+      - ref('fct_scada')
+      - ref('fct_price')
+      - ref('fct_scada_today')
+      - ref('fct_price_today')
+      - ref('dim_duid')
+      - ref('dim_calendar')
+    owner:
+      name: team

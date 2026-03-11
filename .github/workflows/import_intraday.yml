@@ -1,0 +1,53 @@
+name: Import Intraday
+
+on:
+  workflow_run:
+    workflows: ["Process Data"]
+    types: [completed]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    env:
+      ICEBERG_REST_ENDPOINT: ${{ secrets.ICEBERG_REST_ENDPOINT }}
+      ICEBERG_TOKEN: ${{ secrets.ICEBERG_TOKEN }}
+      ICEBERG_WAREHOUSE: ${{ secrets.ICEBERG_WAREHOUSE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install duckdb
+
+      - name: Export fct_scada_today
+        run: python scripts/cache_catalog.py export_scada_today
+
+      - name: Export fct_price_today
+        run: python scripts/cache_catalog.py export_price_today
+
+      - name: Build energy_today.duckdb
+        run: python scripts/cache_catalog.py build_today
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload data dashboard/energy_today.duckdb --clobber || true
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dashboard
+          keep_files: true

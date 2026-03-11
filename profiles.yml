@@ -1,0 +1,50 @@
+iceberg_as_code:
+  target: dev
+  outputs:
+    ci:
+      type: duckdb
+      path: "{{ env_var('DBT_DUCKDB_PATH', ':memory:') }}"
+      threads: 1
+      schema: "{{ env_var('DBT_SCHEMA', 'mart') }}"
+      extensions:
+        - parquet
+        - httpfs
+        - json
+
+    dev:
+      type: duckdb
+      path: ':memory:'
+      threads: 1
+      schema: "{{ env_var('DBT_SCHEMA', 'mart') }}"
+      extensions:
+        - parquet
+        - httpfs
+        - json
+        - iceberg
+      attach:
+        - path: "{{ env_var('ICEBERG_WAREHOUSE') }}"
+          alias: iceberg_catalog
+          type: iceberg
+          options:
+            endpoint: "{{ env_var('ICEBERG_REST_ENDPOINT') }}"
+            token: "{{ env_var('ICEBERG_TOKEN') }}"
+      database: iceberg_catalog
+
+    prod:
+      type: duckdb
+      path: ':memory:'
+      threads: 1
+      schema: "{{ env_var('DBT_SCHEMA', 'mart') }}"
+      extensions:
+        - parquet
+        - httpfs
+        - json
+        - iceberg
+      attach:
+        - path: "{{ env_var('ICEBERG_WAREHOUSE') }}"
+          alias: iceberg_catalog
+          type: iceberg
+          options:
+            endpoint: "{{ env_var('ICEBERG_REST_ENDPOINT') }}"
+            token: "{{ env_var('ICEBERG_TOKEN') }}"
+      database: iceberg_catalog

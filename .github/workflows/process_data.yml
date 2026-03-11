@@ -1,0 +1,36 @@
+name: Process Data
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: process-data
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  process_data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      ICEBERG_REST_ENDPOINT: ${{ secrets.ICEBERG_REST_ENDPOINT }}
+      ICEBERG_TOKEN: ${{ secrets.ICEBERG_TOKEN }}
+      ICEBERG_WAREHOUSE: ${{ secrets.ICEBERG_WAREHOUSE }}
+      download_limit: "150"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install dbt-duckdb
+      - name: Process data
+        run: dbt run --target prod --profiles-dir .
+      - name: Confirm processed log entries
+        run: dbt run-operation confirm_log_entries --target prod --profiles-dir .

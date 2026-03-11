@@ -1,0 +1,22 @@
+name: 'iceberg_as_code'
+version: '1.0.0'
+profile: 'iceberg_as_code'
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  iceberg_as_code:
+    staging:
+      +materialized: view
+      +schema: landing
+    dimensions:
+      +materialized: table
+    marts:
+      +materialized: incremental
+      +schema: landing
