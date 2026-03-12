@@ -346,7 +346,7 @@
     function formatDate(str) {
       const [y, m, d] = str.split('-');
       const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-      return `${parseInt(d)} ${months[parseInt(m) - 1]}`;
+      return `${parseInt(d)} ${months[parseInt(m) - 1]} ${y}`;
     }
 
     // --- CSV download helper ---
