@@ -315,59 +315,14 @@
       }
       console.log(`[OPFS] All databases loaded`);
 
-      // Build hourly agg — one table for all periods, rebuild if sources changed
-      const needsRebuild = results.some(r => r.source !== 'opfs-hit');
-      await buildAggData(needsRebuild);
     }
 
-    async function buildAggData(forceRebuild) {
-      const aggPath = 'opfs://agg_data.duckdb';
-      try {
-        // Check if agg file exists in OPFS
-        const root = await navigator.storage.getDirectory();
-        let exists = false;
-        try { await root.getFileHandle('agg_data.duckdb'); exists = true; } catch(e) {}
-
-        if (exists && !forceRebuild) {
-          await conn.query(`ATTACH '${aggPath}' AS agg (READ_ONLY);`);
-          window._aggReady = true;
-          console.log('[Agg] Cache hit from OPFS');
-          return;
-        }
-
-        if (exists) {
-          try { await conn.query("DETACH agg;"); } catch(e) {}
-          try { await root.removeEntry('agg_data.duckdb'); } catch(e) {}
-          try { await root.removeEntry('agg_data.duckdb.wal'); } catch(e) {}
-        }
-
-        console.time('[Agg] Build');
-        await conn.query(`ATTACH '${aggPath}' AS agg;`);
-
-        const extract = "extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0))";
-        const scadaParts = loadedPeriods.map(p =>
-          `SELECT DUID, date, CAST(${extract} * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh, CAST(COUNT(*) AS INTEGER) AS cnt FROM p${p}.scada GROUP BY DUID, date, ${extract}`
-        );
-        await conn.query(`CREATE TABLE agg.scada_hourly AS ${scadaParts.join(' UNION ALL ')}`);
-
-        const priceParts = loadedPeriods.map(p =>
-          `SELECT REGIONID, date, CAST(${extract} * 100 AS SMALLINT) AS time, AVG(price)::REAL AS price FROM p${p}.price GROUP BY REGIONID, date, ${extract}`
-        );
-        await conn.query(`CREATE TABLE agg.price_hourly AS ${priceParts.join(' UNION ALL ')}`);
-
-        // Checkpoint to flush WAL to main file, then re-attach read-only
-        await conn.query("CHECKPOINT agg;");
-        await conn.query("DETACH agg;");
-        await conn.query(`ATTACH '${aggPath}' AS agg (READ_ONLY);`);
-
-        window._aggReady = true;
-        console.timeEnd('[Agg] Build');
-      } catch(e) {
-        console.warn('[Agg] Failed, falling back to inline unions:', e);
-      }
-    }
+    const _queryCache = new Map();
+    function clearQueryCache() { _queryCache.clear(); }
 
     async function runQuery(sqlStr) {
+      const cached = _queryCache.get(sqlStr);
+      if (cached) return cached;
       const result = await conn.query(sqlStr);
       const rows = [];
       const numRows = Number(result.numRows);
@@ -381,6 +336,7 @@
         }
         rows.push(row);
       }
+      _queryCache.set(sqlStr, rows);
       return rows;
     }
 
@@ -471,11 +427,6 @@
       // Hourly aggregated (for charts when >7d)
       _scadaHourlyUnion() {
         const extract = "extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0))";
-        if (window._aggReady) {
-          return `SELECT DUID, date, time, mwh, cnt FROM agg.scada_hourly WHERE date < CURRENT_DATE - INTERVAL 5 DAY
-            UNION ALL
-            SELECT DUID, date, CAST(${extract} * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh, CAST(COUNT(*) AS INTEGER) AS cnt FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date, ${extract}`;
-        }
         const parts = loadedPeriods.map(p =>
           `SELECT DUID, date, CAST(${extract} * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh, CAST(COUNT(*) AS INTEGER) AS cnt FROM p${p}.scada WHERE date < CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date, ${extract}`
         );
@@ -487,11 +438,6 @@
 
       _priceHourlyUnion() {
         const extract = "extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0))";
-        if (window._aggReady) {
-          return `SELECT REGIONID, date, time, price FROM agg.price_hourly WHERE date < CURRENT_DATE - INTERVAL 5 DAY
-            UNION ALL
-            SELECT REGIONID, date, CAST(${extract} * 100 AS SMALLINT) AS time, AVG(price)::REAL AS price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY REGIONID, date, ${extract}`;
-        }
         const parts = loadedPeriods.map(p =>
           `SELECT REGIONID, date, CAST(${extract} * 100 AS SMALLINT) AS time, AVG(price)::REAL AS price FROM p${p}.price WHERE date < CURRENT_DATE - INTERVAL 5 DAY GROUP BY REGIONID, date, ${extract}`
         );
@@ -510,10 +456,7 @@
             JOIN dim.dim_calendar c ON c.date = sc.date
             JOIN dim.dim_duid d ON sc.DUID = d.DUID`;
         }
-        const scadaSrc = window._aggReady
-          ? 'agg.scada_hourly'
-          : `(${sql._scadaHourlyUnion()})`;
-        return `${scadaSrc} sc
+        return `(${sql._scadaHourlyUnion()}) sc
           JOIN dim.dim_calendar c ON c.date = sc.date
           JOIN dim.dim_duid d ON sc.DUID = d.DUID`;
       },
@@ -523,10 +466,7 @@
           return `today.price_today p
             JOIN dim.dim_calendar c ON c.date = p.date`;
         }
-        const priceSrc = window._aggReady
-          ? 'agg.price_hourly'
-          : `(${sql._priceHourlyUnion()})`;
-        return `${priceSrc} p
+        return `(${sql._priceHourlyUnion()}) p
           JOIN dim.dim_calendar c ON c.date = p.date`;
       },
 
@@ -1021,7 +961,7 @@
       await populateFilters();
       await renderAll();
       // Load year databases in background, then silently refresh
-      loadYearDatabases().then(() => renderAll()).catch(e => console.warn('[OPFS] Year load failed:', e));
+      loadYearDatabases().then(() => { clearQueryCache(); renderAll(); }).catch(e => console.warn('[OPFS] Year load failed:', e));
     } catch (e) {
       setStatus("Error: " + e.message, "error");
       console.error(e);
