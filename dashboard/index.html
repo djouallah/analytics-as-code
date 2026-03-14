@@ -33,7 +33,8 @@
     .kpi-card .kpi-label { font-size: 0.65rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
     .kpi-card .kpi-value { font-size: 1.3rem; font-weight: 700; margin-top: 0.1rem; }
     .kpi-card .kpi-sub { font-size: 0.65rem; color: #8b949e; margin-top: 0.05rem; }
-    .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; padding: 0 2rem 1rem; }
+    .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; padding: 0 2rem 1rem; transition: opacity 0.2s; }
+    .charts.loading { opacity: 0.4; }
     .chart-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 0.6rem; }
     .chart-card h2 { font-size: 0.8rem; font-weight: 600; margin-bottom: 0.3rem; color: #e1e4e8; display: inline; }
     .chart-card .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.3rem; }
@@ -502,17 +503,18 @@
       allDuids: "SELECT DUID, Region, FuelSourceDescriptor AS fuel FROM dim.dim_duid WHERE DUID IS NOT NULL ORDER BY DUID",
 
       // --- Generation chart ---
-      generation(seriesAlias, seriesCol, valCol, timeDetail) {
+      generation(seriesAlias, seriesCol, valCol, timeDetail, intraday) {
+        const cntCol = intraday ? 'COUNT(*)' : 'SUM(sc.cnt)';
         if (timeDetail) {
           return `
-            SELECT CAST(sc.date AS VARCHAR) AS date, CAST(sc.time AS INTEGER) AS time, ${seriesAlias}, SUM(${valCol})::DOUBLE AS total_mw
+            SELECT CAST(sc.date AS VARCHAR) AS date, CAST(sc.time AS INTEGER) AS time, ${seriesAlias}, SUM(${valCol})::DOUBLE AS total_mw, CAST(${cntCol} AS INTEGER) AS row_cnt
             FROM ${sql.fromScada()}
             WHERE ${sql.whereScada()}
             GROUP BY sc.date, sc.time, ${seriesCol}
             ORDER BY sc.date, sc.time`;
         }
         return `
-          SELECT CAST(sc.date AS VARCHAR) AS date, ${seriesAlias}, SUM(${valCol})::DOUBLE AS total_mw
+          SELECT CAST(sc.date AS VARCHAR) AS date, ${seriesAlias}, SUM(${valCol})::DOUBLE AS total_mw, CAST(${cntCol} AS INTEGER) AS row_cnt
           FROM ${sql.fromScada()}
           WHERE ${sql.whereScada()}
           GROUP BY sc.date, ${seriesCol}
@@ -551,19 +553,6 @@
       generatorCount() {
         return `
           SELECT CAST(COUNT(DISTINCT sc.DUID) AS INTEGER) AS cnt
-          FROM ${sql.fromScada()}
-          WHERE ${sql.whereScada()}`;
-      },
-
-      scadaRecordCount() {
-        if (isIntradayMode()) {
-          return `
-            SELECT CAST(COUNT(*) AS INTEGER) AS raw_cnt, CAST(COUNT(*) AS INTEGER) AS agg_cnt
-            FROM ${sql.fromScada()}
-            WHERE ${sql.whereScada()}`;
-        }
-        return `
-          SELECT CAST(SUM(sc.cnt) AS INTEGER) AS raw_cnt, CAST(COUNT(*) AS INTEGER) AS agg_cnt
           FROM ${sql.fromScada()}
           WHERE ${sql.whereScada()}`;
       },
@@ -628,7 +617,7 @@
       const seriesCol = drillFuel ? 'sc.DUID' : 'd.FuelSourceDescriptor';
       const seriesAlias = drillFuel ? 'sc.DUID AS series' : 'd.FuelSourceDescriptor AS series';
 
-      const data = await runQuery(sql.generation(seriesAlias, seriesCol, valCol, timeDetail));
+      const data = await runQuery(sql.generation(seriesAlias, seriesCol, valCol, timeDetail, intraday));
       if (seq !== _renderSeq || !data.length) return;
 
       const { xKeys, xLabels } = buildTimeAxis(data, timeDetail);
@@ -707,6 +696,11 @@
         const avgLabel = intraday ? 'MW avg' : (timeDetail ? 'MWh avg' : 'MWh/day avg');
         document.getElementById('kpiTopFuelSub').textContent = `${Math.round(topFuel[1] / (uniqueIntervals || 1)).toLocaleString()} ${avgLabel}`;
       }
+
+      const rawRecords = data.reduce((s, d) => s + d.row_cnt, 0);
+      const aggRecords = data.length;
+      document.getElementById('kpiRecords').textContent = rawRecords.toLocaleString();
+      document.getElementById('kpiRecordsSub').textContent = `${aggRecords.toLocaleString()} aggregated`;
     }
 
     // --- Average Price by Region (line) ---
@@ -933,13 +927,14 @@
     async function renderAll() {
       const seq = ++_renderSeq;
       if (!window._cutoffCached) setStatus("Querying...", "loading");
+      document.querySelector('.charts').classList.add('loading');
       updateFilterTags();
       try {
         await Promise.all([renderGeneration(seq), renderPrice(seq), renderMap(seq),
-          runQuery(sql.generatorCount()).then(r => { if (seq === _renderSeq && r.length) document.getElementById('kpiGens').textContent = r[0].cnt.toLocaleString(); }),
-          runQuery(sql.scadaRecordCount()).then(r => { if (seq === _renderSeq && r.length) { document.getElementById('kpiRecords').textContent = r[0].raw_cnt.toLocaleString(); document.getElementById('kpiRecordsSub').textContent = `${r[0].agg_cnt.toLocaleString()} aggregated`; } })
+          runQuery(sql.generatorCount()).then(r => { if (seq === _renderSeq && r.length) document.getElementById('kpiGens').textContent = r[0].cnt.toLocaleString(); })
         ]);
         if (seq !== _renderSeq) return;
+        document.querySelector('.charts').classList.remove('loading');
         if (!window._cutoffCached) {
           const cutoffResult = await runQuery(sql.cutoff);
           if (seq !== _renderSeq) return;
