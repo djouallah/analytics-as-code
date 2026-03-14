@@ -39,11 +39,16 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add dashboard/dag/
           git diff --cached --quiet || git commit -m "Update dbt docs" && git push
+      - name: Prepare deploy directory
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          mkdir -p deploy
+          cp dashboard/index.html deploy/
+          cp -r dashboard/dag deploy/
       - name: Deploy to GitHub Pages
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dashboard
+          publish_dir: ./deploy
           keep_files: true
-          exclude_assets: '.github,**.duckdb,**.parquet,metadata.json,daily_manifest.json'
