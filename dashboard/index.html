@@ -823,11 +823,6 @@
         }
       });
 
-      // KPI: active generators
-      if (seq !== _renderSeq) return;
-      const genCount = await runQuery(sql.generatorCount());
-      if (seq !== _renderSeq) return;
-      if (genCount.length) document.getElementById('kpiGens').textContent = genCount[0].cnt.toLocaleString();
     }
 
     // =========================================================================
@@ -926,7 +921,9 @@
       if (!window._cutoffCached) setStatus("Querying...", "loading");
       updateFilterTags();
       try {
-        await Promise.all([renderGeneration(seq), renderPrice(seq), renderMap(seq)]);
+        await Promise.all([renderGeneration(seq), renderPrice(seq), renderMap(seq),
+          runQuery(sql.generatorCount()).then(r => { if (seq === _renderSeq && r.length) document.getElementById('kpiGens').textContent = r[0].cnt.toLocaleString(); })
+        ]);
         if (seq !== _renderSeq) return;
         if (!window._cutoffCached) {
           const cutoffResult = await runQuery(sql.cutoff);
