@@ -46,3 +46,4 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./dashboard
           keep_files: true
+          exclude_assets: '.github,**.duckdb,**.parquet,metadata.json,daily_manifest.json'
