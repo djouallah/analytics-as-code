@@ -208,6 +208,72 @@
 
     let conn;
 
+    // Try to cache a remote .duckdb file in OPFS. Returns { cached, source } for status reporting.
+    // source: 'opfs-hit' | 'opfs-miss' | 'opfs-refresh' | 'http' (fallback)
+    async function cacheInOPFS(db, url, filename) {
+      if (!('storage' in navigator) || !('getDirectory' in navigator.storage)) {
+        console.log(`[OPFS] Not available in this browser, using HTTP for ${filename}`);
+        return { cached: false, source: 'http' };
+      }
+
+      try {
+        const root = await navigator.storage.getDirectory();
+        const cacheKey = `opfs_etag_${filename}`;
+        const cachedTag = localStorage.getItem(cacheKey);
+
+        // HEAD request to check if remote file changed
+        let remoteTag = null;
+        try {
+          const head = await fetch(url, { method: 'HEAD' });
+          remoteTag = head.headers.get('etag') || head.headers.get('last-modified');
+        } catch (e) {
+          console.log(`[OPFS] HEAD request failed (offline?), will use cache if available`);
+        }
+
+        // Try cached version: valid if tags match, or if offline and we have a cache
+        const cacheValid = cachedTag && (cachedTag === remoteTag || !remoteTag);
+        if (cacheValid) {
+          try {
+            setStatus("Loading from cache...");
+            const handle = await root.getFileHandle(filename);
+            const file = await handle.getFile();
+            const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+            console.log(`[OPFS] Cache hit for ${filename} (${sizeMB} MB)`);
+            await db.registerFileBuffer(filename, new Uint8Array(await file.arrayBuffer()));
+            return { cached: true, source: 'opfs-hit' };
+          } catch (e) {
+            console.log(`[OPFS] Cache entry missing from OPFS despite etag, will re-fetch`);
+          }
+        }
+
+        // Fetch and cache in OPFS
+        const reason = cachedTag ? 'file changed on server' : 'first download';
+        console.log(`[OPFS] Fetching ${filename} (${reason})`);
+        setStatus("Downloading database...");
+        const resp = await fetch(url);
+        const buffer = new Uint8Array(await resp.arrayBuffer());
+        const sizeMB = (buffer.byteLength / 1024 / 1024).toFixed(1);
+
+        try {
+          const handle = await root.getFileHandle(filename, { create: true });
+          const writable = await handle.createWritable();
+          await writable.write(buffer);
+          await writable.close();
+          if (remoteTag) localStorage.setItem(cacheKey, remoteTag);
+          console.log(`[OPFS] Cached ${filename} (${sizeMB} MB) in OPFS`);
+        } catch (e) {
+          console.warn(`[OPFS] Failed to write cache for ${filename}:`, e);
+          // Continue anyway — we have the buffer in memory
+        }
+
+        await db.registerFileBuffer(filename, buffer);
+        return { cached: true, source: cachedTag ? 'opfs-refresh' : 'opfs-miss' };
+      } catch (e) {
+        console.warn(`[OPFS] Failed for ${filename}, falling back to HTTP:`, e);
+        return { cached: false, source: 'http' };
+      }
+    }
+
     async function initDuckDB() {
       setStatus("Loading DuckDB WASM...");
       const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
@@ -225,9 +291,22 @@
 
       setStatus("Loading database...");
       const baseUrl = window.location.href.replace(/\/[^/]*$/, "");
-      await conn.query(`ATTACH '${baseUrl}/energy_daily.duckdb' AS db (READ_ONLY);`);
+
+      // energy_daily.duckdb: cache in OPFS (large file, updates daily)
+      const daily = await cacheInOPFS(db, `${baseUrl}/energy_daily.duckdb`, 'energy_daily.duckdb');
+      if (daily.cached) {
+        await conn.query("ATTACH 'energy_daily.duckdb' AS db (READ_ONLY);");
+      } else {
+        await conn.query(`ATTACH '${baseUrl}/energy_daily.duckdb' AS db (READ_ONLY);`);
+      }
+
+      // energy_today.duckdb: always fetch fresh (updates every 30 min)
       await conn.query(`ATTACH '${baseUrl}/energy_today.duckdb' AS today (READ_ONLY);`);
+
       await conn.query("SET TimeZone = 'Australia/Brisbane';");
+
+      const sourceLabel = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded + cached', 'opfs-refresh': 'refreshed cache', 'http': 'no cache' };
+      console.log(`[OPFS] Daily DB: ${sourceLabel[daily.source]}`);
       setStatus("Connected", "connected");
     }
 
