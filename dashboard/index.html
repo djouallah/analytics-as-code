@@ -346,18 +346,18 @@
 
         const extract = "extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0))";
         const scadaParts = loadedPeriods.map(p =>
-          `SELECT DUID, date, CAST(${extract} * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh, CAST(COUNT(*) AS INTEGER) AS cnt FROM p${p}.scada GROUP BY DUID, date, ${extract}`
+          `SELECT DUID, date, CAST(${extract} * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh, CAST(COUNT(*) AS INTEGER) AS cnt FROM p${p}.scada WHERE date < CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date, ${extract}`
         );
         scadaParts.push(
-          `SELECT DUID, date, CAST(${extract} * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh, CAST(COUNT(*) AS INTEGER) AS cnt FROM today.scada_today GROUP BY DUID, date, ${extract}`
+          `SELECT DUID, date, CAST(${extract} * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh, CAST(COUNT(*) AS INTEGER) AS cnt FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date, ${extract}`
         );
         await conn.query(`CREATE TABLE agg.scada_hourly AS ${scadaParts.join(' UNION ALL ')}`);
 
         const priceParts = loadedPeriods.map(p =>
-          `SELECT REGIONID, date, CAST(${extract} * 100 AS SMALLINT) AS time, AVG(price)::REAL AS price FROM p${p}.price GROUP BY REGIONID, date, ${extract}`
+          `SELECT REGIONID, date, CAST(${extract} * 100 AS SMALLINT) AS time, AVG(price)::REAL AS price FROM p${p}.price WHERE date < CURRENT_DATE - INTERVAL 5 DAY GROUP BY REGIONID, date, ${extract}`
         );
         priceParts.push(
-          `SELECT REGIONID, date, CAST(${extract} * 100 AS SMALLINT) AS time, AVG(price)::REAL AS price FROM today.price_today GROUP BY REGIONID, date, ${extract}`
+          `SELECT REGIONID, date, CAST(${extract} * 100 AS SMALLINT) AS time, AVG(price)::REAL AS price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY REGIONID, date, ${extract}`
         );
         await conn.query(`CREATE TABLE agg.price_hourly AS ${priceParts.join(' UNION ALL ')}`);
 
