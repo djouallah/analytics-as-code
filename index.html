@@ -180,6 +180,7 @@
 
     const crossFilter = { fuel: null, region: null, duids: [] };
     let loadedPeriods = [];
+    let aggLoaded = false;
     let _renderSeq = 0;
 
     function updateFilterTags() {
@@ -318,6 +319,11 @@
       }
       console.log(`[OPFS] All databases loaded`);
 
+      // Load daily aggregate database
+      const aggResult = await cacheInOPFS(_db, `${_baseUrl}/data/energy_daily_agg.duckdb`, 'energy_daily_agg.duckdb');
+      await conn.query("ATTACH 'energy_daily_agg.duckdb' AS agg (READ_ONLY);");
+      aggLoaded = true;
+      console.log(`[OPFS] agg: ${sourceLabel[aggResult.source]}`);
     }
 
     const _queryCache = new Map();
@@ -453,16 +459,43 @@
         return parts.join('\n            UNION ALL\n            ');
       },
 
+      // Daily pre-aggregated (for charts when >30d)
+      _scadaDailyUnion() {
+        const parts = [
+          `SELECT DUID, date, mwh FROM agg.scada_daily WHERE date < CURRENT_DATE - INTERVAL 5 DAY`
+        ];
+        parts.push(
+          `SELECT DUID, date, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date`
+        );
+        return parts.join('\n            UNION ALL\n            ');
+      },
+
+      _priceDailyUnion() {
+        const parts = [
+          `SELECT REGIONID, date, price FROM agg.price_daily WHERE date < CURRENT_DATE - INTERVAL 5 DAY`
+        ];
+        parts.push(
+          `SELECT REGIONID, date, CAST(AVG(price) AS REAL) AS price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY REGIONID, date`
+        );
+        return parts.join('\n            UNION ALL\n            ');
+      },
+
       // --- FROM clauses ---
       // Intraday (<=7d): 5-min grain from today DB
-      // Hourly (>7d): year DBs + today aggregated to hourly via UNION ALL
+      // Hourly (8-30d): year DBs + today aggregated to hourly via UNION ALL
+      // Daily (>30d): pre-aggregated daily + today aggregated to daily
       fromScada() {
         if (isIntradayMode()) {
           return `today.scada_today sc
             JOIN dim.dim_calendar c ON c.date = sc.date
             JOIN dim.dim_duid d ON sc.DUID = d.DUID`;
         }
-        return `(${sql._scadaHourlyUnion()}) sc
+        if (showTimeDetail() || !aggLoaded) {
+          return `(${sql._scadaHourlyUnion()}) sc
+            JOIN dim.dim_calendar c ON c.date = sc.date
+            JOIN dim.dim_duid d ON sc.DUID = d.DUID`;
+        }
+        return `(${sql._scadaDailyUnion()}) sc
           JOIN dim.dim_calendar c ON c.date = sc.date
           JOIN dim.dim_duid d ON sc.DUID = d.DUID`;
       },
@@ -472,7 +505,11 @@
           return `today.price_today p
             JOIN dim.dim_calendar c ON c.date = p.date`;
         }
-        return `(${sql._priceHourlyUnion()}) p
+        if (showTimeDetail() || !aggLoaded) {
+          return `(${sql._priceHourlyUnion()}) p
+            JOIN dim.dim_calendar c ON c.date = p.date`;
+        }
+        return `(${sql._priceDailyUnion()}) p
           JOIN dim.dim_calendar c ON c.date = p.date`;
       },
 
@@ -515,7 +552,7 @@
 
       // --- Generation chart ---
       generation(seriesAlias, seriesCol, valCol, timeDetail, intraday, weekly) {
-        const cntCol = intraday ? 'COUNT(*)' : 'SUM(sc.cnt)';
+        const cntCol = intraday ? 'COUNT(*)' : (timeDetail ? 'SUM(sc.cnt)' : 'COUNT(*)');
         if (timeDetail) {
           return `
             SELECT CAST(sc.date AS VARCHAR) AS date, CAST(sc.time AS INTEGER) AS time, ${seriesAlias}, SUM(${valCol})::DOUBLE AS total_mw, CAST(${cntCol} AS INTEGER) AS row_cnt
