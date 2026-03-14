@@ -314,6 +314,58 @@
         console.log(`[OPFS] p${loadedPeriods[i]}: ${sourceLabel[results[i].source]}`);
       }
       console.log(`[OPFS] All databases loaded`);
+
+      // Build hourly aggregation cache in OPFS
+      const needsRebuild = results.some(r => r.source !== 'opfs-hit');
+      await buildAggCache(needsRebuild);
+    }
+
+    async function buildAggCache(forceRebuild) {
+      const aggFile = 'agg_cache.duckdb';
+      try {
+        // Check if agg_cache already exists in OPFS
+        const root = await navigator.storage.getDirectory();
+        let exists = false;
+        try { await root.getFileHandle(aggFile); exists = true; } catch(e) {}
+
+        if (exists && !forceRebuild) {
+          await conn.query(`ATTACH '${aggFile}' AS agg (READ_ONLY);`);
+          window._aggReady = true;
+          console.log('[Agg] Cache hit — using existing agg_cache.duckdb');
+          return;
+        }
+
+        // Drop old if exists
+        if (exists) {
+          try { await conn.query("DETACH agg;"); } catch(e) {}
+          await root.removeEntry(aggFile);
+        }
+
+        console.time('[Agg] Build hourly tables');
+        await conn.query(`ATTACH '${aggFile}' AS agg;`);
+
+        const extract = "extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0))";
+        const scadaParts = loadedPeriods.map(p =>
+          `SELECT DUID, date, CAST(${extract} * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh, CAST(COUNT(*) AS INTEGER) AS cnt FROM p${p}.scada GROUP BY DUID, date, ${extract}`
+        );
+        scadaParts.push(
+          `SELECT DUID, date, CAST(${extract} * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh, CAST(COUNT(*) AS INTEGER) AS cnt FROM today.scada_today GROUP BY DUID, date, ${extract}`
+        );
+        await conn.query(`CREATE TABLE agg.scada_hourly AS ${scadaParts.join(' UNION ALL ')}`);
+
+        const priceParts = loadedPeriods.map(p =>
+          `SELECT REGIONID, date, CAST(${extract} * 100 AS SMALLINT) AS time, AVG(price)::REAL AS price FROM p${p}.price GROUP BY REGIONID, date, ${extract}`
+        );
+        priceParts.push(
+          `SELECT REGIONID, date, CAST(${extract} * 100 AS SMALLINT) AS time, AVG(price)::REAL AS price FROM today.price_today GROUP BY REGIONID, date, ${extract}`
+        );
+        await conn.query(`CREATE TABLE agg.price_hourly AS ${priceParts.join(' UNION ALL ')}`);
+
+        window._aggReady = true;
+        console.timeEnd('[Agg] Build hourly tables');
+      } catch(e) {
+        console.warn('[Agg] Failed to build cache, falling back to inline unions:', e);
+      }
     }
 
     async function runQuery(sqlStr) {
@@ -447,9 +499,10 @@
             JOIN dim.dim_calendar c ON c.date = sc.date
             JOIN dim.dim_duid d ON sc.DUID = d.DUID`;
         }
-        return `(
-            ${sql._scadaHourlyUnion()}
-          ) sc
+        const scadaSrc = window._aggReady
+          ? 'agg.scada_hourly'
+          : `(${sql._scadaHourlyUnion()})`;
+        return `${scadaSrc} sc
           JOIN dim.dim_calendar c ON c.date = sc.date
           JOIN dim.dim_duid d ON sc.DUID = d.DUID`;
       },
@@ -459,9 +512,10 @@
           return `today.price_today p
             JOIN dim.dim_calendar c ON c.date = p.date`;
         }
-        return `(
-            ${sql._priceHourlyUnion()}
-          ) p
+        const priceSrc = window._aggReady
+          ? 'agg.price_hourly'
+          : `(${sql._priceHourlyUnion()})`;
+        return `${priceSrc} p
           JOIN dim.dim_calendar c ON c.date = p.date`;
       },
 
