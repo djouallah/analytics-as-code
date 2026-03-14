@@ -328,15 +328,19 @@
         try { await root.getFileHandle(aggFile); exists = true; } catch(e) {}
 
         if (exists && !forceRebuild) {
+          // Load OPFS file into DuckDB's buffer, then attach
+          const handle = await root.getFileHandle(aggFile);
+          const file = await handle.getFile();
+          await _db.registerFileBuffer(aggFile, new Uint8Array(await file.arrayBuffer()));
           await conn.query(`ATTACH '${aggFile}' AS agg (READ_ONLY);`);
           window._aggReady = true;
-          console.log('[Agg] Cache hit');
+          console.log('[Agg] Cache hit from OPFS');
           return;
         }
 
         if (exists) {
           try { await conn.query("DETACH agg;"); } catch(e) {}
-          await root.removeEntry(aggFile);
+          try { await root.removeEntry(aggFile); } catch(e) {}
         }
 
         console.time('[Agg] Build');
@@ -352,6 +356,16 @@
           `SELECT REGIONID, date, CAST(${extract} * 100 AS SMALLINT) AS time, AVG(price)::REAL AS price FROM p${p}.price GROUP BY REGIONID, date, ${extract}`
         );
         await conn.query(`CREATE TABLE agg.price_hourly AS ${priceParts.join(' UNION ALL ')}`);
+
+        // Persist to OPFS so next load is a cache hit
+        await conn.query("DETACH agg;");
+        const buf = await _db.copyFileToBuffer(aggFile);
+        const opfsHandle = await root.getFileHandle(aggFile, { create: true });
+        const writable = await opfsHandle.createWritable();
+        await writable.write(buf);
+        await writable.close();
+        // Re-attach as read-only from the buffer
+        await conn.query(`ATTACH '${aggFile}' AS agg (READ_ONLY);`);
 
         window._aggReady = true;
         console.timeEnd('[Agg] Build');
