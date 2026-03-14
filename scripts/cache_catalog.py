@@ -7,6 +7,7 @@ Usage:
     python cache_catalog.py export_price_today
     python cache_catalog.py export_dim_duid
     python cache_catalog.py export_dim_calendar
+    python cache_catalog.py build_dim
     python cache_catalog.py build_daily
     python cache_catalog.py build_today
 """
@@ -130,53 +131,72 @@ def build_daily():
 
     con = duckdb.connect(":memory:")
 
-    # Get distinct years from scada data
-    years = [
-        r[0]
+    # Get distinct year-half periods from scada data
+    periods = [
+        (r[0], r[1])
         for r in con.execute(
-            f"SELECT DISTINCT EXTRACT(YEAR FROM date)::INTEGER AS year FROM '{DASHBOARD_DIR}/fct_scada.parquet' ORDER BY year"
+            f"""SELECT DISTINCT EXTRACT(YEAR FROM date)::INTEGER AS year,
+                       CASE WHEN EXTRACT(MONTH FROM date) <= 6 THEN 1 ELSE 2 END AS half
+                FROM '{DASHBOARD_DIR}/fct_scada.parquet'
+                ORDER BY year, half"""
         ).fetchall()
     ]
 
-    # Build per-year files with scada + price
-    for year in years:
-        path = os.path.join(DASHBOARD_DIR, f"energy_data_{year}.duckdb")
+    # Build per-half-year files with scada + price
+    for year, half in periods:
+        tag = f"{year}_h{half}"
+        month_lo = 1 if half == 1 else 7
+        month_hi = 6 if half == 1 else 12
+        path = os.path.join(DASHBOARD_DIR, f"energy_data_{tag}.duckdb")
         ycon = duckdb.connect(path)
         ycon.execute(f"""
             CREATE TABLE scada AS
             SELECT * FROM '{DASHBOARD_DIR}/fct_scada.parquet'
             WHERE EXTRACT(YEAR FROM date) = {year}
+              AND EXTRACT(MONTH FROM date) BETWEEN {month_lo} AND {month_hi}
             ORDER BY DUID, date, time
         """)
         ycon.execute(f"""
             CREATE TABLE price AS
             SELECT * FROM '{DASHBOARD_DIR}/fct_price.parquet'
             WHERE EXTRACT(YEAR FROM date) = {year}
+              AND EXTRACT(MONTH FROM date) BETWEEN {month_lo} AND {month_hi}
             ORDER BY REGIONID, date, time
         """)
         ycon.close()
         size_mb = os.path.getsize(path) / 1024 / 1024
         print(f"Built {path} ({size_mb:.1f} MB)")
 
-    # Build dim file
-    dcon = duckdb.connect(DB_DIM_PATH)
-    dcon.execute(f"CREATE TABLE dim_duid AS SELECT * FROM '{DASHBOARD_DIR}/dim_duid.parquet'")
-    dcon.execute(f"CREATE TABLE dim_calendar AS SELECT * FROM '{DASHBOARD_DIR}/dim_calendar.parquet'")
-    dcon.close()
-    print(f"Built {DB_DIM_PATH}")
-
     # Write manifest
+    tags = [f"{y}_h{h}" for y, h in periods]
     with open(os.path.join(DASHBOARD_DIR, "daily_manifest.json"), "w") as f:
-        json.dump({"years": years}, f)
-    print(f"Manifest: {years}")
+        json.dump({"periods": tags}, f)
+    print(f"Manifest: {tags}")
 
     # Clean up parquet intermediates
-    for f in ["fct_scada.parquet", "fct_price.parquet", "dim_duid.parquet", "dim_calendar.parquet"]:
+    for f in ["fct_scada.parquet", "fct_price.parquet"]:
         path = os.path.join(DASHBOARD_DIR, f)
         if os.path.exists(path):
             os.remove(path)
 
     con.close()
+
+
+def build_dim():
+    if os.path.exists(DB_DIM_PATH):
+        os.remove(DB_DIM_PATH)
+
+    dcon = duckdb.connect(DB_DIM_PATH)
+    dcon.execute(f"CREATE TABLE dim_duid AS SELECT * FROM '{DASHBOARD_DIR}/dim_duid.parquet'")
+    dcon.execute(f"CREATE TABLE dim_calendar AS SELECT * FROM '{DASHBOARD_DIR}/dim_calendar.parquet'")
+    dcon.close()
+
+    for f in ["dim_duid.parquet", "dim_calendar.parquet"]:
+        path = os.path.join(DASHBOARD_DIR, f)
+        if os.path.exists(path):
+            os.remove(path)
+
+    print(f"Built {DB_DIM_PATH}")
 
 
 def build_today():
@@ -207,6 +227,7 @@ COMMANDS = {
     "export_price_today": export_price_today,
     "export_dim_duid": export_dim_duid,
     "export_dim_calendar": export_dim_calendar,
+    "build_dim": build_dim,
     "build_daily": build_daily,
     "build_today": build_today,
 }

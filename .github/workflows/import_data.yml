@@ -50,6 +50,44 @@ jobs:
             pip install duckdb
           fi
 
+      # --- Phase 1: Intraday + dims (fast, gets dashboard working) ---
+      - name: Export fct_scada_today
+        run: python scripts/cache_catalog.py export_scada_today
+
+      - name: Export fct_price_today
+        run: python scripts/cache_catalog.py export_price_today
+
+      - name: Build energy_today.duckdb
+        run: python scripts/cache_catalog.py build_today
+
+      - name: Export dim_duid
+        if: steps.mode.outputs.is_daily == 'true'
+        run: python scripts/cache_catalog.py export_dim_duid
+
+      - name: Export dim_calendar
+        if: steps.mode.outputs.is_daily == 'true'
+        run: python scripts/cache_catalog.py export_dim_calendar
+
+      - name: Build energy_dim.duckdb
+        if: steps.mode.outputs.is_daily == 'true'
+        run: python scripts/cache_catalog.py build_dim
+
+      - name: Deploy to GitHub Pages (intraday)
+        if: steps.mode.outputs.is_daily == 'false'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dashboard
+          keep_files: true
+
+      - name: Upload to GitHub Release (intraday)
+        if: steps.mode.outputs.is_daily == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload data dashboard/energy_today.duckdb --clobber || true
+
+      # --- Phase 2: Daily full refresh (slow) ---
       - name: Test data
         if: steps.mode.outputs.is_daily == 'true'
         run: dbt test --target prod --profiles-dir .
@@ -62,26 +100,9 @@ jobs:
         if: steps.mode.outputs.is_daily == 'true'
         run: python scripts/cache_catalog.py export_price
 
-      - name: Export dim_duid
-        if: steps.mode.outputs.is_daily == 'true'
-        run: python scripts/cache_catalog.py export_dim_duid
-
-      - name: Export dim_calendar
-        if: steps.mode.outputs.is_daily == 'true'
-        run: python scripts/cache_catalog.py export_dim_calendar
-
-      - name: Build daily databases (per-year scada + dims)
+      - name: Build daily databases
         if: steps.mode.outputs.is_daily == 'true'
         run: python scripts/cache_catalog.py build_daily
-
-      - name: Export fct_scada_today
-        run: python scripts/cache_catalog.py export_scada_today
-
-      - name: Export fct_price_today
-        run: python scripts/cache_catalog.py export_price_today
-
-      - name: Build energy_today.duckdb
-        run: python scripts/cache_catalog.py build_today
 
       - name: Upload to GitHub Release (daily)
         if: steps.mode.outputs.is_daily == 'true'
@@ -91,16 +112,6 @@ jobs:
           gh release delete data --yes || true
           gh release create data dashboard/energy_dim.duckdb dashboard/energy_data_*.duckdb dashboard/energy_today.duckdb --title "Data" --notes "Auto-updated energy database"
 
-      - name: Upload to GitHub Release (intraday)
-        if: steps.mode.outputs.is_daily == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload data dashboard/energy_today.duckdb --clobber || true
-
-      - name: Remove duckdb files before Pages deploy
-        run: rm -f dashboard/*.duckdb
-
       - name: Deploy to GitHub Pages (daily)
         if: steps.mode.outputs.is_daily == 'true'
         uses: peaceiris/actions-gh-pages@v4
@@ -108,11 +119,3 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./dashboard
           force_orphan: true
-
-      - name: Deploy to GitHub Pages (intraday)
-        if: steps.mode.outputs.is_daily == 'false'
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dashboard
-          keep_files: true
