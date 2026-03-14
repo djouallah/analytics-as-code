@@ -104,7 +104,7 @@
     <div class="kpi-card"><div class="kpi-label">Avg Price</div><div class="kpi-value" id="kpiPrice">--</div><div class="kpi-sub">$/MWh across regions</div></div>
     <div class="kpi-card"><div class="kpi-label">Active Generators</div><div class="kpi-value" id="kpiGens">--</div><div class="kpi-sub">DUIDs reporting</div></div>
     <div class="kpi-card"><div class="kpi-label">Top Fuel Source</div><div class="kpi-value" id="kpiTopFuel">--</div><div class="kpi-sub" id="kpiTopFuelSub">by generation</div></div>
-    <div class="kpi-card"><div class="kpi-label">Number of Records</div><div class="kpi-value" id="kpiRecords">--</div><div class="kpi-sub">scada rows</div></div>
+    <div class="kpi-card"><div class="kpi-label">Number of Records</div><div class="kpi-value" id="kpiRecords">--</div><div class="kpi-sub" id="kpiRecordsSub">scada rows</div></div>
   </div>
 
   <div class="charts">
@@ -419,10 +419,10 @@
       // Hourly aggregated (for charts when >7d)
       _scadaHourlyUnion() {
         const parts = loadedPeriods.map(p =>
-          `SELECT DUID, date, CAST(extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0)) * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM p${p}.scada WHERE date < CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date, extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0))`
+          `SELECT DUID, date, CAST(extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0)) * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh, CAST(COUNT(*) AS INTEGER) AS cnt FROM p${p}.scada WHERE date < CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date, extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0))`
         );
         parts.push(
-          `SELECT DUID, date, CAST(extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0)) * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date, extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0))`
+          `SELECT DUID, date, CAST(extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0)) * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh, CAST(COUNT(*) AS INTEGER) AS cnt FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date, extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0))`
         );
         return parts.join('\n            UNION ALL\n            ');
       },
@@ -556,14 +556,9 @@
       },
 
       scadaRecordCount() {
-        const parts = loadedPeriods.map(p => `SELECT date, DUID FROM p${p}.scada WHERE date < CURRENT_DATE - INTERVAL 5 DAY`);
-        parts.push(`SELECT date, DUID FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY`);
-        const scadaUnion = parts.join('\n            UNION ALL\n            ');
         return `
-          SELECT CAST(COUNT(*) AS INTEGER) AS cnt
-          FROM (${scadaUnion}) sc
-          JOIN dim.dim_calendar c ON c.date = sc.date
-          JOIN dim.dim_duid d ON sc.DUID = d.DUID
+          SELECT CAST(SUM(sc.cnt) AS INTEGER) AS raw_cnt, CAST(COUNT(*) AS INTEGER) AS agg_cnt
+          FROM ${sql.fromScada()}
           WHERE ${sql.whereScada()}`;
       },
 
@@ -936,7 +931,7 @@
       try {
         await Promise.all([renderGeneration(seq), renderPrice(seq), renderMap(seq),
           runQuery(sql.generatorCount()).then(r => { if (seq === _renderSeq && r.length) document.getElementById('kpiGens').textContent = r[0].cnt.toLocaleString(); }),
-          runQuery(sql.scadaRecordCount()).then(r => { if (seq === _renderSeq && r.length) document.getElementById('kpiRecords').textContent = r[0].cnt.toLocaleString(); })
+          runQuery(sql.scadaRecordCount()).then(r => { if (seq === _renderSeq && r.length) { document.getElementById('kpiRecords').textContent = r[0].raw_cnt.toLocaleString(); document.getElementById('kpiRecordsSub').textContent = `${r[0].agg_cnt.toLocaleString()} aggregated`; } })
         ]);
         if (seq !== _renderSeq) return;
         if (!window._cutoffCached) {
