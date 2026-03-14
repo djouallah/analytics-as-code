@@ -124,4 +124,4 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./dashboard
-          force_orphan: true
+          keep_files: true
