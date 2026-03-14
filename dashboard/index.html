@@ -123,7 +123,10 @@
   <script type="module">
     import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.32.0/+esm";
 
-    // --- Dark theme for ECharts ---
+    // =========================================================================
+    // 1. CONSTANTS & THEME
+    // =========================================================================
+
     const darkTheme = {
       backgroundColor: 'transparent',
       textStyle: { color: '#8b949e' },
@@ -161,13 +164,15 @@
     };
     function fuelColor(name) { return FUEL_COLORS[name] || PALETTE[Math.abs([...name].reduce((h,c)=>h*31+c.charCodeAt(0)|0,0)) % PALETTE.length]; }
 
-    // --- Status ---
+    // =========================================================================
+    // 2. STATE & DOM UTILITIES
+    // =========================================================================
+
     function setStatus(msg, type = "loading") {
       document.getElementById("statusText").textContent = msg;
       document.getElementById("status").className = type;
     }
 
-    // --- Cross-filter state ---
     const crossFilter = { fuel: null, region: null, duids: [] };
     let _renderSeq = 0;
 
@@ -197,7 +202,10 @@
       }
     }
 
-    // --- DuckDB setup ---
+    // =========================================================================
+    // 3. DUCKDB SETUP
+    // =========================================================================
+
     let conn;
 
     async function initDuckDB() {
@@ -223,8 +231,8 @@
       setStatus("Connected", "connected");
     }
 
-    async function query(sql) {
-      const result = await conn.query(sql);
+    async function runQuery(sqlStr) {
+      const result = await conn.query(sqlStr);
       const rows = [];
       const numRows = Number(result.numRows);
       for (let i = 0; i < numRows; i++) {
@@ -240,94 +248,11 @@
       return rows;
     }
 
-    // --- Filters ---
-    async function populateFilters() {
-      const regions = await query("SELECT DISTINCT Region FROM db.dim_duid WHERE Region IS NOT NULL ORDER BY Region");
-      const fuels = await query("SELECT DISTINCT FuelSourceDescriptor AS fuel FROM db.dim_duid WHERE FuelSourceDescriptor IS NOT NULL ORDER BY fuel");
-      const regionSelect = document.getElementById("regionFilter");
-      for (const r of regions) regionSelect.add(new Option(r.Region, r.Region));
-      const fuelSelect = document.getElementById("fuelFilter");
-      for (const f of fuels) fuelSelect.add(new Option(f.fuel, f.fuel));
-      allDuids = await query("SELECT DUID, Region, FuelSourceDescriptor AS fuel FROM db.dim_duid WHERE DUID IS NOT NULL ORDER BY DUID");
-    }
+    // =========================================================================
+    // 4. HELPERS
+    // =========================================================================
 
-    function whereClause() {
-      const region = document.getElementById("regionFilter").value || crossFilter.region;
-      const fuel = document.getElementById("fuelFilter").value || crossFilter.fuel;
-      const days = document.getElementById("daysFilter").value;
-      const dateFilter = days === '1' ? `c.date >= CURRENT_DATE` : `c.date >= CURRENT_DATE - INTERVAL ${days} DAY`;
-      const clauses = [dateFilter];
-      if (region) clauses.push(`d.Region = '${region}'`);
-      if (fuel) clauses.push(`d.FuelSourceDescriptor = '${fuel}'`);
-      if (crossFilter.duids.length) clauses.push(`sc.DUID IN (${crossFilter.duids.map(d => `'${d}'`).join(',')})`);
-      return clauses.join(" AND ");
-    }
-
-    function wherePrice() {
-      const region = document.getElementById("regionFilter").value || crossFilter.region;
-      const days = document.getElementById("daysFilter").value;
-      const dateFilter = days === '1' ? `c.date >= CURRENT_DATE` : `c.date >= CURRENT_DATE - INTERVAL ${days} DAY`;
-      const clauses = [dateFilter];
-      if (region) clauses.push(`p.REGIONID = '${region}'`);
-      // When DUIDs or fuel selected, filter price to matching regions
-      if (!region && (crossFilter.duids.length || crossFilter.fuel)) {
-        const fuel = document.getElementById("fuelFilter").value || crossFilter.fuel;
-        let regionFilter;
-        if (crossFilter.duids.length) {
-          regionFilter = `p.REGIONID IN (SELECT Region FROM db.dim_duid WHERE DUID IN (${crossFilter.duids.map(d => `'${d}'`).join(',')}))`;
-        } else if (fuel) {
-          regionFilter = `p.REGIONID IN (SELECT DISTINCT Region FROM db.dim_duid WHERE FuelSourceDescriptor = '${fuel}')`;
-        }
-        if (regionFilter) clauses.push(regionFilter);
-      }
-      return clauses.join(" AND ");
-    }
-
-    // FROM clauses tailored per chart to avoid unnecessary joins
-    // Intraday mode (<=7d): 5-min grain from today DB
-    // Hourly mode (>7d): hourly grain from daily DB + today aggregated to hourly
-    function fromScada() {
-      if (isIntradayMode()) {
-        return `db.dim_calendar c
-          JOIN today.scada_today sc ON c.date = sc.date
-          JOIN db.dim_duid d ON sc.DUID = d.DUID`;
-      }
-      return `db.dim_calendar c
-        JOIN (
-          SELECT DUID, date, time, mwh FROM db.scada WHERE date < CURRENT_DATE - INTERVAL 1 DAY
-          UNION ALL
-          SELECT DUID, date, CAST(CAST(time / 100 AS INTEGER) * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 1 DAY GROUP BY DUID, date, CAST(time / 100 AS INTEGER)
-        ) sc ON c.date = sc.date
-        JOIN db.dim_duid d ON sc.DUID = d.DUID`;
-    }
-
-    function fromPrice() {
-      if (isIntradayMode()) {
-        return `db.dim_calendar c
-          JOIN today.price_today p ON c.date = p.date`;
-      }
-      return `db.dim_calendar c
-        JOIN (
-          SELECT REGIONID, date, time, price FROM db.price WHERE date < CURRENT_DATE - INTERVAL 1 DAY
-          UNION ALL
-          SELECT REGIONID, date, CAST(CAST(time / 100 AS INTEGER) * 100 AS SMALLINT) AS time, AVG(price) AS price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 1 DAY GROUP BY REGIONID, date, CAST(time / 100 AS INTEGER)
-        ) p ON c.date = p.date`;
-    }
-
-
-
-    // --- ECharts instances ---
-    const charts = {};
-    function getChart(id) {
-      if (!charts[id]) {
-        charts[id] = echarts.init(document.getElementById(id), 'dark-custom');
-      }
-      return charts[id];
-    }
-    window.addEventListener('resize', () => { Object.values(charts).forEach(c => c.resize()); });
-
-    // --- Helper: check grain level ---
-    // <=7d: 5-min from today DB | 8-30d: hourly from daily DB | >30d: aggregate to daily
+    // Grain: <=7d = 5-min intraday | 8-30d = hourly | >30d = daily aggregate
     function isIntradayMode() {
       return parseInt(document.getElementById("daysFilter").value) <= 7;
     }
@@ -349,7 +274,32 @@
       return `${parseInt(d)} ${months[parseInt(m) - 1]} ${y}`;
     }
 
-    // --- CSV download helper ---
+    function buildTimeAxis(rows, timeDetail) {
+      if (timeDetail) {
+        const xKeys = [...new Set(rows.map(d => `${d.date}|${padTime(d.time)}`))].sort();
+        const xLabels = xKeys.map(k => {
+          const [dt, tm] = k.split('|');
+          return formatDate(dt) + ' ' + formatTime(parseInt(tm));
+        });
+        return { xKeys, xLabels };
+      }
+      const xKeys = [...new Set(rows.map(d => d.date))].sort();
+      const xLabels = xKeys.map(d => formatDate(d));
+      return { xKeys, xLabels };
+    }
+
+    function buildLookup(rows, keyFn, valueFn) {
+      const lookup = {};
+      for (const row of rows) lookup[keyFn(row)] = valueFn(row);
+      return lookup;
+    }
+
+    function dataZoomConfig(timeDetail) {
+      return timeDetail
+        ? [{ type: 'inside', start: 0, end: 100 }, { type: 'slider', start: 0, end: 100, height: 20, bottom: 35 }]
+        : [];
+    }
+
     function downloadCSV(rows, filename) {
       if (!rows.length) return;
       const cols = Object.keys(rows[0]);
@@ -363,179 +313,229 @@
       URL.revokeObjectURL(a.href);
     }
 
-    // --- DUID multi-select dropdown ---
-    let allDuids = [];
+    // =========================================================================
+    // 5. SQL QUERY BUILDERS
+    // =========================================================================
 
-    function renderDuidList(filter = '') {
-      const list = document.getElementById('duidList');
-      list.innerHTML = '';
-      const lc = filter.toLowerCase();
-      const regionVal = document.getElementById("regionFilter").value;
-      const fuelVal = document.getElementById("fuelFilter").value;
-      const filtered = allDuids.filter(d =>
-        d.DUID.toLowerCase().includes(lc) &&
-        (!regionVal || d.Region === regionVal) &&
-        (!fuelVal || d.fuel === fuelVal)
-      );
-      for (const d of filtered.slice(0, 150)) {
-        const label = document.createElement('label');
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.checked = crossFilter.duids.includes(d.DUID);
-        cb.addEventListener('change', () => {
-          if (cb.checked) { if (!crossFilter.duids.includes(d.DUID)) crossFilter.duids.push(d.DUID); }
-          else { crossFilter.duids = crossFilter.duids.filter(x => x !== d.DUID); }
-          updateDuidTrigger();
-          renderAll();
-        });
-        label.append(cb, ` ${d.DUID} (${d.Region}, ${d.fuel})`);
-        list.append(label);
-      }
-    }
+    const sql = {
+      // --- FROM clauses ---
+      // Intraday (<=7d): 5-min grain from today DB
+      // Hourly (>7d): daily DB + today aggregated to hourly via UNION ALL
+      fromScada() {
+        if (isIntradayMode()) {
+          return `db.dim_calendar c
+            JOIN today.scada_today sc ON c.date = sc.date
+            JOIN db.dim_duid d ON sc.DUID = d.DUID`;
+        }
+        return `db.dim_calendar c
+          JOIN (
+            SELECT DUID, date, time, mwh FROM db.scada WHERE date < CURRENT_DATE - INTERVAL 1 DAY
+            UNION ALL
+            SELECT DUID, date, CAST(CAST(time / 100 AS INTEGER) * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 1 DAY GROUP BY DUID, date, CAST(time / 100 AS INTEGER)
+          ) sc ON c.date = sc.date
+          JOIN db.dim_duid d ON sc.DUID = d.DUID`;
+      },
 
-    function updateDuidTrigger() {
-      const btn = document.getElementById('duidTrigger');
-      btn.textContent = crossFilter.duids.length ? `${crossFilter.duids.length} selected` : 'All DUIDs';
-    }
-
-    // Toggle panel
-    document.getElementById('duidTrigger').addEventListener('click', (e) => {
-      e.stopPropagation();
-      const panel = document.getElementById('duidPanel');
-      const isOpen = panel.classList.toggle('open');
-      if (isOpen) {
-        document.getElementById('duidSearch').value = '';
-        renderDuidList();
-        document.getElementById('duidSearch').focus();
-      }
-    });
-    document.getElementById('duidPanel').addEventListener('click', e => e.stopPropagation());
-    document.addEventListener('click', () => document.getElementById('duidPanel').classList.remove('open'));
-    document.getElementById('duidSearch').addEventListener('input', e => renderDuidList(e.target.value));
-
-    // --- Consolidated CSV download ---
-    // When DUIDs selected: per-DUID detail. Otherwise: aggregated by date, fuel, region.
-    async function downloadAllCSV() {
-      const intraday = isIntradayMode();
-      const hasDuids = crossFilter.duids.length > 0 || !!document.getElementById("fuelFilter").value || !!document.getElementById("regionFilter").value;
-      let sql;
-      if (intraday && hasDuids) {
-        sql = `
-          SELECT CAST(sc.date AS VARCHAR) AS date, lpad(CAST(sc.time AS VARCHAR), 4, '0') AS time,
-            sc.DUID, d.FuelSourceDescriptor AS fuel, d.Region AS region,
-            ROUND(sc.mw, 2)::DOUBLE AS mw, ROUND(p.price, 2)::DOUBLE AS price
-          FROM ${fromScada()}
-          LEFT JOIN today.price_today p ON sc.date = p.date AND sc.time = p.time AND d.Region = p.REGIONID
-          WHERE ${whereClause()}
-          ORDER BY sc.date, sc.time, sc.DUID`;
-      } else if (intraday) {
-        sql = `
-          SELECT CAST(sc.date AS VARCHAR) AS date, lpad(CAST(sc.time AS VARCHAR), 4, '0') AS time,
-            d.FuelSourceDescriptor AS fuel, d.Region AS region,
-            ROUND(SUM(sc.mw), 2)::DOUBLE AS mw, ROUND(AVG(p.price), 2)::DOUBLE AS price
-          FROM ${fromScada()}
-          LEFT JOIN today.price_today p ON sc.date = p.date AND sc.time = p.time AND d.Region = p.REGIONID
-          WHERE ${whereClause()}
-          GROUP BY sc.date, sc.time, d.FuelSourceDescriptor, d.Region
-          ORDER BY sc.date, sc.time, d.FuelSourceDescriptor`;
-      } else if (hasDuids) {
-        sql = `
-          SELECT CAST(sc.date AS VARCHAR) AS date, lpad(CAST(sc.time AS VARCHAR), 4, '0') AS time,
-            sc.DUID, d.FuelSourceDescriptor AS fuel, d.Region AS region,
-            ROUND(sc.mwh, 2)::DOUBLE AS mwh, ROUND(p.price, 2)::DOUBLE AS avg_price
-          FROM ${fromScada()}
-          LEFT JOIN (
+      fromPrice() {
+        if (isIntradayMode()) {
+          return `db.dim_calendar c
+            JOIN today.price_today p ON c.date = p.date`;
+        }
+        return `db.dim_calendar c
+          JOIN (
             SELECT REGIONID, date, time, price FROM db.price WHERE date < CURRENT_DATE - INTERVAL 1 DAY
             UNION ALL
             SELECT REGIONID, date, CAST(CAST(time / 100 AS INTEGER) * 100 AS SMALLINT) AS time, AVG(price) AS price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 1 DAY GROUP BY REGIONID, date, CAST(time / 100 AS INTEGER)
-          ) p ON sc.date = p.date AND sc.time = p.time AND d.Region = p.REGIONID
-          WHERE ${whereClause()}
-          ORDER BY sc.date, sc.time, sc.DUID`;
-      } else {
-        sql = `
+          ) p ON c.date = p.date`;
+      },
+
+      // --- WHERE clauses ---
+      whereScada() {
+        const region = document.getElementById("regionFilter").value || crossFilter.region;
+        const fuel = document.getElementById("fuelFilter").value || crossFilter.fuel;
+        const days = document.getElementById("daysFilter").value;
+        const dateFilter = days === '1' ? `c.date >= CURRENT_DATE` : `c.date >= CURRENT_DATE - INTERVAL ${days} DAY`;
+        const clauses = [dateFilter];
+        if (region) clauses.push(`d.Region = '${region}'`);
+        if (fuel) clauses.push(`d.FuelSourceDescriptor = '${fuel}'`);
+        if (crossFilter.duids.length) clauses.push(`sc.DUID IN (${crossFilter.duids.map(d => `'${d}'`).join(',')})`);
+        return clauses.join(" AND ");
+      },
+
+      wherePrice() {
+        const region = document.getElementById("regionFilter").value || crossFilter.region;
+        const days = document.getElementById("daysFilter").value;
+        const dateFilter = days === '1' ? `c.date >= CURRENT_DATE` : `c.date >= CURRENT_DATE - INTERVAL ${days} DAY`;
+        const clauses = [dateFilter];
+        if (region) clauses.push(`p.REGIONID = '${region}'`);
+        if (!region && (crossFilter.duids.length || crossFilter.fuel)) {
+          const fuel = document.getElementById("fuelFilter").value || crossFilter.fuel;
+          let regionFilter;
+          if (crossFilter.duids.length) {
+            regionFilter = `p.REGIONID IN (SELECT Region FROM db.dim_duid WHERE DUID IN (${crossFilter.duids.map(d => `'${d}'`).join(',')}))`;
+          } else if (fuel) {
+            regionFilter = `p.REGIONID IN (SELECT DISTINCT Region FROM db.dim_duid WHERE FuelSourceDescriptor = '${fuel}')`;
+          }
+          if (regionFilter) clauses.push(regionFilter);
+        }
+        return clauses.join(" AND ");
+      },
+
+      // --- Filter population ---
+      regions: "SELECT DISTINCT Region FROM db.dim_duid WHERE Region IS NOT NULL ORDER BY Region",
+      fuels: "SELECT DISTINCT FuelSourceDescriptor AS fuel FROM db.dim_duid WHERE FuelSourceDescriptor IS NOT NULL ORDER BY fuel",
+      allDuids: "SELECT DUID, Region, FuelSourceDescriptor AS fuel FROM db.dim_duid WHERE DUID IS NOT NULL ORDER BY DUID",
+
+      // --- Generation chart ---
+      generation(seriesAlias, seriesCol, valCol, timeDetail) {
+        if (timeDetail) {
+          return `
+            SELECT CAST(sc.date AS VARCHAR) AS date, CAST(sc.time AS INTEGER) AS time, ${seriesAlias}, SUM(${valCol})::DOUBLE AS total_mw
+            FROM ${sql.fromScada()}
+            WHERE ${sql.whereScada()}
+            GROUP BY sc.date, sc.time, ${seriesCol}
+            ORDER BY sc.date, sc.time`;
+        }
+        return `
+          SELECT CAST(sc.date AS VARCHAR) AS date, ${seriesAlias}, SUM(${valCol})::DOUBLE AS total_mw
+          FROM ${sql.fromScada()}
+          WHERE ${sql.whereScada()}
+          GROUP BY sc.date, ${seriesCol}
+          ORDER BY sc.date`;
+      },
+
+      // --- Price chart ---
+      price(timeDetail) {
+        if (timeDetail) {
+          return `
+            SELECT CAST(p.date AS VARCHAR) AS date, CAST(p.time AS INTEGER) AS time, p.REGIONID AS Region, AVG(p.price)::DOUBLE AS avg_price
+            FROM ${sql.fromPrice()}
+            WHERE ${sql.wherePrice()}
+            GROUP BY p.date, p.time, p.REGIONID
+            ORDER BY p.date, p.time`;
+        }
+        return `
+          SELECT CAST(p.date AS VARCHAR) AS date, p.REGIONID AS Region, AVG(p.price)::DOUBLE AS avg_price
+          FROM ${sql.fromPrice()}
+          WHERE ${sql.wherePrice()}
+          GROUP BY p.date, p.REGIONID
+          ORDER BY p.date`;
+      },
+
+      // --- Map ---
+      mapScatter(col) {
+        return `
+          SELECT sc.DUID, d.FuelSourceDescriptor AS fuel, d.Region,
+            d.latitude::DOUBLE AS lat, d.longitude::DOUBLE AS lon,
+            AVG(${col})::DOUBLE AS mw
+          FROM ${sql.fromScada()}
+          WHERE ${sql.whereScada()} AND d.latitude IS NOT NULL
+          GROUP BY sc.DUID, d.FuelSourceDescriptor, d.Region, d.latitude, d.longitude`;
+      },
+
+      generatorCount() {
+        return `
+          SELECT CAST(COUNT(DISTINCT sc.DUID) AS INTEGER) AS cnt
+          FROM ${sql.fromScada()}
+          WHERE ${sql.whereScada()}`;
+      },
+
+      // --- CSV export ---
+      csvExport() {
+        const intraday = isIntradayMode();
+        const hasDuids = crossFilter.duids.length > 0 || !!document.getElementById("fuelFilter").value || !!document.getElementById("regionFilter").value;
+
+        if (intraday && hasDuids) {
+          return `
+            SELECT CAST(sc.date AS VARCHAR) AS date, lpad(CAST(sc.time AS VARCHAR), 4, '0') AS time,
+              sc.DUID, d.FuelSourceDescriptor AS fuel, d.Region AS region,
+              ROUND(sc.mw, 2)::DOUBLE AS mw, ROUND(p.price, 2)::DOUBLE AS price
+            FROM ${sql.fromScada()}
+            LEFT JOIN today.price_today p ON sc.date = p.date AND sc.time = p.time AND d.Region = p.REGIONID
+            WHERE ${sql.whereScada()}
+            ORDER BY sc.date, sc.time, sc.DUID`;
+        }
+        if (intraday) {
+          return `
+            SELECT CAST(sc.date AS VARCHAR) AS date, lpad(CAST(sc.time AS VARCHAR), 4, '0') AS time,
+              d.FuelSourceDescriptor AS fuel, d.Region AS region,
+              ROUND(SUM(sc.mw), 2)::DOUBLE AS mw, ROUND(AVG(p.price), 2)::DOUBLE AS price
+            FROM ${sql.fromScada()}
+            LEFT JOIN today.price_today p ON sc.date = p.date AND sc.time = p.time AND d.Region = p.REGIONID
+            WHERE ${sql.whereScada()}
+            GROUP BY sc.date, sc.time, d.FuelSourceDescriptor, d.Region
+            ORDER BY sc.date, sc.time, d.FuelSourceDescriptor`;
+        }
+        const priceJoin = `LEFT JOIN (
+            SELECT REGIONID, date, time, price FROM db.price WHERE date < CURRENT_DATE - INTERVAL 1 DAY
+            UNION ALL
+            SELECT REGIONID, date, CAST(CAST(time / 100 AS INTEGER) * 100 AS SMALLINT) AS time, AVG(price) AS price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 1 DAY GROUP BY REGIONID, date, CAST(time / 100 AS INTEGER)
+          ) p ON sc.date = p.date AND sc.time = p.time AND d.Region = p.REGIONID`;
+        if (hasDuids) {
+          return `
+            SELECT CAST(sc.date AS VARCHAR) AS date, lpad(CAST(sc.time AS VARCHAR), 4, '0') AS time,
+              sc.DUID, d.FuelSourceDescriptor AS fuel, d.Region AS region,
+              ROUND(sc.mwh, 2)::DOUBLE AS mwh, ROUND(p.price, 2)::DOUBLE AS avg_price
+            FROM ${sql.fromScada()}
+            ${priceJoin}
+            WHERE ${sql.whereScada()}
+            ORDER BY sc.date, sc.time, sc.DUID`;
+        }
+        return `
           SELECT CAST(sc.date AS VARCHAR) AS date, lpad(CAST(sc.time AS VARCHAR), 4, '0') AS time,
             d.FuelSourceDescriptor AS fuel, d.Region AS region,
             ROUND(SUM(sc.mwh), 2)::DOUBLE AS mwh, ROUND(AVG(p.price), 2)::DOUBLE AS avg_price
-          FROM ${fromScada()}
-          LEFT JOIN (
-            SELECT REGIONID, date, time, price FROM db.price WHERE date < CURRENT_DATE - INTERVAL 1 DAY
-            UNION ALL
-            SELECT REGIONID, date, CAST(CAST(time / 100 AS INTEGER) * 100 AS SMALLINT) AS time, AVG(price) AS price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 1 DAY GROUP BY REGIONID, date, CAST(time / 100 AS INTEGER)
-          ) p ON sc.date = p.date AND sc.time = p.time AND d.Region = p.REGIONID
-          WHERE ${whereClause()}
+          FROM ${sql.fromScada()}
+          ${priceJoin}
+          WHERE ${sql.whereScada()}
           GROUP BY sc.date, sc.time, d.FuelSourceDescriptor, d.Region
           ORDER BY sc.date, sc.time, d.FuelSourceDescriptor`;
-      }
-      const countResult = await query(`SELECT COUNT(*) AS n FROM (${sql})`);
-      const rowCount = countResult[0].n;
-      if (rowCount > 150000) {
-        alert(`Too many rows (${rowCount.toLocaleString()}). Apply filters or reduce the date range to under 150K rows.`);
-        return;
-      }
-      const data = await query(sql);
-      downloadCSV(data, intraday ? 'energy_intraday.csv' : 'energy_hourly.csv');
+      },
+
+      // --- Cutoff timestamp ---
+      cutoff: "SELECT CAST(MAX(date) AS VARCHAR) || ' ' || substr(lpad(CAST(MAX(time) AS VARCHAR), 4, '0'), 1, 2) || ':' || substr(lpad(CAST(MAX(time) AS VARCHAR), 4, '0'), 3, 2) AS last_update FROM today.scada_today WHERE date = (SELECT MAX(date) FROM today.scada_today)",
+    };
+
+    // =========================================================================
+    // 6. CHART RENDERERS
+    // =========================================================================
+
+    const charts = {};
+    function getChart(id) {
+      if (!charts[id]) charts[id] = echarts.init(document.getElementById(id), 'dark-custom');
+      return charts[id];
     }
+    window.addEventListener('resize', () => { Object.values(charts).forEach(c => c.resize()); });
 
-    document.getElementById('dl-all').addEventListener('click', downloadAllCSV);
-
-    // --- Chart: Generation by Fuel Type (stacked area) ---
+    // --- Generation by Fuel Type (stacked area) ---
     async function renderGeneration(seq) {
       const intraday = isIntradayMode();
+      const timeDetail = showTimeDetail();
       const unit = intraday ? 'MW' : 'MWh';
       const drillFuel = crossFilter.fuel;
+
       document.getElementById("title-generation").textContent = drillFuel
         ? `${drillFuel} by DUID (${unit})`
         : `Generation by Fuel Type (${unit})`;
-      let data, xLabels, xKeys;
 
-      const timeDetail = showTimeDetail();
       const valCol = intraday ? 'sc.mw' : 'sc.mwh';
       const seriesCol = drillFuel ? 'sc.DUID' : 'd.FuelSourceDescriptor';
       const seriesAlias = drillFuel ? 'sc.DUID AS series' : 'd.FuelSourceDescriptor AS series';
 
-      if (timeDetail) {
-        data = await query(`
-          SELECT CAST(sc.date AS VARCHAR) AS date, CAST(sc.time AS INTEGER) AS time, ${seriesAlias}, SUM(${valCol})::DOUBLE AS total_mw
-          FROM ${fromScada()}
-          WHERE ${whereClause()}
-          GROUP BY sc.date, sc.time, ${seriesCol}
-          ORDER BY sc.date, sc.time
-        `);
-      } else {
-        data = await query(`
-          SELECT CAST(sc.date AS VARCHAR) AS date, ${seriesAlias}, SUM(${valCol})::DOUBLE AS total_mw
-          FROM ${fromScada()}
-          WHERE ${whereClause()}
-          GROUP BY sc.date, ${seriesCol}
-          ORDER BY sc.date
-        `);
-      }
-      if (seq !== _renderSeq) return;
-      if (!data.length) return;
+      const data = await runQuery(sql.generation(seriesAlias, seriesCol, valCol, timeDetail));
+      if (seq !== _renderSeq || !data.length) return;
 
-      if (timeDetail) {
-        xKeys = [...new Set(data.map(d => `${d.date}|${padTime(d.time)}`))].sort();
-        xLabels = xKeys.map(k => {
-          const [dt, tm] = k.split('|');
-          return formatDate(dt) + ' ' + formatTime(parseInt(tm));
-        });
-      } else {
-        xKeys = [...new Set(data.map(d => d.date))].sort();
-        xLabels = xKeys.map(d => formatDate(d));
-      }
+      const { xKeys, xLabels } = buildTimeAxis(data, timeDetail);
+      const lookup = buildLookup(data,
+        row => timeDetail ? `${row.date}|${padTime(row.time)}|${row.series}` : `${row.date}|${row.series}`,
+        row => row.total_mw
+      );
 
       // Sort series by total descending, limit to top 15 in drill mode
       const seriesTotals = {};
       for (const row of data) seriesTotals[row.series] = (seriesTotals[row.series] || 0) + row.total_mw;
       let seriesNames = Object.entries(seriesTotals).sort((a, b) => b[1] - a[1]).map(e => e[0]);
       if (drillFuel && seriesNames.length > 15) seriesNames = seriesNames.slice(0, 15);
-
-      // Build lookup for fast access
-      const lookup = {};
-      for (const row of data) {
-        const key = timeDetail ? `${row.date}|${padTime(row.time)}|${row.series}` : `${row.date}|${row.series}`;
-        lookup[key] = row.total_mw;
-      }
 
       const series = seriesNames.map((name, i) => ({
         name,
@@ -567,86 +567,56 @@
         grid: { left: 60, right: 20, top: 35, bottom: 25 },
         xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { rotate: timeDetail ? 45 : 0, fontSize: timeDetail ? 10 : 12 } },
         yAxis: { type: 'value', min: 0, name: unit, nameTextStyle: { color: '#8b949e', fontSize: 11 }, axisLabel: { formatter: v => v >= 1000 ? (v/1000).toFixed(0) + 'k' : v } },
-        dataZoom: timeDetail ? [{ type: 'inside', start: 0, end: 100 }, { type: 'slider', start: 0, end: 100, height: 20, bottom: 35 }] : [],
+        dataZoom: dataZoomConfig(timeDetail),
         series,
         animationDuration: 600,
         animationEasing: 'cubicOut',
       }, true);
 
-      // Click behavior: fuel view → drill into fuel; DUID view → select DUID
+      // Click: fuel view -> drill into fuel; DUID view -> select DUID
       chart.off('click');
       chart.on('click', (params) => {
         if (!params.seriesName) return;
         if (drillFuel) {
-          // In drill mode: toggle DUID selection
           const duid = params.seriesName;
           const idx = crossFilter.duids.indexOf(duid);
           if (idx >= 0) crossFilter.duids.splice(idx, 1);
           else crossFilter.duids.push(duid);
           updateDuidTrigger();
         } else {
-          // Normal mode: drill into fuel
           crossFilter.fuel = params.seriesName;
         }
         renderAll();
       });
 
-      // KPIs from generation data
+      // KPIs
       const uniqueIntervals = timeDetail ? xKeys.length : [...new Set(data.map(d => d.date))].length;
       const totalGen = data.reduce((s, d) => s + d.total_mw, 0) / (uniqueIntervals || 1);
       document.getElementById('kpiGen').textContent = Math.round(totalGen).toLocaleString();
       document.getElementById('kpiGenSub').textContent = intraday ? 'Average MW' : (timeDetail ? 'Average MWh' : 'Average MWh/day');
 
-      // Top fuel (or top DUID in drill mode)
-      const fuelTotals = {};
-      for (const d of data) fuelTotals[d.series] = (fuelTotals[d.series] || 0) + d.total_mw;
-      const topFuel = Object.entries(fuelTotals).sort((a, b) => b[1] - a[1])[0];
+      const topFuel = Object.entries(seriesTotals).sort((a, b) => b[1] - a[1])[0];
       if (topFuel) {
         document.getElementById('kpiTopFuel').textContent = topFuel[0];
         const avgLabel = intraday ? 'MW avg' : (timeDetail ? 'MWh avg' : 'MWh/day avg');
         document.getElementById('kpiTopFuelSub').textContent = `${Math.round(topFuel[1] / (uniqueIntervals || 1)).toLocaleString()} ${avgLabel}`;
       }
-
     }
 
-    // --- Chart: Average Price by Region (line) ---
+    // --- Average Price by Region (line) ---
     async function renderPrice(seq) {
-      const intraday = isIntradayMode();
       const timeDetail = showTimeDetail();
-      let data, xLabels, xKeys;
 
-      if (timeDetail) {
-        data = await query(`
-          SELECT CAST(p.date AS VARCHAR) AS date, CAST(p.time AS INTEGER) AS time, p.REGIONID AS Region, AVG(p.price)::DOUBLE AS avg_price
-          FROM ${fromPrice()}
-          WHERE ${wherePrice()}          GROUP BY p.date, p.time, p.REGIONID
-          ORDER BY p.date, p.time
-        `);
-        if (seq !== _renderSeq || !data.length) return;
-        xKeys = [...new Set(data.map(d => `${d.date}|${padTime(d.time)}`))].sort();
-        xLabels = xKeys.map(k => {
-          const [dt, tm] = k.split('|');
-          return formatDate(dt) + ' ' + formatTime(parseInt(tm));
-        });
-      } else {
-        data = await query(`
-          SELECT CAST(p.date AS VARCHAR) AS date, p.REGIONID AS Region, AVG(p.price)::DOUBLE AS avg_price
-          FROM ${fromPrice()}
-          WHERE ${wherePrice()}          GROUP BY p.date, p.REGIONID
-          ORDER BY p.date
-        `);
-        if (seq !== _renderSeq || !data.length) return;
-        xKeys = [...new Set(data.map(d => d.date))].sort();
-        xLabels = xKeys.map(d => formatDate(d));
-      }
+      const data = await runQuery(sql.price(timeDetail));
+      if (seq !== _renderSeq || !data.length) return;
+
+      const { xKeys, xLabels } = buildTimeAxis(data, timeDetail);
+      const lookup = buildLookup(data,
+        row => timeDetail ? `${row.date}|${padTime(row.time)}|${row.Region}` : `${row.date}|${row.Region}`,
+        row => row.avg_price
+      );
 
       const regions = [...new Set(data.map(d => d.Region))].sort();
-
-      const lookup = {};
-      for (const row of data) {
-        const key = timeDetail ? `${row.date}|${padTime(row.time)}|${row.Region}` : `${row.date}|${row.Region}`;
-        lookup[key] = row.avg_price;
-      }
 
       const series = regions.map((region, i) => ({
         name: region,
@@ -670,7 +640,7 @@
         grid: { left: 55, right: 15, top: 15, bottom: timeDetail ? 55 : 40 },
         xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { rotate: timeDetail ? 45 : 0, fontSize: timeDetail ? 10 : 12 } },
         yAxis: { type: 'value', name: '$/MWh', nameTextStyle: { color: '#8b949e', fontSize: 11 }, axisLabel: { formatter: v => '$' + v } },
-        dataZoom: timeDetail ? [{ type: 'inside', start: 0, end: 100 }, { type: 'slider', start: 0, end: 100, height: 20, bottom: 35 }] : [],
+        dataZoom: dataZoomConfig(timeDetail),
         series,
         animationDuration: 600,
       }, true);
@@ -686,10 +656,9 @@
       // KPI: avg price
       const avgPrice = data.reduce((s, d) => s + d.avg_price, 0) / data.length;
       document.getElementById('kpiPrice').textContent = '$' + avgPrice.toFixed(1);
-
     }
 
-    // --- Chart: Generator Map (geo scatter) ---
+    // --- Generator Map (geo scatter) ---
     let australiaMapRegistered = false;
 
     async function registerAustraliaMap() {
@@ -703,22 +672,15 @@
     async function renderMap(seq) {
       await registerAustraliaMap();
       if (seq !== _renderSeq) return;
+
       const intraday = isIntradayMode();
       const unit = intraday ? 'MW' : 'MWh';
       const col = intraday ? 'sc.mw' : 'sc.mwh';
-      // Note: for hourly mode, AVG(mwh) gives average hourly MWh which equals average MW
-      const data = await query(`
-        SELECT sc.DUID, d.FuelSourceDescriptor AS fuel, d.Region,
-          d.latitude::DOUBLE AS lat, d.longitude::DOUBLE AS lon,
-          AVG(${col})::DOUBLE AS mw
-        FROM ${fromScada()}
-        WHERE ${whereClause()} AND d.latitude IS NOT NULL
-        GROUP BY sc.DUID, d.FuelSourceDescriptor, d.Region, d.latitude, d.longitude
-      `);
+
+      const data = await runQuery(sql.mapScatter(col));
       if (seq !== _renderSeq || !data.length) return;
 
       const fuels = [...new Set(data.map(d => d.fuel))].sort();
-
       const maxMw = Math.max(...data.map(d => d.mw));
 
       const series = fuels.map(fuel => ({
@@ -771,13 +733,99 @@
 
       // KPI: active generators
       if (seq !== _renderSeq) return;
-      const genCount = await query(`
-        SELECT CAST(COUNT(DISTINCT sc.DUID) AS INTEGER) AS cnt
-        FROM ${fromScada()}
-        WHERE ${whereClause()}
-      `);
+      const genCount = await runQuery(sql.generatorCount());
       if (seq !== _renderSeq) return;
       if (genCount.length) document.getElementById('kpiGens').textContent = genCount[0].cnt.toLocaleString();
+    }
+
+    // =========================================================================
+    // 7. WIRING (filters, CSV, DUID dropdown, renderAll, init)
+    // =========================================================================
+
+    // --- DUID multi-select dropdown ---
+    let allDuids = [];
+
+    function renderDuidList(filter = '') {
+      const list = document.getElementById('duidList');
+      list.innerHTML = '';
+      const lc = filter.toLowerCase();
+      const regionVal = document.getElementById("regionFilter").value;
+      const fuelVal = document.getElementById("fuelFilter").value;
+      const filtered = allDuids.filter(d =>
+        d.DUID.toLowerCase().includes(lc) &&
+        (!regionVal || d.Region === regionVal) &&
+        (!fuelVal || d.fuel === fuelVal)
+      );
+      for (const d of filtered.slice(0, 150)) {
+        const label = document.createElement('label');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = crossFilter.duids.includes(d.DUID);
+        cb.addEventListener('change', () => {
+          if (cb.checked) { if (!crossFilter.duids.includes(d.DUID)) crossFilter.duids.push(d.DUID); }
+          else { crossFilter.duids = crossFilter.duids.filter(x => x !== d.DUID); }
+          updateDuidTrigger();
+          renderAll();
+        });
+        label.append(cb, ` ${d.DUID} (${d.Region}, ${d.fuel})`);
+        list.append(label);
+      }
+    }
+
+    function updateDuidTrigger() {
+      const btn = document.getElementById('duidTrigger');
+      btn.textContent = crossFilter.duids.length ? `${crossFilter.duids.length} selected` : 'All DUIDs';
+    }
+
+    document.getElementById('duidTrigger').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const panel = document.getElementById('duidPanel');
+      const isOpen = panel.classList.toggle('open');
+      if (isOpen) {
+        document.getElementById('duidSearch').value = '';
+        renderDuidList();
+        document.getElementById('duidSearch').focus();
+      }
+    });
+    document.getElementById('duidPanel').addEventListener('click', e => e.stopPropagation());
+    document.addEventListener('click', () => document.getElementById('duidPanel').classList.remove('open'));
+    document.getElementById('duidSearch').addEventListener('input', e => renderDuidList(e.target.value));
+
+    // --- CSV download ---
+    async function downloadAllCSV() {
+      const csvSql = sql.csvExport();
+      const countResult = await runQuery(`SELECT COUNT(*) AS n FROM (${csvSql})`);
+      const rowCount = countResult[0].n;
+      if (rowCount > 150000) {
+        alert(`Too many rows (${rowCount.toLocaleString()}). Apply filters or reduce the date range to under 150K rows.`);
+        return;
+      }
+      const data = await runQuery(csvSql);
+      downloadCSV(data, isIntradayMode() ? 'energy_intraday.csv' : 'energy_hourly.csv');
+    }
+
+    document.getElementById('dl-all').addEventListener('click', downloadAllCSV);
+
+    // --- Filter population ---
+    async function populateFilters() {
+      const regions = await runQuery(sql.regions);
+      const fuels = await runQuery(sql.fuels);
+      const regionSelect = document.getElementById("regionFilter");
+      for (const r of regions) regionSelect.add(new Option(r.Region, r.Region));
+      const fuelSelect = document.getElementById("fuelFilter");
+      for (const f of fuels) fuelSelect.add(new Option(f.fuel, f.fuel));
+      allDuids = await runQuery(sql.allDuids);
+    }
+
+    // --- Filter change listeners ---
+    for (const id of ["regionFilter", "fuelFilter", "daysFilter"]) {
+      document.getElementById(id).addEventListener("change", () => {
+        crossFilter.fuel = null;
+        crossFilter.region = null;
+        crossFilter.duids = [];
+        updateDuidTrigger();
+        renderAll();
+      });
     }
 
     // --- Render all ---
@@ -789,7 +837,7 @@
         await Promise.all([renderGeneration(seq), renderPrice(seq), renderMap(seq)]);
         if (seq !== _renderSeq) return;
         if (!window._cutoffCached) {
-          const cutoffResult = await query("SELECT CAST(MAX(date) AS VARCHAR) || ' ' || substr(lpad(CAST(MAX(time) AS VARCHAR), 4, '0'), 1, 2) || ':' || substr(lpad(CAST(MAX(time) AS VARCHAR), 4, '0'), 3, 2) AS last_update FROM today.scada_today WHERE date = (SELECT MAX(date) FROM today.scada_today)");
+          const cutoffResult = await runQuery(sql.cutoff);
           if (seq !== _renderSeq) return;
           if (cutoffResult.length && cutoffResult[0].last_update) {
             const updated = new Date(cutoffResult[0].last_update).toLocaleString("en-AU", { timeZone: "Australia/Brisbane", dateStyle: "medium", timeStyle: "short" });
@@ -801,17 +849,6 @@
         setStatus("Query error: " + e.message, "error");
         console.error(e);
       }
-    }
-
-    // --- Filter event listeners ---
-    for (const id of ["regionFilter", "fuelFilter", "daysFilter"]) {
-      document.getElementById(id).addEventListener("change", () => {
-        crossFilter.fuel = null;
-        crossFilter.region = null;
-        crossFilter.duids = [];
-        updateDuidTrigger();
-        renderAll();
-      });
     }
 
     // --- Init ---
