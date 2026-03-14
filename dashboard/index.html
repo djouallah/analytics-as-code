@@ -104,6 +104,7 @@
     <div class="kpi-card"><div class="kpi-label">Avg Price</div><div class="kpi-value" id="kpiPrice">--</div><div class="kpi-sub">$/MWh across regions</div></div>
     <div class="kpi-card"><div class="kpi-label">Active Generators</div><div class="kpi-value" id="kpiGens">--</div><div class="kpi-sub">DUIDs reporting</div></div>
     <div class="kpi-card"><div class="kpi-label">Top Fuel Source</div><div class="kpi-value" id="kpiTopFuel">--</div><div class="kpi-sub" id="kpiTopFuelSub">by generation</div></div>
+    <div class="kpi-card"><div class="kpi-label">Number of Records</div><div class="kpi-value" id="kpiRecords">--</div><div class="kpi-sub">scada rows</div></div>
   </div>
 
   <div class="charts">
@@ -554,6 +555,13 @@
           WHERE ${sql.whereScada()}`;
       },
 
+      scadaRecordCount() {
+        return `
+          SELECT CAST(COUNT(*) AS INTEGER) AS cnt
+          FROM ${sql.fromScada()}
+          WHERE ${sql.whereScada()}`;
+      },
+
       // --- CSV export (always raw 5-min grain) ---
       csvExport() {
         const hasDuids = crossFilter.duids.length > 0 || !!document.getElementById("fuelFilter").value || !!document.getElementById("regionFilter").value;
@@ -922,7 +930,8 @@
       updateFilterTags();
       try {
         await Promise.all([renderGeneration(seq), renderPrice(seq), renderMap(seq),
-          runQuery(sql.generatorCount()).then(r => { if (seq === _renderSeq && r.length) document.getElementById('kpiGens').textContent = r[0].cnt.toLocaleString(); })
+          runQuery(sql.generatorCount()).then(r => { if (seq === _renderSeq && r.length) document.getElementById('kpiGens').textContent = r[0].cnt.toLocaleString(); }),
+          runQuery(sql.scadaRecordCount()).then(r => { if (seq === _renderSeq && r.length) document.getElementById('kpiRecords').textContent = r[0].cnt.toLocaleString(); })
         ]);
         if (seq !== _renderSeq) return;
         if (!window._cutoffCached) {
