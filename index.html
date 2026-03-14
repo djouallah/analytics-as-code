@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Australian Energy Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #0f1117; color: #e1e4e8; }
+    header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 0.4rem 2rem; border-bottom: 1px solid rgba(255,255,255,0.06); display: flex; align-items: center; gap: 1.2rem; flex-wrap: wrap; }
+    header .title-block { display: flex; flex-direction: column; }
+    header h1 { font-size: 1.2rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.3; }
+    header .subtitle { font-size: 0.7rem; color: #8b949e; }
+    #status { font-size: 0.7rem; display: flex; align-items: center; gap: 0.4rem; margin-left: auto; }
+    #status .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+    #status.connected .dot { background: #3fb950; box-shadow: 0 0 6px #3fb950; }
+    #status.error .dot { background: #f85149; box-shadow: 0 0 6px #f85149; }
+    #status.loading .dot { background: #d29922; box-shadow: 0 0 6px #d29922; animation: pulse 1.2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    .filter-group { display: flex; align-items: center; gap: 0.4rem; }
+    .filter-group label { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+    .filter-group select { padding: 0.35rem 0.6rem; border: 1px solid #30363d; border-radius: 6px; font-size: 0.8rem; background: #0d1117; color: #e1e4e8; cursor: pointer; outline: none; transition: border-color 0.2s; }
+    .filter-group select:hover { border-color: #58a6ff; }
+    .filter-group select:focus { border-color: #58a6ff; box-shadow: 0 0 0 2px rgba(88,166,255,0.15); }
+    .active-filters { display: flex; gap: 0.4rem; padding: 0.5rem 2rem; background: rgba(210,153,34,0.08); flex-wrap: wrap; align-items: center; font-size: 0.75rem; }
+    .active-filters:empty { display: none; }
+    .filter-tag { background: #58a6ff; color: #0d1117; padding: 0.15rem 0.5rem; border-radius: 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 0.25rem; font-weight: 600; font-size: 0.7rem; transition: background 0.2s; }
+    .filter-tag:hover { background: #f85149; color: white; }
+    .filter-tag::after { content: "\00d7"; font-size: 0.9rem; }
+    .kpi-row { display: flex; gap: 0.6rem; padding: 0.5rem 2rem; flex-wrap: wrap; }
+    .kpi-card { flex: 1; min-width: 140px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 0.5rem 0.8rem; }
+    .kpi-card .kpi-label { font-size: 0.65rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+    .kpi-card .kpi-value { font-size: 1.3rem; font-weight: 700; margin-top: 0.1rem; }
+    .kpi-card .kpi-sub { font-size: 0.65rem; color: #8b949e; margin-top: 0.05rem; }
+    .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; padding: 0 2rem 1rem; transition: opacity 0.2s; }
+    .charts.loading { opacity: 0.4; }
+    .chart-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 0.6rem; }
+    .chart-card h2 { font-size: 0.8rem; font-weight: 600; margin-bottom: 0.3rem; color: #e1e4e8; display: inline; }
+    .chart-card .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.3rem; }
+    .chart-card.full-width { grid-column: 1 / -1; }
+    .duid-dropdown { position: relative; }
+    .duid-trigger { padding: 0.35rem 0.6rem; border: 1px solid #30363d; border-radius: 6px; font-size: 0.8rem; background: #0d1117; color: #e1e4e8; cursor: pointer; outline: none; transition: border-color 0.2s; white-space: nowrap; }
+    .duid-trigger:hover { border-color: #58a6ff; }
+    .duid-panel { display: none; position: absolute; top: 100%; left: 0; z-index: 1000; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; width: 280px; margin-top: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+    .duid-panel.open { display: block; }
+    .duid-search { width: 100%; padding: 0.4rem 0.5rem; border: none; border-bottom: 1px solid #30363d; background: #161b22; color: #e1e4e8; font-size: 0.8rem; outline: none; border-radius: 6px 6px 0 0; box-sizing: border-box; }
+    .duid-list { max-height: 240px; overflow-y: auto; }
+    .duid-list label { display: flex; align-items: center; gap: 0.4rem; padding: 0.25rem 0.5rem; cursor: pointer; font-size: 0.75rem; color: #e1e4e8; text-transform: none; letter-spacing: normal; font-weight: 400; }
+    .duid-list label:hover { background: rgba(88,166,255,0.1); }
+    .duid-list input[type=checkbox] { accent-color: #58a6ff; }
+    .btn-csv-main { padding: 0.35rem 0.8rem; border: 1px solid #30363d; border-radius: 6px; font-size: 0.75rem; background: none; color: #8b949e; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+    .btn-csv-main:hover { border-color: #58a6ff; color: #58a6ff; }
+    .chart-container { width: 100%; }
+    @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } .kpi-row { flex-direction: column; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="title-block">
+      <h1>Australian Energy Dashboard</h1>
+      <div class="subtitle">Powered by DuckDB WASM &middot; Data from AEMO via Iceberg &middot; <a href="dag/#!/overview?g_v=1" target="_blank" style="color:#58a6ff;text-decoration:none;">View DAG</a></div>
+    </div>
+    <div class="filter-group">
+      <label>Region</label>
+      <select id="regionFilter"><option value="">All Regions</option></select>
+    </div>
+    <div class="filter-group">
+      <label>Fuel</label>
+      <select id="fuelFilter"><option value="">All Fuel Types</option></select>
+    </div>
+    <div class="filter-group">
+      <label>DUID</label>
+      <div class="duid-dropdown" id="duidDropdown">
+        <button class="duid-trigger" id="duidTrigger" type="button">All DUIDs</button>
+        <div class="duid-panel" id="duidPanel">
+          <input type="text" class="duid-search" id="duidSearch" placeholder="Search DUIDs...">
+          <div class="duid-list" id="duidList"></div>
+        </div>
+      </div>
+    </div>
+    <div class="filter-group">
+      <label>Period</label>
+      <select id="daysFilter">
+        <option value="1">Today</option>
+        <option value="3" selected>Last 3 days</option>
+        <option value="7">Last 7 days</option>
+        <option value="14">Last 14 days</option>
+        <option value="30">Last 30 days</option>
+        <option value="60">Last 60 days</option>
+        <option value="90">Last 90 days</option>
+        <option value="180">Last 6 months</option>
+        <option value="365">Last 1 year</option>
+        <option value="9999">All</option>
+      </select>
+    </div>
+    <button class="btn-csv-main" id="dl-all" type="button">Download CSV</button>
+    <a href="https://github.com/djouallah/analytics-as-code" target="_blank" style="color:#8b949e;text-decoration:none;display:inline-flex;align-items:center;gap:3px;" title="View on GitHub"><svg height="16" width="16" viewBox="0 0 16 16" fill="#8b949e"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+    <div id="status" class="loading"><span class="dot"></span><span id="statusText">Initializing DuckDB...</span></div>
+  </header>
+  <div class="active-filters" id="activeFilters"></div>
+
+  <div class="kpi-row">
+    <div class="kpi-card"><div class="kpi-label">Total Generation</div><div class="kpi-value" id="kpiGen">--</div><div class="kpi-sub" id="kpiGenSub">Average MW</div></div>
+    <div class="kpi-card"><div class="kpi-label">Avg Price</div><div class="kpi-value" id="kpiPrice">--</div><div class="kpi-sub">$/MWh across regions</div></div>
+    <div class="kpi-card"><div class="kpi-label">Active Generators</div><div class="kpi-value" id="kpiGens">--</div><div class="kpi-sub">DUIDs reporting</div></div>
+    <div class="kpi-card"><div class="kpi-label">Top Fuel Source</div><div class="kpi-value" id="kpiTopFuel">--</div><div class="kpi-sub" id="kpiTopFuelSub">by generation</div></div>
+    <div class="kpi-card"><div class="kpi-label">Number of Records</div><div class="kpi-value" id="kpiRecords">--</div><div class="kpi-sub" id="kpiRecordsSub">scada rows</div></div>
+  </div>
+
+  <div class="charts">
+    <div class="chart-card full-width">
+      <div class="chart-header"><h2 id="title-generation">Generation by Fuel Type (MW)</h2></div>
+      <div class="chart-container" id="chart-generation" style="height:320px;"></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-header"><h2>Average Price by Region ($/MWh)</h2></div>
+      <div class="chart-container" id="chart-price" style="height:280px;"></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-container" id="chart-map" style="height:280px;"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.32.0/+esm";
+
+    // =========================================================================
+    // 1. CONSTANTS & THEME
+    // =========================================================================
+
+    const darkTheme = {
+      backgroundColor: 'transparent',
+      textStyle: { color: '#8b949e' },
+      title: { textStyle: { color: '#e1e4e8' } },
+      legend: { textStyle: { color: '#8b949e' }, pageTextStyle: { color: '#8b949e' } },
+      tooltip: {
+        backgroundColor: 'rgba(22,27,34,0.95)',
+        borderColor: '#30363d',
+        textStyle: { color: '#e1e4e8', fontSize: 12 },
+      },
+      categoryAxis: { axisLine: { lineStyle: { color: '#30363d' } }, axisTick: { lineStyle: { color: '#30363d' } }, axisLabel: { color: '#8b949e' }, splitLine: { lineStyle: { color: '#21262d' } } },
+      valueAxis: { axisLine: { lineStyle: { color: '#30363d' } }, axisTick: { lineStyle: { color: '#30363d' } }, axisLabel: { color: '#8b949e' }, splitLine: { lineStyle: { color: '#21262d' } } },
+      timeAxis: { axisLine: { lineStyle: { color: '#30363d' } }, axisTick: { lineStyle: { color: '#30363d' } }, axisLabel: { color: '#8b949e' }, splitLine: { lineStyle: { color: '#21262d' } } },
+    };
+    echarts.registerTheme('dark-custom', darkTheme);
+
+    const PALETTE = ['#58a6ff','#f0883e','#3fb950','#bc8cff','#f778ba','#d29922','#79c0ff','#56d364','#db6d28','#ff7b72','#7ee787','#a5d6ff'];
+    const FUEL_COLORS = {
+      'Black coal': '#444444',
+      'Brown coal': '#8B4513',
+      'Natural gas': '#f0883e',
+      'Natural gas / fuel oil': '#d29922',
+      'Natural gas / diesel': '#db6d28',
+      'Coal seam methane': '#6b4c2a',
+      'Wind': '#58a6ff',
+      'Solar': '#f7c948',
+      'Water': '#3fb950',
+      'Bagasse': '#7ee787',
+      'Diesel': '#ff7b72',
+      'Kerosene': '#f778ba',
+      'Waste coal mine gas': '#888888',
+      'Grid': '#bc8cff',
+      'Other': '#aaaaaa',
+      '-': '#aaaaaa',
+    };
+    function fuelColor(name) { return FUEL_COLORS[name] || PALETTE[Math.abs([...name].reduce((h,c)=>h*31+c.charCodeAt(0)|0,0)) % PALETTE.length]; }
+
+    // =========================================================================
+    // 2. STATE & DOM UTILITIES
+    // =========================================================================
+
+    function setStatus(msg, type = "loading") {
+      document.getElementById("statusText").textContent = msg;
+      document.getElementById("status").className = type;
+    }
+
+    const crossFilter = { fuel: null, region: null, duids: [] };
+    let loadedPeriods = [];
+    let _renderSeq = 0;
+
+    function updateFilterTags() {
+      const el = document.getElementById("activeFilters");
+      el.innerHTML = "";
+      if (crossFilter.fuel) {
+        const tag = document.createElement("span");
+        tag.className = "filter-tag";
+        tag.textContent = crossFilter.fuel;
+        tag.addEventListener("click", () => { crossFilter.fuel = null; renderAll(); });
+        el.append(tag);
+      }
+      if (crossFilter.region) {
+        const tag = document.createElement("span");
+        tag.className = "filter-tag";
+        tag.textContent = crossFilter.region;
+        tag.addEventListener("click", () => { crossFilter.region = null; renderAll(); });
+        el.append(tag);
+      }
+      for (const duid of crossFilter.duids) {
+        const tag = document.createElement("span");
+        tag.className = "filter-tag";
+        tag.textContent = duid;
+        tag.addEventListener("click", () => { crossFilter.duids = crossFilter.duids.filter(d => d !== duid); updateDuidTrigger(); renderAll(); });
+        el.append(tag);
+      }
+    }
+
+    // =========================================================================
+    // 3. DUCKDB SETUP
+    // =========================================================================
+
+    let conn;
+
+    // Cache a remote .duckdb file in OPFS. Downloads if missing or stale.
+    // source: 'opfs-hit' | 'opfs-miss' | 'opfs-refresh'
+    async function cacheInOPFS(db, url, filename) {
+      const root = await navigator.storage.getDirectory();
+      const cacheKey = `opfs_etag_${filename}`;
+      const cachedTag = localStorage.getItem(cacheKey);
+
+      // HEAD request to check if remote file changed
+      let remoteTag = null;
+      try {
+        const head = await fetch(url, { method: 'HEAD' });
+        remoteTag = head.headers.get('etag') || head.headers.get('last-modified');
+      } catch (e) {
+        console.log(`[OPFS] HEAD request failed (offline?), will use cache if available`);
+      }
+
+      // Try cached version: valid if tags match, or if offline and we have a cache
+      const cacheValid = cachedTag && (cachedTag === remoteTag || !remoteTag);
+      if (cacheValid) {
+        try {
+          setStatus("Loading from cache...");
+          const handle = await root.getFileHandle(filename);
+          const file = await handle.getFile();
+          const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+          console.log(`[OPFS] Cache hit for ${filename} (${sizeMB} MB)`);
+          await db.registerFileBuffer(filename, new Uint8Array(await file.arrayBuffer()));
+          return { source: 'opfs-hit' };
+        } catch (e) {
+          console.log(`[OPFS] Cache entry missing from OPFS despite etag, will re-fetch`);
+        }
+      }
+
+      // Fetch and cache in OPFS
+      const reason = cachedTag ? 'file changed on server' : 'first download';
+      console.log(`[OPFS] Fetching ${filename} (${reason})`);
+      setStatus("Downloading database...");
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`Failed to fetch ${filename}: HTTP ${resp.status}`);
+      const buffer = new Uint8Array(await resp.arrayBuffer());
+      if (buffer.byteLength < 100) throw new Error(`${filename} is too small (${buffer.byteLength} bytes), likely not a valid database`);
+      const sizeMB = (buffer.byteLength / 1024 / 1024).toFixed(1);
+
+      const handle = await root.getFileHandle(filename, { create: true });
+      const writable = await handle.createWritable();
+      await writable.write(buffer);
+      await writable.close();
+      if (remoteTag) localStorage.setItem(cacheKey, remoteTag);
+      console.log(`[OPFS] Cached ${filename} (${sizeMB} MB) in OPFS`);
+
+      await db.registerFileBuffer(filename, buffer);
+      return { source: cachedTag ? 'opfs-refresh' : 'opfs-miss' };
+    }
+
+    let _db = null;
+    let _baseUrl = '';
+
+    async function initDuckDB() {
+      setStatus("Loading DuckDB WASM...");
+      const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
+      const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
+      const workerUrl = URL.createObjectURL(
+        new Blob([`importScripts("${bundle.mainWorker}");`], { type: "text/javascript" })
+      );
+      const worker = new Worker(workerUrl);
+      const logger = new duckdb.ConsoleLogger();
+      _db = new duckdb.AsyncDuckDB(logger, worker);
+      await _db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+      URL.revokeObjectURL(workerUrl);
+
+      conn = await _db.connect();
+      _baseUrl = window.location.href.replace(/\/[^/]*$/, "");
+
+      // Phase 1: Load dim + today (enough for default "Last 3 days" view)
+      setStatus("Loading today's data...");
+      const [dimResult, todayResult] = await Promise.all([
+        cacheInOPFS(_db, `${_baseUrl}/energy_dim.duckdb`, 'energy_dim.duckdb'),
+        cacheInOPFS(_db, `${_baseUrl}/energy_today.duckdb`, 'energy_today.duckdb'),
+      ]);
+      await conn.query("ATTACH 'energy_dim.duckdb' AS dim (READ_ONLY);");
+      await conn.query("ATTACH 'energy_today.duckdb' AS today (READ_ONLY);");
+      await conn.query("SET TimeZone = 'Australia/Brisbane';");
+
+      const sourceLabel = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded', 'opfs-refresh': 'refreshed' };
+      console.log(`[OPFS] dim: ${sourceLabel[dimResult.source]}, today: ${sourceLabel[todayResult.source]}`);
+      setStatus("Connected", "connected");
+    }
+
+    async function loadYearDatabases() {
+      const manifest = await (await fetch(`${_baseUrl}/daily_manifest.json`)).json();
+      loadedPeriods = manifest.periods;
+      console.log(`[OPFS] Loading databases: ${loadedPeriods.join(', ')}...`);
+
+      const sourceLabel = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded', 'opfs-refresh': 'refreshed' };
+      const results = await Promise.all(
+        loadedPeriods.map(p => cacheInOPFS(_db, `${_baseUrl}/energy_data_${p}.duckdb`, `energy_data_${p}.duckdb`))
+      );
+      for (const p of loadedPeriods) {
+        await conn.query(`ATTACH 'energy_data_${p}.duckdb' AS p${p} (READ_ONLY);`);
+      }
+      for (let i = 0; i < loadedPeriods.length; i++) {
+        console.log(`[OPFS] p${loadedPeriods[i]}: ${sourceLabel[results[i].source]}`);
+      }
+      console.log(`[OPFS] All databases loaded`);
+
+    }
+
+    const _queryCache = new Map();
+    function clearQueryCache() { _queryCache.clear(); }
+
+    async function runQuery(sqlStr) {
+      const cached = _queryCache.get(sqlStr);
+      if (cached) return cached;
+      const result = await conn.query(sqlStr);
+      const rows = [];
+      const numRows = Number(result.numRows);
+      for (let i = 0; i < numRows; i++) {
+        const row = {};
+        for (const field of result.schema.fields) {
+          const col = result.getChild(field.name);
+          let val = col.get(i);
+          if (typeof val === "bigint") val = Number(val);
+          row[field.name] = val;
+        }
+        rows.push(row);
+      }
+      _queryCache.set(sqlStr, rows);
+      return rows;
+    }
+
+    // =========================================================================
+    // 4. HELPERS
+    // =========================================================================
+
+    // Grain: <=7d = 5-min intraday | 8-30d = hourly | >30d = daily aggregate
+    function isIntradayMode() {
+      return parseInt(document.getElementById("daysFilter").value) <= 7;
+    }
+    function showTimeDetail() {
+      return parseInt(document.getElementById("daysFilter").value) <= 30;
+    }
+
+    function padTime(time) { return String(time).padStart(4, '0'); }
+
+    function formatTime(time) {
+      const hh = String(Math.floor(time / 100)).padStart(2, '0');
+      const mm = String(time % 100).padStart(2, '0');
+      return `${hh}:${mm}`;
+    }
+
+    function formatDate(str) {
+      const [y, m, d] = str.split('-');
+      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      return `${parseInt(d)} ${months[parseInt(m) - 1]} ${y}`;
+    }
+
+    function buildTimeAxis(rows, timeDetail) {
+      if (timeDetail) {
+        const xKeys = [...new Set(rows.map(d => `${d.date}|${padTime(d.time)}`))].sort();
+        const xLabels = xKeys.map(k => {
+          const [dt, tm] = k.split('|');
+          return formatDate(dt) + ' ' + formatTime(parseInt(tm));
+        });
+        return { xKeys, xLabels };
+      }
+      const xKeys = [...new Set(rows.map(d => d.date))].sort();
+      const xLabels = xKeys.map(d => formatDate(d));
+      return { xKeys, xLabels };
+    }
+
+    function buildLookup(rows, keyFn, valueFn) {
+      const lookup = {};
+      for (const row of rows) lookup[keyFn(row)] = valueFn(row);
+      return lookup;
+    }
+
+    function dataZoomConfig(timeDetail) {
+      return timeDetail
+        ? [{ type: 'inside', start: 0, end: 100 }, { type: 'slider', start: 0, end: 100, height: 20, bottom: 35 }]
+        : [];
+    }
+
+    function downloadCSV(rows, filename) {
+      if (!rows.length) return;
+      const cols = Object.keys(rows[0]);
+      const lines = [cols.join(',')];
+      for (const row of rows) lines.push(cols.map(c => row[c] ?? '').join(','));
+      const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    // =========================================================================
+    // 5. SQL QUERY BUILDERS
+    // =========================================================================
+
+    const sql = {
+      // --- UNION ALL builders across year databases ---
+      // Raw 5-min grain (for CSV export)
+      _scadaRawUnion() {
+        const parts = loadedPeriods.map(p => `SELECT DUID, date, time, mw FROM p${p}.scada WHERE date < CURRENT_DATE - INTERVAL 5 DAY`);
+        parts.push(`SELECT DUID, date, time, mw FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY`);
+        return parts.join('\n            UNION ALL\n            ');
+      },
+
+      _priceRawUnion() {
+        const parts = loadedPeriods.map(p => `SELECT REGIONID, date, time, price FROM p${p}.price WHERE date < CURRENT_DATE - INTERVAL 5 DAY`);
+        parts.push(`SELECT REGIONID, date, time, price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY`);
+        return parts.join('\n            UNION ALL\n            ');
+      },
+
+      // Hourly aggregated (for charts when >7d)
+      _scadaHourlyUnion() {
+        const extract = "extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0))";
+        const parts = loadedPeriods.map(p =>
+          `SELECT DUID, date, CAST(${extract} * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh, CAST(COUNT(*) AS INTEGER) AS cnt FROM p${p}.scada WHERE date < CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date, ${extract}`
+        );
+        parts.push(
+          `SELECT DUID, date, CAST(${extract} * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh, CAST(COUNT(*) AS INTEGER) AS cnt FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date, ${extract}`
+        );
+        return parts.join('\n            UNION ALL\n            ');
+      },
+
+      _priceHourlyUnion() {
+        const extract = "extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0))";
+        const parts = loadedPeriods.map(p =>
+          `SELECT REGIONID, date, CAST(${extract} * 100 AS SMALLINT) AS time, AVG(price)::REAL AS price FROM p${p}.price WHERE date < CURRENT_DATE - INTERVAL 5 DAY GROUP BY REGIONID, date, ${extract}`
+        );
+        parts.push(
+          `SELECT REGIONID, date, CAST(${extract} * 100 AS SMALLINT) AS time, AVG(price)::REAL AS price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY REGIONID, date, ${extract}`
+        );
+        return parts.join('\n            UNION ALL\n            ');
+      },
+
+      // --- FROM clauses ---
+      // Intraday (<=7d): 5-min grain from today DB
+      // Hourly (>7d): year DBs + today aggregated to hourly via UNION ALL
+      fromScada() {
+        if (isIntradayMode()) {
+          return `today.scada_today sc
+            JOIN dim.dim_calendar c ON c.date = sc.date
+            JOIN dim.dim_duid d ON sc.DUID = d.DUID`;
+        }
+        return `(${sql._scadaHourlyUnion()}) sc
+          JOIN dim.dim_calendar c ON c.date = sc.date
+          JOIN dim.dim_duid d ON sc.DUID = d.DUID`;
+      },
+
+      fromPrice() {
+        if (isIntradayMode()) {
+          return `today.price_today p
+            JOIN dim.dim_calendar c ON c.date = p.date`;
+        }
+        return `(${sql._priceHourlyUnion()}) p
+          JOIN dim.dim_calendar c ON c.date = p.date`;
+      },
+
+      // --- WHERE clauses ---
+      whereScada() {
+        const region = document.getElementById("regionFilter").value || crossFilter.region;
+        const fuel = document.getElementById("fuelFilter").value || crossFilter.fuel;
+        const days = document.getElementById("daysFilter").value;
+        const dateFilter = days === '1' ? `c.date >= CURRENT_DATE` : `c.date >= CURRENT_DATE - INTERVAL ${days} DAY`;
+        const clauses = [dateFilter];
+        if (region) clauses.push(`d.Region = '${region}'`);
+        if (fuel) clauses.push(`d.FuelSourceDescriptor = '${fuel}'`);
+        if (crossFilter.duids.length) clauses.push(`sc.DUID IN (${crossFilter.duids.map(d => `'${d}'`).join(',')})`);
+        return clauses.join(" AND ");
+      },
+
+      wherePrice() {
+        const region = document.getElementById("regionFilter").value || crossFilter.region;
+        const days = document.getElementById("daysFilter").value;
+        const dateFilter = days === '1' ? `c.date >= CURRENT_DATE` : `c.date >= CURRENT_DATE - INTERVAL ${days} DAY`;
+        const clauses = [dateFilter];
+        if (region) clauses.push(`p.REGIONID = '${region}'`);
+        if (!region && (crossFilter.duids.length || crossFilter.fuel)) {
+          const fuel = document.getElementById("fuelFilter").value || crossFilter.fuel;
+          let regionFilter;
+          if (crossFilter.duids.length) {
+            regionFilter = `p.REGIONID IN (SELECT Region FROM dim.dim_duid WHERE DUID IN (${crossFilter.duids.map(d => `'${d}'`).join(',')}))`;
+          } else if (fuel) {
+            regionFilter = `p.REGIONID IN (SELECT DISTINCT Region FROM dim.dim_duid WHERE FuelSourceDescriptor = '${fuel}')`;
+          }
+          if (regionFilter) clauses.push(regionFilter);
+        }
+        return clauses.join(" AND ");
+      },
+
+      // --- Filter population ---
+      regions: "SELECT DISTINCT Region FROM dim.dim_duid WHERE Region IS NOT NULL ORDER BY Region",
+      fuels: "SELECT DISTINCT FuelSourceDescriptor AS fuel FROM dim.dim_duid WHERE FuelSourceDescriptor IS NOT NULL ORDER BY fuel",
+      allDuids: "SELECT DUID, Region, FuelSourceDescriptor AS fuel FROM dim.dim_duid WHERE DUID IS NOT NULL ORDER BY DUID",
+
+      // --- Generation chart ---
+      generation(seriesAlias, seriesCol, valCol, timeDetail, intraday) {
+        const cntCol = intraday ? 'COUNT(*)' : 'SUM(sc.cnt)';
+        if (timeDetail) {
+          return `
+            SELECT CAST(sc.date AS VARCHAR) AS date, CAST(sc.time AS INTEGER) AS time, ${seriesAlias}, SUM(${valCol})::DOUBLE AS total_mw, CAST(${cntCol} AS INTEGER) AS row_cnt
+            FROM ${sql.fromScada()}
+            WHERE ${sql.whereScada()}
+            GROUP BY sc.date, sc.time, ${seriesCol}
+            ORDER BY sc.date, sc.time`;
+        }
+        return `
+          SELECT CAST(sc.date AS VARCHAR) AS date, ${seriesAlias}, SUM(${valCol})::DOUBLE AS total_mw, CAST(${cntCol} AS INTEGER) AS row_cnt
+          FROM ${sql.fromScada()}
+          WHERE ${sql.whereScada()}
+          GROUP BY sc.date, ${seriesCol}
+          ORDER BY sc.date`;
+      },
+
+      // --- Price chart ---
+      price(timeDetail) {
+        if (timeDetail) {
+          return `
+            SELECT CAST(p.date AS VARCHAR) AS date, CAST(p.time AS INTEGER) AS time, p.REGIONID AS Region, AVG(p.price)::DOUBLE AS avg_price
+            FROM ${sql.fromPrice()}
+            WHERE ${sql.wherePrice()}
+            GROUP BY p.date, p.time, p.REGIONID
+            ORDER BY p.date, p.time`;
+        }
+        return `
+          SELECT CAST(p.date AS VARCHAR) AS date, p.REGIONID AS Region, AVG(p.price)::DOUBLE AS avg_price
+          FROM ${sql.fromPrice()}
+          WHERE ${sql.wherePrice()}
+          GROUP BY p.date, p.REGIONID
+          ORDER BY p.date`;
+      },
+
+      // --- Map ---
+      mapScatter(col) {
+        return `
+          SELECT sc.DUID, d.FuelSourceDescriptor AS fuel, d.Region,
+            d.latitude::DOUBLE AS lat, d.longitude::DOUBLE AS lon,
+            AVG(${col})::DOUBLE AS mw
+          FROM ${sql.fromScada()}
+          WHERE ${sql.whereScada()} AND d.latitude IS NOT NULL
+          GROUP BY sc.DUID, d.FuelSourceDescriptor, d.Region, d.latitude, d.longitude`;
+      },
+
+      generatorCount() {
+        return `
+          SELECT CAST(COUNT(DISTINCT sc.DUID) AS INTEGER) AS cnt
+          FROM ${sql.fromScada()}
+          WHERE ${sql.whereScada()}`;
+      },
+
+      // --- CSV export (always raw 5-min grain) ---
+      csvExport() {
+        const hasDuids = crossFilter.duids.length > 0 || !!document.getElementById("fuelFilter").value || !!document.getElementById("regionFilter").value;
+
+        const scadaFrom = `dim.dim_calendar c
+          JOIN (${sql._scadaRawUnion()}) sc ON c.date = sc.date
+          JOIN dim.dim_duid d ON sc.DUID = d.DUID`;
+        const priceJoin = `LEFT JOIN (${sql._priceRawUnion()}) p ON sc.date = p.date AND sc.time = p.time AND d.Region = p.REGIONID`;
+
+        if (hasDuids) {
+          return `
+            SELECT CAST(sc.date AS VARCHAR) AS date, lpad(CAST(sc.time AS VARCHAR), 4, '0') AS time,
+              sc.DUID, d.FuelSourceDescriptor AS fuel, d.Region AS region,
+              ROUND(sc.mw, 2)::DOUBLE AS mw, ROUND(p.price, 2)::DOUBLE AS price
+            FROM ${scadaFrom}
+            ${priceJoin}
+            WHERE ${sql.whereScada()}
+            ORDER BY sc.date, sc.time, sc.DUID`;
+        }
+        return `
+          SELECT CAST(sc.date AS VARCHAR) AS date, lpad(CAST(sc.time AS VARCHAR), 4, '0') AS time,
+            d.FuelSourceDescriptor AS fuel, d.Region AS region,
+            ROUND(SUM(sc.mw), 2)::DOUBLE AS mw, ROUND(AVG(p.price), 2)::DOUBLE AS price
+          FROM ${scadaFrom}
+          ${priceJoin}
+          WHERE ${sql.whereScada()}
+          GROUP BY sc.date, sc.time, d.FuelSourceDescriptor, d.Region
+          ORDER BY sc.date, sc.time, d.FuelSourceDescriptor`;
+      },
+
+      // --- Cutoff timestamp ---
+      cutoff: "SELECT CAST(MAX(date) AS VARCHAR) || ' ' || substr(lpad(CAST(MAX(time) AS VARCHAR), 4, '0'), 1, 2) || ':' || substr(lpad(CAST(MAX(time) AS VARCHAR), 4, '0'), 3, 2) AS last_update FROM today.scada_today WHERE date = (SELECT MAX(date) FROM today.scada_today)",
+    };
+
+    // =========================================================================
+    // 6. CHART RENDERERS
+    // =========================================================================
+
+    const charts = {};
+    function getChart(id) {
+      if (!charts[id]) charts[id] = echarts.init(document.getElementById(id), 'dark-custom');
+      return charts[id];
+    }
+    window.addEventListener('resize', () => { Object.values(charts).forEach(c => c.resize()); });
+
+    // --- Generation by Fuel Type (stacked area) ---
+    async function renderGeneration(seq) {
+      const intraday = isIntradayMode();
+      const timeDetail = showTimeDetail();
+      const unit = intraday ? 'MW' : 'MWh';
+      const drillFuel = crossFilter.fuel;
+
+      document.getElementById("title-generation").textContent = drillFuel
+        ? `${drillFuel} by DUID (${unit})`
+        : `Generation by Fuel Type (${unit})`;
+
+      const valCol = intraday ? 'sc.mw' : 'sc.mwh';
+      const seriesCol = drillFuel ? 'sc.DUID' : 'd.FuelSourceDescriptor';
+      const seriesAlias = drillFuel ? 'sc.DUID AS series' : 'd.FuelSourceDescriptor AS series';
+
+      const data = await runQuery(sql.generation(seriesAlias, seriesCol, valCol, timeDetail, intraday));
+      if (seq !== _renderSeq || !data.length) return;
+
+      const { xKeys, xLabels } = buildTimeAxis(data, timeDetail);
+      const lookup = buildLookup(data,
+        row => timeDetail ? `${row.date}|${padTime(row.time)}|${row.series}` : `${row.date}|${row.series}`,
+        row => row.total_mw
+      );
+
+      // Sort series by total descending, limit to top 15 in drill mode
+      const seriesTotals = {};
+      for (const row of data) seriesTotals[row.series] = (seriesTotals[row.series] || 0) + row.total_mw;
+      let seriesNames = Object.entries(seriesTotals).sort((a, b) => b[1] - a[1]).map(e => e[0]);
+      if (drillFuel && seriesNames.length > 15) seriesNames = seriesNames.slice(0, 15);
+
+      const series = seriesNames.map((name, i) => ({
+        name,
+        type: 'line',
+        stack: 'total',
+        areaStyle: { opacity: 0.85 },
+        lineStyle: { width: 0 },
+        symbol: 'none',
+        emphasis: { focus: 'series' },
+        triggerLineEvent: true,
+        sampling: timeDetail ? 'lttb' : undefined,
+        itemStyle: { color: drillFuel ? PALETTE[i % PALETTE.length] : fuelColor(name) },
+        data: xKeys.map(k => lookup[`${k}|${name}`] || 0),
+      }));
+
+      let hoveredSeries = '';
+      const chart = getChart('chart-generation');
+      chart.off('mouseover'); chart.off('mouseout');
+      chart.on('mouseover', p => { if (p.seriesName) hoveredSeries = p.seriesName; });
+      chart.on('mouseout', () => { hoveredSeries = ''; });
+      chart.setOption({
+        tooltip: { trigger: 'axis', axisPointer: { type: 'line' }, formatter: params => {
+          const target = hoveredSeries ? params.find(p => p.seriesName === hoveredSeries) : null;
+          const p = target || params.filter(p => p.value > 0).sort((a, b) => b.value - a.value)[0];
+          if (!p) return '';
+          return `<div style="color:#8b949e;margin-bottom:2px">${params[0].axisValueLabel}</div><div style="font-weight:600">${p.marker} ${p.seriesName}: ${Math.round(p.value).toLocaleString()} ${unit}</div>`;
+        }},
+        legend: { type: 'scroll', top: 0, icon: 'none', itemGap: 12, selectedMode: false, data: seriesNames.map((name, i) => ({ name, textStyle: { color: drillFuel ? PALETTE[i % PALETTE.length] : fuelColor(name), fontSize: 11 } })) },
+        grid: { left: 60, right: 20, top: 35, bottom: 25 },
+        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { rotate: timeDetail ? 45 : 0, fontSize: timeDetail ? 10 : 12 } },
+        yAxis: { type: 'value', min: 0, name: unit, nameTextStyle: { color: '#8b949e', fontSize: 11 }, axisLabel: { formatter: v => v >= 1000 ? (v/1000).toFixed(0) + 'k' : v } },
+        dataZoom: dataZoomConfig(timeDetail),
+        series,
+        animationDuration: 600,
+        animationEasing: 'cubicOut',
+      }, true);
+
+      // Click: fuel view -> drill into fuel; DUID view -> select DUID
+      chart.off('click');
+      chart.on('click', (params) => {
+        if (!params.seriesName) return;
+        if (drillFuel) {
+          const duid = params.seriesName;
+          const idx = crossFilter.duids.indexOf(duid);
+          if (idx >= 0) crossFilter.duids.splice(idx, 1);
+          else crossFilter.duids.push(duid);
+          updateDuidTrigger();
+        } else {
+          crossFilter.fuel = params.seriesName;
+        }
+        renderAll();
+      });
+
+      // KPIs
+      const uniqueIntervals = timeDetail ? xKeys.length : [...new Set(data.map(d => d.date))].length;
+      const totalGen = data.reduce((s, d) => s + d.total_mw, 0) / (uniqueIntervals || 1);
+      document.getElementById('kpiGen').textContent = Math.round(totalGen).toLocaleString();
+      document.getElementById('kpiGenSub').textContent = intraday ? 'Average MW' : (timeDetail ? 'Average MWh' : 'Average MWh/day');
+
+      const topFuel = Object.entries(seriesTotals).sort((a, b) => b[1] - a[1])[0];
+      if (topFuel) {
+        document.getElementById('kpiTopFuel').textContent = topFuel[0];
+        const avgLabel = intraday ? 'MW avg' : (timeDetail ? 'MWh avg' : 'MWh/day avg');
+        document.getElementById('kpiTopFuelSub').textContent = `${Math.round(topFuel[1] / (uniqueIntervals || 1)).toLocaleString()} ${avgLabel}`;
+      }
+
+      const rawRecords = data.reduce((s, d) => s + d.row_cnt, 0);
+      const aggRecords = data.length;
+      document.getElementById('kpiRecords').textContent = rawRecords.toLocaleString();
+      document.getElementById('kpiRecordsSub').textContent = `${aggRecords.toLocaleString()} aggregated`;
+    }
+
+    // --- Average Price by Region (line) ---
+    async function renderPrice(seq) {
+      const timeDetail = showTimeDetail();
+
+      const data = await runQuery(sql.price(timeDetail));
+      if (seq !== _renderSeq || !data.length) return;
+
+      const { xKeys, xLabels } = buildTimeAxis(data, timeDetail);
+      const lookup = buildLookup(data,
+        row => timeDetail ? `${row.date}|${padTime(row.time)}|${row.Region}` : `${row.date}|${row.Region}`,
+        row => row.avg_price
+      );
+
+      const regions = [...new Set(data.map(d => d.Region))].sort();
+
+      const series = regions.map((region, i) => ({
+        name: region,
+        type: 'line',
+        symbol: 'none',
+        lineStyle: { width: 2 },
+        emphasis: { focus: 'series', lineStyle: { width: 3 } },
+        triggerLineEvent: true,
+        sampling: timeDetail ? 'lttb' : undefined,
+        data: xKeys.map(k => {
+          const v = lookup[`${k}|${region}`];
+          return v != null ? Math.round(v * 100) / 100 : null;
+        }),
+      }));
+
+      const chart = getChart('chart-price');
+      chart.setOption({
+        color: PALETTE,
+        tooltip: { trigger: 'axis', axisPointer: { type: 'line' } },
+        legend: { bottom: 0, textStyle: { fontSize: 11 } },
+        grid: { left: 55, right: 15, top: 15, bottom: timeDetail ? 55 : 40 },
+        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { rotate: timeDetail ? 45 : 0, fontSize: timeDetail ? 10 : 12 } },
+        yAxis: { type: 'value', name: '$/MWh', nameTextStyle: { color: '#8b949e', fontSize: 11 }, axisLabel: { formatter: v => '$' + v } },
+        dataZoom: dataZoomConfig(timeDetail),
+        series,
+        animationDuration: 600,
+      }, true);
+
+      chart.off('click');
+      chart.on('click', (params) => {
+        if (params.seriesName) {
+          crossFilter.region = crossFilter.region === params.seriesName ? null : params.seriesName;
+          renderAll();
+        }
+      });
+
+      // KPI: avg price
+      const avgPrice = data.reduce((s, d) => s + d.avg_price, 0) / data.length;
+      document.getElementById('kpiPrice').textContent = '$' + avgPrice.toFixed(1);
+    }
+
+    // --- Generator Map (geo scatter) ---
+    let australiaMapRegistered = false;
+
+    async function registerAustraliaMap() {
+      if (australiaMapRegistered) return;
+      const resp = await fetch('https://raw.githubusercontent.com/rowanhogan/australian-states/master/states.geojson');
+      const geoJson = await resp.json();
+      echarts.registerMap('australia', geoJson);
+      australiaMapRegistered = true;
+    }
+
+    async function renderMap(seq) {
+      await registerAustraliaMap();
+      if (seq !== _renderSeq) return;
+
+      const intraday = isIntradayMode();
+      const unit = intraday ? 'MW' : 'MWh';
+      const col = intraday ? 'sc.mw' : 'sc.mwh';
+
+      const data = await runQuery(sql.mapScatter(col));
+      if (seq !== _renderSeq || !data.length) return;
+
+      const fuels = [...new Set(data.map(d => d.fuel))].sort();
+      const maxMw = Math.max(...data.map(d => d.mw));
+
+      const series = fuels.map(fuel => ({
+        name: fuel,
+        type: 'scatter',
+        coordinateSystem: 'geo',
+        data: data.filter(d => d.fuel === fuel).map(d => ({
+          value: [d.lon, d.lat, d.mw],
+          duid: d.DUID,
+          region: d.Region,
+          itemStyle: { opacity: 0.85 },
+        })),
+        symbolSize: d => Math.max(5, Math.sqrt(d[2] / maxMw) * 25),
+        itemStyle: { color: fuelColor(fuel) },
+        emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(88,166,255,0.5)' }, scale: 1.3 },
+      }));
+
+      const chart = getChart('chart-map');
+      chart.setOption({
+        color: PALETTE,
+        geo: {
+          map: 'australia',
+          roam: true,
+          itemStyle: { areaColor: '#1a1f2e', borderColor: '#30363d', borderWidth: 1 },
+          emphasis: { disabled: true },
+          label: { show: false },
+          zoom: 1.1,
+          center: [134, -28],
+        },
+        tooltip: { trigger: 'item', formatter: p => {
+          if (!p.data?.duid) return '';
+          const d = p.data;
+          return `<div style="font-weight:600">${d.duid}</div><div>${p.seriesName} &middot; ${d.region}</div><div style="margin-top:4px"><b>${Math.round(d.value[2]).toLocaleString()} ${unit}</b></div>`;
+        }},
+        series,
+        animationDuration: 600,
+      }, true);
+
+      chart.off('click');
+      chart.on('click', (params) => {
+        const duid = params.data?.duid;
+        if (duid) {
+          const idx = crossFilter.duids.indexOf(duid);
+          if (idx >= 0) crossFilter.duids.splice(idx, 1);
+          else crossFilter.duids.push(duid);
+          updateDuidTrigger();
+          renderAll();
+        }
+      });
+
+    }
+
+    // =========================================================================
+    // 7. WIRING (filters, CSV, DUID dropdown, renderAll, init)
+    // =========================================================================
+
+    // --- DUID multi-select dropdown ---
+    let allDuids = [];
+
+    function renderDuidList(filter = '') {
+      const list = document.getElementById('duidList');
+      list.innerHTML = '';
+      const lc = filter.toLowerCase();
+      const regionVal = document.getElementById("regionFilter").value;
+      const fuelVal = document.getElementById("fuelFilter").value;
+      const filtered = allDuids.filter(d =>
+        d.DUID.toLowerCase().includes(lc) &&
+        (!regionVal || d.Region === regionVal) &&
+        (!fuelVal || d.fuel === fuelVal)
+      );
+      for (const d of filtered.slice(0, 150)) {
+        const label = document.createElement('label');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = crossFilter.duids.includes(d.DUID);
+        cb.addEventListener('change', () => {
+          if (cb.checked) { if (!crossFilter.duids.includes(d.DUID)) crossFilter.duids.push(d.DUID); }
+          else { crossFilter.duids = crossFilter.duids.filter(x => x !== d.DUID); }
+          updateDuidTrigger();
+          renderAll();
+        });
+        label.append(cb, ` ${d.DUID} (${d.Region}, ${d.fuel})`);
+        list.append(label);
+      }
+    }
+
+    function updateDuidTrigger() {
+      const btn = document.getElementById('duidTrigger');
+      btn.textContent = crossFilter.duids.length ? `${crossFilter.duids.length} selected` : 'All DUIDs';
+    }
+
+    document.getElementById('duidTrigger').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const panel = document.getElementById('duidPanel');
+      const isOpen = panel.classList.toggle('open');
+      if (isOpen) {
+        document.getElementById('duidSearch').value = '';
+        renderDuidList();
+        document.getElementById('duidSearch').focus();
+      }
+    });
+    document.getElementById('duidPanel').addEventListener('click', e => e.stopPropagation());
+    document.addEventListener('click', () => document.getElementById('duidPanel').classList.remove('open'));
+    document.getElementById('duidSearch').addEventListener('input', e => renderDuidList(e.target.value));
+
+    // --- CSV download ---
+    async function downloadAllCSV() {
+      const csvSql = sql.csvExport();
+      const countResult = await runQuery(`SELECT COUNT(*) AS n FROM (${csvSql})`);
+      const rowCount = countResult[0].n;
+      if (rowCount > 150000) {
+        alert(`Too many rows (${rowCount.toLocaleString()}). Apply filters or reduce the date range to under 150K rows.`);
+        return;
+      }
+      const data = await runQuery(csvSql);
+      downloadCSV(data, 'energy_5min.csv');
+    }
+
+    document.getElementById('dl-all').addEventListener('click', downloadAllCSV);
+
+    // --- Filter population ---
+    async function populateFilters() {
+      const regions = await runQuery(sql.regions);
+      const fuels = await runQuery(sql.fuels);
+      const regionSelect = document.getElementById("regionFilter");
+      for (const r of regions) regionSelect.add(new Option(r.Region, r.Region));
+      const fuelSelect = document.getElementById("fuelFilter");
+      for (const f of fuels) fuelSelect.add(new Option(f.fuel, f.fuel));
+      allDuids = await runQuery(sql.allDuids);
+    }
+
+    // --- Filter change listeners ---
+    for (const id of ["regionFilter", "fuelFilter", "daysFilter"]) {
+      document.getElementById(id).addEventListener("change", () => {
+        crossFilter.fuel = null;
+        crossFilter.region = null;
+        crossFilter.duids = [];
+        updateDuidTrigger();
+        renderAll();
+      });
+    }
+
+    // --- Render all ---
+    async function renderAll() {
+      const seq = ++_renderSeq;
+      if (!window._cutoffCached) setStatus("Querying...", "loading");
+      document.querySelector('.charts').classList.add('loading');
+      updateFilterTags();
+      try {
+        await Promise.all([renderGeneration(seq), renderPrice(seq), renderMap(seq),
+          runQuery(sql.generatorCount()).then(r => { if (seq === _renderSeq && r.length) document.getElementById('kpiGens').textContent = r[0].cnt.toLocaleString(); })
+        ]);
+        if (seq !== _renderSeq) return;
+        document.querySelector('.charts').classList.remove('loading');
+        if (!window._cutoffCached) {
+          const cutoffResult = await runQuery(sql.cutoff);
+          if (seq !== _renderSeq) return;
+          if (cutoffResult.length && cutoffResult[0].last_update) {
+            const updated = new Date(cutoffResult[0].last_update).toLocaleString("en-AU", { timeZone: "Australia/Brisbane", dateStyle: "medium", timeStyle: "short" });
+            window._cutoffCached = `Data through: ${updated} AEST`;
+          }
+        }
+        setStatus(window._cutoffCached || "Connected", "connected");
+      } catch (e) {
+        setStatus("Query error: " + e.message, "error");
+        console.error(e);
+      }
+    }
+
+    // --- Init ---
+    try {
+      await initDuckDB();
+      await populateFilters();
+      await renderAll();
+      // Load year databases in background, then silently refresh
+      loadYearDatabases().then(() => { clearQueryCache(); renderAll(); }).catch(e => console.warn('[OPFS] Year load failed:', e));
+    } catch (e) {
+      setStatus("Error: " + e.message, "error");
+      console.error(e);
+    }
+  </script>
+</body>
+</html>
