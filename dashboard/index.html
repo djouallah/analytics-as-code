@@ -354,6 +354,9 @@
     function showTimeDetail() {
       return parseInt(document.getElementById("daysFilter").value) <= 30;
     }
+    function useWeeklyAgg() {
+      return parseInt(document.getElementById("daysFilter").value) > 365;
+    }
 
     function padTime(time) { return String(time).padStart(4, '0'); }
 
@@ -511,7 +514,7 @@
       allDuids: "SELECT DUID, Region, FuelSourceDescriptor AS fuel FROM dim.dim_duid WHERE DUID IS NOT NULL ORDER BY DUID",
 
       // --- Generation chart ---
-      generation(seriesAlias, seriesCol, valCol, timeDetail, intraday) {
+      generation(seriesAlias, seriesCol, valCol, timeDetail, intraday, weekly) {
         const cntCol = intraday ? 'COUNT(*)' : 'SUM(sc.cnt)';
         if (timeDetail) {
           return `
@@ -520,6 +523,14 @@
             WHERE ${sql.whereScada()}
             GROUP BY sc.date, sc.time, ${seriesCol}
             ORDER BY sc.date, sc.time`;
+        }
+        if (weekly) {
+          return `
+            SELECT CAST(date_trunc('week', sc.date) AS VARCHAR) AS date, ${seriesAlias}, SUM(${valCol})::DOUBLE AS total_mw, CAST(${cntCol} AS INTEGER) AS row_cnt
+            FROM ${sql.fromScada()}
+            WHERE ${sql.whereScada()}
+            GROUP BY date_trunc('week', sc.date), ${seriesCol}
+            ORDER BY date`;
         }
         return `
           SELECT CAST(sc.date AS VARCHAR) AS date, ${seriesAlias}, SUM(${valCol})::DOUBLE AS total_mw, CAST(${cntCol} AS INTEGER) AS row_cnt
@@ -530,7 +541,7 @@
       },
 
       // --- Price chart ---
-      price(timeDetail) {
+      price(timeDetail, weekly) {
         if (timeDetail) {
           return `
             SELECT CAST(p.date AS VARCHAR) AS date, CAST(p.time AS INTEGER) AS time, p.REGIONID AS Region, AVG(p.price)::DOUBLE AS avg_price
@@ -538,6 +549,14 @@
             WHERE ${sql.wherePrice()}
             GROUP BY p.date, p.time, p.REGIONID
             ORDER BY p.date, p.time`;
+        }
+        if (weekly) {
+          return `
+            SELECT CAST(date_trunc('week', p.date) AS VARCHAR) AS date, p.REGIONID AS Region, AVG(p.price)::DOUBLE AS avg_price
+            FROM ${sql.fromPrice()}
+            WHERE ${sql.wherePrice()}
+            GROUP BY date_trunc('week', p.date), p.REGIONID
+            ORDER BY date`;
         }
         return `
           SELECT CAST(p.date AS VARCHAR) AS date, p.REGIONID AS Region, AVG(p.price)::DOUBLE AS avg_price
@@ -625,7 +644,8 @@
       const seriesCol = drillFuel ? 'sc.DUID' : 'd.FuelSourceDescriptor';
       const seriesAlias = drillFuel ? 'sc.DUID AS series' : 'd.FuelSourceDescriptor AS series';
 
-      const data = await runQuery(sql.generation(seriesAlias, seriesCol, valCol, timeDetail, intraday));
+      const weekly = useWeeklyAgg();
+      const data = await runQuery(sql.generation(seriesAlias, seriesCol, valCol, timeDetail, intraday, weekly));
       if (seq !== _renderSeq || !data.length) return;
 
       const { xKeys, xLabels } = buildTimeAxis(data, timeDetail);
@@ -715,7 +735,8 @@
     async function renderPrice(seq) {
       const timeDetail = showTimeDetail();
 
-      const data = await runQuery(sql.price(timeDetail));
+      const weekly = useWeeklyAgg();
+      const data = await runQuery(sql.price(timeDetail, weekly));
       if (seq !== _renderSeq || !data.length) return;
 
       const { xKeys, xLabels } = buildTimeAxis(data, timeDetail);
