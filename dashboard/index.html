@@ -558,7 +558,9 @@
       scadaRecordCount() {
         return `
           SELECT CAST(COUNT(*) AS INTEGER) AS cnt
-          FROM ${sql.fromScada()}
+          FROM dim.dim_calendar c
+          JOIN (${sql._scadaRawUnion()}) sc ON c.date = sc.date
+          JOIN dim.dim_duid d ON sc.DUID = d.DUID
           WHERE ${sql.whereScada()}`;
       },
 
