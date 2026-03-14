@@ -418,20 +418,20 @@
       // Hourly aggregated (for charts when >7d)
       _scadaHourlyUnion() {
         const parts = loadedPeriods.map(p =>
-          `SELECT DUID, date, CAST(CAST(time / 100 AS INTEGER) * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM p${p}.scada WHERE date < CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date, CAST(time / 100 AS INTEGER)`
+          `SELECT DUID, date, CAST(extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0)) * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM p${p}.scada WHERE date < CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date, extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0))`
         );
         parts.push(
-          `SELECT DUID, date, CAST(CAST(time / 100 AS INTEGER) * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date, CAST(time / 100 AS INTEGER)`
+          `SELECT DUID, date, CAST(extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0)) * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date, extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0))`
         );
         return parts.join('\n            UNION ALL\n            ');
       },
 
       _priceHourlyUnion() {
         const parts = loadedPeriods.map(p =>
-          `SELECT REGIONID, date, CAST(CAST(time / 100 AS INTEGER) * 100 AS SMALLINT) AS time, AVG(price) AS price FROM p${p}.price WHERE date < CURRENT_DATE - INTERVAL 5 DAY GROUP BY REGIONID, date, CAST(time / 100 AS INTEGER)`
+          `SELECT REGIONID, date, CAST(extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0)) * 100 AS SMALLINT) AS time, AVG(price) AS price FROM p${p}.price WHERE date < CURRENT_DATE - INTERVAL 5 DAY GROUP BY REGIONID, date, extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0))`
         );
         parts.push(
-          `SELECT REGIONID, date, CAST(CAST(time / 100 AS INTEGER) * 100 AS SMALLINT) AS time, AVG(price) AS price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY REGIONID, date, CAST(time / 100 AS INTEGER)`
+          `SELECT REGIONID, date, CAST(extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0)) * 100 AS SMALLINT) AS time, AVG(price) AS price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY REGIONID, date, extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0))`
         );
         return parts.join('\n            UNION ALL\n            ');
       },
