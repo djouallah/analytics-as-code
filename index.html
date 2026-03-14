@@ -223,7 +223,7 @@
       let remoteTag = null;
       try {
         const head = await fetch(url, { method: 'HEAD' });
-        remoteTag = head.headers.get('etag') || head.headers.get('last-modified');
+        remoteTag = head.headers.get('content-length');
       } catch (e) {
         console.log(`[OPFS] HEAD request failed (offline?), will use cache if available`);
       }
