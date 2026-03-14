@@ -321,18 +321,15 @@
     }
 
     async function buildAggData(forceRebuild) {
-      const aggFile = 'agg_data.duckdb';
+      const aggPath = 'opfs://agg_data.duckdb';
       try {
+        // Check if agg file exists in OPFS
         const root = await navigator.storage.getDirectory();
         let exists = false;
-        try { await root.getFileHandle(aggFile); exists = true; } catch(e) {}
+        try { await root.getFileHandle('agg_data.duckdb'); exists = true; } catch(e) {}
 
         if (exists && !forceRebuild) {
-          // Load OPFS file into DuckDB's buffer, then attach
-          const handle = await root.getFileHandle(aggFile);
-          const file = await handle.getFile();
-          await _db.registerFileBuffer(aggFile, new Uint8Array(await file.arrayBuffer()));
-          await conn.query(`ATTACH '${aggFile}' AS agg (READ_ONLY);`);
+          await conn.query(`ATTACH '${aggPath}' AS agg (READ_ONLY);`);
           window._aggReady = true;
           console.log('[Agg] Cache hit from OPFS');
           return;
@@ -340,11 +337,12 @@
 
         if (exists) {
           try { await conn.query("DETACH agg;"); } catch(e) {}
-          try { await root.removeEntry(aggFile); } catch(e) {}
+          try { await root.removeEntry('agg_data.duckdb'); } catch(e) {}
+          try { await root.removeEntry('agg_data.duckdb.wal'); } catch(e) {}
         }
 
         console.time('[Agg] Build');
-        await conn.query(`ATTACH '${aggFile}' AS agg;`);
+        await conn.query(`ATTACH '${aggPath}' AS agg;`);
 
         const extract = "extract('hour' FROM make_time((time // 100)::BIGINT, (time % 100)::BIGINT, 0.0))";
         const scadaParts = loadedPeriods.map(p =>
@@ -357,15 +355,10 @@
         );
         await conn.query(`CREATE TABLE agg.price_hourly AS ${priceParts.join(' UNION ALL ')}`);
 
-        // Persist to OPFS so next load is a cache hit
+        // Checkpoint to flush WAL to main file, then re-attach read-only
+        await conn.query("CHECKPOINT agg;");
         await conn.query("DETACH agg;");
-        const buf = await _db.copyFileToBuffer(aggFile);
-        const opfsHandle = await root.getFileHandle(aggFile, { create: true });
-        const writable = await opfsHandle.createWritable();
-        await writable.write(buf);
-        await writable.close();
-        // Re-attach as read-only from the buffer
-        await conn.query(`ATTACH '${aggFile}' AS agg (READ_ONLY);`);
+        await conn.query(`ATTACH '${aggPath}' AS agg (READ_ONLY);`);
 
         window._aggReady = true;
         console.timeEnd('[Agg] Build');
