@@ -174,7 +174,7 @@
     }
 
     const crossFilter = { fuel: null, region: null, duids: [] };
-    let loadedYears = [];
+    let loadedPeriods = [];
     let _renderSeq = 0;
 
     function updateFilterTags() {
@@ -246,7 +246,9 @@
       console.log(`[OPFS] Fetching ${filename} (${reason})`);
       setStatus("Downloading database...");
       const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`Failed to fetch ${filename}: HTTP ${resp.status}`);
       const buffer = new Uint8Array(await resp.arrayBuffer());
+      if (buffer.byteLength < 100) throw new Error(`${filename} is too small (${buffer.byteLength} bytes), likely not a valid database`);
       const sizeMB = (buffer.byteLength / 1024 / 1024).toFixed(1);
 
       const handle = await root.getFileHandle(filename, { create: true });
@@ -296,20 +298,20 @@
 
     async function loadYearDatabases() {
       const manifest = await (await fetch(`${_baseUrl}/daily_manifest.json`)).json();
-      loadedYears = manifest.years;
-      console.log(`[OPFS] Loading year databases: ${loadedYears.join(', ')}...`);
+      loadedPeriods = manifest.periods;
+      console.log(`[OPFS] Loading databases: ${loadedPeriods.join(', ')}...`);
 
       const sourceLabel = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded', 'opfs-refresh': 'refreshed' };
       const results = await Promise.all(
-        loadedYears.map(y => cacheInOPFS(_db, `${_baseUrl}/energy_data_${y}.duckdb`, `energy_data_${y}.duckdb`))
+        loadedPeriods.map(p => cacheInOPFS(_db, `${_baseUrl}/energy_data_${p}.duckdb`, `energy_data_${p}.duckdb`))
       );
-      for (const y of loadedYears) {
-        await conn.query(`ATTACH 'energy_data_${y}.duckdb' AS y${y} (READ_ONLY);`);
+      for (const p of loadedPeriods) {
+        await conn.query(`ATTACH 'energy_data_${p}.duckdb' AS p${p} (READ_ONLY);`);
       }
-      for (let i = 0; i < loadedYears.length; i++) {
-        console.log(`[OPFS] y${loadedYears[i]}: ${sourceLabel[results[i].source]}`);
+      for (let i = 0; i < loadedPeriods.length; i++) {
+        console.log(`[OPFS] p${loadedPeriods[i]}: ${sourceLabel[results[i].source]}`);
       }
-      console.log(`[OPFS] All year databases loaded`);
+      console.log(`[OPFS] All databases loaded`);
     }
 
     async function runQuery(sqlStr) {
@@ -402,21 +404,21 @@
       // --- UNION ALL builders across year databases ---
       // Raw 5-min grain (for CSV export)
       _scadaRawUnion() {
-        const parts = loadedYears.map(y => `SELECT DUID, date, time, mw FROM y${y}.scada WHERE date < CURRENT_DATE - INTERVAL 5 DAY`);
+        const parts = loadedPeriods.map(p => `SELECT DUID, date, time, mw FROM p${p}.scada WHERE date < CURRENT_DATE - INTERVAL 5 DAY`);
         parts.push(`SELECT DUID, date, time, mw FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY`);
         return parts.join('\n            UNION ALL\n            ');
       },
 
       _priceRawUnion() {
-        const parts = loadedYears.map(y => `SELECT REGIONID, date, time, price FROM y${y}.price WHERE date < CURRENT_DATE - INTERVAL 5 DAY`);
+        const parts = loadedPeriods.map(p => `SELECT REGIONID, date, time, price FROM p${p}.price WHERE date < CURRENT_DATE - INTERVAL 5 DAY`);
         parts.push(`SELECT REGIONID, date, time, price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY`);
         return parts.join('\n            UNION ALL\n            ');
       },
 
       // Hourly aggregated (for charts when >7d)
       _scadaHourlyUnion() {
-        const parts = loadedYears.map(y =>
-          `SELECT DUID, date, CAST(CAST(time / 100 AS INTEGER) * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM y${y}.scada WHERE date < CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date, CAST(time / 100 AS INTEGER)`
+        const parts = loadedPeriods.map(p =>
+          `SELECT DUID, date, CAST(CAST(time / 100 AS INTEGER) * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM p${p}.scada WHERE date < CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date, CAST(time / 100 AS INTEGER)`
         );
         parts.push(
           `SELECT DUID, date, CAST(CAST(time / 100 AS INTEGER) * 100 AS SMALLINT) AS time, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date, CAST(time / 100 AS INTEGER)`
@@ -425,8 +427,8 @@
       },
 
       _priceHourlyUnion() {
-        const parts = loadedYears.map(y =>
-          `SELECT REGIONID, date, CAST(CAST(time / 100 AS INTEGER) * 100 AS SMALLINT) AS time, AVG(price) AS price FROM y${y}.price WHERE date < CURRENT_DATE - INTERVAL 5 DAY GROUP BY REGIONID, date, CAST(time / 100 AS INTEGER)`
+        const parts = loadedPeriods.map(p =>
+          `SELECT REGIONID, date, CAST(CAST(time / 100 AS INTEGER) * 100 AS SMALLINT) AS time, AVG(price) AS price FROM p${p}.price WHERE date < CURRENT_DATE - INTERVAL 5 DAY GROUP BY REGIONID, date, CAST(time / 100 AS INTEGER)`
         );
         parts.push(
           `SELECT REGIONID, date, CAST(CAST(time / 100 AS INTEGER) * 100 AS SMALLINT) AS time, AVG(price) AS price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY REGIONID, date, CAST(time / 100 AS INTEGER)`
