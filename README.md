@@ -62,7 +62,7 @@ Source data arrives at 5-minute resolution. The Iceberg tables store everything 
 
 ## Fabric Version
 
-The same approach — dbt-duckdb transforming data — has been applied on [Microsoft Fabric](https://github.com/djouallah/dbt). Instead of Iceberg, it uses **DuckLake** (SQLite metadata) with tables exported as **Delta Lake** to OneLake. Visualization and semantic modeling are handled by **Power BI** via a deployed `.bim` semantic model, replacing the DuckDB-WASM dashboard used here.
+The same approach — dbt-duckdb transforming data — has been applied on [Microsoft Fabric](https://github.com/djouallah/dbt_fabric_python_iceberg). Visualization and semantic modeling are handled by **Power BI** via a deployed `.bim` semantic model, replacing the DuckDB-WASM dashboard used here.
 
 ## Setup
 
