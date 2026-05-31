@@ -10,11 +10,18 @@
   WHERE DUID NOT IN (SELECT DUID FROM {{ this }})
 {%- endset -%}
 
-{%- if execute and is_incremental() -%}
+{# DUID reference data only changes ~daily, and the raw CSVs only exist on the    #}
+{# daily pass (stg gates the download to daily_refresh). On the 30-min intraday   #}
+{# cycle, skip the check/rebuild entirely and keep the existing Iceberg table.    #}
+{% set daily_refresh = env_var('daily_refresh', 'false') == 'true' %}
+
+{%- if execute and is_incremental() and daily_refresh -%}
   {%- set result = run_query(check_new_duids_query) -%}
   {%- set has_new_duids = result and result.rows[0][0] > 0 -%}
-{%- else -%}
+{%- elif not is_incremental() -%}
   {%- set has_new_duids = true -%}
+{%- else -%}
+  {%- set has_new_duids = false -%}
 {%- endif -%}
 
 {{ config(

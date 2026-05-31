@@ -8,7 +8,7 @@
 
 ## Architecture
 1. `stg_csv_archive_log.py` (Python model) downloads data from AEMO + GitHub, stores as gzipped CSVs locally
-2. DUID reference data skipped if downloaded < 24 hours ago
+2. **Daily pass vs intraday cycle:** `process_data` runs every 30 min (intraday) and once at 19:00 UTC (daily). The daily run sets `daily_refresh=true`, which gates the slow / rarely-changing work — GitHub historical backfill *and* the DUID reference download + `dim_duid` rebuild. The 30-min intraday runs skip all of that and reuse the already-materialized Iceberg `dim_duid`. (Ephemeral CI wipes local files each run, so the old "skip DUID if < 24h" guard could never fire — `dim_duid` reads the raw CSVs from local disk, so they must be re-downloaded whenever it rebuilds.)
 3. Fact models read from local CSV archives incrementally (file-based), dimensions are smart-refresh
 4. `fct_summary` rolls up daily + intraday SCADA and price data
 5. CI/CD runs `dbt build` to write directly to Iceberg catalog

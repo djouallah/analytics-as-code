@@ -18,7 +18,9 @@ def model(dbt, session):
 
     csv_archive_path = os.environ.get("ROOT_PATH", "/tmp") + "/Files/csv"
     download_limit = int(os.environ.get("download_limit", "2"))
-    enable_backfill = os.environ.get("enable_backfill", "false").strip().lower() == "true"
+    # Set on the once-daily pass only. Gates the slow/rarely-changing work
+    # (GitHub historical backfill + DUID reference refresh) off the 30-min cycle.
+    daily_refresh = os.environ.get("daily_refresh", "false").strip().lower() == "true"
     batch_size = 7
     max_workers = 8
     pending_entries = []  # non-duid entries deferred until fact tables confirm
@@ -156,10 +158,10 @@ def model(dbt, session):
         )
     """).fetchone()[0]
 
-    # GitHub historical backfill only runs on the daily pass (enable_backfill=true).
+    # GitHub historical backfill only runs on the daily pass (daily_refresh=true).
     # The 30-min intraday cycle stays on the live AEMO listing only, so it never
     # makes the 9 sequential GitHub API calls just to rediscover files it already has.
-    if enable_backfill and aemo_new < download_limit:
+    if daily_refresh and aemo_new < download_limit:
         log(f"Backfill enabled: AEMO has {aemo_new} new daily files (< {download_limit}), checking GitHub archive")
         session.sql("""
             INSERT INTO daily_files_web
@@ -313,10 +315,17 @@ def model(dbt, session):
         os.path.exists(f"{csv_archive_path}/duid/{csv_fn}")
         for _, _, _, csv_fn in duid_sources
     )
+    # On the 30-min intraday cycle, DUID reference data never changes and dim_duid
+    # is not rebuilt (gated to daily_refresh), so skip the download entirely. The
+    # 24h freshness skip below still helps persistent/local filesystems. A full
+    # refresh (non-incremental) always downloads so dim_duid can build from scratch.
     skip_duid = (
-        duid_files_exist
-        and last_duid_download is not None
-        and (datetime.now() - last_duid_download).total_seconds() < 86400
+        (dbt.is_incremental and not daily_refresh)
+        or (
+            duid_files_exist
+            and last_duid_download is not None
+            and (datetime.now() - last_duid_download).total_seconds() < 86400
+        )
     )
 
     if skip_duid:

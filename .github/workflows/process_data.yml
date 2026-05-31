@@ -2,12 +2,12 @@ name: Process Data
 
 on:
   schedule:
-    - cron: '*/30 * * * *'   # intraday — live AEMO listing only, no backfill
-    - cron: '0 19 * * *'     # daily (5am AEST) — also run GitHub historical backfill
+    - cron: '*/30 * * * *'   # intraday — live AEMO listing only
+    - cron: '0 19 * * *'     # daily (5am AEST) — GitHub backfill + DUID/dim_duid refresh
   workflow_dispatch:
     inputs:
-      enable_backfill:
-        description: 'Run GitHub historical backfill'
+      daily_refresh:
+        description: 'Run the daily pass (GitHub backfill + DUID refresh)'
         type: boolean
         default: false
 
@@ -36,17 +36,21 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install dbt-duckdb
-      - name: Determine backfill mode
+      - name: Determine daily-refresh mode
         id: mode
         run: |
-          if [ "${{ github.event.schedule }}" = "0 19 * * *" ] || [ "${{ github.event.inputs.enable_backfill }}" = "true" ]; then
-            echo "enable_backfill=true" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event.schedule }}" = "0 19 * * *" ] || [ "${{ github.event.inputs.daily_refresh }}" = "true" ]; then
+            echo "daily_refresh=true" >> "$GITHUB_OUTPUT"
           else
-            echo "enable_backfill=false" >> "$GITHUB_OUTPUT"
+            echo "daily_refresh=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Process data
         env:
-          enable_backfill: ${{ steps.mode.outputs.enable_backfill }}
+          daily_refresh: ${{ steps.mode.outputs.daily_refresh }}
         run: dbt run --target prod --profiles-dir .
       - name: Confirm processed log entries
         run: dbt run-operation confirm_log_entries --target prod --profiles-dir .
+      - name: Iceberg table stats
+        if: always()
+        continue-on-error: true
+        run: python scripts/iceberg_stats.py
