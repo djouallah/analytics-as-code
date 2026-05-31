@@ -44,10 +44,14 @@ jobs:
 
       - name: Install dependencies
         run: |
+          # duckdb is pinned here (and ONLY here): import_data builds the .duckdb
+          # files deployed to the NemTracker dashboard, whose DuckDB-WASM reader
+          # needs a stable on-disk file format. process_data/build only write
+          # Iceberg / in-memory CI, so they float on the latest duckdb.
           if [ "${{ steps.mode.outputs.is_daily }}" = "true" ]; then
-            pip install dbt-duckdb
+            pip install "duckdb==1.5.1" dbt-duckdb
           else
-            pip install duckdb
+            pip install "duckdb==1.5.1"
           fi
 
       # --- Phase 1: Intraday (always) + dims (daily only) → deploy immediately ---
