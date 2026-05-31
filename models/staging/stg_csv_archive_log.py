@@ -14,6 +14,22 @@ def model(dbt, session):
     def log(msg):
         print(msg, file=sys.stderr, flush=True)
 
+    def sql_with_retry(query, attempts=4, base_delay=5):
+        """Run a session.sql that hits the network (read_text listing fetches).
+        nemweb occasionally throws a transient 403 when rate-limited; without a
+        retry a single bad request kills the whole model. Back off and retry."""
+        import time
+        for attempt in range(attempts):
+            try:
+                return session.sql(query)
+            except Exception as e:
+                if attempt == attempts - 1:
+                    raise
+                wait = base_delay * (2 ** attempt)
+                log(f"WARN: listing fetch failed (attempt {attempt + 1}/{attempts}), "
+                    f"retrying in {wait}s: {str(e).splitlines()[0][:120]}")
+                time.sleep(wait)
+
     import csv as csv_mod
 
     csv_archive_path = os.environ.get("ROOT_PATH", "/tmp") + "/Files/csv"
@@ -148,7 +164,7 @@ def model(dbt, session):
     # =========================================================================
 
     # Fetch file listing from AEMO
-    session.sql("""
+    sql_with_retry("""
         CREATE OR REPLACE TEMP TABLE daily_files_web AS
         WITH
           html_data AS (
@@ -178,7 +194,7 @@ def model(dbt, session):
     # makes the 9 sequential GitHub API calls just to rediscover files it already has.
     if daily_refresh and aemo_new < download_limit:
         log(f"Backfill enabled: AEMO has {aemo_new} new daily files (< {download_limit}), checking GitHub archive")
-        session.sql("""
+        sql_with_retry("""
             INSERT INTO daily_files_web
             WITH
               api_responses AS (
@@ -222,7 +238,7 @@ def model(dbt, session):
     # INTRADAY SCADA
     # =========================================================================
 
-    session.sql("""
+    sql_with_retry("""
         CREATE OR REPLACE TEMP TABLE intraday_scada_web AS
         WITH
           html_data AS (
@@ -257,7 +273,7 @@ def model(dbt, session):
     # INTRADAY PRICE
     # =========================================================================
 
-    session.sql("""
+    sql_with_retry("""
         CREATE OR REPLACE TEMP TABLE intraday_price_web AS
         WITH
           html_data AS (
