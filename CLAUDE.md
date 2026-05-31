@@ -35,3 +35,11 @@
 - CSVs read from gzipped archives via `read_csv()` with `ignore_errors=true`
 - CI target uses plain DuckDB (no Iceberg) for SQL validation
 - Dev/prod targets attach Iceberg REST catalog via `database: iceberg_catalog`
+
+## DuckDB version policy
+- **`import_data.yml` pins duckdb** (e.g. `duckdb==1.5.1`) for safety: it builds the
+  `.duckdb` files deployed to the NemTracker dashboard, read client-side by DuckDB-WASM,
+  so the on-disk file format must stay stable for the deployed reader.
+- **`process_data.yml` always uses the latest duckdb** (unpinned): its output is written
+  to the Iceberg catalog, not to a dashboard file, so the duckdb version doesn't matter.
+- `build.yml` is also unpinned (in-memory CI + docs only).
