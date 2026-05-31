@@ -20,14 +20,18 @@ def model(dbt, session):
     # Daily reports: large files, OOM-sensitive on fct_scada, so keep this low.
     download_limit = int(os.environ.get("download_limit", "2"))
     # Intraday SCADA/price: tiny 5-min files (~6 new per 30-min run) that AEMO
-    # only keeps in Current/ for ~2 days. Must be aggressive to keep pace AND
-    # backfill gaps before they expire from the source.
-    intraday_download_limit = int(os.environ.get("intraday_download_limit", "300"))
+    # only keeps in Current/ for ~2 days, so we want headroom to backfill gaps.
+    # Default kept low (=2) so build.yml CI never bursts requests at AEMO; the
+    # data pipeline (process_data.yml) sets a higher value. Downloads are
+    # throttled (see process_downloads) so a high value doesn't get the IP
+    # rate-limited/blocked by AEMO.
+    intraday_download_limit = int(os.environ.get("intraday_download_limit", "2"))
     # Set on the once-daily pass only. Gates the slow/rarely-changing work
     # (GitHub historical backfill + DUID reference refresh) off the 30-min cycle.
     daily_refresh = os.environ.get("daily_refresh", "false").strip().lower() == "true"
     batch_size = 7
-    max_workers = 8
+    max_workers = 4          # keep concurrency modest to avoid AEMO rate-limiting
+    batch_pause_seconds = 2  # pause between batches to spread requests out
     pending_entries = []  # non-duid entries deferred until fact tables confirm
 
     # =========================================================================
@@ -132,6 +136,12 @@ def model(dbt, session):
                     # Defer writing to Iceberg until fact tables confirm processing
                     pending_entries.append((source_type, src_fn, f'/{subfolder}/{csv_name}',
                                            now, url, csv_base))
+
+            # Throttle: pause between batches so we don't burst requests at AEMO,
+            # which rate-limits (403s) and then blocks the runner IP entirely.
+            if i + batch_size < len(files_to_process):
+                import time
+                time.sleep(batch_pause_seconds)
 
     # =========================================================================
     # DAILY REPORTS (SCADA + PRICE)

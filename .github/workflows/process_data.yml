@@ -30,7 +30,7 @@ jobs:
       ICEBERG_TOKEN: ${{ secrets.ICEBERG_TOKEN }}
       ICEBERG_WAREHOUSE: ${{ secrets.ICEBERG_WAREHOUSE }}
       download_limit: "2"
-      intraday_download_limit: "300"
+      intraday_download_limit: "60"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
