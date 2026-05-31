@@ -1,8 +1,8 @@
 """Print per-table stats for the Iceberg REST catalog (diagnostic only).
 
-Shows row count, data-file count, snapshot count, and total size for every
-table in the catalog. Useful for spotting tables that aren't being compacted
-(high file/snapshot count relative to rows).
+Shows data-file count, snapshot count, and total size for every table in the
+catalog (metadata only — never scans table data). Useful for spotting tables
+that aren't being compacted (high file/snapshot count).
 
 Never fails the pipeline: every metric is best-effort and errors are printed,
 not raised. Run as the last step of a workflow.
@@ -71,12 +71,11 @@ def main():
 
     print("=" * 96)
     print("Iceberg table stats")
-    print(f"{'table':<36}{'rows':>14}{'data_files':>12}{'snapshots':>12}{'size_MB':>12}")
+    print(f"{'table':<36}{'data_files':>12}{'snapshots':>12}{'size_MB':>12}")
     print("-" * 96)
 
     for t in tables:
         fq = f"catalog.{t}"
-        rows = try_scalar(con, f"SELECT count(*) FROM {fq}")
         files = try_scalar(con, f"SELECT count(*) FROM iceberg_metadata('{fq}')")
         size_mb = try_scalar(
             con,
@@ -88,7 +87,7 @@ def main():
         def fmt(v):
             return f"{v:,}" if isinstance(v, int) else str(v)
 
-        print(f"{t:<36}{fmt(rows):>14}{fmt(files):>12}{fmt(snaps):>12}{fmt(size_mb):>12}")
+        print(f"{t:<36}{fmt(files):>12}{fmt(snaps):>12}{fmt(size_mb):>12}")
 
     print("=" * 96)
     con.close()
