@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install dbt-duckdb "duckdb==1.5.1"
+      - run: pip install dbt-duckdb
       - name: Build, test and publish docs
         env:
           DBT_DUCKDB_PATH: ci.duckdb

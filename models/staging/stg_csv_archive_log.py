@@ -18,6 +18,7 @@ def model(dbt, session):
 
     csv_archive_path = os.environ.get("ROOT_PATH", "/tmp") + "/Files/csv"
     download_limit = int(os.environ.get("download_limit", "2"))
+    enable_backfill = os.environ.get("enable_backfill", "false").strip().lower() == "true"
     batch_size = 7
     max_workers = 8
     pending_entries = []  # non-duid entries deferred until fact tables confirm
@@ -155,8 +156,11 @@ def model(dbt, session):
         )
     """).fetchone()[0]
 
-    if aemo_new < download_limit:
-        # Backfill from GitHub
+    # GitHub historical backfill only runs on the daily pass (enable_backfill=true).
+    # The 30-min intraday cycle stays on the live AEMO listing only, so it never
+    # makes the 9 sequential GitHub API calls just to rediscover files it already has.
+    if enable_backfill and aemo_new < download_limit:
+        log(f"Backfill enabled: AEMO has {aemo_new} new daily files (< {download_limit}), checking GitHub archive")
         session.sql("""
             INSERT INTO daily_files_web
             WITH

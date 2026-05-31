@@ -45,9 +45,9 @@ jobs:
       - name: Install dependencies
         run: |
           if [ "${{ steps.mode.outputs.is_daily }}" = "true" ]; then
-            pip install "duckdb==1.5.1" dbt-duckdb
+            pip install dbt-duckdb
           else
-            pip install "duckdb==1.5.1"
+            pip install duckdb
           fi
 
       # --- Phase 1: Intraday (always) + dims (daily only) → deploy immediately ---
