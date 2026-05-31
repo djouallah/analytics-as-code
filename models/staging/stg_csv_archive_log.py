@@ -17,7 +17,12 @@ def model(dbt, session):
     import csv as csv_mod
 
     csv_archive_path = os.environ.get("ROOT_PATH", "/tmp") + "/Files/csv"
+    # Daily reports: large files, OOM-sensitive on fct_scada, so keep this low.
     download_limit = int(os.environ.get("download_limit", "2"))
+    # Intraday SCADA/price: tiny 5-min files (~6 new per 30-min run) that AEMO
+    # only keeps in Current/ for ~2 days. Must be aggressive to keep pace AND
+    # backfill gaps before they expire from the source.
+    intraday_download_limit = int(os.environ.get("intraday_download_limit", "300"))
     # Set on the once-daily pass only. Gates the slow/rarely-changing work
     # (GitHub historical backfill + DUID reference refresh) off the 30-min cycle.
     daily_refresh = os.environ.get("daily_refresh", "false").strip().lower() == "true"
@@ -231,7 +236,7 @@ def model(dbt, session):
         WHERE 'scada_today::' || filename NOT IN (
             SELECT source_type || '::' || source_filename FROM _csv_archive_log
         )
-        LIMIT {download_limit}
+        LIMIT {intraday_download_limit}
     """).fetchall()
 
     log(f"Intraday SCADA files: {len(scada_to_download)} new")
@@ -266,7 +271,7 @@ def model(dbt, session):
         WHERE 'price_today::' || filename NOT IN (
             SELECT source_type || '::' || source_filename FROM _csv_archive_log
         )
-        LIMIT {download_limit}
+        LIMIT {intraday_download_limit}
     """).fetchall()
 
     log(f"Intraday Price files: {len(price_to_download)} new")
