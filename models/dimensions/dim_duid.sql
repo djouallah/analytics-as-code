@@ -2,22 +2,24 @@
 
 {# DUID reference data only changes ~daily, and the raw CSVs only exist on the    #}
 {# daily pass (stg gates the download to daily_refresh). On the 30-min intraday   #}
-{# cycle, skip the rebuild entirely and keep the existing Iceberg table.          #}
+{# cycle the model returns nothing, so delete+insert is a no-op and the existing  #}
+{# Iceberg table is left untouched.                                              #}
 {#                                                                                #}
-{# On the daily pass we fully rebuild via full_refresh = drop & recreate          #}
-{# (CREATE OR REPLACE TABLE AS). Row-level DELETE is a no-op on this Iceberg REST #}
-{# catalog, so the old "DELETE-all + append" pre-hook never cleared anything and  #}
-{# every rebuild just stacked another full copy (the source of the duplicate-DUID #}
-{# rows). A full_refresh replaces the whole table, so there is exactly one copy.  #}
+{# On the daily pass we rebuild with delete+insert keyed on DUID. The incoming    #}
+{# set is every current DUID, so DELETE removes ALL existing rows per DUID --      #}
+{# including the duplicate copies an older duckdb's broken Iceberg DELETE had      #}
+{# stacked -- and INSERT writes one clean deduped row each. (CREATE OR REPLACE is  #}
+{# unsupported on this Iceberg catalog; DELETE + INSERT both work -- see the       #}
+{# capability probe in test.yml.)                                                 #}
 {% set daily_refresh = env_var('daily_refresh', 'false') == 'true' %}
 
 {%- set should_rebuild = (not is_incremental()) or daily_refresh -%}
 
 {{ config(
     materialized='incremental',
-    incremental_strategy='append',
-    on_schema_change='sync_all_columns',
-    full_refresh=daily_refresh
+    incremental_strategy='delete+insert',
+    unique_key=['DUID'],
+    on_schema_change='sync_all_columns'
 ) }}
 
 -- Ensure download runs first by depending on stg_csv_archive_log
