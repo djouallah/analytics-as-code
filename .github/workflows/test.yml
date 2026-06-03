@@ -1,0 +1,50 @@
+name: Tests
+
+# dbt data-quality tests, decoupled from the data pipeline so a failing
+# assertion never blocks downloading (process_data) or publishing (import_data).
+# Also probes what the Iceberg REST catalog actually supports.
+
+on:
+  schedule:
+    - cron: '0 21 * * *'   # ~1h after the daily import (20:00 UTC)
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+
+jobs:
+  dbt_test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ICEBERG_REST_ENDPOINT: ${{ secrets.ICEBERG_REST_ENDPOINT }}
+      ICEBERG_TOKEN: ${{ secrets.ICEBERG_TOKEN }}
+      ICEBERG_WAREHOUSE: ${{ secrets.ICEBERG_WAREHOUSE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install dbt-duckdb
+      - name: dbt test
+        run: dbt test --target prod --profiles-dir .
+
+  catalog_capabilities:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ICEBERG_REST_ENDPOINT: ${{ secrets.ICEBERG_REST_ENDPOINT }}
+      ICEBERG_TOKEN: ${{ secrets.ICEBERG_TOKEN }}
+      ICEBERG_WAREHOUSE: ${{ secrets.ICEBERG_WAREHOUSE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Latest duckdb so MERGE (1.5.3+) is exercised against the catalog.
+      - run: pip install --upgrade duckdb
+      - name: Probe catalog capabilities (CREATE / INSERT / DELETE / UPDATE / MERGE / CREATE OR REPLACE / DROP)
+        run: python scripts/catalog_capabilities.py

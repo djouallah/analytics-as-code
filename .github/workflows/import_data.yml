@@ -48,11 +48,9 @@ jobs:
           # files deployed to the NemTracker dashboard, whose DuckDB-WASM reader
           # needs a stable on-disk file format. process_data/build only write
           # Iceberg / in-memory CI, so they float on the latest duckdb.
-          if [ "${{ steps.mode.outputs.is_daily }}" = "true" ]; then
-            pip install "duckdb==1.5.1" dbt-duckdb
-          else
-            pip install "duckdb==1.5.1"
-          fi
+          # Exports use scripts/cache_catalog.py (plain duckdb) -- no dbt needed
+          # here; data-quality tests run in test.yml.
+          pip install "duckdb==1.5.1"
 
       # --- Phase 1: Intraday (always) + dims (daily only) → deploy immediately ---
       - name: Export fct_scada_today
@@ -127,10 +125,5 @@ jobs:
           publish_dir: ./deploy_daily
           keep_files: true
 
-      # Data-quality tests run AFTER publishing so a failing assertion can no
-      # longer freeze the dashboard (it did, silently, 14 Mar–early Jun 2026).
-      # The step still fails the job on a quality regression, so the run goes
-      # red and surfaces the problem — but the dashboard is already up to date.
-      - name: Test data
-        if: steps.mode.outputs.is_daily == 'true'
-        run: dbt test --target prod --profiles-dir .
+      # Data-quality tests live in their own workflow (.github/workflows/test.yml)
+      # so a failing assertion never blocks publishing the dashboard.
