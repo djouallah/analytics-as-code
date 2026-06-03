@@ -3,10 +3,12 @@
 {# DUID reference data only changes ~daily, and the raw CSVs only exist on the    #}
 {# daily pass (stg gates the download to daily_refresh). On the 30-min intraday   #}
 {# cycle, skip the rebuild entirely and keep the existing Iceberg table.          #}
-{# On the daily pass we always rebuild (delete-all + reinsert the deduped SELECT) #}
-{# rather than only when *new* DUIDs appear: the old "new DUIDs only" gate let    #}
-{# pre-existing duplicates persist forever (they break the unique_dim_duid test   #}
-{# and never self-heal unless a brand-new DUID happens to show up).               #}
+{#                                                                                #}
+{# On the daily pass we fully rebuild via full_refresh = drop & recreate          #}
+{# (CREATE OR REPLACE TABLE AS). Row-level DELETE is a no-op on this Iceberg REST #}
+{# catalog, so the old "DELETE-all + append" pre-hook never cleared anything and  #}
+{# every rebuild just stacked another full copy (the source of the duplicate-DUID #}
+{# rows). A full_refresh replaces the whole table, so there is exactly one copy.  #}
 {% set daily_refresh = env_var('daily_refresh', 'false') == 'true' %}
 
 {%- set should_rebuild = (not is_incremental()) or daily_refresh -%}
@@ -15,7 +17,7 @@
     materialized='incremental',
     incremental_strategy='append',
     on_schema_change='sync_all_columns',
-    pre_hook=["DELETE FROM " ~ this ~ " WHERE 1=1"] if (should_rebuild and is_incremental()) else []
+    full_refresh=daily_refresh
 ) }}
 
 -- Ensure download runs first by depending on stg_csv_archive_log
