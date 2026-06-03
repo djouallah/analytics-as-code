@@ -1,40 +1,27 @@
 {% set csv_archive_path = get_csv_archive_path() %}
 
-{# Check if there are new DUIDs not in the existing table #}
-{%- set check_new_duids_query -%}
-  SELECT count(*) as cnt FROM (
-    SELECT DUID FROM read_csv('{{ csv_archive_path }}/duid/duid_data.csv') WHERE length(DUID) > 2
-    UNION
-    SELECT "Facility Code" AS DUID FROM read_csv_auto('{{ csv_archive_path }}/duid/facilities.csv')
-  ) source_duids
-  WHERE DUID NOT IN (SELECT DUID FROM {{ this }})
-{%- endset -%}
-
 {# DUID reference data only changes ~daily, and the raw CSVs only exist on the    #}
 {# daily pass (stg gates the download to daily_refresh). On the 30-min intraday   #}
-{# cycle, skip the check/rebuild entirely and keep the existing Iceberg table.    #}
+{# cycle, skip the rebuild entirely and keep the existing Iceberg table.          #}
+{# On the daily pass we always rebuild (delete-all + reinsert the deduped SELECT) #}
+{# rather than only when *new* DUIDs appear: the old "new DUIDs only" gate let    #}
+{# pre-existing duplicates persist forever (they break the unique_dim_duid test   #}
+{# and never self-heal unless a brand-new DUID happens to show up).               #}
 {% set daily_refresh = env_var('daily_refresh', 'false') == 'true' %}
 
-{%- if execute and is_incremental() and daily_refresh -%}
-  {%- set result = run_query(check_new_duids_query) -%}
-  {%- set has_new_duids = result and result.rows[0][0] > 0 -%}
-{%- elif not is_incremental() -%}
-  {%- set has_new_duids = true -%}
-{%- else -%}
-  {%- set has_new_duids = false -%}
-{%- endif -%}
+{%- set should_rebuild = (not is_incremental()) or daily_refresh -%}
 
 {{ config(
     materialized='incremental',
     incremental_strategy='append',
     on_schema_change='sync_all_columns',
-    pre_hook=["DELETE FROM " ~ this ~ " WHERE 1=1"] if (has_new_duids and is_incremental()) else []
+    pre_hook=["DELETE FROM " ~ this ~ " WHERE 1=1"] if (should_rebuild and is_incremental()) else []
 ) }}
 
 -- Ensure download runs first by depending on stg_csv_archive_log
 -- depends_on: {{ ref('stg_csv_archive_log') }}
 
-{% if has_new_duids %}
+{% if should_rebuild %}
 WITH
   states AS (
     SELECT 'WA1' AS RegionID, 'Western Australia' AS State
@@ -112,6 +99,6 @@ JOIN states ON a.Region = states.RegionID
 LEFT JOIN geo ON a.duid = geo.duid
 GROUP BY a.DUID
 {% else %}
--- No new DUIDs found, return empty result to keep existing data
+-- Intraday cycle: no rebuild, keep existing data
 SELECT * FROM {{ this }} WHERE FALSE
 {% endif %}

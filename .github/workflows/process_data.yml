@@ -45,6 +45,9 @@ jobs:
           else
             echo "daily_refresh=false" >> "$GITHUB_OUTPUT"
           fi
+      - name: Heal orphaned daily log entries (daily pass only)
+        if: steps.mode.outputs.daily_refresh == 'true'
+        run: dbt run-operation heal_orphaned_daily_files --target prod --profiles-dir .
       - name: Process data
         env:
           daily_refresh: ${{ steps.mode.outputs.daily_refresh }}
