@@ -73,6 +73,12 @@
     .btn-analyze.primary:hover { background: #2ea043; border-color: #2ea043; }
     .btn-analyze:disabled { opacity: 0.5; cursor: not-allowed; }
     .analyze-info { font-size: 0.75rem; color: #8b949e; padding: 0 2rem; }
+    .analyze-sql { padding: 0 2rem 0.4rem; }
+    .analyze-sql-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem; }
+    .analyze-sql-head label { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+    .analyze-sql-head label span { text-transform: none; letter-spacing: 0; font-weight: 400; color: #6e7681; }
+    .analyze-sql textarea { width: 100%; box-sizing: border-box; min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.78rem; line-height: 1.5; background: #0d1117; color: #e1e4e8; border: 1px solid #30363d; border-radius: 6px; padding: 0.6rem 0.8rem; resize: vertical; white-space: pre; }
+    .analyze-sql textarea:focus { outline: none; border-color: #58a6ff; }
     .analyze-table-wrap { padding: 0 2rem 1rem; overflow-x: auto; max-height: 60vh; overflow-y: auto; }
     .analyze-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
     .analyze-table th { position: sticky; top: 0; background: #161b22; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.7rem; font-weight: 600; padding: 0.4rem 0.6rem; border-bottom: 1px solid #30363d; text-align: left; }
@@ -169,7 +175,15 @@
         </div>
       </div>
       <button class="btn-analyze" id="analyzePreview" type="button">Preview</button>
+      <button class="btn-analyze" id="analyzePlan" type="button">Show plan</button>
       <button class="btn-analyze primary" id="analyzeDownload" type="button">Download CSV</button>
+    </div>
+    <div class="analyze-sql">
+      <div class="analyze-sql-head">
+        <label>SQL <span>— editable; Preview / Download run this</span></label>
+        <button class="btn-analyze" id="analyzeSqlReset" type="button">Reset to generated</button>
+      </div>
+      <textarea id="analyzeSql" spellcheck="false" wrap="off"></textarea>
     </div>
     <div class="analyze-info" id="analyzeInfo"></div>
     <div class="analyze-table-wrap">
@@ -1108,6 +1122,8 @@
         const tab = btn.dataset.tab;
         document.getElementById('view-dashboard').style.display = tab === 'dashboard' ? '' : 'none';
         document.getElementById('view-analyze').style.display = tab === 'analyze' ? '' : 'none';
+        // Populate the SQL box the first time Analyze is opened; don't clobber manual edits after.
+        if (tab === 'analyze' && !document.getElementById('analyzeSql').value.trim()) syncAnalyzeSql();
       });
     }
 
@@ -1231,6 +1247,17 @@
       return inner;
     }
 
+    // The Analyze SQL textarea is the source of truth for Preview/Plan/Download — it shows the
+    // tool-generated query and the user can edit it freely. It's regenerated whenever the
+    // builder inputs (measures / dimensions / filters) change, or via "Reset to generated".
+    function syncAnalyzeSql() {
+      const ta = document.getElementById('analyzeSql');
+      if (ta) ta.value = buildAnalyzeSQL(null);
+    }
+    function getAnalyzeSql() {
+      return document.getElementById('analyzeSql').value.trim().replace(/;+\s*$/, '');
+    }
+
     // --- Analyze: ensure data loaded ---
     async function ensureAnalyzeData() {
       const { dimensions } = getAnalyzeOptions();
@@ -1243,9 +1270,9 @@
 
     // --- Analyze: preview ---
     async function analyzePreview() {
-      const { measures } = getAnalyzeOptions();
-      if (!measures.generation && !measures.price) {
-        document.getElementById('analyzeInfo').textContent = 'Select at least one measure.';
+      const base = getAnalyzeSql();
+      if (!base) {
+        document.getElementById('analyzeInfo').textContent = 'Enter a SQL query.';
         return;
       }
 
@@ -1260,7 +1287,7 @@
       try {
         await ensureAnalyzeData();
         setStatus("Previewing...", "loading");
-        const previewSql = buildAnalyzeSQL(500);
+        const previewSql = `SELECT * FROM (\n${base}\n) LIMIT 500`;
         const rows = await runQuery(previewSql);
 
         if (!rows.length) {
@@ -1277,7 +1304,7 @@
         html += '</tbody>';
         table.innerHTML = html;
 
-        const countSql = `SELECT COUNT(*) AS cnt FROM (${buildAnalyzeSQL(null)})`;
+        const countSql = `SELECT COUNT(*) AS cnt FROM (\n${base}\n)`;
         const countResult = await runQuery(countSql);
         const total = countResult[0]?.cnt || rows.length;
         info.textContent = rows.length < total
@@ -1299,11 +1326,43 @@
       }
     }
 
+    // --- Analyze: query plan (EXPLAIN) ---
+    async function analyzePlan() {
+      const base = getAnalyzeSql();
+      const info = document.getElementById('analyzeInfo');
+      if (!base) { info.textContent = 'Enter a SQL query.'; return; }
+
+      const btn = document.getElementById('analyzePlan');
+      btn.disabled = true;
+      btn.textContent = 'Planning...';
+      const table = document.getElementById('analyzeTable');
+      table.innerHTML = '';
+      info.textContent = '';
+
+      try {
+        await ensureAnalyzeData();
+        setStatus("Explaining...", "loading");
+        const rows = await runQuery(`EXPLAIN ${base}`);
+        const plan = rows.map(r => r.explain_value ?? Object.values(r).join('  ')).join('\n');
+        const esc = plan.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        table.innerHTML = `<tbody><tr><td><pre style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.72rem;line-height:1.4;white-space:pre;overflow-x:auto;margin:0">${esc}</pre></td></tr></tbody>`;
+        info.textContent = 'Query plan (EXPLAIN)';
+        setStatus(window._cutoffCached || "Connected", "connected");
+      } catch (e) {
+        info.textContent = 'Error: ' + e.message;
+        setStatus("Query error", "error");
+        console.error('[Analyze plan]', e);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Show plan';
+      }
+    }
+
     // --- Analyze: download ---
     async function analyzeDownload() {
-      const { measures } = getAnalyzeOptions();
-      if (!measures.generation && !measures.price) {
-        alert('Select at least one measure.');
+      const base = getAnalyzeSql();
+      if (!base) {
+        alert('Enter a SQL query.');
         return;
       }
 
@@ -1315,7 +1374,7 @@
         await ensureAnalyzeData();
         btn.textContent = 'Exporting...';
         setStatus("Exporting CSV...", "loading");
-        const exportSql = buildAnalyzeSQL(1000000);
+        const exportSql = `SELECT * FROM (\n${base}\n) LIMIT 1000000`;
         const { from, to } = getDateRange();
         const filename = `energy_export_${from}_${to}.csv`;
         const rowCount = await downloadCSVDirect(exportSql, filename);
@@ -1338,7 +1397,9 @@
     }
 
     document.getElementById('analyzePreview').addEventListener('click', analyzePreview);
+    document.getElementById('analyzePlan').addEventListener('click', analyzePlan);
     document.getElementById('analyzeDownload').addEventListener('click', analyzeDownload);
+    document.getElementById('analyzeSqlReset').addEventListener('click', syncAnalyzeSql);
     for (const id of ['measGeneration', 'measPrice']) {
       document.getElementById(id).addEventListener('change', () => { updateMeasTrigger(); clearAnalyzePreview(); });
     }
@@ -1375,6 +1436,7 @@
     function clearAnalyzePreview() {
       document.getElementById('analyzeTable').innerHTML = '';
       document.getElementById('analyzeInfo').textContent = '';
+      syncAnalyzeSql();   // builder inputs changed -> refresh the generated SQL
     }
 
     for (const id of ["dateFrom", "dateTo"]) {
