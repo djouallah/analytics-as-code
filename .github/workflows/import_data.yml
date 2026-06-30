@@ -114,7 +114,12 @@ jobs:
           mkdir -p deploy_daily/data
           cp dashboard/energy_data_*.duckdb deploy_daily/data/
           cp dashboard/energy_daily_agg.duckdb deploy_daily/data/
-          cp dashboard/daily_manifest.json deploy_daily/data/
+          # NOTE: daily_manifest.json is intentionally NOT deployed here. It is
+          # published last (step below) from the period files actually present in
+          # the deploy repo, so the manifest can never advertise a file whose
+          # .duckdb failed to land in the gh-pages commit (see HISTORY: 2026-07
+          # H1->H2 rollover dropped energy_data_2026_h2.duckdb while the manifest
+          # still listed it -> dashboard 404).
       - name: Deploy to nemtracker (daily)
         if: steps.mode.outputs.is_daily == 'true'
         uses: peaceiris/actions-gh-pages@v4
@@ -123,6 +128,36 @@ jobs:
           external_repository: NemTracker/nemtracker.github.io
           publish_branch: main
           publish_dir: ./deploy_daily
+          keep_files: true
+
+      # --- Phase 3: Publish manifest LAST, from files actually deployed ---
+      - name: Build manifest from deployed files
+        if: steps.mode.outputs.is_daily == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.NEMTRACKER_TOKEN }}
+        run: |
+          mkdir -p deploy_manifest/data
+          # List energy_data_<YYYY>_h<H>.duckdb actually committed in the deploy
+          # repo, derive the period tags, and write a manifest of exactly those.
+          gh api repos/NemTracker/nemtracker.github.io/contents/data --paginate \
+            --jq '.[].name | select(test("^energy_data_[0-9]{4}_h[12]\\.duckdb$")) | capture("^energy_data_(?<tag>[0-9]{4}_h[12])\\.duckdb$").tag' \
+            | sort -u > tags.txt
+          python - <<'PY'
+          import json
+          with open("tags.txt") as f:
+              tags = [t.strip() for t in f if t.strip()]
+          with open("deploy_manifest/data/daily_manifest.json", "w") as f:
+              json.dump({"periods": tags}, f)
+          print("Manifest:", tags)
+          PY
+      - name: Deploy manifest to nemtracker
+        if: steps.mode.outputs.is_daily == 'true'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          personal_token: ${{ secrets.NEMTRACKER_TOKEN }}
+          external_repository: NemTracker/nemtracker.github.io
+          publish_branch: main
+          publish_dir: ./deploy_manifest
           keep_files: true
 
       # Data-quality tests live in their own workflow (.github/workflows/test.yml)

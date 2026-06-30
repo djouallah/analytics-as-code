@@ -167,7 +167,9 @@ def build_daily():
         size_mb = os.path.getsize(path) / 1024 / 1024
         print(f"Built {path} ({size_mb:.1f} MB)")
 
-    # Write manifest
+    # Write manifest (local/dev parity only). The DEPLOYED manifest is rebuilt in
+    # import_data.yml from the period files actually committed to the deploy repo,
+    # so it can never advertise a .duckdb that failed to land in the gh-pages push.
     tags = [f"{y}_h{h}" for y, h in periods]
     with open(os.path.join(DASHBOARD_DIR, "daily_manifest.json"), "w") as f:
         json.dump({"periods": tags}, f)

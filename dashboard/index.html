@@ -382,6 +382,25 @@
 
     let _manifestCache = null;
     const _attachedPeriods = new Set();
+    const _sourceLabel = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded', 'opfs-refresh': 'refreshed' };
+
+    // Fetch + attach a single period. Returns true on success, false if the file
+    // is missing/404 or otherwise fails — so the manifest advertising a period
+    // whose .duckdb didn't deploy degrades gracefully instead of breaking the
+    // whole query. Recent days still come from `today`; other periods still load.
+    async function attachPeriod(p) {
+      try {
+        const res = await cacheInOPFS(_db, `${_baseUrl}/data/energy_data_${p}.duckdb`, `energy_data_${p}.duckdb`);
+        await conn.query(`ATTACH 'energy_data_${p}.duckdb' AS p${p} (READ_ONLY);`);
+        _attachedPeriods.add(p);
+        loadedPeriods.push(p);
+        console.log(`[OPFS] p${p}: ${_sourceLabel[res.source]}`);
+        return true;
+      } catch (e) {
+        console.warn(`[OPFS] skipping period ${p}: ${e}`);
+        return false;
+      }
+    }
 
     function periodsForRange(from, to) {
       const periods = [];
@@ -406,17 +425,7 @@
       if (!needed.length) return;
 
       setStatus("Downloading detailed data...", "loading");
-      const sourceLabel = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded', 'opfs-refresh': 'refreshed' };
-      const results = await Promise.all(
-        needed.map(p => cacheInOPFS(_db, `${_baseUrl}/data/energy_data_${p}.duckdb`, `energy_data_${p}.duckdb`))
-      );
-      for (let i = 0; i < needed.length; i++) {
-        const p = needed[i];
-        await conn.query(`ATTACH 'energy_data_${p}.duckdb' AS p${p} (READ_ONLY);`);
-        _attachedPeriods.add(p);
-        loadedPeriods.push(p);
-        console.log(`[OPFS] p${p}: ${sourceLabel[results[i].source]}`);
-      }
+      await Promise.all(needed.map(attachPeriod));
       await refreshViews();
       setStatus(window._cutoffCached || "Connected", "connected");
     }
@@ -428,17 +437,7 @@
       const needed = _manifestCache.periods.filter(p => !_attachedPeriods.has(p));
       if (!needed.length) return;
       setStatus("Downloading detailed data for export...", "loading");
-      const sourceLabel = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded', 'opfs-refresh': 'refreshed' };
-      const results = await Promise.all(
-        needed.map(p => cacheInOPFS(_db, `${_baseUrl}/data/energy_data_${p}.duckdb`, `energy_data_${p}.duckdb`))
-      );
-      for (let i = 0; i < needed.length; i++) {
-        const p = needed[i];
-        await conn.query(`ATTACH 'energy_data_${p}.duckdb' AS p${p} (READ_ONLY);`);
-        _attachedPeriods.add(p);
-        loadedPeriods.push(p);
-        console.log(`[OPFS] p${p}: ${sourceLabel[results[i].source]}`);
-      }
+      await Promise.all(needed.map(attachPeriod));
       await refreshViews();
       setStatus(window._cutoffCached || "Connected", "connected");
     }
