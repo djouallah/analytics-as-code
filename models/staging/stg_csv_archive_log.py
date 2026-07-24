@@ -198,15 +198,15 @@ def model(dbt, session):
             INSERT INTO daily_files_web
             WITH
               api_responses AS (
-                SELECT 2018 AS year, content AS json_content FROM read_text('https://api.github.com/repos/djouallah/fabric_demo/contents/data/archive/2018')
-                UNION ALL SELECT 2019, content FROM read_text('https://api.github.com/repos/djouallah/fabric_demo/contents/data/archive/2019')
-                UNION ALL SELECT 2020, content FROM read_text('https://api.github.com/repos/djouallah/fabric_demo/contents/data/archive/2020')
-                UNION ALL SELECT 2021, content FROM read_text('https://api.github.com/repos/djouallah/fabric_demo/contents/data/archive/2021')
-                UNION ALL SELECT 2022, content FROM read_text('https://api.github.com/repos/djouallah/fabric_demo/contents/data/archive/2022')
-                UNION ALL SELECT 2023, content FROM read_text('https://api.github.com/repos/djouallah/fabric_demo/contents/data/archive/2023')
-                UNION ALL SELECT 2024, content FROM read_text('https://api.github.com/repos/djouallah/fabric_demo/contents/data/archive/2024')
-                UNION ALL SELECT 2025, content FROM read_text('https://api.github.com/repos/djouallah/fabric_demo/contents/data/archive/2025')
-                UNION ALL SELECT 2026, content FROM read_text('https://api.github.com/repos/djouallah/fabric_demo/contents/data/archive/2026')
+                SELECT 2018 AS year, content AS json_content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2018')
+                UNION ALL SELECT 2019, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2019')
+                UNION ALL SELECT 2020, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2020')
+                UNION ALL SELECT 2021, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2021')
+                UNION ALL SELECT 2022, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2022')
+                UNION ALL SELECT 2023, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2023')
+                UNION ALL SELECT 2024, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2024')
+                UNION ALL SELECT 2025, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2025')
+                UNION ALL SELECT 2026, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2026')
               ),
               parsed_files AS (
                 SELECT year, unnest(from_json(json_content, '["json"]')) AS file_info
