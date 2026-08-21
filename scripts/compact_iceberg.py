@@ -41,7 +41,15 @@ TOKEN = os.environ["ICEBERG_TOKEN"]
 WAREHOUSE = os.environ["ICEBERG_WAREHOUSE"]
 
 # Files smaller than this get folded together; the rest are left alone.
-TARGET_FILE_SIZE = "128MiB"
+#
+# 64MiB, not 128MiB, because of R2: DuckDB's S3 part size is
+# s3_uploader_max_filesize / s3_uploader_max_parts_per_file = 800GB / 10000 = 80MB,
+# so a 128MiB output is uploaded as an 80MB part plus a 48MB part, and R2 rejects
+# it with "InvalidPart: All non-trailing parts must have the same length". The
+# rewrite finishes first, so the failure costs the table's entire rewrite time
+# (26 min on fct_scada_today). Staying under 80MB means a single PUT and no
+# multipart at all.
+TARGET_FILE_SIZE = "64MiB"
 # Don't bother rewriting a table that only has a handful of files. Also what
 # keeps already-tidy tables (dim_calendar, anything compacted yesterday) cheap.
 MIN_INPUT_FILES = 5
