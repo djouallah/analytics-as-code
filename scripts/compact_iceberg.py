@@ -2,13 +2,19 @@
 
 process_data commits to the catalog every 30 minutes, so the small tables end up
 with ~48 tiny data files a day and nothing ever folds them back together. This
-runs iceberg_rewrite_data_files() over every table in the catalog, consolidating
-files below the target size into ~128MiB files.
+runs iceberg_rewrite_data_files() over each table, consolidating files below the
+target size into ~128MiB files.
 
 iceberg_rewrite_data_files landed in duckdb/duckdb-iceberg#1035 (merged
 2026-07-09) and is not in a stable duckdb release yet -- the workflow pins
 duckdb==1.6.0.dev365, and the iceberg extension comes from core_nightly (the
 extension binary is keyed to the duckdb build, so pinning duckdb pins it too).
+
+iceberg_metadata() is EXPENSIVE: it enumerates every manifest, which on a
+fragmented table is the whole problem we're here to fix. scripts/iceberg_stats.py
+was deleted (a46c55f) for exactly this. So: the table list is hardcoded rather
+than discovered, ordered smallest-first by hand, and each table's stats come from
+a single pass, taken once before and once after. Don't add a query per metric.
 
 Known limitations of the upstream function:
   - manifest-level column statistics are not populated for rewritten files
@@ -45,15 +51,16 @@ MIN_INPUT_FILES = 5
 # tomorrow's run -- compaction is incremental by nature.
 BUDGET_MINUTES = float(os.environ.get("COMPACT_BUDGET_MINUTES", "70"))
 
-# Fallback list if catalog discovery fails (schema.table).
-KNOWN_TABLES = [
-    "landing.stg_csv_archive_log",
-    "landing.fct_scada",
-    "landing.fct_price",
-    "landing.fct_scada_today",
-    "landing.fct_price_today",
+# Hand-ordered smallest to largest. We know the tables; discovering them costs a
+# metadata scan each and buys nothing. A new model just gets added here.
+TABLES = [
     "mart.dim_calendar",
     "mart.dim_duid",
+    "landing.stg_csv_archive_log",
+    "landing.fct_price_today",
+    "landing.fct_scada_today",
+    "landing.fct_price",
+    "landing.fct_scada",
 ]
 
 
@@ -80,85 +87,42 @@ def has_rewrite_function(con):
     )
 
 
-def discover_tables(con):
+def try_row(con, sql):
+    """Return the first row, or None if the query can't run. Never raises."""
     try:
-        rows = con.execute(
-            "SELECT table_schema || '.' || table_name "
-            "FROM information_schema.tables "
-            "WHERE table_catalog = 'catalog' "
-            "ORDER BY table_schema, table_name"
-        ).fetchall()
-        found = [r[0] for r in rows]
-        if found:
-            return found
-    except Exception as e:
-        print(f"  (table discovery failed, using hardcoded list: {e})")
-    return KNOWN_TABLES
-
-
-def order_by_size(con, tables):
-    """Smallest tables first.
-
-    Two reasons. The frequently-appended tables (fct_*_today, the archive log)
-    are both the smallest and the most fragmented -- ~48 tiny files a day versus
-    one daily append on the history tables -- so this does the highest-value work
-    first. And if the time budget runs out, it runs out on one big table rather
-    than starving all the cheap ones behind it.
-    """
-    sized = []
-    for t in tables:
-        size = try_scalar(
-            con,
-            f"SELECT coalesce(sum(file_size_in_bytes), 0) FROM iceberg_metadata('catalog.{t}')",
-        )
-        sized.append((size if size is not None else 0, t))
-    return [t for _, t in sorted(sized)]
-
-
-def try_scalar(con, sql):
-    """Return the scalar, or None if the query can't run. Never raises."""
-    try:
-        return con.execute(sql).fetchone()[0]
+        return con.execute(sql).fetchone()
     except Exception:
         return None
 
 
-def by_content(con, fq, agg, labels, codes):
-    """Aggregate iceberg_metadata rows of a given content kind.
+def stats(con, fq):
+    """(data_files, size_mb, rows, delete_files) in ONE pass over the manifests.
 
     The `content` column has been spelled both as a label ('DATA') and as the
-    Iceberg spec's integer code (0), so try both and give up (None) rather than
-    silently aggregating over the wrong set of files.
+    Iceberg spec's integer code (0), so try both spellings -- but only ever one
+    scan per attempt, never one scan per metric.
     """
-    for pred in (f"content IN ({labels})", f"content IN ({codes})"):
-        v = try_scalar(con, f"SELECT {agg} FROM iceberg_metadata('{fq}') WHERE {pred}")
-        if v is not None:
-            return v
-    return None
-
-
-def stats(con, fq):
-    """(data_files, size_mb, snapshots, rows, delete_files) -- metadata only, never scans data."""
-    data_files = by_content(con, fq, "count(*)", "'DATA'", "0")
-    if data_files is None:  # content column unusable; fall back to every manifest entry
-        data_files = try_scalar(con, f"SELECT count(*) FROM iceberg_metadata('{fq}')")
-    return (
-        data_files,
-        try_scalar(
+    for data in ("'DATA'", "0"):
+        row = try_row(
             con,
-            f"SELECT round(coalesce(sum(file_size_in_bytes), 0) / 1024.0 / 1024.0, 1) "
+            f"SELECT count(*) FILTER (WHERE content IN ({data})), "
+            f"       round(coalesce(sum(file_size_in_bytes), 0) / 1048576.0, 1), "
+            f"       coalesce(sum(record_count) FILTER (WHERE content IN ({data})), 0), "
+            f"       count(*) FILTER (WHERE content NOT IN ({data})) "
             f"FROM iceberg_metadata('{fq}')",
-        ),
-        try_scalar(con, f"SELECT count(*) FROM iceberg_snapshots('{fq}')"),
-        by_content(con, fq, "coalesce(sum(record_count), 0)", "'DATA'", "0"),
-        by_content(con, fq, "count(*)", "'POSITION_DELETES','EQUALITY_DELETES'", "1,2"),
-    )
+        )
+        if row is not None:
+            return row
+    # content unusable -- fall back to a plain file count so the report still says
+    # something useful about whether compaction moved the needle.
+    row = try_row(con, f"SELECT count(*), NULL, NULL, NULL FROM iceberg_metadata('{fq}')")
+    return row if row is not None else (None, None, None, None)
 
 
 def compact(con, table):
     """Compact one table. Returns a result row for the report."""
     fq = f"catalog.{table}"
-    files_before, mb_before, snaps_before, rows_before, deletes_before = stats(con, fq)
+    files_before, mb_before, rows_before, deletes_before = stats(con, fq)
 
     try:
         row = con.execute(
@@ -168,18 +132,20 @@ def compact(con, table):
             f"min_input_files => {MIN_INPUT_FILES})"
         ).fetchone()
     except Exception as e:
-        return (table, files_before, files_before, mb_before, snaps_before,
+        return (table, files_before, files_before, mb_before,
                 "ERROR: " + str(e).splitlines()[0][:100])
 
     # No row means nothing was eligible -- not an error.
     rewritten, added, rewritten_bytes = row if row else (0, 0, 0)
-    files_after, mb_after, snaps_after, rows_after, _ = stats(con, fq)
 
     if not rewritten:
-        status = f"skipped (<{MIN_INPUT_FILES} eligible files)"
-    else:
-        mb = (rewritten_bytes or 0) / 1024.0 / 1024.0
-        status = f"OK ({rewritten} -> {added} files, {mb:.1f} MB)"
+        # Nothing changed, so don't pay for a second manifest scan.
+        return (table, files_before, files_before, mb_before,
+                f"skipped (<{MIN_INPUT_FILES} eligible files)")
+
+    files_after, mb_after, rows_after, _ = stats(con, fq)
+    mb = (rewritten_bytes or 0) / 1048576.0
+    status = f"OK ({rewritten} -> {added} files, {mb:.1f} MB rewritten)"
 
     # Compaction applies pending merge-on-read deletes as it rewrites, so a table
     # that had delete files legitimately loses rows here. Only flag what can never
@@ -191,7 +157,7 @@ def compact(con, table):
         else:
             status = f"{status}; {delta} ({deletes_before} delete files applied)"
 
-    return (table, files_before, files_after, mb_after, snaps_after, status)
+    return (table, files_before, files_after, mb_after, status)
 
 
 def fmt(v):
@@ -201,15 +167,11 @@ def fmt(v):
 
 
 def report(lines, duckdb_version):
-    header = (
-        f"{'table':<32}{'files_before':>14}{'files_after':>13}"
-        f"{'MB':>10}{'snapshots':>11}  status"
-    )
+    header = f"{'table':<32}{'files_before':>14}{'files_after':>13}{'MB':>10}  status"
     out = ["=" * 110, f"Iceberg compaction (duckdb {duckdb_version})", header, "-" * 110]
-    for table, before, after, mb, snaps, status in lines:
+    for table, before, after, mb, status in lines:
         out.append(
-            f"{table:<32}{fmt(before):>14}{fmt(after):>13}"
-            f"{fmt(mb):>10}{fmt(snaps):>11}  {status}"
+            f"{table:<32}{fmt(before):>14}{fmt(after):>13}{fmt(mb):>10}  {status}"
         )
     out.append("=" * 110)
     print("\n".join(out))
@@ -218,20 +180,24 @@ def report(lines, duckdb_version):
     if summary:
         with open(summary, "a", encoding="utf-8") as f:
             f.write(f"## Iceberg compaction (duckdb {duckdb_version})\n\n")
-            f.write("| table | files before | files after | MB | snapshots | status |\n")
-            f.write("|---|--:|--:|--:|--:|---|\n")
-            for table, before, after, mb, snaps, status in lines:
+            f.write("| table | files before | files after | MB | status |\n")
+            f.write("|---|--:|--:|--:|---|\n")
+            for table, before, after, mb, status in lines:
                 f.write(
-                    f"| `{table}` | {fmt(before)} | {fmt(after)} | "
-                    f"{fmt(mb)} | {fmt(snaps)} | {status} |\n"
+                    f"| `{table}` | {fmt(before)} | {fmt(after)} | {fmt(mb)} | {status} |\n"
                 )
             f.write("\n")
 
 
 def main():
-    con = connect()
     version = duckdb.__version__
+    print(f"duckdb {version} -- compacting {len(TABLES)} table(s) at {TARGET_FILE_SIZE}, "
+          f"min_input_files={MIN_INPUT_FILES}, budget={BUDGET_MINUTES:g}min, in order:")
+    for t in TABLES:
+        print(f"  - catalog.{t}")
+    print(flush=True)
 
+    con = connect()
     if not has_rewrite_function(con):
         print(
             f"iceberg_rewrite_data_files() not available in duckdb {version} -- "
@@ -240,35 +206,25 @@ def main():
         )
         return
 
-    tables = order_by_size(con, discover_tables(con))
-    total = len(tables)
-    print(f"duckdb {version} -- compacting {total} table(s) at {TARGET_FILE_SIZE}, "
-          f"min_input_files={MIN_INPUT_FILES}, budget={BUDGET_MINUTES:g}min "
-          f"(smallest first):")
-    for t in tables:
-        print(f"  - catalog.{t}")
-    print(flush=True)
-
-    # Print each table as it finishes rather than only in the summary, so a long
-    # rewrite is visible live in the CI log instead of looking hung.
     started = time.monotonic()
+    total = len(TABLES)
     lines = []
-    for i, table in enumerate(tables, 1):
+    for i, table in enumerate(TABLES, 1):
         elapsed = (time.monotonic() - started) / 60.0
         if elapsed >= BUDGET_MINUTES:
             # Never drop tables silently -- say which ones and why.
-            for skipped in tables[i - 1:]:
-                lines.append((skipped, None, None, None, None,
+            for skipped in TABLES[i - 1:]:
+                lines.append((skipped, None, None, None,
                               f"not attempted ({BUDGET_MINUTES:g}min budget spent)"))
             print(f"time budget spent after {elapsed:.1f}min -- not attempting: "
-                  f"{', '.join(tables[i - 1:])}", flush=True)
+                  f"{', '.join(TABLES[i - 1:])}", flush=True)
             break
 
         print(f"[{i}/{total}] catalog.{table} ... ({elapsed:.1f}min elapsed)", flush=True)
         line = compact(con, table)
-        _, before, after, _, _, status = line
-        print(f"[{i}/{total}] catalog.{table}: "
-              f"{fmt(before)} -> {fmt(after)} files  {status}\n", flush=True)
+        took = (time.monotonic() - started) / 60.0 - elapsed
+        print(f"[{i}/{total}] catalog.{table}: {fmt(line[1])} -> {fmt(line[2])} files  "
+              f"{line[4]}  [{took:.1f}min]\n", flush=True)
         lines.append(line)
 
     report(lines, version)
