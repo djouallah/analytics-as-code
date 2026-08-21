@@ -66,11 +66,15 @@ TABLES = [
 
 def connect():
     con = duckdb.connect(":memory:")
+    # Plain install first. duckdb 1.6.0.dev365 identifies itself as v2.0.0-alpha*,
+    # and nightly-extensions.duckdb.org has no iceberg build under that version --
+    # asking core_nightly first just buys a 404 and a scary log line. The core
+    # extension for this build does carry iceberg_rewrite_data_files.
     try:
-        con.execute("FORCE INSTALL iceberg FROM core_nightly")
-    except Exception as e:
-        print(f"  (core_nightly install failed, falling back to core: {e})")
         con.install_extension("iceberg")
+    except Exception as e:
+        print(f"  (core install failed, trying core_nightly: {e})", flush=True)
+        con.execute("FORCE INSTALL iceberg FROM core_nightly")
     con.load_extension("iceberg")
     con.execute(f"CREATE SECRET (TYPE ICEBERG, TOKEN '{TOKEN}');")
     con.execute(f"ATTACH '{WAREHOUSE}' AS catalog (TYPE ICEBERG, ENDPOINT '{ENDPOINT}');")
