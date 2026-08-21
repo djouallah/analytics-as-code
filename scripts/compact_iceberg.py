@@ -51,14 +51,19 @@ MIN_INPUT_FILES = 5
 # tomorrow's run -- compaction is incremental by nature.
 BUDGET_MINUTES = float(os.environ.get("COMPACT_BUDGET_MINUTES", "70"))
 
-# Hand-ordered smallest to largest. We know the tables; discovering them costs a
-# metadata scan each and buys nothing. A new model just gets added here.
+# Hand-ordered. We know the tables; discovering them costs a metadata scan each
+# and buys nothing. A new model just gets added here.
+#
+# Order by expected MANIFEST count, not data size -- prime() enumerates manifests,
+# so that's the cost driver. Ordering by bytes put stg_csv_archive_log third and it
+# burned 21 minutes: tiny in bytes, but 48 commits a day is the worst fragmentation
+# in the catalog. The dashboard tables go first because they matter most.
 TABLES = [
+    "landing.fct_price_today",
+    "landing.fct_scada_today",
     "mart.dim_calendar",
     "mart.dim_duid",
     "landing.stg_csv_archive_log",
-    "landing.fct_price_today",
-    "landing.fct_scada_today",
     "landing.fct_price",
     "landing.fct_scada",
 ]

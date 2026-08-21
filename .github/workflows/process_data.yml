@@ -85,12 +85,17 @@ jobs:
     # Must exceed COMPACT_BUDGET_MINUTES: the script stops starting new tables at
     # the budget, and needs the slack to finish the table in flight and print its
     # report. A runner timeout kills it mid-rewrite with nothing reported.
-    timeout-minutes: 90
+    #
+    # Raised to near the 6h GitHub job ceiling for the initial backfill -- six
+    # months without compaction means prime() alone takes ~20min on the worst
+    # tables. Drop back to 90/70 once the backlog is cleared; the daily delta is
+    # only ~48 files per table.
+    timeout-minutes: 350
     env:
       ICEBERG_REST_ENDPOINT: ${{ secrets.ICEBERG_REST_ENDPOINT }}
       ICEBERG_TOKEN: ${{ secrets.ICEBERG_TOKEN }}
       ICEBERG_WAREHOUSE: ${{ secrets.ICEBERG_WAREHOUSE }}
-      COMPACT_BUDGET_MINUTES: "70"
+      COMPACT_BUDGET_MINUTES: "320"
       # Without this python block-buffers stdout when it isn't a TTY, so a job
       # that hits the timeout reports nothing at all about what it was doing.
       PYTHONUNBUFFERED: "1"
