@@ -90,7 +90,6 @@ jobs:
       ICEBERG_REST_ENDPOINT: ${{ secrets.ICEBERG_REST_ENDPOINT }}
       ICEBERG_TOKEN: ${{ secrets.ICEBERG_TOKEN }}
       ICEBERG_WAREHOUSE: ${{ secrets.ICEBERG_WAREHOUSE }}
-      COMPACT_BUDGET_MINUTES: "70"
       # Without this python block-buffers stdout when it isn't a TTY, so a job
       # that hits the timeout reports nothing at all about what it was doing.
       PYTHONUNBUFFERED: "1"
