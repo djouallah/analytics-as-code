@@ -82,11 +82,18 @@ jobs:
     # trigger gates on this workflow's conclusion being success.
     continue-on-error: true
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Must exceed COMPACT_BUDGET_MINUTES: the script stops starting new tables at
+    # the budget, and needs the slack to finish the table in flight and print its
+    # report. A runner timeout kills it mid-rewrite with nothing reported.
+    timeout-minutes: 90
     env:
       ICEBERG_REST_ENDPOINT: ${{ secrets.ICEBERG_REST_ENDPOINT }}
       ICEBERG_TOKEN: ${{ secrets.ICEBERG_TOKEN }}
       ICEBERG_WAREHOUSE: ${{ secrets.ICEBERG_WAREHOUSE }}
+      COMPACT_BUDGET_MINUTES: "70"
+      # Without this python block-buffers stdout when it isn't a TTY, so a job
+      # that hits the timeout reports nothing at all about what it was doing.
+      PYTHONUNBUFFERED: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

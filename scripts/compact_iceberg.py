@@ -26,6 +26,7 @@ Usage:
 
 import os
 import sys
+import time
 
 import duckdb
 
@@ -38,6 +39,11 @@ TARGET_FILE_SIZE = "128MiB"
 # Don't bother rewriting a table that only has a handful of files. Also what
 # keeps already-tidy tables (dim_calendar, anything compacted yesterday) cheap.
 MIN_INPUT_FILES = 5
+# Stop starting new tables past this much wall clock, so the job reports what it
+# did instead of being killed by the runner's timeout mid-rewrite. Keep it well
+# under the workflow's timeout-minutes. Whatever gets skipped is picked up by
+# tomorrow's run -- compaction is incremental by nature.
+BUDGET_MINUTES = float(os.environ.get("COMPACT_BUDGET_MINUTES", "70"))
 
 # Fallback list if catalog discovery fails (schema.table).
 KNOWN_TABLES = [
@@ -88,6 +94,25 @@ def discover_tables(con):
     except Exception as e:
         print(f"  (table discovery failed, using hardcoded list: {e})")
     return KNOWN_TABLES
+
+
+def order_by_size(con, tables):
+    """Smallest tables first.
+
+    Two reasons. The frequently-appended tables (fct_*_today, the archive log)
+    are both the smallest and the most fragmented -- ~48 tiny files a day versus
+    one daily append on the history tables -- so this does the highest-value work
+    first. And if the time budget runs out, it runs out on one big table rather
+    than starving all the cheap ones behind it.
+    """
+    sized = []
+    for t in tables:
+        size = try_scalar(
+            con,
+            f"SELECT coalesce(sum(file_size_in_bytes), 0) FROM iceberg_metadata('catalog.{t}')",
+        )
+        sized.append((size if size is not None else 0, t))
+    return [t for _, t in sorted(sized)]
 
 
 def try_scalar(con, sql):
@@ -215,19 +240,31 @@ def main():
         )
         return
 
-    tables = discover_tables(con)
+    tables = order_by_size(con, discover_tables(con))
     total = len(tables)
     print(f"duckdb {version} -- compacting {total} table(s) at {TARGET_FILE_SIZE}, "
-          f"min_input_files={MIN_INPUT_FILES}")
+          f"min_input_files={MIN_INPUT_FILES}, budget={BUDGET_MINUTES:g}min "
+          f"(smallest first):")
     for t in tables:
         print(f"  - catalog.{t}")
     print(flush=True)
 
     # Print each table as it finishes rather than only in the summary, so a long
     # rewrite is visible live in the CI log instead of looking hung.
+    started = time.monotonic()
     lines = []
     for i, table in enumerate(tables, 1):
-        print(f"[{i}/{total}] catalog.{table} ...", flush=True)
+        elapsed = (time.monotonic() - started) / 60.0
+        if elapsed >= BUDGET_MINUTES:
+            # Never drop tables silently -- say which ones and why.
+            for skipped in tables[i - 1:]:
+                lines.append((skipped, None, None, None, None,
+                              f"not attempted ({BUDGET_MINUTES:g}min budget spent)"))
+            print(f"time budget spent after {elapsed:.1f}min -- not attempting: "
+                  f"{', '.join(tables[i - 1:])}", flush=True)
+            break
+
+        print(f"[{i}/{total}] catalog.{table} ... ({elapsed:.1f}min elapsed)", flush=True)
         line = compact(con, table)
         _, before, after, _, _, status = line
         print(f"[{i}/{total}] catalog.{table}: "
