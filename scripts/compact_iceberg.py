@@ -13,7 +13,7 @@ extension binary is keyed to the duckdb build, so pinning duckdb pins it too).
 Do not add iceberg_metadata() calls here. It enumerates every manifest, which on
 a fragmented table is the whole problem we're here to fix -- scripts/iceberg_stats.py
 was deleted (a46c55f) for exactly that. The table list is hardcoded rather than
-discovered, and the only per-table read is the LIMIT 0 in prime(). The function
+discovered, and the only per-table read is the LIMIT 1 in prime(). The function
 reports its own rewritten/added counts; that is the report.
 
 Known limitations of the upstream function:
@@ -95,12 +95,14 @@ def prime(con, fq):
     """Make the catalog vend this table's storage credentials.
 
     iceberg_rewrite_data_files doesn't fetch them itself -- called cold it dies
-    with 403 "No credentials are provided" (duckdb/duckdb-iceberg#1349). Any
-    per-table read triggers the loadTable that returns them; LIMIT 0 plans the
-    scan and reads no data, so it costs far less than iceberg_metadata(), which
-    enumerates every manifest.
+    with 403 "No credentials are provided" (duckdb/duckdb-iceberg#1349).
+
+    LIMIT 1, not LIMIT 0: LIMIT 0 is planned without ever opening a data file,
+    so it returns without the credentials being set up and the rewrite still
+    403s. LIMIT 1 has to actually read, which forces them. Still far cheaper
+    than iceberg_metadata(), which enumerates every manifest.
     """
-    con.execute(f"SELECT * FROM {fq} LIMIT 0")
+    con.execute(f"SELECT * FROM {fq} LIMIT 1")
 
 
 def compact(con, table, say):
