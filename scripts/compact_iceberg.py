@@ -46,9 +46,9 @@ TABLES = [
 
 
 def connect():
+    # No install/load: duckdb autoloads iceberg from core when it sees the
+    # ICEBERG secret type.
     con = duckdb.connect(":memory:")
-    con.install_extension("iceberg")
-    con.load_extension("iceberg")
     con.execute(f"CREATE SECRET (TYPE ICEBERG, TOKEN '{TOKEN}');")
     con.execute(f"ATTACH '{WAREHOUSE}' AS catalog (TYPE ICEBERG, ENDPOINT '{ENDPOINT}');")
     return con
