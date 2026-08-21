@@ -46,20 +46,15 @@ TABLES = [
 
 
 def connect():
-    # Load iceberg explicitly. Relying on autoload attaches fine but then every
-    # data-file read fails with "HTTP GET error reading 's3://...'" -- the R2
-    # storage credentials the catalog vends don't get set up. Same pattern as
-    # scripts/cache_catalog.py and scripts/catalog_capabilities.py.
     con = duckdb.connect(":memory:")
+    # httpfs does the actual s3:// GETs against R2; iceberg talks to the REST
+    # catalog. Load both explicitly, as profiles.yml and the other scripts do.
+    con.install_extension("httpfs")
+    con.load_extension("httpfs")
     con.install_extension("iceberg")
     con.load_extension("iceberg")
     con.execute(f"CREATE SECRET (TYPE ICEBERG, TOKEN '{TOKEN}');")
     con.execute(f"ATTACH '{WAREHOUSE}' AS catalog (TYPE ICEBERG, ENDPOINT '{ENDPOINT}');")
-    # Touch the catalog once before reading any file. ATTACH on its own appears to
-    # be lazy: without this every manifest read comes back 403 AccessDenied, and
-    # the R2 credentials the catalog vends are never set up. This is the only
-    # difference from the run that did compact dim_duid successfully.
-    con.execute("SELECT 1 FROM information_schema.tables WHERE table_catalog = 'catalog' LIMIT 1")
     return con
 
 
