@@ -98,28 +98,45 @@ def try_scalar(con, sql):
         return None
 
 
+def by_content(con, fq, agg, labels, codes):
+    """Aggregate iceberg_metadata rows of a given content kind.
+
+    The `content` column has been spelled both as a label ('DATA') and as the
+    Iceberg spec's integer code (0), so try both and give up (None) rather than
+    silently aggregating over the wrong set of files.
+    """
+    for pred in (f"content IN ({labels})", f"content IN ({codes})"):
+        v = try_scalar(con, f"SELECT {agg} FROM iceberg_metadata('{fq}') WHERE {pred}")
+        if v is not None:
+            return v
+    return None
+
+
 def stats(con, fq):
-    """(data_files, size_mb, snapshots, rows) -- metadata only, never scans data."""
+    """(data_files, size_mb, snapshots, rows, delete_files) -- metadata only, never scans data."""
+    data_files = by_content(con, fq, "count(*)", "'DATA'", "0")
+    if data_files is None:  # content column unusable; fall back to every manifest entry
+        data_files = try_scalar(con, f"SELECT count(*) FROM iceberg_metadata('{fq}')")
     return (
-        try_scalar(con, f"SELECT count(*) FROM iceberg_metadata('{fq}')"),
+        data_files,
         try_scalar(
             con,
             f"SELECT round(coalesce(sum(file_size_in_bytes), 0) / 1024.0 / 1024.0, 1) "
             f"FROM iceberg_metadata('{fq}')",
         ),
         try_scalar(con, f"SELECT count(*) FROM iceberg_snapshots('{fq}')"),
-        # record_count isn't guaranteed to be exposed; degrades to None.
-        try_scalar(con, f"SELECT coalesce(sum(record_count), 0) FROM iceberg_metadata('{fq}')"),
+        by_content(con, fq, "coalesce(sum(record_count), 0)", "'DATA'", "0"),
+        by_content(con, fq, "count(*)", "'POSITION_DELETES','EQUALITY_DELETES'", "1,2"),
     )
 
 
 def compact(con, table):
     """Compact one table. Returns a result row for the report."""
     fq = f"catalog.{table}"
-    files_before, mb_before, snaps_before, rows_before = stats(con, fq)
+    files_before, mb_before, snaps_before, rows_before, deletes_before = stats(con, fq)
 
     try:
-        rewritten, added, rewritten_bytes = con.execute(
+        row = con.execute(
             f"SELECT rewritten_data_files, added_data_files, rewritten_bytes "
             f"FROM iceberg_rewrite_data_files('{fq}', "
             f"target_file_size_bytes => '{TARGET_FILE_SIZE}', "
@@ -129,17 +146,25 @@ def compact(con, table):
         return (table, files_before, files_before, mb_before, snaps_before,
                 "ERROR: " + str(e).splitlines()[0][:100])
 
-    files_after, mb_after, snaps_after, rows_after = stats(con, fq)
+    # No row means nothing was eligible -- not an error.
+    rewritten, added, rewritten_bytes = row if row else (0, 0, 0)
+    files_after, mb_after, snaps_after, rows_after, _ = stats(con, fq)
 
-    if rewritten == 0:
+    if not rewritten:
         status = f"skipped (<{MIN_INPUT_FILES} eligible files)"
     else:
-        status = f"OK ({rewritten} -> {added} files, {rewritten_bytes / 1024.0 / 1024.0:.1f} MB)"
+        mb = (rewritten_bytes or 0) / 1024.0 / 1024.0
+        status = f"OK ({rewritten} -> {added} files, {mb:.1f} MB)"
 
-    # Compaction must be row-preserving. This is the one correctness check here,
-    # and it's free -- both numbers come from manifest metadata.
+    # Compaction applies pending merge-on-read deletes as it rewrites, so a table
+    # that had delete files legitimately loses rows here. Only flag what can never
+    # be legitimate: rows appearing, or rows vanishing with nothing to delete them.
     if rows_before is not None and rows_after is not None and rows_before != rows_after:
-        status = f"ROW COUNT CHANGED {rows_before:,} -> {rows_after:,} !! " + status
+        delta = f"rows {rows_before:,} -> {rows_after:,}"
+        if rows_after > rows_before or deletes_before == 0:
+            status = f"ROW COUNT CHANGED {delta} !! " + status
+        else:
+            status = f"{status}; {delta} ({deletes_before} delete files applied)"
 
     return (table, files_before, files_after, mb_after, snaps_after, status)
 
