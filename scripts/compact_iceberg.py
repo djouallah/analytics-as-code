@@ -81,7 +81,9 @@ def main():
             outcome = (f"{rewritten} rewritten -> {added} added, "
                        f"{rewritten_bytes / 1048576.0:.1f} MB")
         except Exception as e:
-            outcome = "ERROR: " + str(e).splitlines()[0][:120]
+            # Print it whole. Truncating to one 120-char line cut off the HTTP
+            # status code, which is the only part that says why it failed.
+            outcome = f"ERROR: {type(e).__name__}: {e}"
 
         mins = (time.monotonic() - started) / 60.0
         print(f"[{i}/{len(TABLES)}] catalog.{table}: {outcome}  [{mins:.1f}min]\n",
