@@ -53,14 +53,14 @@ def connect():
     con.load_extension("httpfs")
     con.install_extension("iceberg")
     con.load_extension("iceberg")
-    con.execute(f"CREATE SECRET (TYPE ICEBERG, TOKEN '{TOKEN}');")
-    con.execute(f"ATTACH '{WAREHOUSE}' AS catalog (TYPE ICEBERG, ENDPOINT '{ENDPOINT}');")
-    # Ask the catalog one question before reading any file. Without this, httpfs
-    # reaches R2 with no credentials at all ("No credentials are provided", 403)
-    # -- ATTACH alone never fetches the vended ones. The run that did compact
-    # dim_duid 61 -> 1 queried information_schema first; that is the only
-    # difference. Cheap: table names only, no manifests.
-    con.execute("SELECT 1 FROM information_schema.tables WHERE table_catalog = 'catalog' LIMIT 1")
+    # Pass the token as an ATTACH option, the way profiles.yml does for dbt.
+    # CREATE SECRET (TYPE ICEBERG, TOKEN ...) is what cache_catalog.py uses on
+    # duckdb 1.5.1, but on 1.6.0.dev365 it leaves httpfs with no R2 credentials
+    # at all -- every manifest read returns 403 "No credentials are provided".
+    con.execute(
+        f"ATTACH '{WAREHOUSE}' AS catalog "
+        f"(TYPE ICEBERG, ENDPOINT '{ENDPOINT}', TOKEN '{TOKEN}');"
+    )
     return con
 
 
