@@ -100,25 +100,33 @@ def try_row(con, sql):
 
 
 def stats(con, fq):
-    """(data_files, size_mb, rows, delete_files) in ONE pass over the manifests.
+    """(live_data_files, size_mb, rows, delete_files) in ONE pass over the manifests.
 
-    The `content` column has been spelled both as a label ('DATA') and as the
-    Iceberg spec's integer code (0), so try both spellings -- but only ever one
-    scan per attempt, never one scan per metric.
+    Only LIVE files count. iceberg_metadata() keeps listing rewritten files as
+    DELETED-status manifest entries, so an unfiltered count(*) goes UP after a
+    successful compaction (dim_duid read 120 -> 121 while the rewrite actually
+    folded 61 files into 1) -- which reads as if compaction made things worse.
+
+    `content` and `status` have each been spelled as a label ('DATA', 'DELETED')
+    and as the Iceberg spec's integer code, so try both -- but only ever one scan
+    per attempt, never one scan per metric.
     """
-    for data in ("'DATA'", "0"):
+    for data, deleted in (("'DATA'", "'DELETED'"), ("0", "2")):
+        live = f"content IN ({data}) AND status NOT IN ({deleted})"
         row = try_row(
             con,
-            f"SELECT count(*) FILTER (WHERE content IN ({data})), "
-            f"       round(coalesce(sum(file_size_in_bytes), 0) / 1048576.0, 1), "
-            f"       coalesce(sum(record_count) FILTER (WHERE content IN ({data})), 0), "
-            f"       count(*) FILTER (WHERE content NOT IN ({data})) "
+            f"SELECT count(*) FILTER (WHERE {live}), "
+            f"       round(coalesce(sum(file_size_in_bytes) FILTER (WHERE {live}), 0) "
+            f"             / 1048576.0, 1), "
+            f"       coalesce(sum(record_count) FILTER (WHERE {live}), 0), "
+            f"       count(*) FILTER (WHERE content NOT IN ({data}) "
+            f"                          AND status NOT IN ({deleted})) "
             f"FROM iceberg_metadata('{fq}')",
         )
         if row is not None:
             return row
-    # content unusable -- fall back to a plain file count so the report still says
-    # something useful about whether compaction moved the needle.
+    # Columns unusable -- fall back to a plain count so the report still says
+    # something, even though it will include tombstones.
     row = try_row(con, f"SELECT count(*), NULL, NULL, NULL FROM iceberg_metadata('{fq}')")
     return row if row is not None else (None, None, None, None)
 
