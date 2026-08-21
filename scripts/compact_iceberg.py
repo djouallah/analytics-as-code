@@ -10,10 +10,10 @@ iceberg_rewrite_data_files landed in duckdb/duckdb-iceberg#1035 (merged
 duckdb==1.6.0.dev365, and the iceberg extension comes from core_nightly (the
 extension binary is keyed to the duckdb build, so pinning duckdb pins it too).
 
-Do not add iceberg_metadata() calls here. It enumerates every manifest, which on
+Exactly one iceberg_metadata() call, in prime(). Do not add more. It enumerates every manifest, which on
 a fragmented table is the whole problem we're here to fix -- scripts/iceberg_stats.py
 was deleted (a46c55f) for exactly that. The table list is hardcoded rather than
-discovered, and the only per-table read is the LIMIT 1 in prime(). The function
+discovered, and the only per-table read is the one in prime(). The function
 reports its own rewritten/added counts; that is the report.
 
 Known limitations of the upstream function:
@@ -97,12 +97,15 @@ def prime(con, fq):
     iceberg_rewrite_data_files doesn't fetch them itself -- called cold it dies
     with 403 "No credentials are provided" (duckdb/duckdb-iceberg#1349).
 
-    LIMIT 1, not LIMIT 0: LIMIT 0 is planned without ever opening a data file,
-    so it returns without the credentials being set up and the rewrite still
-    403s. LIMIT 1 has to actually read, which forces them. Still far cheaper
-    than iceberg_metadata(), which enumerates every manifest.
+    This is the only query known to work. Both cheaper options were tried against
+    the real catalog and both still 403'd on the rewrite: LIMIT 0 (planned without
+    opening a file) and LIMIT 1 (reads a data file, but not the manifests). The
+    403 is on the manifest avro, and iceberg_metadata() is what reads those.
+
+    It is expensive -- it enumerates every manifest -- so it is the one and only
+    metadata call here. Don't add more, and don't "optimise" this one away.
     """
-    con.execute(f"SELECT * FROM {fq} LIMIT 1")
+    con.execute(f"SELECT count(*) FROM iceberg_metadata('{fq}')")
 
 
 def compact(con, table, say):
