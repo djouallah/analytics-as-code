@@ -46,9 +46,13 @@ TABLES = [
 
 
 def connect():
-    # No install/load: duckdb autoloads iceberg from core when it sees the
-    # ICEBERG secret type.
+    # Load iceberg explicitly. Relying on autoload attaches fine but then every
+    # data-file read fails with "HTTP GET error reading 's3://...'" -- the R2
+    # storage credentials the catalog vends don't get set up. Same pattern as
+    # scripts/cache_catalog.py and scripts/catalog_capabilities.py.
     con = duckdb.connect(":memory:")
+    con.install_extension("iceberg")
+    con.load_extension("iceberg")
     con.execute(f"CREATE SECRET (TYPE ICEBERG, TOKEN '{TOKEN}');")
     con.execute(f"ATTACH '{WAREHOUSE}' AS catalog (TYPE ICEBERG, ENDPOINT '{ENDPOINT}');")
     return con
