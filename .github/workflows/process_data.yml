@@ -10,8 +10,8 @@ on:
         description: 'Run the daily pass (GitHub backfill + DUID refresh)'
         type: boolean
         default: false
-      force_compact:
-        description: 'Run Iceberg compaction even on an intraday pass'
+      compact_only:
+        description: 'Skip the data load and only run Iceberg compaction'
         type: boolean
         default: false
 
@@ -27,6 +27,7 @@ permissions:
 
 jobs:
   process_data:
+    if: github.event.inputs.compact_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     outputs:
@@ -68,9 +69,15 @@ jobs:
   # for the duration, which is fine -- they're idempotent and re-run every 30 min.
   compact:
     needs: process_data
-    # The explicit success() matters: overriding `if` drops the implicit success gate,
-    # and compaction must not run on top of a failed load.
-    if: success() && (needs.process_data.outputs.daily_refresh == 'true' || github.event.inputs.force_compact == 'true')
+    # `always()` is needed so a compact_only dispatch still runs when process_data
+    # is skipped; the explicit result checks put back the success gate it removes,
+    # because compaction must not run on top of a failed or cancelled load.
+    if: >-
+      always()
+      && needs.process_data.result != 'failure'
+      && needs.process_data.result != 'cancelled'
+      && (needs.process_data.outputs.daily_refresh == 'true'
+          || github.event.inputs.compact_only == 'true')
     # Maintenance must never fail "Process Data" -- import_data.yml's workflow_run
     # trigger gates on this workflow's conclusion being success.
     continue-on-error: true
