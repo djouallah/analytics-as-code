@@ -10,11 +10,11 @@ iceberg_rewrite_data_files landed in duckdb/duckdb-iceberg#1035 (merged
 duckdb==1.6.0.dev365, and the iceberg extension comes from core_nightly (the
 extension binary is keyed to the duckdb build, so pinning duckdb pins it too).
 
-iceberg_metadata() is EXPENSIVE: it enumerates every manifest, which on a
-fragmented table is the whole problem we're here to fix. scripts/iceberg_stats.py
-was deleted (a46c55f) for exactly this. So: the table list is hardcoded rather
-than discovered, ordered smallest-first by hand, and each table's stats come from
-a single pass, taken once before and once after. Don't add a query per metric.
+Do not add iceberg_metadata() calls here. It enumerates every manifest, which on
+a fragmented table is the whole problem we're here to fix -- scripts/iceberg_stats.py
+was deleted (a46c55f) for exactly that. The table list is hardcoded rather than
+discovered, and the only per-table read is the LIMIT 0 in prime(). The function
+reports its own rewritten/added counts; that is the report.
 
 Known limitations of the upstream function:
   - manifest-level column statistics are not populated for rewritten files
@@ -91,43 +91,29 @@ def has_rewrite_function(con):
     )
 
 
-def try_row(con, sql):
-    """Return the first row, or None if the query can't run. Never raises."""
-    try:
-        return con.execute(sql).fetchone()
-    except Exception:
-        return None
+def prime(con, fq):
+    """Make the catalog vend this table's storage credentials.
 
-
-def stats(con, fq):
-    """(data_files, size_mb, rows, delete_files) in ONE pass over the manifests.
-
-    The `content` column has been spelled both as a label ('DATA') and as the
-    Iceberg spec's integer code (0), so try both spellings -- but only ever one
-    scan per attempt, never one scan per metric.
+    iceberg_rewrite_data_files doesn't fetch them itself -- called cold it dies
+    with 403 "No credentials are provided" (duckdb/duckdb-iceberg#1349). Any
+    per-table read triggers the loadTable that returns them; LIMIT 0 plans the
+    scan and reads no data, so it costs far less than iceberg_metadata(), which
+    enumerates every manifest.
     """
-    for data in ("'DATA'", "0"):
-        row = try_row(
-            con,
-            f"SELECT count(*) FILTER (WHERE content IN ({data})), "
-            f"       round(coalesce(sum(file_size_in_bytes), 0) / 1048576.0, 1), "
-            f"       coalesce(sum(record_count) FILTER (WHERE content IN ({data})), 0), "
-            f"       count(*) FILTER (WHERE content NOT IN ({data})) "
-            f"FROM iceberg_metadata('{fq}')",
-        )
-        if row is not None:
-            return row
-    # content unusable -- fall back to a plain file count so the report still says
-    # something useful about whether compaction moved the needle.
-    row = try_row(con, f"SELECT count(*), NULL, NULL, NULL FROM iceberg_metadata('{fq}')")
-    return row if row is not None else (None, None, None, None)
+    con.execute(f"SELECT * FROM {fq} LIMIT 0")
 
 
-def compact(con, table):
-    """Compact one table. Returns a result row for the report."""
+def compact(con, table, say):
+    """Compact one table. Returns (table, status) for the report."""
     fq = f"catalog.{table}"
-    files_before, mb_before, rows_before, deletes_before = stats(con, fq)
 
+    say("priming credentials")
+    try:
+        prime(con, fq)
+    except Exception as e:
+        return (table, f"ERROR priming: {type(e).__name__}: {e}")
+
+    say("rewriting")
     try:
         row = con.execute(
             f"SELECT rewritten_data_files, added_data_files, rewritten_bytes "
@@ -136,60 +122,31 @@ def compact(con, table):
             f"min_input_files => {MIN_INPUT_FILES})"
         ).fetchone()
     except Exception as e:
-        return (table, files_before, files_before, mb_before,
-                "ERROR: " + str(e).splitlines()[0][:100])
+        return (table, f"ERROR: {type(e).__name__}: {e}")
 
     # No row means nothing was eligible -- not an error.
     rewritten, added, rewritten_bytes = row if row else (0, 0, 0)
-
     if not rewritten:
-        # Nothing changed, so don't pay for a second manifest scan.
-        return (table, files_before, files_before, mb_before,
-                f"skipped (<{MIN_INPUT_FILES} eligible files)")
+        return (table, f"skipped (<{MIN_INPUT_FILES} eligible files)")
 
-    files_after, mb_after, rows_after, _ = stats(con, fq)
     mb = (rewritten_bytes or 0) / 1048576.0
-    status = f"OK ({rewritten} -> {added} files, {mb:.1f} MB rewritten)"
-
-    # Compaction applies pending merge-on-read deletes as it rewrites, so a table
-    # that had delete files legitimately loses rows here. Only flag what can never
-    # be legitimate: rows appearing, or rows vanishing with nothing to delete them.
-    if rows_before is not None and rows_after is not None and rows_before != rows_after:
-        delta = f"rows {rows_before:,} -> {rows_after:,}"
-        if rows_after > rows_before or deletes_before == 0:
-            status = f"ROW COUNT CHANGED {delta} !! " + status
-        else:
-            status = f"{status}; {delta} ({deletes_before} delete files applied)"
-
-    return (table, files_before, files_after, mb_after, status)
-
-
-def fmt(v):
-    if v is None:
-        return "?"
-    return f"{v:,}" if isinstance(v, int) else str(v)
+    return (table, f"OK ({rewritten} -> {added} files, {mb:.1f} MB rewritten)")
 
 
 def report(lines, duckdb_version):
-    header = f"{'table':<32}{'files_before':>14}{'files_after':>13}{'MB':>10}  status"
-    out = ["=" * 110, f"Iceberg compaction (duckdb {duckdb_version})", header, "-" * 110]
-    for table, before, after, mb, status in lines:
-        out.append(
-            f"{table:<32}{fmt(before):>14}{fmt(after):>13}{fmt(mb):>10}  {status}"
-        )
-    out.append("=" * 110)
+    out = ["=" * 100, f"Iceberg compaction (duckdb {duckdb_version})", "-" * 100]
+    for table, status in lines:
+        out.append(f"{table:<32}{status}")
+    out.append("=" * 100)
     print("\n".join(out))
 
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as f:
             f.write(f"## Iceberg compaction (duckdb {duckdb_version})\n\n")
-            f.write("| table | files before | files after | MB | status |\n")
-            f.write("|---|--:|--:|--:|---|\n")
-            for table, before, after, mb, status in lines:
-                f.write(
-                    f"| `{table}` | {fmt(before)} | {fmt(after)} | {fmt(mb)} | {status} |\n"
-                )
+            f.write("| table | result |\n|---|---|\n")
+            for table, status in lines:
+                f.write(f"| `{table}` | {status} |\n")
             f.write("\n")
 
 
@@ -218,18 +175,23 @@ def main():
         if elapsed >= BUDGET_MINUTES:
             # Never drop tables silently -- say which ones and why.
             for skipped in TABLES[i - 1:]:
-                lines.append((skipped, None, None, None,
+                lines.append((skipped,
                               f"not attempted ({BUDGET_MINUTES:g}min budget spent)"))
             print(f"time budget spent after {elapsed:.1f}min -- not attempting: "
                   f"{', '.join(TABLES[i - 1:])}", flush=True)
             break
 
-        print(f"[{i}/{total}] catalog.{table} ... ({elapsed:.1f}min elapsed)", flush=True)
-        line = compact(con, table)
+        prefix = f"[{i}/{total}] catalog.{table}"
+
+        def say(phase, _prefix=prefix):
+            # Which step it's on, so a slow table can't be mistaken for a hang.
+            print(f"{_prefix} ... {phase}", flush=True)
+
+        print(f"{prefix} ... ({elapsed:.1f}min elapsed)", flush=True)
+        _, status = compact(con, table, say)
         took = (time.monotonic() - started) / 60.0 - elapsed
-        print(f"[{i}/{total}] catalog.{table}: {fmt(line[1])} -> {fmt(line[2])} files  "
-              f"{line[4]}  [{took:.1f}min]\n", flush=True)
-        lines.append(line)
+        print(f"{prefix}: {status}  [{took:.1f}min]\n", flush=True)
+        lines.append((table, status))
 
     report(lines, version)
     con.close()
