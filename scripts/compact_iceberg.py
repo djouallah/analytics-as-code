@@ -216,10 +216,24 @@ def main():
         return
 
     tables = discover_tables(con)
-    print(f"compacting {len(tables)} table(s) at {TARGET_FILE_SIZE}, "
-          f"min_input_files={MIN_INPUT_FILES}\n")
+    total = len(tables)
+    print(f"duckdb {version} -- compacting {total} table(s) at {TARGET_FILE_SIZE}, "
+          f"min_input_files={MIN_INPUT_FILES}")
+    for t in tables:
+        print(f"  - catalog.{t}")
+    print(flush=True)
 
-    lines = [compact(con, t) for t in tables]
+    # Print each table as it finishes rather than only in the summary, so a long
+    # rewrite is visible live in the CI log instead of looking hung.
+    lines = []
+    for i, table in enumerate(tables, 1):
+        print(f"[{i}/{total}] catalog.{table} ...", flush=True)
+        line = compact(con, table)
+        _, before, after, _, _, status = line
+        print(f"[{i}/{total}] catalog.{table}: "
+              f"{fmt(before)} -> {fmt(after)} files  {status}\n", flush=True)
+        lines.append(line)
+
     report(lines, version)
     con.close()
 
