@@ -6,7 +6,10 @@ name: Tests
 
 on:
   schedule:
-    - cron: '0 21 * * *'   # ~1h after the daily import (20:00 UTC)
+    # :15, deliberately off process_data's :00/:30 cadence. The compact job shares
+    # process_data's concurrency group, so a head-on start at :00 would just make
+    # one of them queue; starting mid-slot lets the :00 load finish first.
+    - cron: '15 21 * * *'   # ~1h after the daily import (20:00 UTC)
   workflow_dispatch:
 
 env:
