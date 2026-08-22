@@ -308,13 +308,20 @@ def model(dbt, session):
     # DUID REFERENCE DATA (skip if downloaded less than 24 hours ago)
     # =========================================================================
 
+    # duid_data.csv is NOT a fixed URL like the others -- it is derived from the
+    # newest AEMO "NEM Registration and Exemption List" in djouallah/aemo_data.
+    # It used to be a static CSV on a patch branch of aemo_fabric, which silently
+    # went stale: dim_duid drifted behind AEMO's ~fortnightly republish and the
+    # fct_scada -> dim_duid relationship test warned on ~94M unmatched rows.
+    #
+    # The files are named .xls but are really xlsx (they start with PK), so the
+    # excel extension reads them directly. Sheet "PU and Scheduled Loads" carries
+    # exactly the four columns dim_duid wants: DUID, Region,
+    # "Fuel Source - Descriptor", Participant -- header on row 1.
+    REG_API = "https://api.github.com/repos/djouallah/aemo_data/contents/data/duid/registration"
+    REG_SHEET = "PU and Scheduled Loads"
+
     duid_sources = [
-        (
-            "duid_data",
-            "duid_data",
-            "https://raw.githubusercontent.com/djouallah/aemo_fabric/refs/heads/djouallah-patch-1/duid_data.csv",
-            "duid_data.csv",
-        ),
         (
             "duid_facilities",
             "facilities",
@@ -344,7 +351,7 @@ def model(dbt, session):
     # Also check if local files exist (ephemeral runners won't have them)
     duid_files_exist = all(
         os.path.exists(f"{csv_archive_path}/duid/{csv_fn}")
-        for _, _, _, csv_fn in duid_sources
+        for csv_fn in ["duid_data.csv"] + [c for *_, c in duid_sources]
     )
     # On the 30-min intraday cycle, DUID reference data never changes and dim_duid
     # is not rebuilt (gated to daily_refresh), so skip the download entirely. The
@@ -366,6 +373,46 @@ def model(dbt, session):
         os.makedirs(duid_dir, exist_ok=True)
 
         duid_downloaded = []
+
+        # --- duid_data.csv from the newest registration workbook ---
+        duid_csv = f"{duid_dir}/duid_data.csv"
+        try:
+            # Names end _YYYYMMDD.xls, so lexicographic DESC is newest-first.
+            reg = sql_with_retry(f"""
+                SELECT json_extract_string(f, '$.name'),
+                       json_extract_string(f, '$.download_url')
+                FROM (
+                    SELECT unnest(from_json(content, '["json"]')) AS f
+                    FROM read_text('{REG_API}')
+                )
+                WHERE json_extract_string(f, '$.name') LIKE 'NEM-Registration-and-Exemption-List_%'
+                ORDER BY 1 DESC
+                LIMIT 1
+            """).fetchone()
+            if reg is None:
+                raise ValueError(f"no registration workbook found at {REG_API}")
+            reg_name, reg_url = reg
+
+            reg_local = f"{duid_dir}/{reg_name}"
+            urllib.request.urlretrieve(reg_url, reg_local)
+            session.sql("INSTALL excel; LOAD excel;")
+            session.sql(f"""
+                COPY (
+                    SELECT * FROM read_xlsx('{reg_local}',
+                        sheet = '{REG_SHEET}', header = true)
+                ) TO '{duid_csv}' (FORMAT CSV, HEADER)
+            """)
+            os.remove(reg_local)
+            log(f"DUID registration: {reg_name}")
+            # Record the workbook actually used, so the log says which vintage
+            # dim_duid was built from rather than a fixed URL.
+            duid_downloaded.append(("duid_data", "duid_data", reg_url, "duid_data.csv"))
+        except Exception as e:
+            if os.path.exists(duid_csv):
+                log(f"WARN: registration download failed, using existing duid_data.csv: {e}")
+            else:
+                raise
+
         for source_type, source_filename, url, csv_filename in duid_sources:
             local_path = f"{csv_archive_path}/duid/{csv_filename}"
             try:
