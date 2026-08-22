@@ -49,3 +49,38 @@ jobs:
       - run: pip install "duckdb==1.6.0.dev365"
       - name: Probe catalog capabilities (CREATE / INSERT / DELETE / UPDATE / MERGE / CREATE OR REPLACE / DROP)
         run: python scripts/catalog_capabilities.py
+
+  # Daily Iceberg compaction. It lived in process_data.yml so the workflow-level
+  # concurrency group would cover it, but holding that group for the length of a
+  # compaction run queued and cancelled the 30-min data loads. Here it gets the same
+  # protection from a job-level group, without blocking process_data CI or dbt_test.
+  compact:
+    runs-on: ubuntu-latest
+    # iceberg_rewrite_data_files commits optimistically and the delete+insert models
+    # remove data files, so overlapping an intraday load would fail one side.
+    concurrency:
+      group: process-data
+      cancel-in-progress: false
+    # Maintenance must never fail the test workflow.
+    continue-on-error: true
+    # Must exceed COMPACT_BUDGET_MINUTES: the script stops starting new tables at the
+    # budget and needs slack to finish the one in flight and print its report.
+    # Both are sized for the initial six-month backfill -- drop to 90/70 once the
+    # backlog is clear, since the daily delta is only ~48 files per table.
+    timeout-minutes: 350
+    env:
+      ICEBERG_REST_ENDPOINT: ${{ secrets.ICEBERG_REST_ENDPOINT }}
+      ICEBERG_TOKEN: ${{ secrets.ICEBERG_TOKEN }}
+      ICEBERG_WAREHOUSE: ${{ secrets.ICEBERG_WAREHOUSE }}
+      COMPACT_BUDGET_MINUTES: "320"
+      # Without this python block-buffers stdout when it isn't a TTY, so a job that
+      # hits the timeout reports nothing at all about what it was doing.
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install "duckdb==1.6.0.dev365"
+      - name: Compact Iceberg data files
+        run: python scripts/compact_iceberg.py

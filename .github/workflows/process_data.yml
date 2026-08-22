@@ -10,10 +10,6 @@ on:
         description: 'Run the daily pass (GitHub backfill + DUID refresh)'
         type: boolean
         default: false
-      compact_only:
-        description: 'Skip the data load and only run Iceberg compaction'
-        type: boolean
-        default: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -27,11 +23,8 @@ permissions:
 
 jobs:
   process_data:
-    if: github.event.inputs.compact_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    outputs:
-      daily_refresh: ${{ steps.mode.outputs.daily_refresh }}
     env:
       ICEBERG_REST_ENDPOINT: ${{ secrets.ICEBERG_REST_ENDPOINT }}
       ICEBERG_TOKEN: ${{ secrets.ICEBERG_TOKEN }}
@@ -61,49 +54,3 @@ jobs:
         run: dbt run --target prod --profiles-dir .
       - name: Confirm processed log entries
         run: dbt run-operation confirm_log_entries --target prod --profiles-dir .
-
-  # Daily Iceberg compaction. Lives in this workflow (rather than its own) so the
-  # workflow-level `process-data` concurrency group covers it: iceberg_rewrite_data_files
-  # commits optimistically and the delete+insert models remove data files, so an overlap
-  # with an intraday run would fail one side. Holding the group blocks the :00/:30 runs
-  # for the duration, which is fine -- they're idempotent and re-run every 30 min.
-  compact:
-    needs: process_data
-    # `always()` is needed so a compact_only dispatch still runs when process_data
-    # is skipped; the explicit result checks put back the success gate it removes,
-    # because compaction must not run on top of a failed or cancelled load.
-    if: >-
-      always()
-      && needs.process_data.result != 'failure'
-      && needs.process_data.result != 'cancelled'
-      && (needs.process_data.outputs.daily_refresh == 'true'
-          || github.event.inputs.compact_only == 'true')
-    # Maintenance must never fail "Process Data" -- import_data.yml's workflow_run
-    # trigger gates on this workflow's conclusion being success.
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    # Must exceed COMPACT_BUDGET_MINUTES: the script stops starting new tables at
-    # the budget, and needs the slack to finish the table in flight and print its
-    # report. A runner timeout kills it mid-rewrite with nothing reported.
-    #
-    # Raised to near the 6h GitHub job ceiling for the initial backfill -- six
-    # months without compaction means prime() alone takes ~20min on the worst
-    # tables. Drop back to 90/70 once the backlog is cleared; the daily delta is
-    # only ~48 files per table.
-    timeout-minutes: 350
-    env:
-      ICEBERG_REST_ENDPOINT: ${{ secrets.ICEBERG_REST_ENDPOINT }}
-      ICEBERG_TOKEN: ${{ secrets.ICEBERG_TOKEN }}
-      ICEBERG_WAREHOUSE: ${{ secrets.ICEBERG_WAREHOUSE }}
-      COMPACT_BUDGET_MINUTES: "320"
-      # Without this python block-buffers stdout when it isn't a TTY, so a job
-      # that hits the timeout reports nothing at all about what it was doing.
-      PYTHONUNBUFFERED: "1"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: pip install "duckdb==1.6.0.dev365"
-      - name: Compact Iceberg data files
-        run: python scripts/compact_iceberg.py
