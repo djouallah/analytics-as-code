@@ -44,35 +44,45 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # duckdb is pinned here (and ONLY here): import_data builds the .duckdb
-          # files deployed to the NemTracker dashboard, whose DuckDB-WASM reader
-          # needs a stable on-disk file format. process_data/build only write
-          # Iceberg / in-memory CI, so they float on the latest duckdb.
-          # Exports use scripts/cache_catalog.py (plain duckdb) -- no dbt needed
-          # here; data-quality tests run in test.yml.
-          pip install "duckdb==1.5.1"
+          # TWO duckdbs, because this job does two different jobs:
+          #
+          #   read  -> reads the Iceberg catalog and writes parquet (export_* steps)
+          #   write -> reads that parquet and writes .duckdb (build_* steps)
+          #
+          # The .duckdb files are read client-side by the DuckDB-WASM reader already
+          # deployed to the NemTracker dashboard, so their on-disk format must stay
+          # at 1.5.1. But 1.5.1 SEGFAULTS reading tables that compaction rewrote with
+          # 1.6.0.dev365 -- export_scada_today started dying with exit 139 as soon as
+          # fct_scada_today had been compacted. Reading the catalog with the same
+          # duckdb that wrote it fixes that.
+          #
+          # Parquet is the handoff between them, so the dashboard format is untouched.
+          python -m venv .venv-read
+          .venv-read/bin/pip install -q "duckdb==1.6.0.dev365"
+          python -m venv .venv-write
+          .venv-write/bin/pip install -q "duckdb==1.5.1"
 
       # --- Phase 1: Intraday (always) + dims (daily only) → deploy immediately ---
       - name: Export fct_scada_today
-        run: python scripts/cache_catalog.py export_scada_today
+        run: .venv-read/bin/python scripts/cache_catalog.py export_scada_today
 
       - name: Export fct_price_today
-        run: python scripts/cache_catalog.py export_price_today
+        run: .venv-read/bin/python scripts/cache_catalog.py export_price_today
 
       - name: Build energy_today.duckdb
-        run: python scripts/cache_catalog.py build_today
+        run: .venv-write/bin/python scripts/cache_catalog.py build_today
 
       - name: Export dim_duid
         if: steps.mode.outputs.is_daily == 'true'
-        run: python scripts/cache_catalog.py export_dim_duid
+        run: .venv-read/bin/python scripts/cache_catalog.py export_dim_duid
 
       - name: Export dim_calendar
         if: steps.mode.outputs.is_daily == 'true'
-        run: python scripts/cache_catalog.py export_dim_calendar
+        run: .venv-read/bin/python scripts/cache_catalog.py export_dim_calendar
 
       - name: Build energy_dim.duckdb
         if: steps.mode.outputs.is_daily == 'true'
-        run: python scripts/cache_catalog.py build_dim
+        run: .venv-write/bin/python scripts/cache_catalog.py build_dim
 
       - name: Stage data for deploy
         run: |
@@ -94,19 +104,19 @@ jobs:
       # --- Phase 2: Daily full refresh (slow) ---
       - name: Export fct_scada
         if: steps.mode.outputs.is_daily == 'true'
-        run: python scripts/cache_catalog.py export_scada
+        run: .venv-read/bin/python scripts/cache_catalog.py export_scada
 
       - name: Export fct_price
         if: steps.mode.outputs.is_daily == 'true'
-        run: python scripts/cache_catalog.py export_price
+        run: .venv-read/bin/python scripts/cache_catalog.py export_price
 
       - name: Build daily databases
         if: steps.mode.outputs.is_daily == 'true'
-        run: python scripts/cache_catalog.py build_daily
+        run: .venv-write/bin/python scripts/cache_catalog.py build_daily
 
       - name: Build daily aggregate database
         if: steps.mode.outputs.is_daily == 'true'
-        run: python scripts/cache_catalog.py build_daily_agg
+        run: .venv-write/bin/python scripts/cache_catalog.py build_daily_agg
 
       - name: Stage data for deploy (daily)
         if: steps.mode.outputs.is_daily == 'true'
