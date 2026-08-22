@@ -68,14 +68,17 @@ jobs:
     continue-on-error: true
     # Must exceed COMPACT_BUDGET_MINUTES: the script stops starting new tables at the
     # budget and needs slack to finish the one in flight and print its report.
-    # Both are sized for the initial six-month backfill -- drop to 90/70 once the
-    # backlog is clear, since the daily delta is only ~48 files per table.
-    timeout-minutes: 350
+    #
+    # 90/70 now the six-month backfill is done -- that pass took 12 minutes total
+    # (5,606 files -> 78), and the daily delta is far smaller. Keep these tight: the
+    # job holds the `process-data` concurrency group while it runs, so a stuck run
+    # stops data landing for as long as the timeout allows.
+    timeout-minutes: 90
     env:
       ICEBERG_REST_ENDPOINT: ${{ secrets.ICEBERG_REST_ENDPOINT }}
       ICEBERG_TOKEN: ${{ secrets.ICEBERG_TOKEN }}
       ICEBERG_WAREHOUSE: ${{ secrets.ICEBERG_WAREHOUSE }}
-      COMPACT_BUDGET_MINUTES: "320"
+      COMPACT_BUDGET_MINUTES: "70"
       # Without this python block-buffers stdout when it isn't a TTY, so a job that
       # hits the timeout reports nothing at all about what it was doing.
       PYTHONUNBUFFERED: "1"
