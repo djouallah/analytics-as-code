@@ -77,6 +77,30 @@ TABLES = [
 ]
 
 
+# Upload every rewritten parquet file as ONE part.
+#
+# R2 requires all non-trailing parts of a multipart upload to be the same length,
+# and DuckDB does not guarantee that -- s3_settings.cpp doubles the part size every
+# `growth_interval` parts, and the parquet writer can flush a short part mid-file.
+# Both 128MiB and 64MiB targets failed with
+#   InvalidPart: All non-trailing parts must have the same length
+# The rewrite finishes before the upload fails, so each failure costs the table's
+# whole rewrite time (26 min on fct_scada_today).
+#
+# Rather than try to make the parts uniform, remove them: with max_parts=1,
+# initial_part_size is the smallest block-aligned size >= max_filesize, so any file
+# under UPLOAD_MAX_FILESIZE goes up as a single part and "non-trailing parts" is
+# empty. Keep it a modest multiple of TARGET_FILE_SIZE -- the part is buffered, so
+# this is memory per open file handle, and a file that exceeds it fails the upload
+# outright ("exceeds the size supported by s3_uploader_max_parts_per_file").
+UPLOAD_MAX_FILESIZE = "256MB"
+
+
+def configure_uploader(con):
+    con.execute("SET s3_uploader_max_parts_per_file = 1")
+    con.execute(f"SET s3_uploader_max_filesize = '{UPLOAD_MAX_FILESIZE}'")
+
+
 def connect():
     con = duckdb.connect(":memory:")
     # Plain install first. duckdb 1.6.0.dev365 identifies itself as v2.0.0-alpha*,
@@ -89,6 +113,7 @@ def connect():
         print(f"  (core install failed, trying core_nightly: {e})", flush=True)
         con.execute("FORCE INSTALL iceberg FROM core_nightly")
     con.load_extension("iceberg")
+    configure_uploader(con)
     con.execute(f"CREATE SECRET (TYPE ICEBERG, TOKEN '{TOKEN}');")
     con.execute(f"ATTACH '{WAREHOUSE}' AS catalog (TYPE ICEBERG, ENDPOINT '{ENDPOINT}');")
     return con
