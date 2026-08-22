@@ -318,6 +318,10 @@ def model(dbt, session):
     # excel extension reads them directly. Sheet "PU and Scheduled Loads" carries
     # exactly the four columns dim_duid wants: DUID, Region,
     # "Fuel Source - Descriptor", Participant -- header on row 1.
+    #
+    # Read it all_varchar: the capacity columns use '-' as a placeholder, which
+    # fails type inference ("Could not convert string '-' to DOUBLE"). dim_duid
+    # only reads text columns, so inference buys nothing here.
     REG_API = "https://api.github.com/repos/djouallah/aemo_data/contents/data/duid/registration"
     REG_SHEET = "PU and Scheduled Loads"
 
@@ -399,7 +403,7 @@ def model(dbt, session):
             session.sql(f"""
                 COPY (
                     SELECT * FROM read_xlsx('{reg_local}',
-                        sheet = '{REG_SHEET}', header = true)
+                        sheet = '{REG_SHEET}', header = true, all_varchar = true)
                 ) TO '{duid_csv}' (FORMAT CSV, HEADER)
             """)
             os.remove(reg_local)
