@@ -19,14 +19,14 @@ models:
   - name: fct_scada
     description: SCADA data from daily AEMO dispatch files
     columns:
+      # No relationships test to dim_duid here: dim_duid holds only *currently registered*
+      # DUIDs while fct_scada goes back to 2018 and is full of retired ones, so the test
+      # could never be 0 (it warned on 82,304,828 rows). The meaningful version --
+      # do DUIDs generating *right now* exist in dim_duid -- lives in
+      # tests/assert_recent_scada_duids_registered.sql.
       - name: DUID
         tests:
           - not_null
-          - relationships:
-              to: ref('dim_duid')
-              field: DUID
-              config:
-                severity: warn
       - name: SETTLEMENTDATE
         tests:
           - not_null

@@ -189,11 +189,27 @@ def model(dbt, session):
         )
     """).fetchone()[0]
 
+    # Files heal_orphaned_daily_files flagged as logged-but-never-processed. Their markers
+    # are deliberately left in place (they are the evidence the data is missing), so the
+    # normal dedup below would skip them forever -- this list is how they get past it.
+    # See macros/heal_orphaned_daily_files.sql. Reading the list consumes it.
+    force_path = os.environ.get("ROOT_PATH", "/tmp") + "/force_download.txt"
+    forced_names = []
+    if os.path.exists(force_path):
+        with open(force_path, newline="") as f:
+            forced_names = [row[0] for row in csv_mod.reader(f) if row][1:]
+        os.remove(force_path)
+        log(f"Force re-download requested for {len(forced_names)} daily file(s)")
+
     # GitHub historical backfill only runs on the daily pass (daily_refresh=true).
     # The 30-min intraday cycle stays on the live AEMO listing only, so it never
     # makes the 9 sequential GitHub API calls just to rediscover files it already has.
-    if daily_refresh and aemo_new < download_limit:
-        log(f"Backfill enabled: AEMO has {aemo_new} new daily files (< {download_limit}), checking GitHub archive")
+    # A forced file is usually months old, so the archive is the only place it lives --
+    # always consult it when there is one to heal.
+    if forced_names or (daily_refresh and aemo_new < download_limit):
+        why = (f"{len(forced_names)} file(s) to force-heal" if forced_names
+               else f"AEMO has {aemo_new} new daily files (< {download_limit})")
+        log(f"Backfill enabled: {why}, checking GitHub archive")
         sql_with_retry("""
             INSERT INTO daily_files_web
             WITH
@@ -221,6 +237,20 @@ def model(dbt, session):
                   NOT IN (SELECT filename FROM daily_files_web)
         """)
 
+    # Forced files bypass the dedup and sit on top of download_limit, so healing a hole
+    # never starves the normal daily intake.
+    forced_to_download = []
+    if forced_names:
+        quoted = ", ".join("'" + n.replace("'", "''") + "'" for n in forced_names)
+        forced_to_download = session.sql(f"""
+            SELECT max(full_url) AS full_url, filename
+            FROM daily_files_web WHERE filename IN ({quoted})
+            GROUP BY filename
+        """).fetchall()
+        for name in sorted(set(forced_names) - {r[1] for r in forced_to_download}):
+            log(f"WARN: forced re-download {name} is offered by neither AEMO nor the GitHub "
+                f"archive; it cannot be healed automatically")
+
     # Get new daily files to download
     daily_to_download = session.sql(f"""
         SELECT full_url, filename FROM daily_files_web
@@ -230,7 +260,13 @@ def model(dbt, session):
         LIMIT {download_limit}
     """).fetchall()
 
-    log(f"Daily files: {len(daily_to_download)} new")
+    # A forced file whose marker *was* successfully deleted also shows up as "new"; keep one.
+    forced_filenames = {r[1] for r in forced_to_download}
+    daily_to_download = forced_to_download + [
+        r for r in daily_to_download if r[1] not in forced_filenames
+    ]
+
+    log(f"Daily files: {len(daily_to_download)} new ({len(forced_to_download)} forced)")
     if daily_to_download:
         process_downloads(daily_to_download, 'daily', 'daily')
 
@@ -436,8 +472,28 @@ def model(dbt, session):
 
         # Delete old DUID log entries and re-insert for successfully downloaded files
         if duid_downloaded:
-            for st, sf, _, _ in duid_downloaded:
+            duid_types = sorted({st for st, *_ in duid_downloaded})
+            for st in duid_types:
                 session.sql(f"DELETE FROM _csv_archive_log WHERE source_type = '{st}'")
+
+            # The delete above only dedups the in-memory copy. The Iceberg table is
+            # append-only, so without this the duid_* markers stack one fresh copy per
+            # daily pass forever -- they had reached 2724 copies each. This is the plain
+            # IN-list predicate form that dim_duid's delete+insert already proves works
+            # against this catalog, unlike the cross-table subquery in
+            # heal_orphaned_daily_files. Verify rather than assume.
+            if dbt.is_incremental:
+                in_list = ", ".join(f"'{t}'" for t in duid_types)
+                count_sql = (f"SELECT count(*) FROM {dbt.this} "
+                             f"WHERE source_type IN ({in_list})")
+                before = session.sql(count_sql).fetchone()[0]
+                session.sql(f"DELETE FROM {dbt.this} WHERE source_type IN ({in_list})")
+                after = session.sql(count_sql).fetchone()[0]
+                log(f"DUID log markers: removed {before - after} of {before} stale rows")
+                if after:
+                    log(f"WARN: {after} stale duid_* log rows survived the DELETE "
+                        f"(silent no-op on this Iceberg table)")
+
             now = datetime.now().isoformat()
             for source_type, source_filename, url, csv_filename in duid_downloaded:
                 csv_base = csv_filename.rsplit(".", 1)[0]

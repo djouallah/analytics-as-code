@@ -14,14 +14,23 @@
     {% set pending_count = run_query(count_sql).rows[0][0] %}
     {{ log("Confirming " ~ pending_count ~ " pending log entries", info=True) }}
 
+    {#- Anti-join the existing log: a forced re-download (see
+        heal_orphaned_daily_files) reprocesses a file whose marker is usually still
+        present, and the log is append-only, so a blind INSERT would double the row. -#}
     {% set insert_sql %}
       INSERT INTO {{ ref('stg_csv_archive_log') }}
       SELECT
-        source_type, source_filename, archive_path,
-        archived_at::TIMESTAMP AS archived_at,
+        p.source_type, p.source_filename, p.archive_path,
+        p.archived_at::TIMESTAMP AS archived_at,
         NULL::BIGINT AS row_count,
-        source_url, NULL::VARCHAR AS etag, csv_filename
-      FROM read_csv('{{ pending_path }}')
+        p.source_url, NULL::VARCHAR AS etag, p.csv_filename
+      FROM read_csv('{{ pending_path }}') p
+      WHERE NOT EXISTS (
+        SELECT 1 FROM {{ ref('stg_csv_archive_log') }} l
+        WHERE l.source_type = p.source_type
+          AND l.source_filename = p.source_filename
+          AND l.csv_filename = p.csv_filename
+      )
     {% endset %}
     {% do run_query(insert_sql) %}
 

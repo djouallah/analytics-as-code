@@ -1,11 +1,16 @@
 -- Test: All downloaded intraday SCADA files should be processed in fct_scada_today
 -- Returns rows where a downloaded file is missing from fct_scada_today
+--
+-- NOT EXISTS, not NOT IN: a single NULL `file` in the fact table would make a NOT IN
+-- predicate evaluate to NULL for every row and turn this test permanently green.
+-- DISTINCT because the log is append-only and can hold the same marker twice.
 
-SELECT
-  csv_filename
-FROM {{ ref('stg_csv_archive_log') }}
-WHERE source_type = 'scada_today'
-  AND csv_filename NOT IN (
-    SELECT DISTINCT file
-    FROM {{ ref('fct_scada_today') }}
+SELECT DISTINCT
+  l.csv_filename
+FROM {{ ref('stg_csv_archive_log') }} l
+WHERE l.source_type = 'scada_today'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM {{ ref('fct_scada_today') }} f
+    WHERE f.file = l.csv_filename
   )
