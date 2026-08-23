@@ -10,10 +10,17 @@
 
 {{ config(severity='warn') }}
 
+-- "Generated" means the same thing here as it does in scripts/cache_catalog.py's
+-- export_scada: a non-intervention dispatch record with a non-zero INITIALMW. Without
+-- those two predicates this warns on 122 DUIDs rather than 1 -- AEMO keeps dispatching
+-- long-retired units at 0 MW, and those legitimately aren't in the registration list.
+
 SELECT DISTINCT
   f.DUID
 FROM {{ ref('fct_scada') }} f
 WHERE f.DATE >= CURRENT_DATE - INTERVAL 30 DAY
+  AND f.INTERVENTION = 0
+  AND f.INITIALMW <> 0
   AND NOT EXISTS (
     SELECT 1
     FROM {{ ref('dim_duid') }} d
