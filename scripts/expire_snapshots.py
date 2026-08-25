@@ -1,10 +1,15 @@
 """Expire old Iceberg snapshots (daily maintenance, immediately after compaction).
 
-process_data commits every 30 minutes, so each table gains ~48 snapshots a day and never
-loses one: duckdb-iceberg has no snapshot expiry. Compaction makes that worse before it
-makes it better — iceberg_rewrite_data_files() adds one more snapshot and leaves every
-previous one pointing at the small files it just replaced. So this runs *after*
-compact_iceberg.py, on pyiceberg, which does have expire_snapshots().
+process_data commits every 30 minutes and duckdb-iceberg has no snapshot expiry, so nothing
+on the write path ever drops a snapshot. Compaction makes that worse before it makes it
+better — iceberg_rewrite_data_files() adds one more snapshot and leaves every previous one
+pointing at the small files it just replaced. So this runs *after* compact_iceberg.py, on
+pyiceberg, which does have expire_snapshots().
+
+Measured on the first run (2026-08-25): every table held 16-18 snapshots and none was older
+than a day, so this expired nothing. Something on the OneLake side is already trimming the
+snapshot list — this is a bounded safety net, not a backlog cleaner. If a table is ever seen
+carrying more than ~48 snapshots (a day's commits), that assumption has changed.
 
 What this buys, precisely: pyiceberg's ExpireSnapshots stages a RemoveSnapshotsUpdate and
 nothing else. Snapshot entries leave the table metadata — the metadata JSON stops growing
@@ -12,11 +17,9 @@ without bound and planning stays cheap — but no files are deleted. The orphane
 stay in OneLake unless the service itself collects them. This is not a way to reclaim
 storage; don't let the report be read as one.
 
-The catalog gets the last word on whether this works at all. Microsoft documents the
-OneLake IRC endpoint as read-only metadata operations, yet duckdb commits to it every 30
-minutes, so writes plainly work; whether a `remove-snapshots` update is accepted is a
-separate question this script answers empirically. Hence: best-effort per table, re-read
-the metadata afterwards instead of trusting the commit, and never fail the pipeline.
+The catalog gets the last word on whether a `remove-snapshots` update is accepted at all, so
+every table is best-effort, the metadata is re-read afterwards rather than trusting the
+commit, and nothing here ever fails the pipeline.
 
 Usage:
     python scripts/expire_snapshots.py
@@ -93,10 +96,13 @@ def allow_table_updates(catalog):
 
     pyiceberg's RestCatalog gates commit_table on the `endpoints` list from GET /v1/config
     and raises NotImplementedError before making the call if the update-table endpoint
-    isn't advertised. OneLake advertises only GET/HEAD — and yet duckdb commits to it every
-    30 minutes, which is the whole reason this repo exists. So this deliberately pokes the
-    private supported-endpoint set to remove the client-side veto. If OneLake really does
-    refuse the update, we want its 4xx in the report, not a guess.
+    isn't advertised. Microsoft's docs describe the OneLake IRC endpoint as read-only and
+    show a config response carrying GET/HEAD only, which would veto this script client-side
+    — but the live catalog advertises 13 endpoints including update-table (checked
+    2026-08-25), matching the fact that duckdb commits to it every 30 minutes. So the
+    override below is a fallback that normally doesn't fire; the printed endpoint list is
+    the evidence for which case we're in. If OneLake ever does refuse the update, we want
+    its 4xx in the report rather than a client-side guess.
     """
     supported = getattr(catalog, "_supported_endpoints", None)
     if supported is None:

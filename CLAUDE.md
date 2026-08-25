@@ -52,11 +52,12 @@ Three deliberate local differences, all of which must survive a re-copy:
    `iceberg_rewrite_data_files()`) and then `scripts/expire_snapshots.py`. Order is not
    negotiable: the rewrite adds a snapshot and leaves the previous ones pointing at the files
    it replaced, so expiry is what makes compaction worth anything. Expiry is **pyiceberg**
-   (`pyiceberg==0.11.1`) because duckdb-iceberg has no `expire_snapshots` yet, and pyiceberg
-   gates `commit_table` on the endpoint list OneLake advertises (GET/HEAD only) — the script
-   overrides that gate so the catalog, not the client, decides. It is metadata-only: snapshots
-   leave the metadata JSON, the orphaned data files stay, so reads get faster but storage
-   doesn't shrink. The job takes a job-level `process-data` concurrency group — both operations
+   (`pyiceberg==0.11.1`) because duckdb-iceberg has no `expire_snapshots` yet. It is
+   metadata-only: snapshots leave the metadata JSON, the orphaned data files stay, so reads
+   get faster but storage doesn't shrink. **First run (2026-08-25) expired nothing** — every
+   table held 16-18 snapshots, none older than a day, so something on the OneLake side is
+   already trimming them; treat this step as a bounded safety net, and if a table is ever seen
+   above ~48 snapshots that assumption has changed. The job takes a job-level `process-data` concurrency group — both operations
    commit optimistically, so an overlap with a load could fail one side. It is
    `continue-on-error` and both scripts always exit 0: maintenance must never fail the pipeline
    or block `import_data.yml`'s `workflow_run` gate. Both scripts read their table list from
@@ -126,7 +127,11 @@ Everything is pinned — no workflow floats on "latest".
 - **`pyiceberg==0.11.1`** (snapshot expiry, `table_maintenance.yml` only) is pinned on its own
   schedule — it never touches the duckdb file format, only the REST catalog, and the script
   reaches into `RestCatalog._supported_endpoints`, which is exactly the kind of internal a
-  floating version breaks.
+  floating version breaks. That poke is a fallback: pyiceberg refuses to `commit_table` unless
+  `GET /v1/config` advertises the update-table endpoint, and Microsoft's docs show a
+  GET/HEAD-only config. The live catalog advertises 13 endpoints including
+  `POST /v1/{prefix}/namespaces/{namespace}/tables/{table}` (checked 2026-08-25), so the
+  override doesn't fire — the script logs the list each run, which is the evidence.
 - **`import_data.yml` stays on `duckdb==1.5.1`.** Different reason, deliberately unchanged: it
   builds the `.duckdb` files deployed to the NemTracker dashboard, read client-side by
   DuckDB-WASM, so the on-disk file format must stay stable for the *already deployed* reader.
