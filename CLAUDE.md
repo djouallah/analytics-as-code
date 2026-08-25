@@ -72,12 +72,11 @@ OIDC only: `azure/login@v2` with a federated credential, then each job mints a s
 The ids live in repository **variables** (public identifiers, not secrets):
 - `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` — the tenant + Entra app (`dbt_fabric_python_iceberg`,
   no client secret; shared with the sibling repo)
-- `WS_ID` — the Fabric workspace (`power`). **The lakehouse id is deliberately NOT a
-  variable**: every OneLake-touching job has a "Resolve lakehouse" step that calls
-  `duckrun.workspace(WS_ID).create_lakehouse('nem')` (idempotent create-if-missing) and
-  exports `WAREHOUSE_PATH` + `FILES_PATH` to `$GITHUB_ENV`. A pinned id goes stale the moment
-  the lakehouse is recreated — which is exactly what happened. `$GITHUB_ENV` doesn't cross
-  jobs, so each job resolves it again.
+- `WS_ID`, `LH_ID` — the Fabric workspace (`power`) and lakehouse (`nem`). The workflows build
+  `WAREHOUSE_PATH = {WS_ID}/{LH_ID}` and `FILES_PATH = abfss://{WS_ID}@onelake.dfs.fabric.microsoft.com/{LH_ID}/Files`
+  directly from them. **No workflow creates or looks up a lakehouse** — that is infrastructure,
+  created once by hand (schema-enabled, since the models write to `landing`/`mart`). If it is
+  ever recreated, update `LH_ID`; CI is deliberately not in the provisioning business.
 Env contract consumed by profiles.yml, the models and the scripts: `ONELAKE_ENDPOINT`,
 `ONELAKE_TOKEN`, `WAREHOUSE_PATH`, `FILES_PATH`, `download_limit`, `process_limit`, plus
 `AZURE_TRANSPORT_OPTION_TYPE=curl` + `CURL_CA_INFO` on runners (the azure extension's default

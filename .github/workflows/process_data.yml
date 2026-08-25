@@ -28,11 +28,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      # OneLake Iceberg REST catalog. WAREHOUSE_PATH and FILES_PATH are resolved at runtime
-      # by the "Resolve lakehouse" step below (the lakehouse id is never pinned in a
-      # variable — it changes if the lakehouse is recreated). ONELAKE_TOKEN is minted per
-      # run from the OIDC login.
+      # OneLake Iceberg REST catalog. The workspace and lakehouse are infrastructure — created
+      # once by hand — so CI is simply told which ones to use via repo VARIABLES (public ids,
+      # not secrets). Nothing here provisions anything. ONELAKE_TOKEN is minted per run.
       ONELAKE_ENDPOINT: https://onelake.table.fabric.microsoft.com/iceberg
+      WAREHOUSE_PATH: ${{ vars.WS_ID }}/${{ vars.LH_ID }}
+      FILES_PATH: abfss://${{ vars.WS_ID }}@onelake.dfs.fabric.microsoft.com/${{ vars.LH_ID }}/Files
       # The azure extension's default transport fails the OneLake TLS handshake on the
       # runners; curl needs the runner's CA bundle.
       AZURE_TRANSPORT_OPTION_TYPE: curl
@@ -40,7 +41,6 @@ jobs:
       # Authenticated GitHub API calls for the staging model's backfill listing —
       # anonymous calls share the runner IP's 60 req/h quota and get rate-limited.
       GITHUB_TOKEN: ${{ github.token }}
-      LH_NAME: nem
       # A single shared cap across all three feeds (daily, scada_today, price_today), and a
       # CAP rather than a workload: a 30-minute slot only publishes ~6 intraday files per
       # feed and at most one daily file, so this only binds during backfill.
@@ -52,7 +52,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install dbt-duckdb "duckdb==1.6.0.dev365" duckrun
+      - run: pip install dbt-duckdb "duckdb==1.6.0.dev365"
       - name: Azure federated login
         uses: azure/login@v2
         with:
@@ -64,34 +64,5 @@ jobs:
           TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
           echo "::add-mask::$TOKEN"
           echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
-      - name: Resolve lakehouse
-        # Idempotent create-if-missing (schema-enabled — the models write to landing/mart),
-        # then export the paths the dbt run reads. duckrun self-acquires its own Fabric token
-        # from the Azure CLI login above.
-        #
-        # Creating a lakehouse also provisions a SQL analytics endpoint, and that step can be
-        # refused for reasons unrelated to this repo ("try again later"). Steady state never
-        # takes this path — the lakehouse already exists and is found by name — so the retry
-        # only matters the first time, or after someone deletes it.
-        run: |
-          python - <<'EOF' >> "$GITHUB_ENV"
-          import os, sys, time, duckrun
-          ws_id, lh_name = os.environ["WS_ID"], os.environ["LH_NAME"]
-          ws = duckrun.workspace(ws_id)
-          for attempt in range(4):
-              try:
-                  lh_id = ws.create_lakehouse(lh_name, schemas=True)
-                  break
-              except Exception as e:
-                  if attempt == 3:
-                      raise
-                  print(f"::warning::lakehouse create failed ({str(e).splitlines()[0][:120]}) "
-                        f"— retrying in 30s", file=sys.stderr)
-                  time.sleep(30)
-          print(f"WAREHOUSE_PATH={ws_id}/{lh_id}")
-          print(f"FILES_PATH=abfss://{ws_id}@onelake.dfs.fabric.microsoft.com/{lh_id}/Files")
-          EOF
-        env:
-          WS_ID: ${{ vars.WS_ID }}
       - name: Process data
         run: dbt run --target prod --profiles-dir .

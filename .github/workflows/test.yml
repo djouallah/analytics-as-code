@@ -14,13 +14,13 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  # OneLake Iceberg REST catalog. Each job mints its own short-lived ONELAKE_TOKEN from the
-  # OIDC login and resolves WAREHOUSE_PATH itself â€” $GITHUB_ENV does not cross jobs, and the
-  # lakehouse id is never pinned in a variable (it changes if the lakehouse is recreated).
+  # OneLake Iceberg REST catalog — workspace/lakehouse ids come from repo VARIABLES (public
+  # ids, not secrets). Each job mints its own short-lived ONELAKE_TOKEN from the OIDC login.
   ONELAKE_ENDPOINT: https://onelake.table.fabric.microsoft.com/iceberg
+  WAREHOUSE_PATH: ${{ vars.WS_ID }}/${{ vars.LH_ID }}
+  FILES_PATH: abfss://${{ vars.WS_ID }}@onelake.dfs.fabric.microsoft.com/${{ vars.LH_ID }}/Files
   AZURE_TRANSPORT_OPTION_TYPE: curl
   CURL_CA_INFO: /etc/ssl/certs/ca-certificates.crt
-  LH_NAME: nem
 
 permissions:
   contents: read
@@ -35,7 +35,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install dbt-duckdb "duckdb==1.6.0.dev365" duckrun
+      - run: pip install dbt-duckdb "duckdb==1.6.0.dev365"
       - name: Azure federated login
         uses: azure/login@v2
         with:
@@ -47,17 +47,6 @@ jobs:
           TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
           echo "::add-mask::$TOKEN"
           echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
-      - name: Resolve lakehouse
-        run: |
-          python - <<'EOF' >> "$GITHUB_ENV"
-          import os, duckrun
-          ws_id, lh_name = os.environ["WS_ID"], os.environ["LH_NAME"]
-          lh_id = duckrun.workspace(ws_id).create_lakehouse(lh_name, schemas=True)
-          print(f"WAREHOUSE_PATH={ws_id}/{lh_id}")
-          print(f"FILES_PATH=abfss://{ws_id}@onelake.dfs.fabric.microsoft.com/{lh_id}/Files")
-          EOF
-        env:
-          WS_ID: ${{ vars.WS_ID }}
       - name: dbt test
         run: dbt test --target prod --profiles-dir .
 
@@ -71,7 +60,7 @@ jobs:
           python-version: "3.11"
       # Same pin as the rest of the pipeline; it's well past 1.5.3, so MERGE is
       # still exercised against the catalog.
-      - run: pip install "duckdb==1.6.0.dev365" duckrun
+      - run: pip install "duckdb==1.6.0.dev365"
       - name: Azure federated login
         uses: azure/login@v2
         with:
@@ -83,15 +72,6 @@ jobs:
           TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
           echo "::add-mask::$TOKEN"
           echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
-      - name: Resolve lakehouse
-        run: |
-          python - <<'EOF' >> "$GITHUB_ENV"
-          import os, duckrun
-          ws_id, lh_name = os.environ["WS_ID"], os.environ["LH_NAME"]
-          print(f"WAREHOUSE_PATH={ws_id}/{duckrun.workspace(ws_id).create_lakehouse(lh_name, schemas=True)}")
-          EOF
-        env:
-          WS_ID: ${{ vars.WS_ID }}
       - name: Probe catalog capabilities (CREATE / INSERT / DELETE / UPDATE / MERGE / CREATE OR REPLACE / DROP)
         run: python scripts/catalog_capabilities.py
 
@@ -126,7 +106,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install "duckdb==1.6.0.dev365" duckrun
+      - run: pip install "duckdb==1.6.0.dev365"
       - name: Azure federated login
         uses: azure/login@v2
         with:
@@ -138,14 +118,5 @@ jobs:
           TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
           echo "::add-mask::$TOKEN"
           echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
-      - name: Resolve lakehouse
-        run: |
-          python - <<'EOF' >> "$GITHUB_ENV"
-          import os, duckrun
-          ws_id, lh_name = os.environ["WS_ID"], os.environ["LH_NAME"]
-          print(f"WAREHOUSE_PATH={ws_id}/{duckrun.workspace(ws_id).create_lakehouse(lh_name, schemas=True)}")
-          EOF
-        env:
-          WS_ID: ${{ vars.WS_ID }}
       - name: Compact Iceberg data files
         run: python scripts/compact_iceberg.py

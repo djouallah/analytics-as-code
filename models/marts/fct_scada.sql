@@ -26,7 +26,7 @@ AND csv_filename NOT IN (SELECT DISTINCT file FROM {{ this }})
 {%- endif -%}
 
 {% if has_files %}
-{# The CSV layout in file order â€” single source of truth: the read_csv
+{# The CSV layout in file order — single source of truth: the read_csv
    columns spec and the CAST select are both generated from this list. #}
 {%- set csv_cols = [
     'I', 'UNIT', 'XX', 'VERSION',
