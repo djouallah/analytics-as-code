@@ -1,6 +1,6 @@
--- Insert-only merge (WHEN MATCHED THEN DO NOTHING): every commit stays a single
--- append snapshot -- the OneLake catalog rejects multi-snapshot commits (see the
--- fct_summary.sql header) -- while re-processed files dedupe on the unique_key
+﻿-- Insert-only merge (WHEN MATCHED THEN DO NOTHING): every commit stays a single
+-- append snapshot -- the OneLake catalog rejects commits that mix delete files and
+-- data files (BadRequest 400) -- while re-processed files dedupe on the unique_key
 -- instead of double-inserting.
 {{ config(
     materialized='incremental',
@@ -28,7 +28,7 @@ AND csv_filename NOT IN (SELECT DISTINCT file FROM {{ this }})
 {%- endif -%}
 
 {% if has_files %}
-{# The CSV layout in file order — single source of truth: the read_csv
+{# The CSV layout in file order â€” single source of truth: the read_csv
    columns spec and the CAST select are both generated from this list. #}
 {%- set csv_cols = [
     ('I', 'VARCHAR'), ('DISPATCH', 'VARCHAR'),
