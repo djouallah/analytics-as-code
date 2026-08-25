@@ -11,6 +11,13 @@ on:
   schedule:
     - cron: '*/30 * * * *'
   workflow_dispatch:
+    inputs:
+      download_limit:
+        description: 'Files fetched per feed per run (blank = 200). Raise it to burst the backfill.'
+        required: false
+      process_limit:
+        description: 'Files turned into fact rows per feed per run (blank = 300)'
+        required: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -43,10 +50,18 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       # A single shared cap across all three feeds (daily, scada_today, price_today), and a
       # CAP rather than a workload: a 30-minute slot only publishes ~6 intraday files per
-      # feed and at most one daily file, so this only binds during backfill.
-      download_limit: "60"
+      # feed and at most one daily file, so in steady state this never binds — it only sets
+      # how fast the historical backfill drains.
+      #
+      # 200 is sized to the cadence, not to appetite: staging runs at roughly 5s/file
+      # (60 files took ~5min), so ~200 keeps a run near ~17min, inside the 30-minute slot.
+      # Going much higher makes a run outlast its slot and the next tick queues behind it
+      # (concurrency group `process-data`, cancel-in-progress: false), which stalls the
+      # intraday feeds rather than speeding anything up. Burst higher via dispatch when you
+      # want a backfill push and can accept the queueing.
+      download_limit: ${{ inputs.download_limit || '200' }}
       # Files turned into fact rows per feed per run (read by the fact models' pre-hooks).
-      process_limit: "300"
+      process_limit: ${{ inputs.process_limit || '300' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
