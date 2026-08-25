@@ -2,7 +2,7 @@
 
 > None of the individual pieces here are new — dbt, DuckDB, Iceberg, GitHub Actions have all existed for years. What makes this kind of project possible now is that AI has made the cost of writing and maintaining code dramatically cheaper. Ideally, code like this can be deployed to any data platform — the platform's job becomes hosting, security, and isolation, while the logic stays portable in Git.
 
-The entire analytics stack — ingestion, transformation, storage, and visualization — defined and deployed from a single Git repository. No servers to manage, no orchestrator to maintain. The only persistent layer is an **Iceberg REST catalog**.
+The entire analytics stack — ingestion, transformation, storage, and visualization — defined and deployed from a single Git repository. No servers to manage, no orchestrator to maintain. The only persistent layer is an **Iceberg REST catalog** (currently OneLake, a Microsoft Fabric lakehouse), which also holds the raw CSV archive.
 
 ## Architecture
 
@@ -11,7 +11,7 @@ The entire analytics stack — ingestion, transformation, storage, and visualiza
 | *external*  |   | *ephemeral, in-memory* | | *persistent, only state* | | *Iceberg → native DuckDB files* | | *DuckDB-WASM queries native files in browser* |
 
 - **dbt-duckdb** — transformation engine that runs entirely in-memory. No database server, no cluster. A Python model handles data ingestion; SQL models handle transformation.
-- **Iceberg REST catalog** — the single persistent layer. All warehouse state lives here as Iceberg tables.
+- **Iceberg REST catalog** — the single persistent layer. All warehouse state lives here as Iceberg tables, and the gzipped source CSVs are archived next to them in object storage, so nothing depends on the ephemeral CI runner's disk.
 - **GitHub Actions** — orchestrates everything. Scheduled workflows replace traditional schedulers (Airflow, Dagster, etc.).
 - **DuckDB-WASM dashboard** — a static HTML page that loads compact DuckDB files in the browser and queries them client-side. No backend API.
 
@@ -19,10 +19,11 @@ The entire analytics stack — ingestion, transformation, storage, and visualiza
 
 - **Everything is code.** Models, tests, macros, pipelines, dashboard — all versioned in Git.
 - **No running infrastructure.** dbt runs ephemerally in CI. The catalog is the only thing that persists.
-- **File-based incremental processing.** Fact models track which source files have been processed. No watermark tables, no external state database.
+- **File-based incremental processing.** Fact models track which source files have been processed, reading the work list from the ingestion log table. No watermark tables, no external state database.
+- **Durable archive, no reconciliation code.** The CSV archive and its log live in object storage, not on the runner, so an interrupted run leaves nothing to repair — the next pass simply sees what is already there.
 - **CI validates SQL on every code change.** `dbt build --target ci` runs all models + tests in-memory — catches broken SQL before it reaches production.
-- **Intraday skips tests.** The 30-min processing cadence is too frequent for expensive test runs against live tables.
-- **Daily backfill runs full data quality tests.** Once every 24 hours, `dbt test --target prod` runs the complete test suite against live Iceberg tables — uniqueness, not_null, accepted_values, referential integrity, and file completeness checks. Import to the dashboard only proceeds if all tests pass.
+- **Loading skips tests.** The 30-min processing cadence is too frequent for expensive test runs against live tables, so `process_data` only runs `dbt run`.
+- **Tests run daily.** Once every 24 hours, `dbt test --target prod` runs the complete suite against live Iceberg tables — uniqueness, not_null, accepted_values, and file completeness checks.
 
 ## Grain Reduction
 
@@ -34,8 +35,8 @@ Source data arrives at 5-minute resolution. The Iceberg tables store everything 
 
 ## How It Works
 
-1. **Ingest** — A dbt Python model downloads source data and stores it as gzipped CSVs locally
-2. **Transform** — dbt SQL models read from CSV archives, apply transformations, and write incrementally to Iceberg tables
+1. **Ingest** — A dbt Python model downloads source data and archives it as gzipped CSVs in the lakehouse's `Files/`, alongside a durable log of what has been fetched
+2. **Transform** — dbt SQL models read those archived CSVs, apply transformations, and write incrementally to Iceberg tables as insert-only merges (one append snapshot per commit)
 3. **Import to dashboard** — A script reads from the Iceberg catalog and builds compact DuckDB files optimized for the browser
 4. **Visualize** — The dashboard loads DuckDB-WASM, fetches the exported files, and joins/aggregates at query time in the browser
 

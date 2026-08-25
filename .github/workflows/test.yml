@@ -14,12 +14,13 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  # OneLake Iceberg REST catalog — ids come from repo VARIABLES (public, not secrets);
-  # each job mints its own short-lived ONELAKE_TOKEN from the OIDC login.
+  # OneLake Iceberg REST catalog. Each job mints its own short-lived ONELAKE_TOKEN from the
+  # OIDC login and resolves WAREHOUSE_PATH itself — $GITHUB_ENV does not cross jobs, and the
+  # lakehouse id is never pinned in a variable (it changes if the lakehouse is recreated).
   ONELAKE_ENDPOINT: https://onelake.table.fabric.microsoft.com/iceberg
-  WAREHOUSE_PATH: ${{ vars.WS_ID }}/${{ vars.LH_ID }}
   AZURE_TRANSPORT_OPTION_TYPE: curl
   CURL_CA_INFO: /etc/ssl/certs/ca-certificates.crt
+  LH_NAME: nem
 
 permissions:
   contents: read
@@ -34,7 +35,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install dbt-duckdb "duckdb==1.6.0.dev365"
+      - run: pip install dbt-duckdb "duckdb==1.6.0.dev365" duckrun
       - name: Azure federated login
         uses: azure/login@v2
         with:
@@ -46,13 +47,19 @@ jobs:
           TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
           echo "::add-mask::$TOKEN"
           echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+      - name: Resolve lakehouse
+        run: |
+          python - <<'EOF' >> "$GITHUB_ENV"
+          import os, duckrun
+          ws_id, lh_name = os.environ["WS_ID"], os.environ["LH_NAME"]
+          lh_id = duckrun.workspace(ws_id).create_lakehouse(lh_name)
+          print(f"WAREHOUSE_PATH={ws_id}/{lh_id}")
+          print(f"FILES_PATH=abfss://{ws_id}@onelake.dfs.fabric.microsoft.com/{lh_id}/Files")
+          EOF
+        env:
+          WS_ID: ${{ vars.WS_ID }}
       - name: dbt test
         run: dbt test --target prod --profiles-dir .
-      # dbt only reports a row count for the assert_all_*_files_processed tests, so a red
-      # build says "FAIL 1" and nothing about which file. Always print the names.
-      - name: Report unprocessed files
-        if: always()
-        run: dbt run-operation report_unprocessed_files --target prod --profiles-dir .
 
   catalog_capabilities:
     runs-on: ubuntu-latest
@@ -64,7 +71,7 @@ jobs:
           python-version: "3.11"
       # Same pin as the rest of the pipeline; it's well past 1.5.3, so MERGE is
       # still exercised against the catalog.
-      - run: pip install "duckdb==1.6.0.dev365"
+      - run: pip install "duckdb==1.6.0.dev365" duckrun
       - name: Azure federated login
         uses: azure/login@v2
         with:
@@ -76,6 +83,15 @@ jobs:
           TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
           echo "::add-mask::$TOKEN"
           echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+      - name: Resolve lakehouse
+        run: |
+          python - <<'EOF' >> "$GITHUB_ENV"
+          import os, duckrun
+          ws_id, lh_name = os.environ["WS_ID"], os.environ["LH_NAME"]
+          print(f"WAREHOUSE_PATH={ws_id}/{duckrun.workspace(ws_id).create_lakehouse(lh_name)}")
+          EOF
+        env:
+          WS_ID: ${{ vars.WS_ID }}
       - name: Probe catalog capabilities (CREATE / INSERT / DELETE / UPDATE / MERGE / CREATE OR REPLACE / DROP)
         run: python scripts/catalog_capabilities.py
 
@@ -85,8 +101,8 @@ jobs:
   # protection from a job-level group, without blocking process_data CI or dbt_test.
   compact:
     runs-on: ubuntu-latest
-    # iceberg_rewrite_data_files commits optimistically and the delete+insert models
-    # remove data files, so overlapping an intraday load would fail one side.
+    # iceberg_rewrite_data_files commits optimistically, so overlapping a load would fail
+    # one side.
     concurrency:
       group: process-data
       cancel-in-progress: false
@@ -110,7 +126,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install "duckdb==1.6.0.dev365"
+      - run: pip install "duckdb==1.6.0.dev365" duckrun
       - name: Azure federated login
         uses: azure/login@v2
         with:
@@ -122,5 +138,14 @@ jobs:
           TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
           echo "::add-mask::$TOKEN"
           echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+      - name: Resolve lakehouse
+        run: |
+          python - <<'EOF' >> "$GITHUB_ENV"
+          import os, duckrun
+          ws_id, lh_name = os.environ["WS_ID"], os.environ["LH_NAME"]
+          print(f"WAREHOUSE_PATH={ws_id}/{duckrun.workspace(ws_id).create_lakehouse(lh_name)}")
+          EOF
+        env:
+          WS_ID: ${{ vars.WS_ID }}
       - name: Compact Iceberg data files
         run: python scripts/compact_iceberg.py

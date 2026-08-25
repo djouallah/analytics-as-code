@@ -2,22 +2,29 @@ version: 2
 
 models:
   - name: fct_price
-    description: Price data from daily AEMO dispatch files
+    description: Regional spot prices from daily AEMO dispatch files (5-minute intervals)
     columns:
       - name: REGIONID
+        description: NEM region (plus WA1 for the WA market)
         tests:
           - not_null
           - accepted_values:
               values: ['QLD1', 'NSW1', 'VIC1', 'SA1', 'TAS1', 'WA1']
       - name: SETTLEMENTDATE
+        description: 5-minute dispatch interval timestamp (timestamptz)
         tests:
           - not_null
+      - name: RRP
+        description: Regional Reference Price ($/MWh) for the interval
+      - name: INTERVENTION
+        description: AEMO intervention flag (0 = normal dispatch run)
       - name: file
+        description: Source CSV filename the row was ingested from (part of the merge key)
         tests:
           - not_null
 
   - name: fct_scada
-    description: SCADA data from daily AEMO dispatch files
+    description: Generation SCADA readings per unit from daily AEMO dispatch files
     columns:
       # No relationships test to dim_duid here: dim_duid holds only *currently registered*
       # DUIDs while fct_scada goes back to 2018 and is full of retired ones, so the test
@@ -25,40 +32,56 @@ models:
       # do DUIDs generating *right now* exist in dim_duid -- lives in
       # tests/assert_recent_scada_duids_registered.sql.
       - name: DUID
+        description: Dispatchable Unit Identifier of the generating unit
         tests:
           - not_null
       - name: SETTLEMENTDATE
+        description: 5-minute dispatch interval timestamp (timestamptz)
         tests:
           - not_null
+      - name: INITIALMW
+        description: Metered output of the unit at the start of the interval (MW)
       - name: file
+        description: Source CSV filename the row was ingested from (part of the merge key)
         tests:
           - not_null
 
   - name: fct_price_today
-    description: Intraday price data from AEMO dispatch files
+    description: Intraday regional spot prices from AEMO 5-minute dispatch files
     columns:
       - name: REGIONID
+        description: NEM region (plus WA1 for the WA market)
         tests:
           - not_null
           - accepted_values:
               values: ['QLD1', 'NSW1', 'VIC1', 'SA1', 'TAS1', 'WA1']
       - name: SETTLEMENTDATE
+        description: 5-minute dispatch interval timestamp (timestamptz)
         tests:
           - not_null
+      - name: RRP
+        description: Regional Reference Price ($/MWh) for the interval
       - name: file
+        description: Source CSV filename the row was ingested from (part of the merge key)
         tests:
           - not_null
 
   - name: fct_scada_today
-    description: Intraday SCADA data from AEMO dispatch files
+    description: Intraday generation SCADA readings per unit from AEMO dispatch files
     columns:
+      # Same reasoning as fct_scada above -- no relationships test to dim_duid.
       - name: DUID
+        description: Dispatchable Unit Identifier of the generating unit
         tests:
           - not_null
       - name: SETTLEMENTDATE
+        description: 5-minute dispatch interval timestamp (timestamptz)
         tests:
           - not_null
+      - name: INITIALMW
+        description: Metered output of the unit at the start of the interval (MW)
       - name: file
+        description: Source CSV filename the row was ingested from (part of the merge key)
         tests:
           - not_null
 

@@ -1,15 +1,16 @@
 name: Process Data
 
+# Every 30 minutes. There is no daily/intraday split any more: the staging model does all
+# three feeds (daily archive, intraday SCADA, intraday price) plus the DUID reference on
+# every pass, and self-gates the slow parts on data rather than on a schedule —
+#   * the DUID download is skipped while the last one is < 24h old
+#   * the GitHub historical backfill listing only runs when AEMO returned fewer than
+#     download_limit new files
+# so a 30-minute cadence costs nothing extra over an hourly one.
 on:
   schedule:
-    - cron: '*/30 * * * *'   # intraday — live AEMO listing only
-    - cron: '0 19 * * *'     # daily (5am AEST) — GitHub backfill + DUID/dim_duid refresh
+    - cron: '*/30 * * * *'
   workflow_dispatch:
-    inputs:
-      daily_refresh:
-        description: 'Run the daily pass (GitHub backfill + DUID refresh)'
-        type: boolean
-        default: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -27,22 +28,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      # OneLake Iceberg REST catalog — ids come from repo VARIABLES (public, not secrets);
-      # ONELAKE_TOKEN is minted below, per run, from the OIDC login.
+      # OneLake Iceberg REST catalog. WAREHOUSE_PATH and FILES_PATH are resolved at runtime
+      # by the "Resolve lakehouse" step below (the lakehouse id is never pinned in a
+      # variable — it changes if the lakehouse is recreated). ONELAKE_TOKEN is minted per
+      # run from the OIDC login.
       ONELAKE_ENDPOINT: https://onelake.table.fabric.microsoft.com/iceberg
-      WAREHOUSE_PATH: ${{ vars.WS_ID }}/${{ vars.LH_ID }}
       # The azure extension's default transport fails the OneLake TLS handshake on the
       # runners; curl needs the runner's CA bundle.
       AZURE_TRANSPORT_OPTION_TYPE: curl
       CURL_CA_INFO: /etc/ssl/certs/ca-certificates.crt
-      download_limit: "2"
-      intraday_download_limit: "60"
+      # Authenticated GitHub API calls for the staging model's backfill listing —
+      # anonymous calls share the runner IP's 60 req/h quota and get rate-limited.
+      GITHUB_TOKEN: ${{ github.token }}
+      LH_NAME: nem
+      # A single shared cap across all three feeds (daily, scada_today, price_today), and a
+      # CAP rather than a workload: a 30-minute slot only publishes ~6 intraday files per
+      # feed and at most one daily file, so this only binds during backfill.
+      download_limit: "60"
+      # Files turned into fact rows per feed per run (read by the fact models' pre-hooks).
+      process_limit: "300"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install dbt-duckdb "duckdb==1.6.0.dev365"
+      - run: pip install dbt-duckdb "duckdb==1.6.0.dev365" duckrun
       - name: Azure federated login
         uses: azure/login@v2
         with:
@@ -54,20 +64,18 @@ jobs:
           TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
           echo "::add-mask::$TOKEN"
           echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
-      - name: Determine daily-refresh mode
-        id: mode
+      - name: Resolve lakehouse
+        # Idempotent create-if-missing (schema-enabled), then export the paths the dbt run
+        # reads. duckrun self-acquires its own Fabric token from the Azure CLI login above.
         run: |
-          if [ "${{ github.event.schedule }}" = "0 19 * * *" ] || [ "${{ github.event.inputs.daily_refresh }}" = "true" ]; then
-            echo "daily_refresh=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "daily_refresh=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Heal orphaned daily log entries (daily pass only)
-        if: steps.mode.outputs.daily_refresh == 'true'
-        run: dbt run-operation heal_orphaned_daily_files --target prod --profiles-dir .
-      - name: Process data
+          python - <<'EOF' >> "$GITHUB_ENV"
+          import os, duckrun
+          ws_id, lh_name = os.environ["WS_ID"], os.environ["LH_NAME"]
+          lh_id = duckrun.workspace(ws_id).create_lakehouse(lh_name)
+          print(f"WAREHOUSE_PATH={ws_id}/{lh_id}")
+          print(f"FILES_PATH=abfss://{ws_id}@onelake.dfs.fabric.microsoft.com/{lh_id}/Files")
+          EOF
         env:
-          daily_refresh: ${{ steps.mode.outputs.daily_refresh }}
+          WS_ID: ${{ vars.WS_ID }}
+      - name: Process data
         run: dbt run --target prod --profiles-dir .
-      - name: Confirm processed log entries
-        run: dbt run-operation confirm_log_entries --target prod --profiles-dir .

@@ -13,60 +13,58 @@
   `delete+insert` — its NOT-IN filter means incoming rows never match, so commits stay pure
   appends.
 
+## The dbt project is a subset copy of the sibling repo
+`models/`, `macros/` and the `assert_fct_*_grain` tests are copied verbatim from
+[`dbt_fabric_python_iceberg`](https://github.com/djouallah/dbt_fabric_python_iceberg)'s `dbt/`
+directory, minus `fct_summary` / `fct_summary_daily` (this repo's dashboard computes that join
+client-side in `scripts/cache_catalog.py`). **Port fixes from there rather than diverging.**
+Three deliberate local differences, all of which must survive a re-copy:
+- No `relationships → dim_duid` tests on `fct_scada`/`fct_scada_today` — `dim_duid` holds only
+  currently-registered DUIDs while the facts go back to 2018 and are full of retired ones, so
+  the test could never be 0. `tests/assert_recent_scada_duids_registered.sql` is the meaningful
+  version and is this repo's own.
+- `tests/assert_all_*_files_processed_*.sql` use `NOT EXISTS` and are untagged; the sibling's
+  use `NOT IN` (a single NULL `file` makes them permanently green) and are tagged `heavy`.
+- `profiles.yml` keeps a `ci` target (in-memory, no Iceberg) for `build.yml`, and
+  `dbt_project.yml`'s `on-run-start` hooks are guarded with `target.name != 'ci'` — the
+  sibling's are unconditional and would break that target.
+
 ## Architecture
-1. `stg_csv_archive_log.py` (Python model) downloads data from AEMO + GitHub, stores as gzipped CSVs locally
-2. **Daily pass vs intraday cycle:** `process_data` runs every 30 min (intraday) and once at 19:00 UTC (daily). The daily run sets `daily_refresh=true`, which gates the slow / rarely-changing work — GitHub historical backfill *and* the DUID reference download + `dim_duid` rebuild. The 30-min intraday runs skip all of that and reuse the already-materialized Iceberg `dim_duid`. (Ephemeral CI wipes local files each run, so the old "skip DUID if < 24h" guard could never fire — `dim_duid` reads the raw CSVs from local disk, so they must be re-downloaded whenever it rebuilds.)
-3. Fact models read from local CSV archives incrementally (file-based), dimensions are smart-refresh
-4. CI/CD runs `dbt build` to write directly to Iceberg catalog
-5. **Self-heal via `force_download.txt`, not by deleting log markers.** See
-   "Iceberg DELETE is not reliable here" below. `heal_orphaned_daily_files` (daily pass, before
-   `dbt run`) finds `daily` log rows whose file never landed in `fct_scada`/`fct_price`, logs
-   their names, and writes them to `$ROOT_PATH/force_download.txt`.
-   `stg_csv_archive_log.py` consumes that file and downloads exactly those, **ignoring the log
-   dedup and on top of `download_limit`**. The fact models then pick them up from the local
-   glob, which keys off `NOT IN (SELECT file FROM fct_*)` and never consults the log.
-   `confirm_log_entries` anti-joins before inserting, so a re-download can't duplicate a
-   marker. **The macro no longer deletes anything.** The marker isn't the problem, it's the
-   evidence — once the file is reprocessed the assert goes green on its own, whereas deleting
-   a marker for a file that turns out to be ungettable would go green over a permanent hole.
-   A file the archive no longer serves is logged as a `WARN` and stays red until a human
-   quarantines it; that is the intended behaviour.
-6. **Daily compaction:** the `compact` job in `test.yml` runs `scripts/compact_iceberg.py`
-   after a daily pass (or on a `force_compact=true` dispatch), folding each table's small data
-   files into ~128MiB ones via `iceberg_rewrite_data_files()`. It lives in *that* workflow so the
-   workflow-level `process-data` concurrency group covers it — compaction commits optimistically,
-   so an overlap with an intraday load could fail one side. It is `continue-on-error` and the
-   script always exits 0: maintenance must never fail the pipeline or block `import_data.yml`'s
-   `workflow_run` gate. Note there is no snapshot expiry, so reads get faster but storage
-   doesn't shrink.
+1. `stg_csv_archive_log.py` (Python model) downloads AEMO + GitHub data and archives the
+   gzipped CSVs **to OneLake Files** (`FILES_PATH`, i.e. the `nem` lakehouse's `Files/csv/`),
+   alongside a durable `Files/csv_archive_log.parquet`. This is the whole point of the 2026-08
+   rewrite: the archive used to live on the runner's `/tmp`, which is wiped every run, and the
+   pile of reconciliation machinery that existed to paper over that (`confirm_log_entries`,
+   `heal_orphaned_daily_files`, `report_unprocessed_files`, `force_download.txt`,
+   `pending_log_entries.csv`) is **deleted** — a durable archive needs none of it.
+2. **No daily/intraday split.** Every 30-minute pass does all three feeds plus the DUID
+   reference, self-gated on data rather than on a schedule: the DUID download is skipped while
+   the last one is < 24h old, and the GitHub historical backfill listing only runs when AEMO
+   returned fewer than `download_limit` new files. There is no `daily_refresh` env var.
+3. Work is discovered from the **log table**, not a filesystem glob: each fact model's pre-hook
+   builds its path list from `stg_csv_archive_log.archive_path` filtered by
+   `csv_filename NOT IN (SELECT file FROM {{ this }})`.
+4. `process_data.yml` runs `dbt run` (tests live in `test.yml`), writing straight to the
+   OneLake Iceberg catalog. No `dbt run-operation` anywhere — there are no operation macros.
+5. **Compaction:** the `compact` job in `test.yml` runs `scripts/compact_iceberg.py`, folding
+   each table's small data files together via `iceberg_rewrite_data_files()`. It lives in
+   *that* workflow but takes a job-level `process-data` concurrency group — compaction commits
+   optimistically, so an overlap with a load could fail one side. It is `continue-on-error` and
+   the script always exits 0: maintenance must never fail the pipeline or block
+   `import_data.yml`'s `workflow_run` gate. There is no snapshot expiry, so reads get faster
+   but storage doesn't shrink.
 
-## Iceberg DELETE is not reliable here
-**Catalog-history note (2026-08):** the observations below were made against the previous
-(R2-backed) REST catalog. The catalog is now OneLake, which has its own DELETE behaviour —
-delete-file commits may be rejected outright (one-add-snapshot rule) rather than silently
-no-op'd, which is why the `duid_*` cleanup DELETE in `stg_csv_archive_log.py` is wrapped in
-try/except and the fact models are insert-only merges. The nightly capability probe and the
-duid cleanup's before/after counts are the standing evidence for what OneLake actually does;
-revalidate against those before leaning on any claim in this section.
-
-`DELETE` against this catalog **succeeds without applying** when the predicate contains
-subqueries over *other* Iceberg tables. `heal_orphaned_daily_files` did exactly that and was
-a no-op for weeks while logging "deleted 1 entries" every night — four consecutive daily
-passes each found the same single orphan
-(`PUBLIC_DAILY_202604130000_20260414040503`), "deleted" it, then reported `Daily files: 0 new`
-because the marker was still there blocking the dedup. Meanwhile the `daily` row count kept
-climbing +1/day with no decrement.
-
-Plain `IN`-list / local-relation predicates *do* work — `dim_duid`'s `delete+insert` dedups
-754 DUIDs every day with no stacking. So:
-- Prefer an `IN (...)` literal list or a subquery over a **temp/in-memory** relation.
-- Never assume a `DELETE` landed. Re-count afterwards and log the delta — the `duid_*`
-  cleanup in `stg_csv_archive_log.py` does this on `stg_csv_archive_log` every daily pass,
-  which is the standing check on whether `DELETE` works on that table.
-- Better still, design the path so it needs no `DELETE` at all (see the self-heal above).
+## Don't design anything that needs DELETE
+Every write is an append. On OneLake a commit may carry only one add-snapshot, so anything
+that mixes delete files with data files is rejected outright (`BadRequest 400`) — hence the
+insert-only merges. On the previous (R2-backed) catalog `DELETE` had a nastier failure mode:
+it **succeeded without applying** whenever the predicate contained subqueries over *other*
+Iceberg tables, silently no-op'ing for weeks. Both histories point the same way: design the
+path so it needs no `DELETE`, and never assume one landed — re-count and log the delta.
 
 `scripts/catalog_capabilities.py` probes CREATE/INSERT/DELETE/UPDATE/MERGE/DROP against a
-freshly created table each night — useful, but it does **not** exercise this failure mode.
+freshly created table each night. That matrix is the standing evidence for what this catalog
+actually does; check it before relying on any claim here.
 
 ## Auth (GitHub Actions) — no secrets
 OIDC only: `azure/login@v2` with a federated credential, then each job mints a short-lived
@@ -74,29 +72,38 @@ OIDC only: `azure/login@v2` with a federated credential, then each job mints a s
 The ids live in repository **variables** (public identifiers, not secrets):
 - `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` — the tenant + Entra app (`dbt_fabric_python_iceberg`,
   no client secret; shared with the sibling repo)
-- `WS_ID`, `LH_ID` — Fabric workspace `power` / lakehouse `nem`; the workflows derive
-  `WAREHOUSE_PATH={WS_ID}/{LH_ID}`
-Env contract consumed by profiles.yml and the scripts: `ONELAKE_ENDPOINT`, `ONELAKE_TOKEN`,
-`WAREHOUSE_PATH`, plus `AZURE_TRANSPORT_OPTION_TYPE=curl` + `CURL_CA_INFO` on runners (the
-azure extension's default transport fails the OneLake TLS handshake).
+- `WS_ID` — the Fabric workspace (`power`). **The lakehouse id is deliberately NOT a
+  variable**: every OneLake-touching job has a "Resolve lakehouse" step that calls
+  `duckrun.workspace(WS_ID).create_lakehouse('nem')` (idempotent create-if-missing) and
+  exports `WAREHOUSE_PATH` + `FILES_PATH` to `$GITHUB_ENV`. A pinned id goes stale the moment
+  the lakehouse is recreated — which is exactly what happened. `$GITHUB_ENV` doesn't cross
+  jobs, so each job resolves it again.
+Env contract consumed by profiles.yml, the models and the scripts: `ONELAKE_ENDPOINT`,
+`ONELAKE_TOKEN`, `WAREHOUSE_PATH`, `FILES_PATH`, `download_limit`, `process_limit`, plus
+`AZURE_TRANSPORT_OPTION_TYPE=curl` + `CURL_CA_INFO` on runners (the azure extension's default
+transport fails the OneLake TLS handshake).
 `NEMTRACKER_TOKEN` (gh-pages deploy) is the one remaining true secret.
 
 ## Models (7)
 | Model | Schema | Materialization |
 |-------|--------|-----------------|
-| stg_csv_archive_log | landing | incremental (Python) |
-| dim_calendar | mart | incremental (one-time) |
-| dim_duid | mart | incremental (smart refresh) |
-| fct_scada, fct_price | landing | incremental (by file) |
-| fct_scada_today, fct_price_today | landing | incremental (by file) |
+| stg_csv_archive_log | landing | incremental append (Python) |
+| dim_calendar | mart | incremental delete+insert (pure append in practice — the NOT-IN filter means incoming rows never match) |
+| dim_duid | mart | incremental insert-only merge on DUID |
+| fct_scada, fct_price | landing | incremental insert-only merge (by file) |
+| fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
+
+`dim_duid`'s insert-only merge means attribute changes (region/fuel/geo) never update in
+place; `dbt run --full-refresh -s dim_duid` is the reconciliation lever.
 
 ## Profiles: ci (in-memory, no Iceberg), dev/prod (OneLake Iceberg REST catalog)
 
 ## Key Patterns
-- Pre-hooks set DuckDB VARIABLEs with file paths for incremental processing
-- CSVs read from gzipped archives via `read_csv()` with `ignore_errors=true`
-- CI target uses plain DuckDB (no Iceberg) for SQL validation
-- Dev/prod targets attach Iceberg REST catalog via `database: iceberg_catalog`
+- Pre-hooks set DuckDB VARIABLEs with the file paths to process, read from the log table
+- CSVs read from gzipped archives in OneLake Files via `read_csv()` with `ignore_errors=true`
+- CI target uses plain DuckDB (no Iceberg) for SQL validation; `FILES_PATH` is unset there so
+  the archive falls back to `/tmp`
+- Dev/prod targets attach the OneLake Iceberg REST catalog via `database: iceberg_catalog`
 
 ## DuckDB version policy
 Everything is pinned — no workflow floats on "latest".

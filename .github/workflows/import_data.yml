@@ -24,12 +24,12 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
     env:
-      # OneLake Iceberg REST catalog — only the .venv-read (export_*) steps touch it;
-      # ids come from repo VARIABLES, ONELAKE_TOKEN is minted below per run.
+      # OneLake Iceberg REST catalog — only the .venv-read (export_*) steps touch it.
+      # WAREHOUSE_PATH is resolved at runtime below; ONELAKE_TOKEN is minted per run.
       ONELAKE_ENDPOINT: https://onelake.table.fabric.microsoft.com/iceberg
-      WAREHOUSE_PATH: ${{ vars.WS_ID }}/${{ vars.LH_ID }}
       AZURE_TRANSPORT_OPTION_TYPE: curl
       CURL_CA_INFO: /etc/ssl/certs/ca-certificates.crt
+      LH_NAME: nem
     steps:
       - uses: actions/checkout@v4
 
@@ -49,6 +49,19 @@ jobs:
           TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
           echo "::add-mask::$TOKEN"
           echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+
+      - name: Resolve lakehouse
+        # $GITHUB_ENV doesn't cross jobs, and the lakehouse id is never pinned in a
+        # variable — resolve it here (idempotent create-if-missing).
+        run: |
+          pip install -q duckrun
+          python - <<'EOF' >> "$GITHUB_ENV"
+          import os, duckrun
+          ws_id, lh_name = os.environ["WS_ID"], os.environ["LH_NAME"]
+          print(f"WAREHOUSE_PATH={ws_id}/{duckrun.workspace(ws_id).create_lakehouse(lh_name)}")
+          EOF
+        env:
+          WS_ID: ${{ vars.WS_ID }}
 
       - name: Set mode
         id: mode

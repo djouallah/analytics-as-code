@@ -2,13 +2,25 @@ version: 2
 
 models:
   - name: dim_duid
-    description: Dimension table for DUID (Dispatchable Unit Identifier)
+    description: Dimension table for DUID (Dispatchable Unit Identifier), covering NEM units plus WA facilities
     columns:
       - name: DUID
         description: Unique identifier for dispatchable unit
         tests:
           - unique
           - not_null
+      - name: Region
+        description: NEM region the unit dispatches into (WA1 for WA facilities)
+      - name: State
+        description: State name derived from the region
+      - name: FuelSourceDescriptor
+        description: Fuel/technology of the unit (e.g. Solar, Wind, Coal), title-cased
+      - name: Participant
+        description: Registered market participant that operates the unit
+      - name: latitude
+        description: Unit latitude (from the geo reference CSV; null when unknown)
+      - name: longitude
+        description: Unit longitude (from the geo reference CSV; null when unknown)
 
   - name: dim_calendar
     description: Calendar dimension with date attributes

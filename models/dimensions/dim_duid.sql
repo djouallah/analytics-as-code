@@ -1,32 +1,43 @@
 {% set csv_archive_path = get_csv_archive_path() %}
 
-{# DUID reference data only changes ~daily, and the raw CSVs only exist on the    #}
-{# daily pass (stg gates the download to daily_refresh). On the 30-min intraday   #}
-{# cycle the model returns nothing, so the merge is a no-op and the existing      #}
-{# Iceberg table is left untouched.                                              #}
-{% set daily_refresh = env_var('daily_refresh', 'false') == 'true' %}
+{# Check if there are new DUIDs not in the existing table #}
+{%- set check_new_duids_query -%}
+  SELECT count(*) as cnt FROM (
+    SELECT DUID FROM read_csv('{{ csv_archive_path }}/duid/duid_data.csv') WHERE length(DUID) > 2
+    UNION
+    SELECT "Facility Code" AS DUID FROM read_csv_auto('{{ csv_archive_path }}/duid/facilities.csv')
+  ) source_duids
+  WHERE DUID NOT IN (SELECT DUID FROM {{ this }})
+{%- endset -%}
 
-{%- set should_rebuild = (not is_incremental()) or daily_refresh -%}
+{%- if execute and is_incremental() and flags.WHICH in ('run', 'build', 'retry') -%}
+  {%- set result = run_query(check_new_duids_query) -%}
+  {%- set has_new_duids = result and result.rows[0][0] > 0 -%}
+{%- else -%}
+  {%- set has_new_duids = true -%}
+{%- endif -%}
 
 -- Insert-only merge on DUID (WHEN MATCHED DO NOTHING), same pattern as the facts:
--- new DUIDs are inserted, existing ones are never touched -- every commit stays a
--- single append snapshot, which is all the OneLake catalog accepts. Consequence:
--- attribute changes (region/fuel/geo) never update in place;
+-- new DUIDs are inserted, existing ones are never touched — so a run that sees a
+-- stale/empty view of the table can at worst re-insert nothing that survives the
+-- merge, instead of the old wipe-and-reload appending a full duplicate copy.
+-- Consequence: attribute changes (region/fuel/geo) never update in place;
 -- `dbt run --full-refresh -s dim_duid` is the reconciliation lever.
--- Same pattern as dbt_fabric_python_iceberg's dim_duid.
 {{ config(
     materialized='incremental',
     incremental_strategy='merge',
-    merge_clauses={'when_matched': [{'action': 'do_nothing'}]},
     unique_key=['DUID'],
+    merge_clauses={'when_matched': [{'action': 'do_nothing'}]},
     on_schema_change='sync_all_columns'
 ) }}
 
--- Ensure download runs first by depending on stg_csv_archive_log
+-- Ensure the download runs first
 -- depends_on: {{ ref('stg_csv_archive_log') }}
 
-{% if should_rebuild %}
+{% if has_new_duids %}
 WITH
+  -- Deliberately an inline CTE, not a seed: 7 static rows aren't worth a
+  -- materialized Iceberg table + a `dbt seed` step in every runner.
   states AS (
     SELECT 'WA1' AS RegionID, 'Western Australia' AS State
     UNION ALL SELECT 'QLD1', 'Queensland'
@@ -103,6 +114,6 @@ JOIN states ON a.Region = states.RegionID
 LEFT JOIN geo ON a.duid = geo.duid
 GROUP BY a.DUID
 {% else %}
--- Intraday cycle: no rebuild, keep existing data
+-- No new DUIDs found, return empty result to keep existing data
 SELECT * FROM {{ this }} WHERE FALSE
 {% endif %}

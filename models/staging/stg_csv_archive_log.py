@@ -1,70 +1,59 @@
 def model(dbt, session):
-    dbt.config(materialized="incremental", unique_key=["source_type", "source_filename"], incremental_strategy="append", schema="landing")
+    dbt.config(materialized="incremental", incremental_strategy="append", schema="landing")
 
     import os
     import io
-    import sys
     import gzip
     import zipfile
     import tempfile
     import urllib.request
-    from datetime import datetime
+    from datetime import datetime, timezone
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    def log(msg):
-        print(msg, file=sys.stderr, flush=True)
-
-    def sql_with_retry(query, attempts=4, base_delay=5):
-        """Run a session.sql that hits the network (read_text listing fetches).
-        nemweb occasionally throws a transient 403 when rate-limited; without a
-        retry a single bad request kills the whole model. Back off and retry."""
-        import time
-        for attempt in range(attempts):
-            try:
-                return session.sql(query)
-            except Exception as e:
-                if attempt == attempts - 1:
-                    raise
-                wait = base_delay * (2 ** attempt)
-                log(f"WARN: listing fetch failed (attempt {attempt + 1}/{attempts}), "
-                    f"retrying in {wait}s: {str(e).splitlines()[0][:120]}")
-                time.sleep(wait)
-
-    import csv as csv_mod
-
-    csv_archive_path = os.environ.get("ROOT_PATH", "/tmp") + "/Files/csv"
-    # Daily reports: large files, OOM-sensitive on fct_scada, so keep this low.
+    root_path = os.environ.get("FILES_PATH", "/tmp")
+    csv_archive_path = root_path + "/csv"
+    csv_log_path = root_path + "/csv_archive_log.parquet"
     download_limit = int(os.environ.get("download_limit", "2"))
-    # Intraday SCADA/price: tiny 5-min files (~6 new per 30-min run) that AEMO
-    # only keeps in Current/ for ~2 days, so we want headroom to backfill gaps.
-    # Default kept low (=2) so build.yml CI never bursts requests at AEMO; the
-    # data pipeline (process_data.yml) sets a higher value. Downloads are
-    # throttled (see process_downloads) so a high value doesn't get the IP
-    # rate-limited/blocked by AEMO.
-    intraday_download_limit = int(os.environ.get("intraday_download_limit", "2"))
-    # Set on the once-daily pass only. Gates the slow/rarely-changing work
-    # (GitHub historical backfill + DUID reference refresh) off the 30-min cycle.
-    daily_refresh = os.environ.get("daily_refresh", "false").strip().lower() == "true"
     batch_size = 7
-    max_workers = 4          # keep concurrency modest to avoid AEMO rate-limiting
-    batch_pause_seconds = 2  # pause between batches to spread requests out
-    pending_entries = []  # non-duid entries deferred until fact tables confirm
+    max_workers = 8
 
     # =========================================================================
-    # Load existing log from Iceberg table (incremental) or start fresh
+    # Load existing log
     # =========================================================================
-    if dbt.is_incremental:
-        session.sql(f"""
-            CREATE OR REPLACE TEMP TABLE _csv_archive_log AS
-            SELECT source_type, source_filename, archive_path, archived_at,
-                   row_count, source_url, etag, csv_filename
-            FROM {dbt.this}
-        """)
+    log_exists = session.sql(
+        f"SELECT count(*) FROM glob('{csv_log_path}')"
+    ).fetchone()[0]
+
+    if log_exists > 0:
+        # Check if csv_filename column exists in existing parquet
+        cols = [row[0] for row in session.sql(
+            f"DESCRIBE SELECT * FROM read_parquet('{csv_log_path}')"
+        ).fetchall()]
+        has_csv_filename = "csv_filename" in cols
+
+        if has_csv_filename:
+            session.sql(f"""
+                CREATE OR REPLACE TEMP TABLE _csv_archive_log AS
+                SELECT source_type, source_filename, archive_path, archived_at,
+                       row_count, source_url, etag, csv_filename
+                FROM read_parquet('{csv_log_path}')
+                WHERE csv_filename IS NOT NULL
+            """)
+        else:
+            # Old-format log without csv_filename — start fresh
+            session.sql("""
+                CREATE OR REPLACE TEMP TABLE _csv_archive_log (
+                    source_type VARCHAR, source_filename VARCHAR,
+                    archive_path VARCHAR, archived_at TIMESTAMPTZ,
+                    row_count BIGINT, source_url VARCHAR, etag VARCHAR,
+                    csv_filename VARCHAR
+                )
+            """)
     else:
         session.sql("""
             CREATE OR REPLACE TEMP TABLE _csv_archive_log (
                 source_type VARCHAR, source_filename VARCHAR,
-                archive_path VARCHAR, archived_at TIMESTAMP,
+                archive_path VARCHAR, archived_at TIMESTAMPTZ,
                 row_count BIGINT, source_url VARCHAR, etag VARCHAR,
                 csv_filename VARCHAR
             )
@@ -76,16 +65,6 @@ def model(dbt, session):
         "SELECT source_type || '::' || source_filename FROM _csv_archive_log"
     ).fetchall():
         existing.add(row[0])
-
-    # Track new rows added this run
-    session.sql("""
-        CREATE OR REPLACE TEMP TABLE _new_log_rows (
-            source_type VARCHAR, source_filename VARCHAR,
-            archive_path VARCHAR, archived_at TIMESTAMP,
-            row_count BIGINT, source_url VARCHAR, etag VARCHAR,
-            csv_filename VARCHAR
-        )
-    """)
 
     # =========================================================================
     # Helper: download ZIP, extract CSVs to temp dir
@@ -114,8 +93,23 @@ def model(dbt, session):
                 results.append((name, gz_name, gz_path))
         return results
 
+    def copy_to_onelake(temp_path, dest_path):
+        """Copy a local file to OneLake via DuckDB COPY."""
+        escaped_temp = temp_path.replace("\\", "/")
+        if not dest_path.startswith(("az://", "abfss://")):
+            dest_dir = dest_path.rsplit("/", 1)[0]
+            os.makedirs(dest_dir, exist_ok=True)
+        session.sql(
+            f"COPY (SELECT content FROM read_blob('{escaped_temp}')) "
+            f"TO '{dest_path}' (FORMAT BLOB, COMPRESSION 'none')"
+        )
+
+    def save_log():
+        """Save current log state to parquet."""
+        session.sql(f"COPY _csv_archive_log TO '{csv_log_path}' (FORMAT PARQUET)")
+
     def process_downloads(rows, source_type, subfolder):
-        """Download, extract, store locally in batches."""
+        """Download, extract, copy to OneLake in batches. Saves log after each batch."""
         files_to_process = [(row[0], row[1]) for row in rows]
         for i in range(0, len(files_to_process), batch_size):
             batch = files_to_process[i:i + batch_size]
@@ -132,39 +126,27 @@ def model(dbt, session):
                             for csv_name, safe_name, temp_path in future.result():
                                 extracted.append((src_fn, safe_name, temp_path, url))
                         except Exception as e:
-                            log(f"WARN: skipping {src_fn}: {e}")
+                            print(f"  WARN: skipping {src_fn}: {e}")
 
-                now = datetime.now().isoformat()
+                now = datetime.now(timezone.utc).isoformat()
                 for src_fn, csv_name, temp_path, url in extracted:
                     csv_base = csv_name.removesuffix(".gz").removesuffix(".CSV").removesuffix(".csv")
                     dest = f"{csv_archive_path}/{subfolder}/{csv_name}"
-                    dest_dir = dest.rsplit("/", 1)[0]
-                    os.makedirs(dest_dir, exist_ok=True)
-                    import shutil
-                    shutil.copy2(temp_path, dest)
-                    # Insert into in-memory log for dedup within this run
-                    session.sql(f"""
-                        INSERT INTO _csv_archive_log VALUES (
-                            '{source_type}', '{src_fn}', '/{subfolder}/{csv_name}',
-                            '{now}'::TIMESTAMP, NULL, '{url}', NULL, '{csv_base}'
-                        )
-                    """)
-                    # Defer writing to Iceberg until fact tables confirm processing
-                    pending_entries.append((source_type, src_fn, f'/{subfolder}/{csv_name}',
-                                           now, url, csv_base))
-
-            # Throttle: pause between batches so we don't burst requests at AEMO,
-            # which rate-limits (403s) and then blocks the runner IP entirely.
-            if i + batch_size < len(files_to_process):
-                import time
-                time.sleep(batch_pause_seconds)
+                    copy_to_onelake(temp_path, dest)
+                    # Parameterized so odd characters in filenames/URLs can't break the SQL
+                    session.execute(
+                        "INSERT INTO _csv_archive_log VALUES "
+                        "(?, ?, ?, CAST(? AS TIMESTAMPTZ), NULL, ?, NULL, ?)",
+                        [source_type, src_fn, f"/{subfolder}/{csv_name}", now, url, csv_base],
+                    )
+            save_log()
 
     # =========================================================================
     # DAILY REPORTS (SCADA + PRICE)
     # =========================================================================
 
     # Fetch file listing from AEMO
-    sql_with_retry("""
+    session.sql("""
         CREATE OR REPLACE TEMP TABLE daily_files_web AS
         WITH
           html_data AS (
@@ -189,67 +171,49 @@ def model(dbt, session):
         )
     """).fetchone()[0]
 
-    # Files heal_orphaned_daily_files flagged as logged-but-never-processed. Their markers
-    # are deliberately left in place (they are the evidence the data is missing), so the
-    # normal dedup below would skip them forever -- this list is how they get past it.
-    # See macros/heal_orphaned_daily_files.sql. Reading the list consumes it.
-    force_path = os.environ.get("ROOT_PATH", "/tmp") + "/force_download.txt"
-    forced_names = []
-    if os.path.exists(force_path):
-        with open(force_path, newline="") as f:
-            forced_names = [row[0] for row in csv_mod.reader(f) if row][1:]
-        os.remove(force_path)
-        log(f"Force re-download requested for {len(forced_names)} daily file(s)")
-
-    # GitHub historical backfill only runs on the daily pass (daily_refresh=true).
-    # The 30-min intraday cycle stays on the live AEMO listing only, so it never
-    # makes the 9 sequential GitHub API calls just to rediscover files it already has.
-    # A forced file is usually months old, so the archive is the only place it lives --
-    # always consult it when there is one to heal.
-    if forced_names or (daily_refresh and aemo_new < download_limit):
-        why = (f"{len(forced_names)} file(s) to force-heal" if forced_names
-               else f"AEMO has {aemo_new} new daily files (< {download_limit})")
-        log(f"Backfill enabled: {why}, checking GitHub archive")
-        sql_with_retry("""
-            INSERT INTO daily_files_web
-            WITH
-              api_responses AS (
-                SELECT 2018 AS year, content AS json_content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2018')
-                UNION ALL SELECT 2019, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2019')
-                UNION ALL SELECT 2020, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2020')
-                UNION ALL SELECT 2021, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2021')
-                UNION ALL SELECT 2022, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2022')
-                UNION ALL SELECT 2023, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2023')
-                UNION ALL SELECT 2024, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2024')
-                UNION ALL SELECT 2025, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2025')
-                UNION ALL SELECT 2026, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2026')
-              ),
-              parsed_files AS (
-                SELECT year, unnest(from_json(json_content, '["json"]')) AS file_info
-                FROM api_responses
-              )
-            SELECT
-              json_extract_string(file_info, '$.download_url') AS full_url,
-              split_part(json_extract_string(file_info, '$.name'), '.', 1) AS filename
-            FROM parsed_files
-            WHERE json_extract_string(file_info, '$.name') LIKE 'PUBLIC_DAILY%.zip'
-              AND split_part(json_extract_string(file_info, '$.name'), '.', 1)
-                  NOT IN (SELECT filename FROM daily_files_web)
-        """)
-
-    # Forced files bypass the dedup and sit on top of download_limit, so healing a hole
-    # never starves the normal daily intake.
-    forced_to_download = []
-    if forced_names:
-        quoted = ", ".join("'" + n.replace("'", "''") + "'" for n in forced_names)
-        forced_to_download = session.sql(f"""
-            SELECT max(full_url) AS full_url, filename
-            FROM daily_files_web WHERE filename IN ({quoted})
-            GROUP BY filename
-        """).fetchall()
-        for name in sorted(set(forced_names) - {r[1] for r in forced_to_download}):
-            log(f"WARN: forced re-download {name} is offered by neither AEMO nor the GitHub "
-                f"archive; it cannot be healed automatically")
+    if aemo_new < download_limit:
+        # Authenticated GitHub API calls get 5000 req/h vs 60 anonymous — shared CI
+        # runner IPs exhaust the anonymous quota and the listing calls fail.
+        github_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        if github_token:
+            session.sql(f"""
+                CREATE OR REPLACE SECRET github_api (
+                    TYPE HTTP,
+                    BEARER_TOKEN '{github_token}',
+                    SCOPE 'https://api.github.com'
+                )
+            """)
+        # Backfill from GitHub — opportunistic: if the listing API is unavailable
+        # (rate limit, outage), continue with the AEMO current files only.
+        try:
+            session.sql("""
+                INSERT INTO daily_files_web
+                WITH
+                  api_responses AS (
+                    SELECT 2018 AS year, content AS json_content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2018')
+                    UNION ALL SELECT 2019, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2019')
+                    UNION ALL SELECT 2020, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2020')
+                    UNION ALL SELECT 2021, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2021')
+                    UNION ALL SELECT 2022, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2022')
+                    UNION ALL SELECT 2023, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2023')
+                    UNION ALL SELECT 2024, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2024')
+                    UNION ALL SELECT 2025, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2025')
+                    UNION ALL SELECT 2026, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2026')
+                  ),
+                  parsed_files AS (
+                    SELECT year, unnest(from_json(json_content, '["json"]')) AS file_info
+                    FROM api_responses
+                  )
+                SELECT
+                  json_extract_string(file_info, '$.download_url') AS full_url,
+                  split_part(json_extract_string(file_info, '$.name'), '.', 1) AS filename
+                FROM parsed_files
+                WHERE json_extract_string(file_info, '$.name') LIKE 'PUBLIC_DAILY%.zip'
+                  AND split_part(json_extract_string(file_info, '$.name'), '.', 1)
+                      NOT IN (SELECT filename FROM daily_files_web)
+            """)
+        except Exception as e:
+            print(f"  WARN: GitHub backfill listing unavailable, continuing with AEMO files only: {e}")
 
     # Get new daily files to download
     daily_to_download = session.sql(f"""
@@ -260,13 +224,6 @@ def model(dbt, session):
         LIMIT {download_limit}
     """).fetchall()
 
-    # A forced file whose marker *was* successfully deleted also shows up as "new"; keep one.
-    forced_filenames = {r[1] for r in forced_to_download}
-    daily_to_download = forced_to_download + [
-        r for r in daily_to_download if r[1] not in forced_filenames
-    ]
-
-    log(f"Daily files: {len(daily_to_download)} new ({len(forced_to_download)} forced)")
     if daily_to_download:
         process_downloads(daily_to_download, 'daily', 'daily')
 
@@ -274,7 +231,7 @@ def model(dbt, session):
     # INTRADAY SCADA
     # =========================================================================
 
-    sql_with_retry("""
+    session.sql("""
         CREATE OR REPLACE TEMP TABLE intraday_scada_web AS
         WITH
           html_data AS (
@@ -298,10 +255,9 @@ def model(dbt, session):
         WHERE 'scada_today::' || filename NOT IN (
             SELECT source_type || '::' || source_filename FROM _csv_archive_log
         )
-        LIMIT {intraday_download_limit}
+        LIMIT {download_limit}
     """).fetchall()
 
-    log(f"Intraday SCADA files: {len(scada_to_download)} new")
     if scada_to_download:
         process_downloads(scada_to_download, 'scada_today', 'scada_today')
 
@@ -309,7 +265,7 @@ def model(dbt, session):
     # INTRADAY PRICE
     # =========================================================================
 
-    sql_with_retry("""
+    session.sql("""
         CREATE OR REPLACE TEMP TABLE intraday_price_web AS
         WITH
           html_data AS (
@@ -333,10 +289,9 @@ def model(dbt, session):
         WHERE 'price_today::' || filename NOT IN (
             SELECT source_type || '::' || source_filename FROM _csv_archive_log
         )
-        LIMIT {intraday_download_limit}
+        LIMIT {download_limit}
     """).fetchall()
 
-    log(f"Intraday Price files: {len(price_to_download)} new")
     if price_to_download:
         process_downloads(price_to_download, 'price_today', 'price_today')
 
@@ -344,24 +299,13 @@ def model(dbt, session):
     # DUID REFERENCE DATA (skip if downloaded less than 24 hours ago)
     # =========================================================================
 
-    # duid_data.csv is NOT a fixed URL like the others -- it is derived from the
-    # newest AEMO "NEM Registration and Exemption List" in djouallah/aemo_data.
-    # It used to be a static CSV on a patch branch of aemo_fabric, which silently
-    # went stale: dim_duid drifted behind AEMO's ~fortnightly republish and the
-    # fct_scada -> dim_duid relationship test warned on ~94M unmatched rows.
-    #
-    # The files are named .xls but are really xlsx (they start with PK), so the
-    # excel extension reads them directly. Sheet "PU and Scheduled Loads" carries
-    # exactly the four columns dim_duid wants: DUID, Region,
-    # "Fuel Source - Descriptor", Participant -- header on row 1.
-    #
-    # Read it all_varchar: the capacity columns use '-' as a placeholder, which
-    # fails type inference ("Could not convert string '-' to DOUBLE"). dim_duid
-    # only reads text columns, so inference buys nothing here.
-    REG_API = "https://api.github.com/repos/djouallah/aemo_data/contents/data/duid/registration"
-    REG_SHEET = "PU and Scheduled Loads"
-
     duid_sources = [
+        (
+            "duid_data",
+            "duid_data",
+            "https://raw.githubusercontent.com/djouallah/aemo_data/refs/heads/main/duid_data.csv",
+            "duid_data.csv",
+        ),
         (
             "duid_facilities",
             "facilities",
@@ -371,13 +315,13 @@ def model(dbt, session):
         (
             "duid_wa_energy",
             "WA_ENERGY",
-            "https://raw.githubusercontent.com/djouallah/aemo_fabric/refs/heads/main/WA_ENERGY.csv",
+            "https://raw.githubusercontent.com/djouallah/aemo_data/refs/heads/main/WA_ENERGY.csv",
             "WA_ENERGY.csv",
         ),
         (
             "duid_geo_data",
             "geo_data",
-            "https://raw.githubusercontent.com/djouallah/aemo_fabric/refs/heads/main/geo_data.csv",
+            "https://raw.githubusercontent.com/djouallah/aemo_data/refs/heads/main/geo_data.csv",
             "geo_data.csv",
         ),
     ]
@@ -388,150 +332,41 @@ def model(dbt, session):
         WHERE source_type LIKE 'duid_%'
     """).fetchone()[0]
 
-    # Also check if local files exist (ephemeral runners won't have them)
-    duid_files_exist = all(
-        os.path.exists(f"{csv_archive_path}/duid/{csv_fn}")
-        for csv_fn in ["duid_data.csv"] + [c for *_, c in duid_sources]
-    )
-    # On the 30-min intraday cycle, DUID reference data never changes and dim_duid
-    # is not rebuilt (gated to daily_refresh), so skip the download entirely. The
-    # 24h freshness skip below still helps persistent/local filesystems. A full
-    # refresh (non-incremental) always downloads so dim_duid can build from scratch.
     skip_duid = (
-        (dbt.is_incremental and not daily_refresh)
-        or (
-            duid_files_exist
-            and last_duid_download is not None
-            and (datetime.now() - last_duid_download).total_seconds() < 86400
-        )
+        last_duid_download is not None
+        and (datetime.now(last_duid_download.tzinfo) - last_duid_download).total_seconds() < 86400
     )
 
     if skip_duid:
-        log(f"DUID data is fresh (last download: {last_duid_download}), skipping")
+        print(f"  DUID data is fresh (last download: {last_duid_download}), skipping")
     else:
         duid_dir = f"{csv_archive_path}/duid"
-        os.makedirs(duid_dir, exist_ok=True)
-
-        duid_downloaded = []
-
-        # --- duid_data.csv from the newest registration workbook ---
-        duid_csv = f"{duid_dir}/duid_data.csv"
-        try:
-            # Names end _YYYYMMDD.xls, so lexicographic DESC is newest-first.
-            reg = sql_with_retry(f"""
-                SELECT json_extract_string(f, '$.name'),
-                       json_extract_string(f, '$.download_url')
-                FROM (
-                    SELECT unnest(from_json(content, '["json"]')) AS f
-                    FROM read_text('{REG_API}')
-                )
-                WHERE json_extract_string(f, '$.name') LIKE 'NEM-Registration-and-Exemption-List_%'
-                ORDER BY 1 DESC
-                LIMIT 1
-            """).fetchone()
-            if reg is None:
-                raise ValueError(f"no registration workbook found at {REG_API}")
-            reg_name, reg_url = reg
-
-            reg_local = f"{duid_dir}/{reg_name}"
-            urllib.request.urlretrieve(reg_url, reg_local)
-            session.sql("INSTALL excel; LOAD excel;")
-            session.sql(f"""
-                COPY (
-                    SELECT * FROM read_xlsx('{reg_local}',
-                        sheet = '{REG_SHEET}', header = true, all_varchar = true)
-                ) TO '{duid_csv}' (FORMAT CSV, HEADER)
-            """)
-            os.remove(reg_local)
-            log(f"DUID registration: {reg_name}")
-            # Record the workbook actually used, so the log says which vintage
-            # dim_duid was built from rather than a fixed URL.
-            duid_downloaded.append(("duid_data", "duid_data", reg_url, "duid_data.csv"))
-        except Exception as e:
-            if os.path.exists(duid_csv):
-                log(f"WARN: registration download failed, using existing duid_data.csv: {e}")
-            else:
-                raise
+        if not duid_dir.startswith(("az://", "abfss://")):
+            os.makedirs(duid_dir, exist_ok=True)
 
         for source_type, source_filename, url, csv_filename in duid_sources:
-            local_path = f"{csv_archive_path}/duid/{csv_filename}"
-            try:
-                session.sql(f"""
-                    COPY (
-                        SELECT * FROM read_csv_auto('{url}',
-                            null_padding=true, ignore_errors=true
-                            {", header=true" if source_filename == "WA_ENERGY" else ""})
-                    ) TO ('{local_path}') (FORMAT CSV, HEADER)
-                """)
-                duid_downloaded.append((source_type, source_filename, url, csv_filename))
-            except Exception as e:
-                if os.path.exists(local_path):
-                    log(f"WARN: {source_filename} download failed, using existing local file: {e}")
-                else:
-                    raise
+            session.sql(f"""
+                COPY (
+                    SELECT * FROM read_csv_auto('{url}',
+                        null_padding=true, ignore_errors=true
+                        {", header=true" if source_filename == "WA_ENERGY" else ""})
+                ) TO ('{csv_archive_path}/duid/{csv_filename}') (FORMAT CSV, HEADER)
+            """)
 
-        # Delete old DUID log entries and re-insert for successfully downloaded files
-        if duid_downloaded:
-            duid_types = sorted({st for st, *_ in duid_downloaded})
-            for st in duid_types:
-                session.sql(f"DELETE FROM _csv_archive_log WHERE source_type = '{st}'")
-
-            # The delete above only dedups the in-memory copy. The Iceberg table is
-            # append-only, so without this the duid_* markers stack one fresh copy per
-            # daily pass forever -- they had reached 2724 copies each. Plain IN-list
-            # predicate. Best-effort on OneLake: a delete-file commit may be rejected
-            # by the one-add-snapshot rule (BadRequest 400), and a stacked marker is
-            # cosmetic -- so a failed DELETE must never kill the daily pass. The
-            # capability probe (test.yml) reports whether DELETE works; verify there.
-            if dbt.is_incremental:
-                in_list = ", ".join(f"'{t}'" for t in duid_types)
-                count_sql = (f"SELECT count(*) FROM {dbt.this} "
-                             f"WHERE source_type IN ({in_list})")
-                before = session.sql(count_sql).fetchone()[0]
-                try:
-                    session.sql(f"DELETE FROM {dbt.this} WHERE source_type IN ({in_list})")
-                    after = session.sql(count_sql).fetchone()[0]
-                    log(f"DUID log markers: removed {before - after} of {before} stale rows")
-                    if after:
-                        log(f"WARN: {after} stale duid_* log rows survived the DELETE "
-                            f"(silent no-op on this Iceberg table)")
-                except Exception as e:
-                    log(f"WARN: stale duid_* marker DELETE rejected by the catalog "
-                        f"({str(e).splitlines()[0][:120]}); {before} stale rows remain")
-
-            now = datetime.now().isoformat()
-            for source_type, source_filename, url, csv_filename in duid_downloaded:
-                csv_base = csv_filename.rsplit(".", 1)[0]
-                session.sql(f"""
-                    INSERT INTO _csv_archive_log VALUES (
-                        '{source_type}', '{source_filename}',
-                        '/duid/{csv_filename}', '{now}'::TIMESTAMP,
-                        NULL, '{url}', NULL, '{csv_base}'
-                    )
-                """)
-                session.sql(f"""
-                    INSERT INTO _new_log_rows VALUES (
-                        '{source_type}', '{source_filename}',
-                        '/duid/{csv_filename}', '{now}'::TIMESTAMP,
-                        NULL, '{url}', NULL, '{csv_base}'
-                    )
-                """)
+        # Delete old DUID log entries and re-insert
+        session.sql("DELETE FROM _csv_archive_log WHERE source_type LIKE 'duid_%'")
+        now = datetime.now(timezone.utc).isoformat()
+        for source_type, source_filename, url, csv_filename in duid_sources:
+            csv_base = csv_filename.rsplit(".", 1)[0]
+            session.execute(
+                "INSERT INTO _csv_archive_log VALUES "
+                "(?, ?, ?, CAST(? AS TIMESTAMPTZ), NULL, ?, NULL, ?)",
+                [source_type, source_filename, f"/duid/{csv_filename}", now, url, csv_base],
+            )
 
     # =========================================================================
-    # Save pending entries to temp file for confirm_log_entries macro
+    # Save log to parquet and return
     # =========================================================================
-    if pending_entries:
-        pending_path = os.environ.get("ROOT_PATH", "/tmp") + "/pending_log_entries.csv"
-        with open(pending_path, "w", newline="") as f:
-            w = csv_mod.writer(f)
-            w.writerow(["source_type", "source_filename", "archive_path",
-                        "archived_at", "source_url", "csv_filename"])
-            for st, sf, ap, at, url, cf in pending_entries:
-                w.writerow([st, sf, ap, at, url, cf])
-        log(f"Wrote {len(pending_entries)} pending log entries to {pending_path}")
+    save_log()
 
-    # =========================================================================
-    # Return: new rows only (incremental) or all rows (full refresh)
-    # =========================================================================
-    result_table = "_new_log_rows" if dbt.is_incremental else "_csv_archive_log"
-    return session.sql(f"SELECT * FROM {result_table}")
+    return session.sql("SELECT * FROM _csv_archive_log")

@@ -18,6 +18,13 @@ on-run-start:
   - "{% if target.name != 'ci' %}SET GLOBAL azure_transport_option_type = '{{ env_var('AZURE_TRANSPORT_OPTION_TYPE', 'default') }}'{% else %}SELECT 1{% endif %}"
   - "{% if target.name != 'ci' %}SET GLOBAL temp_directory = '/tmp/duckdb_spill'{% else %}SELECT 1{% endif %}"
 
+# Environment contract (set by the workflows / a local shell):
+#   ONELAKE_TOKEN, ONELAKE_ENDPOINT, WAREHOUSE_PATH  -> profiles.yml (Iceberg attach)
+#   FILES_PATH                                       -> get_root_path/get_csv_archive_path macros
+#                                                       (the OneLake Files CSV archive)
+#   download_limit, process_limit                    -> staging download + fact ingestion batch size
+#   AZURE_TRANSPORT_OPTION_TYPE                      -> curl on GitHub runners, default elsewhere
+
 models:
   iceberg_as_code:
     staging:
@@ -25,6 +32,7 @@ models:
       +schema: landing
     dimensions:
       +materialized: table
+      +schema: mart
     marts:
       +materialized: incremental
       +schema: landing
