@@ -1,4 +1,4 @@
-name: Tests
+﻿name: Tests
 
 # dbt data-quality tests, decoupled from the data pipeline so a failing
 # assertion never blocks downloading (process_data) or publishing (import_data).
@@ -15,7 +15,7 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # OneLake Iceberg REST catalog. Each job mints its own short-lived ONELAKE_TOKEN from the
-  # OIDC login and resolves WAREHOUSE_PATH itself — $GITHUB_ENV does not cross jobs, and the
+  # OIDC login and resolves WAREHOUSE_PATH itself â€” $GITHUB_ENV does not cross jobs, and the
   # lakehouse id is never pinned in a variable (it changes if the lakehouse is recreated).
   ONELAKE_ENDPOINT: https://onelake.table.fabric.microsoft.com/iceberg
   AZURE_TRANSPORT_OPTION_TYPE: curl
@@ -52,7 +52,7 @@ jobs:
           python - <<'EOF' >> "$GITHUB_ENV"
           import os, duckrun
           ws_id, lh_name = os.environ["WS_ID"], os.environ["LH_NAME"]
-          lh_id = duckrun.workspace(ws_id).create_lakehouse(lh_name)
+          lh_id = duckrun.workspace(ws_id).create_lakehouse(lh_name, schemas=True)
           print(f"WAREHOUSE_PATH={ws_id}/{lh_id}")
           print(f"FILES_PATH=abfss://{ws_id}@onelake.dfs.fabric.microsoft.com/{lh_id}/Files")
           EOF
@@ -88,7 +88,7 @@ jobs:
           python - <<'EOF' >> "$GITHUB_ENV"
           import os, duckrun
           ws_id, lh_name = os.environ["WS_ID"], os.environ["LH_NAME"]
-          print(f"WAREHOUSE_PATH={ws_id}/{duckrun.workspace(ws_id).create_lakehouse(lh_name)}")
+          print(f"WAREHOUSE_PATH={ws_id}/{duckrun.workspace(ws_id).create_lakehouse(lh_name, schemas=True)}")
           EOF
         env:
           WS_ID: ${{ vars.WS_ID }}
@@ -143,7 +143,7 @@ jobs:
           python - <<'EOF' >> "$GITHUB_ENV"
           import os, duckrun
           ws_id, lh_name = os.environ["WS_ID"], os.environ["LH_NAME"]
-          print(f"WAREHOUSE_PATH={ws_id}/{duckrun.workspace(ws_id).create_lakehouse(lh_name)}")
+          print(f"WAREHOUSE_PATH={ws_id}/{duckrun.workspace(ws_id).create_lakehouse(lh_name, schemas=True)}")
           EOF
         env:
           WS_ID: ${{ vars.WS_ID }}

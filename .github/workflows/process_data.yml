@@ -65,13 +65,29 @@ jobs:
           echo "::add-mask::$TOKEN"
           echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
       - name: Resolve lakehouse
-        # Idempotent create-if-missing (schema-enabled), then export the paths the dbt run
-        # reads. duckrun self-acquires its own Fabric token from the Azure CLI login above.
+        # Idempotent create-if-missing (schema-enabled — the models write to landing/mart),
+        # then export the paths the dbt run reads. duckrun self-acquires its own Fabric token
+        # from the Azure CLI login above.
+        #
+        # Creating a lakehouse also provisions a SQL analytics endpoint, and that step can be
+        # refused for reasons unrelated to this repo ("try again later"). Steady state never
+        # takes this path — the lakehouse already exists and is found by name — so the retry
+        # only matters the first time, or after someone deletes it.
         run: |
           python - <<'EOF' >> "$GITHUB_ENV"
-          import os, duckrun
+          import os, sys, time, duckrun
           ws_id, lh_name = os.environ["WS_ID"], os.environ["LH_NAME"]
-          lh_id = duckrun.workspace(ws_id).create_lakehouse(lh_name)
+          ws = duckrun.workspace(ws_id)
+          for attempt in range(4):
+              try:
+                  lh_id = ws.create_lakehouse(lh_name, schemas=True)
+                  break
+              except Exception as e:
+                  if attempt == 3:
+                      raise
+                  print(f"::warning::lakehouse create failed ({str(e).splitlines()[0][:120]}) "
+                        f"— retrying in 30s", file=sys.stderr)
+                  time.sleep(30)
           print(f"WAREHOUSE_PATH={ws_id}/{lh_id}")
           print(f"FILES_PATH=abfss://{ws_id}@onelake.dfs.fabric.microsoft.com/{lh_id}/Files")
           EOF

@@ -1,8 +1,8 @@
-name: Import Data
+﻿name: Import Data
 
 on:
   schedule:
-    - cron: '0 20 * * *'  # 6am AEST (UTC+10) — daily full refresh
+    - cron: '0 20 * * *'  # 6am AEST (UTC+10) â€” daily full refresh
   workflow_run:
     workflows: ["Process Data"]
     types: [completed]
@@ -24,7 +24,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
     env:
-      # OneLake Iceberg REST catalog — only the .venv-read (export_*) steps touch it.
+      # OneLake Iceberg REST catalog â€” only the .venv-read (export_*) steps touch it.
       # WAREHOUSE_PATH is resolved at runtime below; ONELAKE_TOKEN is minted per run.
       ONELAKE_ENDPOINT: https://onelake.table.fabric.microsoft.com/iceberg
       AZURE_TRANSPORT_OPTION_TYPE: curl
@@ -52,13 +52,13 @@ jobs:
 
       - name: Resolve lakehouse
         # $GITHUB_ENV doesn't cross jobs, and the lakehouse id is never pinned in a
-        # variable — resolve it here (idempotent create-if-missing).
+        # variable â€” resolve it here (idempotent create-if-missing).
         run: |
           pip install -q duckrun
           python - <<'EOF' >> "$GITHUB_ENV"
           import os, duckrun
           ws_id, lh_name = os.environ["WS_ID"], os.environ["LH_NAME"]
-          print(f"WAREHOUSE_PATH={ws_id}/{duckrun.workspace(ws_id).create_lakehouse(lh_name)}")
+          print(f"WAREHOUSE_PATH={ws_id}/{duckrun.workspace(ws_id).create_lakehouse(lh_name, schemas=True)}")
           EOF
         env:
           WS_ID: ${{ vars.WS_ID }}
@@ -92,7 +92,7 @@ jobs:
           python -m venv .venv-write
           .venv-write/bin/pip install -q "duckdb==1.5.1"
 
-      # --- Phase 1: Intraday (always) + dims (daily only) → deploy immediately ---
+      # --- Phase 1: Intraday (always) + dims (daily only) â†’ deploy immediately ---
       - name: Export fct_scada_today
         run: .venv-read/bin/python scripts/cache_catalog.py export_scada_today
 
