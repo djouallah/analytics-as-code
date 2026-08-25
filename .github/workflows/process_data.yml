@@ -20,15 +20,21 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write   # OIDC federated login to Azure (OneLake tokens are minted per run)
 
 jobs:
   process_data:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      ICEBERG_REST_ENDPOINT: ${{ secrets.ICEBERG_REST_ENDPOINT }}
-      ICEBERG_TOKEN: ${{ secrets.ICEBERG_TOKEN }}
-      ICEBERG_WAREHOUSE: ${{ secrets.ICEBERG_WAREHOUSE }}
+      # OneLake Iceberg REST catalog — ids come from repo VARIABLES (public, not secrets);
+      # ONELAKE_TOKEN is minted below, per run, from the OIDC login.
+      ONELAKE_ENDPOINT: https://onelake.table.fabric.microsoft.com/iceberg
+      WAREHOUSE_PATH: ${{ vars.WS_ID }}/${{ vars.LH_ID }}
+      # The azure extension's default transport fails the OneLake TLS handshake on the
+      # runners; curl needs the runner's CA bundle.
+      AZURE_TRANSPORT_OPTION_TYPE: curl
+      CURL_CA_INFO: /etc/ssl/certs/ca-certificates.crt
       download_limit: "2"
       intraday_download_limit: "60"
     steps:
@@ -37,6 +43,17 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install dbt-duckdb "duckdb==1.6.0.dev365"
+      - name: Azure federated login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Mint OneLake token
+        run: |
+          TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
+          echo "::add-mask::$TOKEN"
+          echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
       - name: Determine daily-refresh mode
         id: mode
         run: |

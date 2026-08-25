@@ -14,9 +14,12 @@ import sys
 
 import duckdb
 
-ENDPOINT = os.environ["ICEBERG_REST_ENDPOINT"]
-TOKEN = os.environ["ICEBERG_TOKEN"]
-WAREHOUSE = os.environ["ICEBERG_WAREHOUSE"]
+ENDPOINT = os.environ["ONELAKE_ENDPOINT"]
+TOKEN = os.environ["ONELAKE_TOKEN"]
+WAREHOUSE = os.environ["WAREHOUSE_PATH"]      # "{workspace_id}/{lakehouse_id}"
+# The azure extension's default transport fails the OneLake TLS handshake on GitHub
+# runners; the workflows set this to curl.
+AZURE_TRANSPORT = os.environ.get("AZURE_TRANSPORT_OPTION_TYPE", "default")
 
 TABLE = "catalog.mart._capability_probe"
 
@@ -25,8 +28,18 @@ def connect():
     con = duckdb.connect(":memory:")
     con.install_extension("iceberg")
     con.load_extension("iceberg")
-    con.execute(f"CREATE SECRET (TYPE ICEBERG, TOKEN '{TOKEN}');")
-    con.execute(f"ATTACH '{WAREHOUSE}' AS catalog (TYPE ICEBERG, ENDPOINT '{ENDPOINT}');")
+    con.execute(f"SET GLOBAL azure_transport_option_type = '{AZURE_TRANSPORT}'")
+    # OneLake is attached with access_delegation_mode 'none' — the catalog vends no
+    # storage credentials, so the azure secret is what authorises the data-file I/O.
+    con.execute(
+        f"CREATE SECRET onelake_storage "
+        f"(TYPE azure, PROVIDER access_token, ACCESS_TOKEN '{TOKEN}')"
+    )
+    con.execute(
+        f"ATTACH '{WAREHOUSE}' AS catalog "
+        f"(TYPE ICEBERG, ENDPOINT '{ENDPOINT}', TOKEN '{TOKEN}', "
+        f"ACCESS_DELEGATION_MODE 'none')"
+    )
     return con
 
 

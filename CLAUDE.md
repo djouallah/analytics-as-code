@@ -1,10 +1,17 @@
 # CLAUDE.md — iceberg_as_code
 
 ## Quick Reference
-- **Stack:** dbt-duckdb, Iceberg REST catalog
+- **Stack:** dbt-duckdb, **OneLake Iceberg REST catalog** (Microsoft Fabric workspace `power`,
+  lakehouse `nem` — its own lakehouse, deliberately separate from dbt_fabric_python_iceberg's
+  `data`, because both repos write identically-named tables in `landing`/`mart`)
 - **Run:** `dbt build --target ci --profiles-dir .` (test, in-memory)
-- **Run:** `dbt build --target dev --profiles-dir .` (writes to Iceberg)
+- **Run:** `dbt build --target dev --profiles-dir .` (writes to Iceberg; needs the OneLake env vars below)
 - **Schemas:** `mart` (dim_calendar, dim_duid) / `landing` (facts, staging)
+- **Writes are insert-only merges** (`WHEN MATCHED DO NOTHING`): the OneLake catalog accepts
+  one add-snapshot per commit and rejects commits mixing delete files + data files
+  (BadRequest 400). Same pattern as dbt_fabric_python_iceberg. `dim_calendar` keeps
+  `delete+insert` — its NOT-IN filter means incoming rows never match, so commits stay pure
+  appends.
 
 ## Architecture
 1. `stg_csv_archive_log.py` (Python model) downloads data from AEMO + GitHub, stores as gzipped CSVs locally
@@ -27,13 +34,21 @@
 6. **Daily compaction:** the `compact` job in `test.yml` runs `scripts/compact_iceberg.py`
    after a daily pass (or on a `force_compact=true` dispatch), folding each table's small data
    files into ~128MiB ones via `iceberg_rewrite_data_files()`. It lives in *that* workflow so the
-   workflow-level `process-data` concurrency group covers it — compaction commits optimistically
-   and the `delete+insert` models remove data files, so an overlap with an intraday run would fail
-   one side. It is `continue-on-error` and the script always exits 0: maintenance must never fail
-   the pipeline or block `import_data.yml`'s `workflow_run` gate. Note there is no snapshot
-   expiry, so reads get faster but storage doesn't shrink.
+   workflow-level `process-data` concurrency group covers it — compaction commits optimistically,
+   so an overlap with an intraday load could fail one side. It is `continue-on-error` and the
+   script always exits 0: maintenance must never fail the pipeline or block `import_data.yml`'s
+   `workflow_run` gate. Note there is no snapshot expiry, so reads get faster but storage
+   doesn't shrink.
 
 ## Iceberg DELETE is not reliable here
+**Catalog-history note (2026-08):** the observations below were made against the previous
+(R2-backed) REST catalog. The catalog is now OneLake, which has its own DELETE behaviour —
+delete-file commits may be rejected outright (one-add-snapshot rule) rather than silently
+no-op'd, which is why the `duid_*` cleanup DELETE in `stg_csv_archive_log.py` is wrapped in
+try/except and the fact models are insert-only merges. The nightly capability probe and the
+duid cleanup's before/after counts are the standing evidence for what OneLake actually does;
+revalidate against those before leaning on any claim in this section.
+
 `DELETE` against this catalog **succeeds without applying** when the predicate contains
 subqueries over *other* Iceberg tables. `heal_orphaned_daily_files` did exactly that and was
 a no-op for weeks while logging "deleted 1 entries" every night — four consecutive daily
@@ -53,10 +68,18 @@ Plain `IN`-list / local-relation predicates *do* work — `dim_duid`'s `delete+i
 `scripts/catalog_capabilities.py` probes CREATE/INSERT/DELETE/UPDATE/MERGE/DROP against a
 freshly created table each night — useful, but it does **not** exercise this failure mode.
 
-## Required Secrets (GitHub Actions)
-- `ICEBERG_REST_ENDPOINT` — REST catalog URL (e.g. `https://polaris.example.com/api/catalog`)
-- `ICEBERG_TOKEN` — Bearer token for catalog auth
-- `ICEBERG_WAREHOUSE` — Warehouse path in the catalog
+## Auth (GitHub Actions) — no secrets
+OIDC only: `azure/login@v2` with a federated credential, then each job mints a short-lived
+`ONELAKE_TOKEN` via `az account get-access-token --resource https://storage.azure.com/`.
+The ids live in repository **variables** (public identifiers, not secrets):
+- `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` — the tenant + Entra app (`dbt_fabric_python_iceberg`,
+  no client secret; shared with the sibling repo)
+- `WS_ID`, `LH_ID` — Fabric workspace `power` / lakehouse `nem`; the workflows derive
+  `WAREHOUSE_PATH={WS_ID}/{LH_ID}`
+Env contract consumed by profiles.yml and the scripts: `ONELAKE_ENDPOINT`, `ONELAKE_TOKEN`,
+`WAREHOUSE_PATH`, plus `AZURE_TRANSPORT_OPTION_TYPE=curl` + `CURL_CA_INFO` on runners (the
+azure extension's default transport fails the OneLake TLS handshake).
+`NEMTRACKER_TOKEN` (gh-pages deploy) is the one remaining true secret.
 
 ## Models (7)
 | Model | Schema | Materialization |
@@ -67,7 +90,7 @@ freshly created table each night — useful, but it does **not** exercise this f
 | fct_scada, fct_price | landing | incremental (by file) |
 | fct_scada_today, fct_price_today | landing | incremental (by file) |
 
-## Profiles: ci (in-memory, no Iceberg), dev/prod (Iceberg REST catalog)
+## Profiles: ci (in-memory, no Iceberg), dev/prod (OneLake Iceberg REST catalog)
 
 ## Key Patterns
 - Pre-hooks set DuckDB VARIABLEs with file paths for incremental processing

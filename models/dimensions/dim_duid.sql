@@ -2,22 +2,22 @@
 
 {# DUID reference data only changes ~daily, and the raw CSVs only exist on the    #}
 {# daily pass (stg gates the download to daily_refresh). On the 30-min intraday   #}
-{# cycle the model returns nothing, so delete+insert is a no-op and the existing  #}
+{# cycle the model returns nothing, so the merge is a no-op and the existing      #}
 {# Iceberg table is left untouched.                                              #}
-{#                                                                                #}
-{# On the daily pass we rebuild with delete+insert keyed on DUID. The incoming    #}
-{# set is every current DUID, so DELETE removes ALL existing rows per DUID --      #}
-{# including the duplicate copies an older duckdb's broken Iceberg DELETE had      #}
-{# stacked -- and INSERT writes one clean deduped row each. (CREATE OR REPLACE is  #}
-{# unsupported on this Iceberg catalog; DELETE + INSERT both work -- see the       #}
-{# capability probe in test.yml.)                                                 #}
 {% set daily_refresh = env_var('daily_refresh', 'false') == 'true' %}
 
 {%- set should_rebuild = (not is_incremental()) or daily_refresh -%}
 
+-- Insert-only merge on DUID (WHEN MATCHED DO NOTHING), same pattern as the facts:
+-- new DUIDs are inserted, existing ones are never touched -- every commit stays a
+-- single append snapshot, which is all the OneLake catalog accepts. Consequence:
+-- attribute changes (region/fuel/geo) never update in place;
+-- `dbt run --full-refresh -s dim_duid` is the reconciliation lever.
+-- Same pattern as dbt_fabric_python_iceberg's dim_duid.
 {{ config(
     materialized='incremental',
-    incremental_strategy='delete+insert',
+    incremental_strategy='merge',
+    merge_clauses={'when_matched': [{'action': 'do_nothing'}]},
     unique_key=['DUID'],
     on_schema_change='sync_all_columns'
 ) }}

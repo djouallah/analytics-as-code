@@ -1,9 +1,14 @@
 -- depends_on: {{ ref('stg_csv_archive_log') }}
 
+-- Insert-only merge (WHEN MATCHED THEN DO NOTHING): every commit stays a single
+-- append snapshot -- the OneLake catalog rejects commits that mix delete files and
+-- data files (BadRequest 400) -- while re-processed files dedupe on the unique_key
+-- instead of double-inserting. Same pattern as dbt_fabric_python_iceberg.
 {{ config(
     materialized='incremental',
+    incremental_strategy='merge',
+    merge_clauses={'when_matched': [{'action': 'do_nothing'}]},
     unique_key=['file', 'DUID', 'SETTLEMENTDATE'],
-    incremental_strategy='delete+insert',
     pre_hook="SET VARIABLE scada_today_paths = (SELECT COALESCE(NULLIF(list(file), []), ['']) FROM glob('{{ get_csv_archive_path() }}/scada_today/*.gz'))"
 ) }}
 

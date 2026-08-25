@@ -68,11 +68,16 @@ The same approach — dbt-duckdb transforming data — has been applied on [Micr
 
 ### Environment Variables
 
+The catalog is the **OneLake Iceberg REST catalog** (a Microsoft Fabric lakehouse). In CI the
+values come from GitHub repository **variables** (`WS_ID`, `LH_ID`, `AZURE_TENANT_ID`,
+`AZURE_CLIENT_ID` — public identifiers, no secrets) plus a per-run token minted after an OIDC
+federated `azure/login`:
+
 | Variable | Description |
 |----------|-------------|
-| `ICEBERG_REST_ENDPOINT` | REST catalog URL |
-| `ICEBERG_TOKEN` | Bearer token for catalog auth |
-| `ICEBERG_WAREHOUSE` | Warehouse path in the catalog |
+| `ONELAKE_ENDPOINT` | `https://onelake.table.fabric.microsoft.com/iceberg` |
+| `WAREHOUSE_PATH` | `{workspace_id}/{lakehouse_id}` |
+| `ONELAKE_TOKEN` | Short-lived Azure storage token (minted per run, never stored) |
 
 ### Local Development
 
@@ -82,9 +87,11 @@ pip install dbt-duckdb
 # Validate SQL in-memory (no catalog needed)
 dbt build --target ci --profiles-dir .
 
-# Write to Iceberg catalog
-export ICEBERG_REST_ENDPOINT=https://your-catalog/api/catalog
-export ICEBERG_TOKEN=your-token
-export ICEBERG_WAREHOUSE=your-warehouse
+# Write to the OneLake Iceberg catalog (az login with an identity that can
+# access the Fabric workspace)
+az login
+export ONELAKE_ENDPOINT=https://onelake.table.fabric.microsoft.com/iceberg
+export WAREHOUSE_PATH=<workspace-guid>/<lakehouse-guid>
+export ONELAKE_TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
 dbt build --target dev --profiles-dir .
 ```

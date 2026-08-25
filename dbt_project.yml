@@ -10,6 +10,14 @@ clean-targets:
   - "target"
   - "dbt_packages"
 
+# OneLake needs the curl transport on GitHub runners (the azure extension's default
+# transport fails the OneLake TLS handshake), and temp_directory must be set before the
+# first spill. Guarded off the ci target, which runs plain in-memory DuckDB with no
+# azure extension.
+on-run-start:
+  - "{% if target.name != 'ci' %}SET GLOBAL azure_transport_option_type = '{{ env_var('AZURE_TRANSPORT_OPTION_TYPE', 'default') }}'{% else %}SELECT 1{% endif %}"
+  - "{% if target.name != 'ci' %}SET GLOBAL temp_directory = '/tmp/duckdb_spill'{% else %}SELECT 1{% endif %}"
+
 models:
   iceberg_as_code:
     staging:

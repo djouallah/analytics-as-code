@@ -11,6 +11,15 @@ iceberg_as_code:
         - httpfs
         - json
 
+    # dev and prod both attach the OneLake Iceberg REST catalog. Environment contract
+    # (set by the workflows; locally: az login + mint a storage token yourself):
+    #   WAREHOUSE_PATH   -> "{workspace_id}/{lakehouse_id}"
+    #   ONELAKE_ENDPOINT -> https://onelake.table.fabric.microsoft.com/iceberg
+    #   ONELAKE_TOKEN    -> az account get-access-token --resource https://storage.azure.com/
+    # access_delegation_mode 'none' means the catalog vends no storage credentials — the
+    # azure secret below is what authorises the actual data-file reads/writes.
+    # Use int 0/1 for the attach options, not bools: dbt-duckdb silently drops
+    # boolean-false attach options.
     dev:
       type: duckdb
       path: ':memory:'
@@ -21,13 +30,22 @@ iceberg_as_code:
         - httpfs
         - json
         - iceberg
+      secrets:
+        - type: azure
+          name: onelake_storage
+          provider: access_token
+          access_token: "{{ env_var('ONELAKE_TOKEN') }}"
       attach:
-        - path: "{{ env_var('ICEBERG_WAREHOUSE') }}"
+        - path: "{{ env_var('WAREHOUSE_PATH') }}"
           alias: iceberg_catalog
           type: iceberg
           options:
-            endpoint: "{{ env_var('ICEBERG_REST_ENDPOINT') }}"
-            token: "{{ env_var('ICEBERG_TOKEN') }}"
+            endpoint: "{{ env_var('ONELAKE_ENDPOINT') }}"
+            token: "{{ env_var('ONELAKE_TOKEN') }}"
+            access_delegation_mode: 'none'
+            stage_create_tables: 0
+            skip_create_table_metadata_updates: 1
+            default_schema: dbo
       database: iceberg_catalog
 
     prod:
@@ -40,11 +58,20 @@ iceberg_as_code:
         - httpfs
         - json
         - iceberg
+      secrets:
+        - type: azure
+          name: onelake_storage
+          provider: access_token
+          access_token: "{{ env_var('ONELAKE_TOKEN') }}"
       attach:
-        - path: "{{ env_var('ICEBERG_WAREHOUSE') }}"
+        - path: "{{ env_var('WAREHOUSE_PATH') }}"
           alias: iceberg_catalog
           type: iceberg
           options:
-            endpoint: "{{ env_var('ICEBERG_REST_ENDPOINT') }}"
-            token: "{{ env_var('ICEBERG_TOKEN') }}"
+            endpoint: "{{ env_var('ONELAKE_ENDPOINT') }}"
+            token: "{{ env_var('ONELAKE_TOKEN') }}"
+            access_delegation_mode: 'none'
+            stage_create_tables: 0
+            skip_create_table_metadata_updates: 1
+            default_schema: dbo
       database: iceberg_catalog

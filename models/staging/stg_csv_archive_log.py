@@ -478,21 +478,26 @@ def model(dbt, session):
 
             # The delete above only dedups the in-memory copy. The Iceberg table is
             # append-only, so without this the duid_* markers stack one fresh copy per
-            # daily pass forever -- they had reached 2724 copies each. This is the plain
-            # IN-list predicate form that dim_duid's delete+insert already proves works
-            # against this catalog, unlike the cross-table subquery in
-            # heal_orphaned_daily_files. Verify rather than assume.
+            # daily pass forever -- they had reached 2724 copies each. Plain IN-list
+            # predicate. Best-effort on OneLake: a delete-file commit may be rejected
+            # by the one-add-snapshot rule (BadRequest 400), and a stacked marker is
+            # cosmetic -- so a failed DELETE must never kill the daily pass. The
+            # capability probe (test.yml) reports whether DELETE works; verify there.
             if dbt.is_incremental:
                 in_list = ", ".join(f"'{t}'" for t in duid_types)
                 count_sql = (f"SELECT count(*) FROM {dbt.this} "
                              f"WHERE source_type IN ({in_list})")
                 before = session.sql(count_sql).fetchone()[0]
-                session.sql(f"DELETE FROM {dbt.this} WHERE source_type IN ({in_list})")
-                after = session.sql(count_sql).fetchone()[0]
-                log(f"DUID log markers: removed {before - after} of {before} stale rows")
-                if after:
-                    log(f"WARN: {after} stale duid_* log rows survived the DELETE "
-                        f"(silent no-op on this Iceberg table)")
+                try:
+                    session.sql(f"DELETE FROM {dbt.this} WHERE source_type IN ({in_list})")
+                    after = session.sql(count_sql).fetchone()[0]
+                    log(f"DUID log markers: removed {before - after} of {before} stale rows")
+                    if after:
+                        log(f"WARN: {after} stale duid_* log rows survived the DELETE "
+                            f"(silent no-op on this Iceberg table)")
+                except Exception as e:
+                    log(f"WARN: stale duid_* marker DELETE rejected by the catalog "
+                        f"({str(e).splitlines()[0][:120]}); {before} stale rows remain")
 
             now = datetime.now().isoformat()
             for source_type, source_filename, url, csv_filename in duid_downloaded:
