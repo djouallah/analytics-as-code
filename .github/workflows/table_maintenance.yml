@@ -1,12 +1,16 @@
-﻿name: Tests
+﻿name: Table Maintenance
 
-# dbt data-quality tests, decoupled from the data pipeline so a failing
-# assertion never blocks downloading (process_data) or publishing (import_data).
-# Also probes what the Iceberg REST catalog actually supports.
+# Daily upkeep of the Iceberg tables — compaction then snapshot expiry — plus the dbt
+# data-quality tests, which are here for the same reason: both are decoupled from the
+# data pipeline so neither a failing assertion nor a slow rewrite ever blocks
+# downloading (process_data) or publishing (import_data).
+# The catalog capability probe used to run here too; it is standing evidence that only
+# needs re-running when the catalog or the duckdb pin changes, so it now lives in
+# .github/workflows/catalog_capabilities.yml and is manual.
 
 on:
   schedule:
-    # :15, deliberately off process_data's :00/:30 cadence. The compact job shares
+    # :15, deliberately off process_data's :00/:30 cadence. The maintenance job shares
     # process_data's concurrency group, so a head-on start at :00 would just make
     # one of them queue; starting mid-slot lets the :00 load finish first.
     - cron: '15 21 * * *'   # ~1h after the daily import (20:00 UTC)
@@ -50,43 +54,19 @@ jobs:
       - name: dbt test
         run: dbt test --target prod --profiles-dir .
 
-  catalog_capabilities:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      # Same pin as the rest of the pipeline; it's well past 1.5.3, so MERGE is
-      # still exercised against the catalog.
-      - run: pip install "duckdb==1.6.0.dev365"
-      - name: Azure federated login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          allow-no-subscriptions: true
-      - name: Mint OneLake token
-        run: |
-          TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
-          echo "::add-mask::$TOKEN"
-          echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
-      - name: Probe catalog capabilities (CREATE / INSERT / DELETE / UPDATE / MERGE / CREATE OR REPLACE / DROP)
-        run: python scripts/catalog_capabilities.py
-
-  # Daily Iceberg compaction. It lived in process_data.yml so the workflow-level
-  # concurrency group would cover it, but holding that group for the length of a
-  # compaction run queued and cancelled the 30-min data loads. Here it gets the same
+  # Daily Iceberg compaction, then snapshot expiry. It lived in process_data.yml so the
+  # workflow-level concurrency group would cover it, but holding that group for the length
+  # of a compaction run queued and cancelled the 30-min data loads. Here it gets the same
   # protection from a job-level group, without blocking process_data CI or dbt_test.
-  compact:
+  compact_and_expire:
     runs-on: ubuntu-latest
     # iceberg_rewrite_data_files commits optimistically, so overlapping a load would fail
     # one side.
     concurrency:
       group: process-data
       cancel-in-progress: false
-    # Maintenance must never fail the test workflow.
+    # Maintenance must never fail this workflow — a red dbt_test is a finding, a red
+    # compaction or expiry is just "the tables stay as they are until tomorrow".
     continue-on-error: true
     # Must exceed COMPACT_BUDGET_MINUTES: the script stops starting new tables at the
     # budget and needs slack to finish the one in flight and print its report.
@@ -120,3 +100,13 @@ jobs:
           echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
       - name: Compact Iceberg data files
         run: python scripts/compact_iceberg.py
+      - name: Install pyiceberg
+        # Installed here rather than alongside duckdb on purpose: a resolution failure
+        # must not abort the compaction step above.
+        run: pip install "pyiceberg==0.11.1"
+      - name: Expire old snapshots
+        # duckdb-iceberg has no snapshot expiry yet, so pyiceberg does it. Must run after
+        # compaction — that is what makes the previous snapshots redundant.
+        env:
+          EXPIRE_OLDER_THAN_DAYS: "1"
+        run: python scripts/expire_snapshots.py

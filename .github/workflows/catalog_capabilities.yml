@@ -1,0 +1,51 @@
+name: Catalog Capabilities
+
+# What the OneLake Iceberg REST catalog actually supports (CREATE / INSERT / DELETE /
+# UPDATE / MERGE / CREATE OR REPLACE / DROP), probed against a scratch table.
+#
+# Manual on purpose. This is standing evidence, not a monitor: the answer only moves when
+# the catalog or the duckdb pin moves, and every run creates and drops a table in `mart`.
+# Re-run it after a duckdb version bump, after a Fabric-side change, or before relying on
+# any claim in CLAUDE.md's "Don't design anything that needs DELETE" section.
+
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # workspace/lakehouse ids come from repo VARIABLES (public ids, not secrets); the token
+  # is minted per run from the OIDC login.
+  ONELAKE_ENDPOINT: https://onelake.table.fabric.microsoft.com/iceberg
+  WAREHOUSE_PATH: ${{ vars.WS_ID }}/${{ vars.LH_ID }}
+  AZURE_TRANSPORT_OPTION_TYPE: curl
+  CURL_CA_INFO: /etc/ssl/certs/ca-certificates.crt
+
+permissions:
+  contents: read
+  id-token: write   # OIDC federated login to Azure (OneLake tokens are minted per run)
+
+jobs:
+  catalog_capabilities:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Same pin as the rest of the pipeline; it's well past 1.5.3, so MERGE is
+      # still exercised against the catalog.
+      - run: pip install "duckdb==1.6.0.dev365"
+      - name: Azure federated login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Mint OneLake token
+        run: |
+          TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
+          echo "::add-mask::$TOKEN"
+          echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+      - name: Probe catalog capabilities (CREATE / INSERT / DELETE / UPDATE / MERGE / CREATE OR REPLACE / DROP)
+        run: python scripts/catalog_capabilities.py

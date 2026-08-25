@@ -26,8 +26,11 @@ manifest, which on a fragmented table is the whole problem we're here to fix.
 Known limitations of the upstream function:
   - manifest-level column statistics are not populated for rewritten files
   - V3 tables and partition spec evolution are unsupported
-  - there is no snapshot expiry, so the pre-compaction data files stay in OneLake until
-    something expires them. Reads get faster immediately; storage does not shrink.
+  - there is no snapshot expiry — the rewrite adds a snapshot and leaves every previous one
+    in place, still referencing the pre-compaction files. expire_snapshots.py runs straight
+    after this (pyiceberg, since duckdb-iceberg can't) and drops those snapshots from the
+    metadata. Even then the orphaned files themselves stay in OneLake: reads get faster,
+    storage does not shrink.
 
 Never fails the pipeline: every table is best-effort and errors are printed, not raised, so
 a bad run just means the tables stay fragmented until tomorrow.
@@ -41,6 +44,8 @@ import sys
 import time
 
 import duckdb
+
+from iceberg_tables import TABLES
 
 ENDPOINT = os.environ["ONELAKE_ENDPOINT"]
 TOKEN = os.environ["ONELAKE_TOKEN"]
@@ -61,21 +66,6 @@ BUDGET_MINUTES = float(os.environ.get("COMPACT_BUDGET_MINUTES", "70"))
 # transport fails the OneLake TLS handshake). dbt sets this via on-run-start in
 # dbt_project.yml; this script is not a dbt run, so it sets it itself.
 AZURE_TRANSPORT = os.environ.get("AZURE_TRANSPORT_OPTION_TYPE", "default")
-
-# Hand-ordered. We know the tables; discovering them costs a metadata scan each and buys
-# nothing. A new model just gets added here.
-#
-# Order by expected MANIFEST count, not data size — prime() enumerates manifests, so
-# that's the cost driver. The dashboard tables go first because they matter most.
-TABLES = [
-    "landing.fct_price_today",
-    "landing.fct_scada_today",
-    "mart.dim_calendar",
-    "mart.dim_duid",
-    "landing.stg_csv_archive_log",
-    "landing.fct_price",
-    "landing.fct_scada",
-]
 
 
 def connect():

@@ -44,15 +44,23 @@ Three deliberate local differences, all of which must survive a re-copy:
 3. Work is discovered from the **log table**, not a filesystem glob: each fact model's pre-hook
    builds its path list from `stg_csv_archive_log.archive_path` filtered by
    `csv_filename NOT IN (SELECT file FROM {{ this }})`.
-4. `process_data.yml` runs `dbt run` (tests live in `test.yml`), writing straight to the
-   OneLake Iceberg catalog. No `dbt run-operation` anywhere — there are no operation macros.
-5. **Compaction:** the `compact` job in `test.yml` runs `scripts/compact_iceberg.py`, folding
-   each table's small data files together via `iceberg_rewrite_data_files()`. It lives in
-   *that* workflow but takes a job-level `process-data` concurrency group — compaction commits
-   optimistically, so an overlap with a load could fail one side. It is `continue-on-error` and
-   the script always exits 0: maintenance must never fail the pipeline or block
-   `import_data.yml`'s `workflow_run` gate. There is no snapshot expiry, so reads get faster
-   but storage doesn't shrink.
+4. `process_data.yml` runs `dbt run` (tests live in `table_maintenance.yml`), writing straight
+   to the OneLake Iceberg catalog. No `dbt run-operation` anywhere — there are no operation
+   macros.
+5. **Maintenance:** the `compact_and_expire` job in `table_maintenance.yml` runs
+   `scripts/compact_iceberg.py` (folding small data files together via
+   `iceberg_rewrite_data_files()`) and then `scripts/expire_snapshots.py`. Order is not
+   negotiable: the rewrite adds a snapshot and leaves the previous ones pointing at the files
+   it replaced, so expiry is what makes compaction worth anything. Expiry is **pyiceberg**
+   (`pyiceberg==0.11.1`) because duckdb-iceberg has no `expire_snapshots` yet, and pyiceberg
+   gates `commit_table` on the endpoint list OneLake advertises (GET/HEAD only) — the script
+   overrides that gate so the catalog, not the client, decides. It is metadata-only: snapshots
+   leave the metadata JSON, the orphaned data files stay, so reads get faster but storage
+   doesn't shrink. The job takes a job-level `process-data` concurrency group — both operations
+   commit optimistically, so an overlap with a load could fail one side. It is
+   `continue-on-error` and both scripts always exit 0: maintenance must never fail the pipeline
+   or block `import_data.yml`'s `workflow_run` gate. Both scripts read their table list from
+   `scripts/iceberg_tables.py`; a new model gets added there once.
 
 ## Don't design anything that needs DELETE
 Every write is an append. On OneLake a commit may carry only one add-snapshot, so anything
@@ -63,8 +71,10 @@ Iceberg tables, silently no-op'ing for weeks. Both histories point the same way:
 path so it needs no `DELETE`, and never assume one landed — re-count and log the delta.
 
 `scripts/catalog_capabilities.py` probes CREATE/INSERT/DELETE/UPDATE/MERGE/DROP against a
-freshly created table each night. That matrix is the standing evidence for what this catalog
-actually does; check it before relying on any claim here.
+freshly created table. That matrix is the standing evidence for what this catalog actually
+does; check it before relying on any claim here. It runs **on demand** —
+`catalog_capabilities.yml` is `workflow_dispatch`-only, since the answer only moves when the
+catalog or the duckdb pin moves. Re-run it after either, and read the run's log.
 
 ## Auth (GitHub Actions) — no secrets
 OIDC only: `azure/login@v2` with a federated credential, then each job mints a short-lived
@@ -106,13 +116,17 @@ place; `dbt run --full-refresh -s dim_duid` is the reconciliation lever.
 
 ## DuckDB version policy
 Everything is pinned — no workflow floats on "latest".
-- **`process_data.yml`, `build.yml`, `test.yml` pin `duckdb==1.6.0.dev365`.** That nightly is
-  required, not incidental: `iceberg_rewrite_data_files()` (duckdb-iceberg#1035, merged
-  2026-07-09) isn't in a stable release yet, and the compaction job needs it. Pinning the
-  same build everywhere means the catalog is only ever touched by one known duckdb. The
-  `iceberg` extension comes from `core_nightly` and its binary is keyed to the duckdb build,
-  so pinning duckdb pins the extension too. Collapse all three back to a stable release once
-  1.6.0 ships.
+- **`process_data.yml`, `build.yml`, `table_maintenance.yml`, `catalog_capabilities.yml` pin
+  `duckdb==1.6.0.dev365`.** That nightly is required, not incidental:
+  `iceberg_rewrite_data_files()` (duckdb-iceberg#1035, merged 2026-07-09) isn't in a stable
+  release yet, and the compaction job needs it. Pinning the same build everywhere means the
+  catalog is only ever touched by one known duckdb. The `iceberg` extension comes from
+  `core_nightly` and its binary is keyed to the duckdb build, so pinning duckdb pins the
+  extension too. Collapse them back to a stable release once 1.6.0 ships.
+- **`pyiceberg==0.11.1`** (snapshot expiry, `table_maintenance.yml` only) is pinned on its own
+  schedule — it never touches the duckdb file format, only the REST catalog, and the script
+  reaches into `RestCatalog._supported_endpoints`, which is exactly the kind of internal a
+  floating version breaks.
 - **`import_data.yml` stays on `duckdb==1.5.1`.** Different reason, deliberately unchanged: it
   builds the `.duckdb` files deployed to the NemTracker dashboard, read client-side by
   DuckDB-WASM, so the on-disk file format must stay stable for the *already deployed* reader.

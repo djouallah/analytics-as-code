@@ -187,5 +187,6 @@ jobs:
           publish_dir: ./deploy_manifest
           keep_files: true
 
-      # Data-quality tests live in their own workflow (.github/workflows/test.yml)
-      # so a failing assertion never blocks publishing the dashboard.
+      # Data-quality tests live in their own workflow
+      # (.github/workflows/table_maintenance.yml) so a failing assertion never blocks
+      # publishing the dashboard.
