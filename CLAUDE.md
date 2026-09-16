@@ -42,8 +42,12 @@ Three deliberate local differences, all of which must survive a re-copy:
    the last one is < 24h old, and the GitHub historical backfill listing only runs when AEMO
    returned fewer than `download_limit` new files. There is no `daily_refresh` env var.
 3. Work is discovered from the **log table**, not a filesystem glob: each fact model's pre-hook
-   builds its path list from `stg_csv_archive_log.archive_path` filtered by
-   `csv_filename NOT IN (SELECT file FROM {{ this }})`.
+   builds its path list from `SELECT DISTINCT stg_csv_archive_log.archive_path` filtered by
+   `csv_filename NOT IN (SELECT file FROM {{ this }})`. The DISTINCT is load-bearing: the
+   staging model re-appends the *whole* log every run, so a file that waits K runs has K log
+   rows, and MERGE only dedupes against the target, never within a batch. Without it a single
+   fact-model failure (fct_scada, 2026-08-25 09:43 UTC, network error) turned into 74.9M
+   duplicate keys as the backlog was read 2-N times per batch.
 4. `process_data.yml` runs `dbt run` (tests live in `table_maintenance.yml`), writing straight
    to the OneLake Iceberg catalog. No `dbt run-operation` anywhere — there are no operation
    macros.
@@ -104,7 +108,11 @@ transport fails the OneLake TLS handshake).
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
 
 `dim_duid`'s insert-only merge means attribute changes (region/fuel/geo) never update in
-place; `dbt run --full-refresh -s dim_duid` is the reconciliation lever.
+place. **Rebuilding a table = dispatch `process_data.yml` with `rebuild=<table>`**: it runs
+`scripts/rebuild_table.py` (DROP, names checked against `scripts/iceberg_tables.py`) and the
+dbt run that follows recreates the table with a plain CTAS, refilling at `process_limit`
+files per run. Do not use `dbt run --full-refresh`: dbt-duckdb builds `<table>__dbt_tmp` and
+RENAMEs it into place, and RENAME is not in the probed capability matrix.
 
 ## Profiles: ci (in-memory, no Iceberg), dev/prod (OneLake Iceberg REST catalog)
 

@@ -18,6 +18,9 @@ on:
       process_limit:
         description: 'Files turned into fact rows per feed per run (blank = 300)'
         required: false
+      rebuild:
+        description: 'Table to DROP before the run so it is rebuilt from the archive (e.g. fct_scada). Blank = none. Refills at process_limit files per run.'
+        required: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -79,5 +82,13 @@ jobs:
           TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
           echo "::add-mask::$TOKEN"
           echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+      - name: Drop table for rebuild
+        # Dispatch-only. `rebuild=<table>` drops it so the dbt run below recreates it from
+        # the archive with a plain CTAS — see scripts/rebuild_table.py for why this and not
+        # --full-refresh. The step fails the job rather than fall through to a normal load.
+        if: github.event_name == 'workflow_dispatch' && inputs.rebuild != ''
+        env:
+          REBUILD_TABLE: ${{ inputs.rebuild }}
+        run: python scripts/rebuild_table.py
       - name: Process data
         run: dbt run --target prod --profiles-dir .
