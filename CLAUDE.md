@@ -44,10 +44,18 @@ Three deliberate local differences, all of which must survive a re-copy:
 3. Work is discovered from the **log table**, not a filesystem glob: each fact model's pre-hook
    builds its path list from `SELECT DISTINCT stg_csv_archive_log.archive_path` filtered by
    `csv_filename NOT IN (SELECT file FROM {{ this }})`. The DISTINCT is load-bearing: the
-   staging model re-appends the *whole* log every run, so a file that waits K runs has K log
-   rows, and MERGE only dedupes against the target, never within a batch. Without it a single
+   log table is append-only and can hold a file more than once (until 2026-09-18 the staging
+   model re-appended the *whole* log every run, so a file that waited K runs had K rows), and
+   MERGE only dedupes against the target, never within a batch. Without it a single
    fact-model failure (fct_scada, 2026-08-25 09:43 UTC, network error) turned into 74.9M
    duplicate keys as the backlog was read 2-N times per batch.
+   The staging model now appends only the rows the Iceberg table is missing (anti-join on
+   source_type/source_filename/csv_filename against `dbt.this`). The whole-log version grew
+   the table by its own size 48 times a day; on 2026-09-17 15:34 UTC the OneLake catalog
+   started answering HTTP 500 to every load and commit of `landing.stg_csv_archive_log`
+   (dbt, compaction and pyiceberg alike, every other table fine) and the pipeline was down
+   until the table was dropped and rebuilt from `Files/csv_archive_log.parquet`, which is
+   the durable log and the only source of truth — the Iceberg table is a materialization.
 4. `process_data.yml` runs `dbt run` (tests live in `table_maintenance.yml`), writing straight
    to the OneLake Iceberg catalog. No `dbt run-operation` anywhere — there are no operation
    macros.
@@ -101,7 +109,7 @@ transport fails the OneLake TLS handshake).
 ## Models (7)
 | Model | Schema | Materialization |
 |-------|--------|-----------------|
-| stg_csv_archive_log | landing | incremental append (Python) |
+| stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
 | dim_calendar | mart | incremental delete+insert (pure append in practice — the NOT-IN filter means incoming rows never match) |
 | dim_duid | mart | incremental insert-only merge on DUID |
 | fct_scada, fct_price | landing | incremental insert-only merge (by file) |
@@ -111,7 +119,8 @@ transport fails the OneLake TLS handshake).
 place. **Rebuilding a table = dispatch `process_data.yml` with `rebuild=<table>`**: it runs
 `scripts/rebuild_table.py` (DROP, names checked against `scripts/iceberg_tables.py`) and the
 dbt run that follows recreates the table with a plain CTAS, refilling at `process_limit`
-files per run. Do not use `dbt run --full-refresh`: dbt-duckdb builds `<table>__dbt_tmp` and
+files per run. It also works on a table the catalog can no longer serve (the pre-drop count
+is best-effort). Do not use `dbt run --full-refresh`: dbt-duckdb builds `<table>__dbt_tmp` and
 RENAMEs it into place, and RENAME is not in the probed capability matrix.
 
 ## Profiles: ci (in-memory, no Iceberg), dev/prod (OneLake Iceberg REST catalog)

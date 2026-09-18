@@ -369,4 +369,28 @@ def model(dbt, session):
     # =========================================================================
     save_log()
 
+    # The parquet above is the durable log; the Iceberg table is a materialization of it
+    # that the fact pre-hooks read. Append only the rows the table is missing. Returning
+    # the whole log every run (the original version) made the table grow by its own size
+    # 48 times a day: by 2026-09-17 the OneLake catalog answered HTTP 500 to every load
+    # and commit of it and the pipeline was down until the table was rebuilt.
+    # Anti-join, not "what this run downloaded": a run that saves the parquet and then
+    # fails to commit (the 2026-09-17 failure mode) must be repaired by the next run, not
+    # leave those files invisible to the facts forever.
+    if dbt.is_incremental:
+        session.sql(f"""
+            CREATE OR REPLACE TEMP TABLE _log_delta AS
+            SELECT l.*
+            FROM _csv_archive_log l
+            WHERE NOT EXISTS (
+                SELECT 1 FROM {dbt.this} t
+                WHERE t.source_type = l.source_type
+                  AND t.source_filename = l.source_filename
+                  AND t.csv_filename = l.csv_filename
+            )
+        """)
+        n = session.sql("SELECT count(*) FROM _log_delta").fetchone()[0]
+        print(f"  {n} log rows not yet in {dbt.this}, appending")
+        return session.sql("SELECT * FROM _log_delta")
+
     return session.sql("SELECT * FROM _csv_archive_log")

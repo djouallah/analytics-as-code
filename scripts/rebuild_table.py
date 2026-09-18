@@ -11,6 +11,11 @@ Consequences: the fact is refilled at process_limit files per run, so the dashbo
 shows partial history until the backlog drains; the dropped data files stay in OneLake
 (nothing here purges storage).
 
+The pre-drop row count is best-effort. A table the catalog can no longer serve (HTTP 500
+on every load, as landing.stg_csv_archive_log from 2026-09-17 15:34 UTC) is precisely
+the case that needs a rebuild, so an unreadable table is reported, not treated as a
+reason to stop.
+
 Usage (process_data.yml, workflow_dispatch input `rebuild`):
     REBUILD_TABLE=fct_scada python scripts/rebuild_table.py
 
@@ -41,11 +46,11 @@ def main():
 
     con = connect()
     try:
-        before = con.execute(f"SELECT count(*) FROM {fq}").fetchone()[0]
+        before = f"{con.execute(f'SELECT count(*) FROM {fq}').fetchone()[0]:,} rows"
     except Exception as e:
-        print(f"::error::cannot read {fq} before dropping it: {oneline(e)}")
-        return 1
-    print(f"{fq}: {before:,} rows — dropping", flush=True)
+        before = "unreadable"
+        print(f"::warning::{fq} cannot be read before the drop: {oneline(e)}")
+    print(f"{fq}: {before} — dropping", flush=True)
 
     try:
         con.execute(f"DROP TABLE {fq}")
@@ -63,7 +68,7 @@ def main():
         print(f"::error::{fq} is still listed by the catalog after DROP")
         return 1
 
-    print(f"{fq} dropped ({before:,} rows); the dbt run that follows recreates it from the archive")
+    print(f"{fq} dropped ({before}); the dbt run that follows recreates it from the archive")
     return 0
 
 
