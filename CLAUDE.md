@@ -2,26 +2,33 @@
 
 ## Quick Reference
 - **Stack:** dbt-duckdb, **OneLake Iceberg REST catalog** (Microsoft Fabric workspace `power`,
-  lakehouse `nem` — its own lakehouse, deliberately separate from dbt_fabric_python_iceberg's
+  lakehouse `nem` — its own lakehouse, deliberately separate from the sibling repo's
   `data`, because both repos write identically-named tables in `landing`/`mart`)
 - **Run:** `dbt build --target ci --profiles-dir .` (test, in-memory)
 - **Run:** `dbt build --target dev --profiles-dir .` (writes to Iceberg; needs the OneLake env vars below)
 - **Schemas:** `mart` (dim_calendar, dim_duid) / `landing` (facts, staging)
 - **Writes are insert-only merges** (`WHEN MATCHED DO NOTHING`): the OneLake catalog accepts
   one add-snapshot per commit and rejects commits mixing delete files + data files
-  (BadRequest 400). Same pattern as dbt_fabric_python_iceberg. `dim_calendar` keeps
+  (BadRequest 400). Same pattern as the sibling repo (dbt-fabric). `dim_calendar` keeps
   `delete+insert` — its NOT-IN filter means incoming rows never match, so commits stay pure
   appends.
 
-## The dbt project is a subset copy of the sibling repo
-`models/`, `macros/` and the `assert_fct_*_grain` tests are copied verbatim from
-[`dbt_fabric_python_iceberg`](https://github.com/djouallah/dbt_fabric_python_iceberg)'s `dbt/`
-directory, minus `fct_summary` / `fct_summary_daily` (this repo's dashboard computes that join
-client-side in `scripts/cache_catalog.py`). **Port fixes from there rather than diverging.**
-(2026-09-25: that repo no longer resolves on GitHub — deleted or renamed — so until it
-reappears fixes land here only; the last ported ones were the pre-hook DISTINCT and the
-staging anti-join on 2026-09-16/18.)
-Three deliberate local differences, all of which must survive a re-copy:
+## The dbt project descends from the sibling repo
+The sibling is now [`dbt-fabric`](https://github.com/djouallah/dbt-fabric) (it replaced
+`dbt_fabric_python_iceberg`, which no longer exists). It runs the same AEMO models on five
+engines; the one that matches this repo is `dbt1/models/aemo/iceberg/` (tests in
+`dbt1/tests/aemo/iceberg/`). This repo was copied from the old sibling minus `fct_summary`
+(the dashboard computes that join client-side in `scripts/cache_catalog.py`).
+**Look there first for fixes, and port them rather than diverging.** It is no longer a
+verbatim copy — as of 2026-09-25 the iceberg variant differs structurally:
+- Downloading moved out of dbt into `download_aemo.py`; `stg_csv_archive_log` is a plain view
+  in DuckDB's in-memory catalog over the parquet log, not an Iceberg table. That removes the
+  log table this repo had to rebuild on 2026-09-18.
+- The fact pre-hooks already have `SELECT DISTINCT archive_path` and add
+  `ORDER BY archive_path DESC` before `LIMIT process_limit`, so a partial load takes the
+  newest files first and is deterministic.
+- Model config comes from an `aemo_spec()` macro shared across engines.
+Three deliberate local differences, all of which must survive a port:
 - No `relationships → dim_duid` tests on `fct_scada`/`fct_scada_today` — `dim_duid` holds only
   currently-registered DUIDs while the facts go back to 2018 and are full of retired ones, so
   the test could never be 0. `tests/assert_recent_scada_duids_registered.sql` is the meaningful
@@ -96,7 +103,7 @@ catalog or the duckdb pin moves. Re-run it after either, and read the run's log.
 OIDC only: `azure/login@v2` with a federated credential, then each job mints a short-lived
 `ONELAKE_TOKEN` via `az account get-access-token --resource https://storage.azure.com/`.
 The ids live in repository **variables** (public identifiers, not secrets):
-- `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` — the tenant + Entra app (`dbt_fabric_python_iceberg`,
+- `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` — the tenant + Entra app (named `dbt_fabric_python_iceberg` after the old sibling,
   no client secret; shared with the sibling repo)
 - `WS_ID`, `LH_ID` — the Fabric workspace (`power`) and lakehouse (`nem`). The workflows build
   `WAREHOUSE_PATH = {WS_ID}/{LH_ID}` and `FILES_PATH = abfss://{WS_ID}@onelake.dfs.fabric.microsoft.com/{LH_ID}/Files`
