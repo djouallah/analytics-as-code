@@ -18,6 +18,9 @@
 [`dbt_fabric_python_iceberg`](https://github.com/djouallah/dbt_fabric_python_iceberg)'s `dbt/`
 directory, minus `fct_summary` / `fct_summary_daily` (this repo's dashboard computes that join
 client-side in `scripts/cache_catalog.py`). **Port fixes from there rather than diverging.**
+(2026-09-25: that repo no longer resolves on GitHub — deleted or renamed — so until it
+reappears fixes land here only; the last ported ones were the pre-hook DISTINCT and the
+staging anti-join on 2026-09-16/18.)
 Three deliberate local differences, all of which must survive a re-copy:
 - No `relationships → dim_duid` tests on `fct_scada`/`fct_scada_today` — `dim_duid` holds only
   currently-registered DUIDs while the facts go back to 2018 and are full of retired ones, so
@@ -126,6 +129,13 @@ RENAMEs it into place, and RENAME is not in the probed capability matrix.
 ## Profiles: ci (in-memory, no Iceberg), dev/prod (OneLake Iceberg REST catalog)
 
 ## Key Patterns
+- **SETTLEMENTDATE is AEST wall clock stored as TIMESTAMPTZ labelled UTC.** The models cast
+  the CSV string straight to TIMESTAMPTZ and the dbt session on the runners is UTC, so the
+  instant in the column is 10h early; the `DATE`/`YEAR` columns next to it are cast from the
+  string and are right. Every reader must therefore run with `TimeZone = 'UTC'` (as
+  `scripts/cache_catalog.py` does) — a Brisbane session shifts every date and time by +10h,
+  which is what the dashboard showed from the 2026-08-25 refactor until 2026-09-25. Fixing
+  it at the writer would change the column's values and mean rebuilding all four facts.
 - Pre-hooks set DuckDB VARIABLEs with the file paths to process, read from the log table
 - CSVs read from gzipped archives in OneLake Files via `read_csv()` with `ignore_errors=true`
 - CI target uses plain DuckDB (no Iceberg) for SQL validation; `FILES_PATH` is unset there so

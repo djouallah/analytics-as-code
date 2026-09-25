@@ -48,7 +48,14 @@ def connect_iceberg():
         f"(TYPE ICEBERG, ENDPOINT '{ENDPOINT}', TOKEN '{TOKEN}', "
         f"ACCESS_DELEGATION_MODE 'none')"
     )
-    con.execute("SET TimeZone = 'Australia/Brisbane';")
+    # UTC, deliberately. The fact tables' SETTLEMENTDATE is TIMESTAMPTZ, but the value in
+    # it is AEMO's AEST wall clock labelled as UTC: the models CAST the CSV string to
+    # TIMESTAMPTZ in a dbt session that runs in UTC on the runners. Reading it back in UTC
+    # returns that wall clock unchanged, which is what the dashboard's `date`/`time` mean.
+    # This was 'Australia/Brisbane' until 2026-09-25, which shifted every date and time
+    # on the dashboard by +10h (14:05 on the 25th displayed as 00:05 on the 26th); it was
+    # harmless while SETTLEMENTDATE was a naive TIMESTAMP, before the 2026-08-25 refactor.
+    con.execute("SET TimeZone = 'UTC';")
     return con
 
 
