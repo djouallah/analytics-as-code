@@ -177,3 +177,8 @@ Everything is pinned — no workflow floats on "latest".
   an `opfs://` ATTACH also opens `<file>.wal`, which is never registered, so the ATTACH fails.
   The handle is exclusive, so a second tab falls back to in-memory. Checked 2026-09-29 in
   headless Chrome against the deployed 1.5.1-written files: renders, 132 → 112 MB.
+  It runs **single-threaded on purpose**. The `coi` (threads) build loads, but it can't load
+  ICU (`SET TimeZone` fails with a shared-memory LinkError), it can't pass the OPFS handle to
+  its pthreads, and it only gained ~1.4x on 4 threads (2026-09-30). The page is therefore not
+  cross-origin isolated, and `dashboard/coi-serviceworker.js` is now a self-unregistering kill
+  switch for browsers that installed the old one.

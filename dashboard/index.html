@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Australian Energy Dashboard</title>
-  <script src="coi-serviceworker.js"></script>
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
   <style>
@@ -397,7 +396,6 @@
       await conn.query("SET preserve_insertion_order = false;");
       await refreshViews();
 
-      console.log(`[DuckDB] crossOriginIsolated: ${window.crossOriginIsolated} (${window.crossOriginIsolated ? 'multi-threaded' : 'single-threaded'})`);
       setStatus(window._cutoffCached || "Connected", "connected");
     }
 

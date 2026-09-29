@@ -60,7 +60,7 @@ Source data arrives at 5-minute resolution. The Iceberg tables store everything 
 ## Limitations
 
 - **GitHub Pages file size limit: 100 MB.** The DuckDB files served via GitHub Pages must stay under this limit, which constrains how much historical data the dashboard can hold.
-- **DuckDB-WASM is single-threaded per origin.** Browsers enforce a single-origin policy, so WASM runs on a single thread. We use the native DuckDB file format (not Parquet) because DuckDB-WASM can query its own format efficiently even under this constraint — range requests, predicate pushdown, and columnar reads all work without needing to load the entire file into memory.
+- **DuckDB-WASM runs single-threaded.** Its multi-threaded build can't load extensions such as ICU yet and can't share OPFS file handles with its threads, and it only gained ~1.4x on 4 threads when tried (2026-09-30). We use the native DuckDB file format (not Parquet) because DuckDB-WASM can query its own format efficiently even under this constraint — range requests, predicate pushdown, and columnar reads all work without needing to load the entire file into memory.
 
 ## Setup
 
