@@ -169,3 +169,11 @@ Everything is pinned — no workflow floats on "latest".
 - **`import_data.yml` stays on `duckdb==1.5.1`.** Different reason, deliberately unchanged: it
   builds the `.duckdb` files deployed to the NemTracker dashboard, read client-side by
   DuckDB-WASM, so the on-disk file format must stay stable for the *already deployed* reader.
+- **The dashboard pins `@duckdb/duckdb-wasm@1.33.1-dev65.0`** (DuckDB 1.5.x line), a dev build
+  because nothing stable has shipped since 1.33.0 (Dec 2025). Don't take npm's `latest` tag:
+  it points at `1.33.1-dev57.0`, which the DuckDB blog says breaks OPFS. The dev build lets
+  `attachCached` read the OPFS-cached files in place (`registerFileHandle` + `BROWSER_FSACCESS`)
+  instead of copying each one into the WASM heap. Register the plain filename, not `opfs://`:
+  an `opfs://` ATTACH also opens `<file>.wal`, which is never registered, so the ATTACH fails.
+  The handle is exclusive, so a second tab falls back to in-memory. Checked 2026-09-29 in
+  headless Chrome against the deployed 1.5.1-written files: renders, 132 → 112 MB.

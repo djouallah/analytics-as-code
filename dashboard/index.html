@@ -192,7 +192,7 @@
   </div>
 
   <script type="module">
-    import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.32.0/+esm";
+    import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev65.0/+esm";
 
     // =========================================================================
     // 1. CONSTANTS & THEME
@@ -282,7 +282,7 @@
     let conn;
 
     // Cache a remote .duckdb file in OPFS. Downloads if missing or stale.
-    // source: 'opfs-hit' | 'opfs-miss' | 'opfs-refresh'
+    // source: 'opfs-hit' | 'opfs-miss' | 'opfs-refresh'; buffer: the download, only if it couldn't be cached
     async function cacheInOPFS(db, url, filename) {
       const root = await navigator.storage.getDirectory();
       const cacheKey = `opfs_etag_${filename}`;
@@ -306,8 +306,7 @@
           const file = await handle.getFile();
           const sizeMB = (file.size / 1024 / 1024).toFixed(1);
           console.log(`[OPFS] Cache hit for ${filename} (${sizeMB} MB)`);
-          await db.registerFileBuffer(filename, new Uint8Array(await file.arrayBuffer()));
-          return { source: 'opfs-hit' };
+          return { source: 'opfs-hit', buffer: null };
         } catch (e) {
           console.log(`[OPFS] Cache entry missing from OPFS despite etag, will re-fetch`);
         }
@@ -323,15 +322,46 @@
       if (buffer.byteLength < 100) throw new Error(`${filename} is too small (${buffer.byteLength} bytes), likely not a valid database`);
       const sizeMB = (buffer.byteLength / 1024 / 1024).toFixed(1);
 
-      const handle = await root.getFileHandle(filename, { create: true });
-      const writable = await handle.createWritable();
-      await writable.write(buffer);
-      await writable.close();
+      const source = cachedTag ? 'opfs-refresh' : 'opfs-miss';
+      try {
+        const handle = await root.getFileHandle(filename, { create: true });
+        const writable = await handle.createWritable();
+        await writable.write(buffer);
+        await writable.close();
+      } catch (e) {
+        // Another tab reading the file in place holds its exclusive handle.
+        console.log(`[OPFS] Could not write ${filename} (${e}), using the download in memory`);
+        return { source, buffer };
+      }
       if (remoteTag) localStorage.setItem(cacheKey, remoteTag);
       console.log(`[OPFS] Cached ${filename} (${sizeMB} MB) in OPFS`);
+      return { source, buffer: null };
+    }
 
+    // ATTACH a cached file READ_ONLY. Preferred: DuckDB reads it in place from OPFS, pulling
+    // only the pages a query touches, instead of the whole file being copied into the WASM heap.
+    // That needs an exclusive sync access handle, which a second tab on the same origin can't
+    // get, so fall back to copying the file into memory. `buffer` is set when cacheInOPFS
+    // couldn't write the file to OPFS.
+    async function attachCached(db, filename, alias, buffer) {
+      if (!buffer) {
+        const root = await navigator.storage.getDirectory();
+        const handle = await root.getFileHandle(filename);
+        try {
+          // Registered under the plain name, not opfs://: an opfs:// ATTACH also opens
+          // opfs://<file>.wal, which is never registered, and the ATTACH fails.
+          await db.registerFileHandle(filename, handle, duckdb.DuckDBDataProtocol.BROWSER_FSACCESS, true);
+          await conn.query(`ATTACH '${filename}' AS ${alias} (READ_ONLY);`);
+          return 'in place';
+        } catch (e) {
+          console.log(`[OPFS] In-place read failed for ${filename} (${e}), loading into memory`);
+          try { await db.dropFile(filename); } catch (_) {}
+          buffer = new Uint8Array(await (await handle.getFile()).arrayBuffer());
+        }
+      }
       await db.registerFileBuffer(filename, buffer);
-      return { source: cachedTag ? 'opfs-refresh' : 'opfs-miss' };
+      await conn.query(`ATTACH '${filename}' AS ${alias} (READ_ONLY);`);
+      return 'in memory';
     }
 
     let _db = null;
@@ -359,14 +389,14 @@
         cacheInOPFS(_db, `${_baseUrl}/data/energy_dim.duckdb`, 'energy_dim.duckdb'),
         cacheInOPFS(_db, `${_baseUrl}/data/energy_today.duckdb`, 'energy_today.duckdb'),
       ]);
-      await conn.query("ATTACH 'energy_dim.duckdb' AS dim (READ_ONLY);");
-      await conn.query("ATTACH 'energy_today.duckdb' AS today (READ_ONLY);");
+      const dimMode = await attachCached(_db, 'energy_dim.duckdb', 'dim', dimResult.buffer);
+      const todayMode = await attachCached(_db, 'energy_today.duckdb', 'today', todayResult.buffer);
       await conn.query("SET TimeZone = 'Australia/Brisbane';");
       await conn.query("SET preserve_insertion_order = false;");
       await refreshViews();
 
       const sourceLabel = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded', 'opfs-refresh': 'refreshed' };
-      console.log(`[OPFS] dim: ${sourceLabel[dimResult.source]}, today: ${sourceLabel[todayResult.source]}`);
+      console.log(`[OPFS] dim: ${sourceLabel[dimResult.source]} (${dimMode}), today: ${sourceLabel[todayResult.source]} (${todayMode})`);
       console.log(`[DuckDB] crossOriginIsolated: ${window.crossOriginIsolated} (${window.crossOriginIsolated ? 'multi-threaded' : 'single-threaded'})`);
       setStatus(window._cutoffCached || "Connected", "connected");
     }
@@ -374,10 +404,10 @@
     async function loadDailyAggDatabase() {
       const sourceLabel = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded', 'opfs-refresh': 'refreshed' };
       const aggResult = await cacheInOPFS(_db, `${_baseUrl}/data/energy_daily_agg.duckdb`, 'energy_daily_agg.duckdb');
-      await conn.query("ATTACH 'energy_daily_agg.duckdb' AS agg (READ_ONLY);");
+      const aggMode = await attachCached(_db, 'energy_daily_agg.duckdb', 'agg', aggResult.buffer);
       aggLoaded = true;
       await refreshViews();
-      console.log(`[OPFS] agg: ${sourceLabel[aggResult.source]}`);
+      console.log(`[OPFS] agg: ${sourceLabel[aggResult.source]} (${aggMode})`);
     }
 
     let _manifestCache = null;
@@ -391,10 +421,10 @@
     async function attachPeriod(p) {
       try {
         const res = await cacheInOPFS(_db, `${_baseUrl}/data/energy_data_${p}.duckdb`, `energy_data_${p}.duckdb`);
-        await conn.query(`ATTACH 'energy_data_${p}.duckdb' AS p${p} (READ_ONLY);`);
+        const mode = await attachCached(_db, `energy_data_${p}.duckdb`, `p${p}`, res.buffer);
         _attachedPeriods.add(p);
         loadedPeriods.push(p);
-        console.log(`[OPFS] p${p}: ${_sourceLabel[res.source]}`);
+        console.log(`[OPFS] p${p}: ${_sourceLabel[res.source]} (${mode})`);
         return true;
       } catch (e) {
         console.warn(`[OPFS] skipping period ${p}: ${e}`);
