@@ -245,7 +245,6 @@
     }
 
     const crossFilter = { fuel: null, region: null, duids: [] };
-    let loadedPeriods = [];
     let aggLoaded = false;
     let _renderSeq = 0;
 
@@ -364,6 +363,14 @@
       return 'in memory';
     }
 
+    // Download (or reuse from OPFS) data/<file> and ATTACH it as <alias>.
+    const SOURCE_LABEL = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded', 'opfs-refresh': 'refreshed' };
+    async function loadDb(file, alias) {
+      const res = await cacheInOPFS(_db, `${_baseUrl}/data/${file}`, file);
+      const mode = await attachCached(_db, file, alias, res.buffer);
+      console.log(`[OPFS] ${alias}: ${SOURCE_LABEL[res.source]} (${mode})`);
+    }
+
     let _db = null;
     let _baseUrl = '';
 
@@ -385,50 +392,33 @@
 
       // Phase 1: Load dim + today (enough for default "Last 3 days" view)
       setStatus("Loading today's data...");
-      const [dimResult, todayResult] = await Promise.all([
-        cacheInOPFS(_db, `${_baseUrl}/data/energy_dim.duckdb`, 'energy_dim.duckdb'),
-        cacheInOPFS(_db, `${_baseUrl}/data/energy_today.duckdb`, 'energy_today.duckdb'),
-      ]);
-      const dimMode = await attachCached(_db, 'energy_dim.duckdb', 'dim', dimResult.buffer);
-      const todayMode = await attachCached(_db, 'energy_today.duckdb', 'today', todayResult.buffer);
+      await Promise.all([loadDb('energy_dim.duckdb', 'dim'), loadDb('energy_today.duckdb', 'today')]);
       await conn.query("SET TimeZone = 'Australia/Brisbane';");
       await conn.query("SET preserve_insertion_order = false;");
       await refreshViews();
 
-      const sourceLabel = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded', 'opfs-refresh': 'refreshed' };
-      console.log(`[OPFS] dim: ${sourceLabel[dimResult.source]} (${dimMode}), today: ${sourceLabel[todayResult.source]} (${todayMode})`);
       console.log(`[DuckDB] crossOriginIsolated: ${window.crossOriginIsolated} (${window.crossOriginIsolated ? 'multi-threaded' : 'single-threaded'})`);
       setStatus(window._cutoffCached || "Connected", "connected");
     }
 
     async function loadDailyAggDatabase() {
-      const sourceLabel = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded', 'opfs-refresh': 'refreshed' };
-      const aggResult = await cacheInOPFS(_db, `${_baseUrl}/data/energy_daily_agg.duckdb`, 'energy_daily_agg.duckdb');
-      const aggMode = await attachCached(_db, 'energy_daily_agg.duckdb', 'agg', aggResult.buffer);
+      await loadDb('energy_daily_agg.duckdb', 'agg');
       aggLoaded = true;
       await refreshViews();
-      console.log(`[OPFS] agg: ${sourceLabel[aggResult.source]} (${aggMode})`);
     }
 
-    let _manifestCache = null;
+    let _manifest = null;
     const _attachedPeriods = new Set();
-    const _sourceLabel = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded', 'opfs-refresh': 'refreshed' };
 
-    // Fetch + attach a single period. Returns true on success, false if the file
-    // is missing/404 or otherwise fails — so the manifest advertising a period
-    // whose .duckdb didn't deploy degrades gracefully instead of breaking the
-    // whole query. Recent days still come from `today`; other periods still load.
+    // Attach one half-year period. A period the manifest advertises but whose .duckdb
+    // didn't deploy is skipped instead of breaking the whole query: recent days still
+    // come from `today` and the other periods still load.
     async function attachPeriod(p) {
       try {
-        const res = await cacheInOPFS(_db, `${_baseUrl}/data/energy_data_${p}.duckdb`, `energy_data_${p}.duckdb`);
-        const mode = await attachCached(_db, `energy_data_${p}.duckdb`, `p${p}`, res.buffer);
+        await loadDb(`energy_data_${p}.duckdb`, `p${p}`);
         _attachedPeriods.add(p);
-        loadedPeriods.push(p);
-        console.log(`[OPFS] p${p}: ${_sourceLabel[res.source]} (${mode})`);
-        return true;
       } catch (e) {
         console.warn(`[OPFS] skipping period ${p}: ${e}`);
-        return false;
       }
     }
 
@@ -446,66 +436,55 @@
       return periods;
     }
 
-    async function ensurePeriodsForRange(from, to) {
-      if (!_manifestCache) {
-        _manifestCache = await (await fetch(`${_baseUrl}/data/daily_manifest.json`)).json();
-      }
-      const available = new Set(_manifestCache.periods);
-      const needed = periodsForRange(from, to).filter(p => available.has(p) && !_attachedPeriods.has(p));
+    // Attach the given periods (null = every period in the manifest) that exist and
+    // aren't attached yet.
+    async function ensurePeriods(periods, msg) {
+      _manifest ??= await (await fetch(`${_baseUrl}/data/daily_manifest.json`)).json();
+      const needed = (periods ?? _manifest.periods)
+        .filter(p => _manifest.periods.includes(p) && !_attachedPeriods.has(p));
       if (!needed.length) return;
-
-      setStatus("Downloading detailed data...", "loading");
+      setStatus(msg, "loading");
       await Promise.all(needed.map(attachPeriod));
       await refreshViews();
       setStatus(window._cutoffCached || "Connected", "connected");
     }
 
-    async function ensureAllPeriods() {
-      if (!_manifestCache) {
-        _manifestCache = await (await fetch(`${_baseUrl}/data/daily_manifest.json`)).json();
-      }
-      const needed = _manifestCache.periods.filter(p => !_attachedPeriods.has(p));
-      if (!needed.length) return;
-      setStatus("Downloading detailed data for export...", "loading");
-      await Promise.all(needed.map(attachPeriod));
-      await refreshViews();
-      setStatus(window._cutoffCached || "Connected", "connected");
-    }
-
+    // The four views every query reads. The last 5 days come from `today` (refreshed
+    // intraday), everything older from the half-year periods (5-min) or agg (daily).
+    // Until agg is attached, the daily views only cover `today`.
     async function refreshViews() {
-      // v_scada: all loaded periods + today (5-min raw)
-      const scadaParts = loadedPeriods.map(p => `SELECT DUID, date, time, mw FROM p${p}.scada WHERE date < CURRENT_DATE - INTERVAL 5 DAY`);
-      scadaParts.push(`SELECT DUID, date, time, mw FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY`);
-      await conn.query(`CREATE OR REPLACE VIEW v_scada AS ${scadaParts.join(' UNION ALL ')}`);
+      const OLD = 'date < CURRENT_DATE - INTERVAL 5 DAY', RECENT = 'date >= CURRENT_DATE - INTERVAL 5 DAY';
+      const raw = (cols, table) => [
+        ...[..._attachedPeriods].map(p => `SELECT ${cols} FROM p${p}.${table} WHERE ${OLD}`),
+        `SELECT ${cols} FROM today.${table}_today WHERE ${RECENT}`,
+      ].join(' UNION ALL ');
+      const daily = (aggSql, todaySql) => aggLoaded
+        ? `${aggSql} WHERE ${OLD} UNION ALL ${todaySql} WHERE ${RECENT} GROUP BY ALL`
+        : `${todaySql} GROUP BY ALL`;
 
-      // v_price: all loaded periods + today (5-min raw)
-      const priceParts = loadedPeriods.map(p => `SELECT REGIONID, date, time, price FROM p${p}.price WHERE date < CURRENT_DATE - INTERVAL 5 DAY`);
-      priceParts.push(`SELECT REGIONID, date, time, price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY`);
-      await conn.query(`CREATE OR REPLACE VIEW v_price AS ${priceParts.join(' UNION ALL ')}`);
-
-      // v_scada_daily / v_price_daily: pre-aggregated if agg loaded, else today-only
-      if (aggLoaded) {
-        await conn.query(`CREATE OR REPLACE VIEW v_scada_daily AS
-          SELECT DUID, date, mwh FROM agg.scada_daily WHERE date < CURRENT_DATE - INTERVAL 5 DAY
-          UNION ALL
-          SELECT DUID, date, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date`);
-        await conn.query(`CREATE OR REPLACE VIEW v_price_daily AS
-          SELECT REGIONID, date, price FROM agg.price_daily WHERE date < CURRENT_DATE - INTERVAL 5 DAY
-          UNION ALL
-          SELECT REGIONID, date, CAST(AVG(price) AS REAL) AS price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY REGIONID, date`);
-      } else {
-        await conn.query(`CREATE OR REPLACE VIEW v_scada_daily AS
-          SELECT DUID, date, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM today.scada_today GROUP BY DUID, date`);
-        await conn.query(`CREATE OR REPLACE VIEW v_price_daily AS
-          SELECT REGIONID, date, CAST(AVG(price) AS REAL) AS price FROM today.price_today GROUP BY REGIONID, date`);
-      }
+      await conn.query(`CREATE OR REPLACE VIEW v_scada AS ${raw('DUID, date, time, mw', 'scada')}`);
+      await conn.query(`CREATE OR REPLACE VIEW v_price AS ${raw('REGIONID, date, time, price', 'price')}`);
+      await conn.query(`CREATE OR REPLACE VIEW v_scada_daily AS ${daily(
+        'SELECT DUID, date, mwh FROM agg.scada_daily',
+        'SELECT DUID, date, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM today.scada_today')}`);
+      await conn.query(`CREATE OR REPLACE VIEW v_price_daily AS ${daily(
+        'SELECT REGIONID, date, price FROM agg.price_daily',
+        'SELECT REGIONID, date, CAST(AVG(price) AS REAL) AS price FROM today.price_today')}`);
+      // Queries over the views keep the same SQL text, so results cached before this
+      // redefinition must never be served after it (see runQuery).
+      _viewGen++;
+      clearQueryCache();
     }
 
+    // Keyed on the view generation as well as the SQL: a query that started before a
+    // refreshViews() and finishes after it stores its result under the old generation.
     const _queryCache = new Map();
+    let _viewGen = 0;
     function clearQueryCache() { _queryCache.clear(); }
 
     async function runQuery(sqlStr) {
-      const cached = _queryCache.get(sqlStr);
+      const key = `${_viewGen}|${sqlStr}`;
+      const cached = _queryCache.get(key);
       if (cached) return cached;
       const result = await conn.query(sqlStr);
       const numRows = Number(result.numRows);
@@ -528,7 +507,7 @@
         }
         rows[i] = row;
       }
-      _queryCache.set(sqlStr, rows);
+      _queryCache.set(key, rows);
       return rows;
     }
 
@@ -634,87 +613,16 @@
     // =========================================================================
 
     const sql = {
-      // --- UNION ALL builders across year databases ---
-      // Raw 5-min grain (for CSV export)
-      _scadaRawUnion() {
-        const parts = loadedPeriods.map(p => `SELECT DUID, date, time, mw FROM p${p}.scada WHERE date < CURRENT_DATE - INTERVAL 5 DAY`);
-        parts.push(`SELECT DUID, date, time, mw FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY`);
-        return parts.join('\n            UNION ALL\n            ');
-      },
-
-      _priceRawUnion() {
-        const parts = loadedPeriods.map(p => `SELECT REGIONID, date, time, price FROM p${p}.price WHERE date < CURRENT_DATE - INTERVAL 5 DAY`);
-        parts.push(`SELECT REGIONID, date, time, price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY`);
-        return parts.join('\n            UNION ALL\n            ');
-      },
-
-      // Daily pre-aggregated (for charts when >7d)
-      _scadaDailyUnion() {
-        const parts = [
-          `SELECT DUID, date, mwh FROM agg.scada_daily WHERE date < CURRENT_DATE - INTERVAL 5 DAY`
-        ];
-        parts.push(
-          `SELECT DUID, date, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY DUID, date`
-        );
-        return parts.join('\n            UNION ALL\n            ');
-      },
-
-      _priceDailyUnion() {
-        const parts = [
-          `SELECT REGIONID, date, price FROM agg.price_daily WHERE date < CURRENT_DATE - INTERVAL 5 DAY`
-        ];
-        parts.push(
-          `SELECT REGIONID, date, CAST(AVG(price) AS REAL) AS price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY GROUP BY REGIONID, date`
-        );
-        return parts.join('\n            UNION ALL\n            ');
-      },
-
-      // --- Intraday UNION builders (selected periods + today, deduped) ---
-      _scadaIntradayUnion() {
-        const { from, to } = getDateRange();
-        const needed = periodsForRange(from, to).filter(p => _attachedPeriods.has(p));
-        const parts = needed.map(p => `SELECT DUID, date, time, mw FROM p${p}.scada WHERE date < CURRENT_DATE - INTERVAL 5 DAY`);
-        parts.push(`SELECT DUID, date, time, mw FROM today.scada_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY`);
-        return parts.join('\n            UNION ALL\n            ');
-      },
-
-      _priceIntradayUnion() {
-        const { from, to } = getDateRange();
-        const needed = periodsForRange(from, to).filter(p => _attachedPeriods.has(p));
-        const parts = needed.map(p => `SELECT REGIONID, date, time, price FROM p${p}.price WHERE date < CURRENT_DATE - INTERVAL 5 DAY`);
-        parts.push(`SELECT REGIONID, date, time, price FROM today.price_today WHERE date >= CURRENT_DATE - INTERVAL 5 DAY`);
-        return parts.join('\n            UNION ALL\n            ');
-      },
-
-      // --- FROM clauses ---
-      // Intraday (<=7d): 5-min grain from loaded year-half DBs + today
-      // Daily (>7d): pre-aggregated daily + today aggregated to daily
+      // --- FROM clauses (views defined in refreshViews) ---
+      // Intraday (<=30d): 5-min grain | daily (>30d): pre-aggregated
       fromScada() {
-        if (isIntradayMode()) {
-          return `(${sql._scadaIntradayUnion()}) sc
-            JOIN dim.dim_calendar c ON c.date = sc.date
-            JOIN dim.dim_duid d ON sc.DUID = d.DUID`;
-        }
-        if (!aggLoaded) {
-          return `(SELECT DUID, date, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM today.scada_today GROUP BY DUID, date) sc
-            JOIN dim.dim_calendar c ON c.date = sc.date
-            JOIN dim.dim_duid d ON sc.DUID = d.DUID`;
-        }
-        return `(${sql._scadaDailyUnion()}) sc
+        return `${isIntradayMode() ? 'v_scada' : 'v_scada_daily'} sc
           JOIN dim.dim_calendar c ON c.date = sc.date
           JOIN dim.dim_duid d ON sc.DUID = d.DUID`;
       },
 
       fromPrice() {
-        if (isIntradayMode()) {
-          return `(${sql._priceIntradayUnion()}) p
-            JOIN dim.dim_calendar c ON c.date = p.date`;
-        }
-        if (!aggLoaded) {
-          return `(SELECT REGIONID, date, CAST(AVG(price) AS REAL) AS price FROM today.price_today GROUP BY REGIONID, date) p
-            JOIN dim.dim_calendar c ON c.date = p.date`;
-        }
-        return `(${sql._priceDailyUnion()}) p
+        return `${isIntradayMode() ? 'v_price' : 'v_price_daily'} p
           JOIN dim.dim_calendar c ON c.date = p.date`;
       },
 
@@ -1291,7 +1199,7 @@
     async function ensureAnalyzeData() {
       const { dimensions } = getAnalyzeOptions();
       if (dimensions.time) {
-        await ensureAllPeriods();
+        await ensurePeriods(null, "Downloading detailed data for export...");
       } else {
         if (!aggLoaded) await loadDailyAggDatabase();
       }
@@ -1502,7 +1410,7 @@
       try {
         if (isIntradayMode()) {
           const { from, to } = getDateRange();
-          await ensurePeriodsForRange(from, to);
+          await ensurePeriods(periodsForRange(from, to), "Downloading detailed data...");
         }
         await Promise.all([renderGeneration(seq), renderPrice(seq), renderMap(seq),
           runQuery(sql.generatorCount()).then(r => { if (seq === _renderSeq && r.length) document.getElementById('kpiGens').textContent = r[0].cnt.toLocaleString(); })
@@ -1530,7 +1438,7 @@
       await populateFilters();
       await renderAll();
       // Load year databases in background, then silently refresh
-      loadDailyAggDatabase().then(() => { clearQueryCache(); renderAll(); }).catch(e => console.warn('[OPFS] Agg load failed:', e));
+      loadDailyAggDatabase().then(renderAll).catch(e => console.warn('[OPFS] Agg load failed:', e));
     } catch (e) {
       setStatus("Error: " + e.message, "error");
       console.error(e);
