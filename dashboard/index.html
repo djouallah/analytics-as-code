@@ -46,7 +46,7 @@
     .filter-tag { background: var(--accent); color: #fff; padding: 0.15rem 0.5rem; border-radius: 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 0.25rem; font-weight: 600; font-size: 0.7rem; transition: background 0.2s; }
     .filter-tag:hover { background: #f85149; color: white; }
     .filter-tag::after { content: "\00d7"; font-size: 0.9rem; }
-    .kpi-row { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0.6rem; padding: 0.5rem 2rem; }
+    .kpi-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0.6rem; padding: 0.5rem 2rem; }
     .kpi-card { min-width: 0; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.8rem; }
     .kpi-card .kpi-label { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
     .kpi-card .kpi-value { font-size: 1.3rem; font-weight: 700; margin-top: 0.1rem; }
@@ -109,7 +109,8 @@
     .theme-toggle { background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); cursor: pointer; font-size: 0.9rem; line-height: 1; padding: 0.3rem 0.45rem; }
     .theme-toggle:hover { color: var(--accent); border-color: var(--accent); }
     .theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    @media (max-width: 1100px) { .kpi-row { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    @media (max-width: 1100px) { .kpi-row { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+    .insights-note { font-size: 0.72rem; color: var(--muted); padding: 0 2rem 1rem; line-height: 1.5; }
     @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
     @media (max-width: 600px) {
       header, .kpi-row, .tab-bar, .analyze-controls, .analyze-sql, .analyze-info, .analyze-table-wrap, .active-filters { padding-left: 1rem; padding-right: 1rem; }
@@ -160,6 +161,7 @@
   <div class="active-filters" id="activeFilters"></div>
   <div class="tab-bar" role="tablist">
     <button class="tab-btn active" data-tab="dashboard" role="tab" id="tab-dashboard" aria-selected="true" aria-controls="view-dashboard">Dashboard</button>
+    <button class="tab-btn" data-tab="insights" role="tab" id="tab-insights" aria-selected="false" aria-controls="view-insights" tabindex="-1">Insights</button>
     <button class="tab-btn" data-tab="analyze" role="tab" id="tab-analyze" aria-selected="false" aria-controls="view-analyze" tabindex="-1">Analyze</button>
   </div>
 
@@ -168,6 +170,7 @@
     <div class="kpi-card"><div class="kpi-label">Total Generation</div><div class="kpi-value" id="kpiGen">--</div><div class="kpi-sub" id="kpiGenSub">Average MW</div></div>
     <div class="kpi-card"><div class="kpi-label">Avg Price</div><div class="kpi-value" id="kpiPrice">--</div><div class="kpi-sub">$/MWh across regions</div></div>
     <div class="kpi-card"><div class="kpi-label">Active Generators</div><div class="kpi-value" id="kpiGens">--</div><div class="kpi-sub">DUIDs reporting</div></div>
+    <div class="kpi-card"><div class="kpi-label">Renewables</div><div class="kpi-value" id="kpiRE">--</div><div class="kpi-sub" id="kpiRESub">share of generation</div></div>
     <div class="kpi-card"><div class="kpi-label">Top Fuel Source</div><div class="kpi-value" id="kpiTopFuel">--</div><div class="kpi-sub" id="kpiTopFuelSub">by generation</div></div>
     <div class="kpi-card"><div class="kpi-label">Latest MW</div><div class="kpi-value" id="kpiLatestMW">--</div><div class="kpi-sub" id="kpiLatestMWSub">total generation</div></div>
     <div class="kpi-card"><div class="kpi-label">Latest Price</div><div class="kpi-value" id="kpiLatestPrice">--</div><div class="kpi-sub" id="kpiLatestPriceSub">avg $/MWh</div></div>
@@ -187,6 +190,47 @@
       <div class="chart-container" id="chart-map" style="height:280px;"></div>
     </div>
   </div>
+  </div>
+
+  <div id="view-insights" role="tabpanel" aria-labelledby="tab-insights" style="display:none">
+    <div class="charts">
+      <div class="chart-card full-width">
+        <div class="chart-header"><h2 id="title-re">Renewable share of generation (%)</h2></div>
+        <div class="chart-container" id="chart-re" style="height:240px;"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header"><h2 id="title-heat">Price heatmap ($/MWh)</h2></div>
+        <div class="chart-container" id="chart-heat" style="height:300px;"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header"><h2 id="title-profile">Average day by fuel (MW)</h2></div>
+        <div class="chart-container" id="chart-profile" style="height:300px;"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header"><h2 id="title-capture">Capture price by fuel ($/MWh)</h2></div>
+        <div class="chart-container" id="chart-capture" style="height:300px;"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header"><h2 id="title-neg">Negative prices by region</h2></div>
+        <div class="chart-container" id="chart-neg" style="height:300px;"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header"><h2 id="title-cf">Capacity factor by fuel (%)</h2></div>
+        <div class="chart-container" id="chart-cf" style="height:320px;"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header"><h2 id="title-cfunits">Capacity factor, top units (%)</h2></div>
+        <div class="chart-container" id="chart-cfunits" style="height:320px;"></div>
+      </div>
+    </div>
+    <p class="insights-note">
+      Utility-scale only: rooftop solar is not in AEMO's dispatch data, so renewable shares are
+      lower than figures that include it. Renewables = solar, wind, hydro and bioenergy; batteries
+      ("Grid") are storage and count on neither side. Capture price = generation-weighted price the
+      fuel earned in its region (5-minute prices for ranges up to 30 days, daily averages beyond).
+      Capacity factor = energy / (registered capacity &times; hours), over units that generated in
+      the range. All charts follow the header filters.
+    </p>
   </div>
 
   <div id="view-analyze" role="tabpanel" aria-labelledby="tab-analyze" style="display:none">
@@ -705,6 +749,10 @@
     // JOINed to it so those still count toward totals, grouped as "Unregistered"; units that
     // are in it without a fuel are "Unknown".
     const UNREGISTERED = 'Unregistered';
+    // Renewable fuels as AEMO describes them. 'Grid' (batteries) is storage: neither side.
+    const RENEWABLE_FUELS = ['Solar', 'Wind', 'Water', 'Bagasse', 'Biogas - sludge',
+      'Landfill methane / landfill gas', 'Sewerage / waste water'];
+    const renewableSql = () => RENEWABLE_FUELS.map(sqlStr).join(',');
     const FUEL = `CASE WHEN d.DUID IS NULL THEN '${UNREGISTERED}' ELSE COALESCE(d.FuelSourceDescriptor, 'Unknown') END`;
 
     const sql = {
@@ -722,8 +770,8 @@
       },
 
       // --- WHERE clauses ---
-      whereScada() {
-        const region = activeRegion(), fuel = activeFuel();
+      whereScada({ withFuel = true } = {}) {
+        const region = activeRegion(), fuel = withFuel ? activeFuel() : null;
         const { from, to } = getDateRange();
         const clauses = [`c.date >= ${sqlStr(from)} AND c.date <= ${sqlStr(to)}`];
         if (region) clauses.push(`d.Region = ${sqlStr(region)}`);
@@ -1097,6 +1145,243 @@
       }
     }
 
+    // =========================================================================
+    // 6b. INSIGHTS (renewables, price heatmap, daily profile, capture price,
+    //     negative prices, capacity factor)
+    // =========================================================================
+
+    // Renewable share per interval (or day); the fuel filter is ignored on purpose.
+    function renewableShareSql() {
+      const intraday = isIntradayMode();
+      const v = intraday ? 'GREATEST(sc.mw, 0)' : 'GREATEST(sc.mwh, 0)';
+      return `
+        SELECT CAST(sc.date AS VARCHAR) AS date${intraday ? ', CAST(sc.time AS INTEGER) AS time' : ''},
+          SUM(CASE WHEN ${FUEL} IN (${renewableSql()}) THEN ${v} ELSE 0 END)::DOUBLE AS re,
+          SUM(CASE WHEN ${FUEL} <> 'Grid' THEN ${v} ELSE 0 END)::DOUBLE AS total
+        FROM ${sql.fromScada()}
+        WHERE ${sql.whereScada({ withFuel: false })}
+        GROUP BY ALL ORDER BY ALL`;
+    }
+
+    async function updateRenewablesKpi(seq) {
+      const rows = await runQuery(renewableShareSql());
+      if (seq !== _renderSeq) return;
+      const re = rows.reduce((s, r) => s + r.re, 0), total = rows.reduce((s, r) => s + r.total, 0);
+      if (!total) return setKpi('kpiRE', '--', 'share of generation');
+      let peak = null;
+      for (const r of rows) if (r.total > 0 && (!peak || r.re / r.total > peak.share)) peak = { share: r.re / r.total, r };
+      const when = peak.r.time != null ? `${formatDate(peak.r.date).replace(/ \d{4}$/, '')} ${formatTime(peak.r.time)}` : formatDate(peak.r.date);
+      setKpi('kpiRE', `${(100 * re / total).toFixed(1)}%`, `peak ${(100 * peak.share).toFixed(0)}% (${when})`);
+    }
+
+    async function renderInsights(seq) {
+      await Promise.all([renderRenewables(seq), renderHeatmap(seq), renderProfile(seq),
+        renderCapture(seq), renderNegative(seq), renderCapacityFactor(seq)]);
+    }
+
+    async function renderRenewables(seq) {
+      const intraday = isIntradayMode();
+      const rows = await runQuery(renewableShareSql());
+      if (seq !== _renderSeq) return;
+      if (!rows.length) return showEmpty('chart-re');
+      const { xKeys, xLabels } = buildTimeAxis(rows, intraday);
+      const lookup = buildLookup(rows, r => intraday ? `${r.date}|${padTime(r.time)}` : r.date,
+        r => r.total ? Math.round(1000 * r.re / r.total) / 10 : null);
+      getChart('chart-re').setOption({
+        tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '-' : `${v}%` },
+        grid: { left: 45, right: 20, top: 15, bottom: intraday ? 60 : 25 },
+        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 11 } },
+        yAxis: { type: 'value', min: 0, max: 100, axisLabel: { formatter: '{value}%' } },
+        dataZoom: dataZoomConfig(intraday),
+        series: [{ name: 'Renewables', type: 'line', symbol: 'none', sampling: 'average',
+          lineStyle: { width: 1.5, color: '#3fb950' }, areaStyle: { color: 'rgba(63,185,80,0.25)' },
+          data: xKeys.map(k => lookup.get(k) ?? null) }],
+      }, true);
+    }
+
+    // Intraday: hour of day x date. Daily: region x date (there is no time of day).
+    async function renderHeatmap(seq) {
+      const intraday = isIntradayMode();
+      const rows = await runQuery(intraday ? `
+          SELECT CAST(p.date AS VARCHAR) AS date, CAST(p.time // 100 AS INTEGER) AS y, AVG(p.price)::DOUBLE AS price
+          FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()} GROUP BY ALL ORDER BY ALL` : `
+          SELECT CAST(p.date AS VARCHAR) AS date, p.REGIONID AS y, AVG(p.price)::DOUBLE AS price
+          FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()} GROUP BY ALL ORDER BY ALL`);
+      if (seq !== _renderSeq) return;
+      document.getElementById('title-heat').textContent = intraday
+        ? 'Price by hour of day ($/MWh)' : 'Daily price by region ($/MWh)';
+      if (!rows.length) return showEmpty('chart-heat');
+      const dates = [...new Set(rows.map(r => r.date))].sort();
+      const ys = intraday ? [...Array(24).keys()] : [...new Set(rows.map(r => r.y))].sort();
+      const yLabels = intraday ? ys.map(h => `${String(h).padStart(2, '0')}:00`) : ys.map(regionName);
+      const vals = rows.map(r => r.price).sort((a, b) => a - b);
+      const q = f => vals[Math.min(vals.length - 1, Math.floor(f * vals.length))];
+      getChart('chart-heat').setOption({
+        tooltip: { position: 'top', formatter: p => `${formatDate(dates[p.value[0]])} &middot; ${yLabels[p.value[1]]}<br><b>$${p.value[2].toFixed(1)}</b>` },
+        grid: { left: intraday ? 50 : 110, right: 15, top: 10, bottom: 70 },
+        xAxis: { type: 'category', data: dates.map(d => formatDate(d).replace(/ \d{4}$/, '')), axisLabel: { hideOverlap: true, fontSize: 11 } },
+        yAxis: { type: 'category', data: yLabels, axisLabel: { fontSize: 10 } },
+        // Scale clipped to the 2nd-98th percentile so one spike doesn't wash out the rest.
+        visualMap: { min: Math.min(0, Math.floor(q(0.02))), max: Math.max(1, Math.ceil(q(0.98))), calculable: true,
+          orient: 'horizontal', left: 'center', bottom: 0, itemHeight: 120, textStyle: { fontSize: 10 },
+          inRange: { color: ['#2c7bb6', '#abd9e9', '#ffffbf', '#fdae61', '#d7191c'] } },
+        series: [{ type: 'heatmap', progressive: 2000,
+          data: rows.map(r => [dates.indexOf(r.date), ys.indexOf(r.y), r.price]) }],
+      }, true);
+    }
+
+    // Average MW at each time of day, by fuel: the "duck curve" when solar is in the mix.
+    async function renderProfile(seq) {
+      if (!isIntradayMode()) return showEmpty('chart-profile', 'Choose a range of 30 days or less (needs 5-minute data)');
+      const rows = await runQuery(`
+        SELECT ${FUEL} AS fuel, CAST(sc.time AS INTEGER) AS time,
+          (SUM(GREATEST(sc.mw, 0)) / COUNT(DISTINCT sc.date))::DOUBLE AS mw
+        FROM ${sql.fromScada()} WHERE ${sql.whereScada()} AND ${FUEL} <> 'Grid'
+        GROUP BY ALL ORDER BY ALL`);
+      if (seq !== _renderSeq) return;
+      if (!rows.length) return showEmpty('chart-profile');
+      const times = [...new Set(rows.map(r => r.time))].sort((a, b) => a - b);
+      const totals = {};
+      for (const r of rows) totals[r.fuel] = (totals[r.fuel] || 0) + r.mw;
+      const fuels = Object.keys(totals).sort((a, b) => totals[b] - totals[a]);
+      const lookup = buildLookup(rows, r => `${r.fuel}|${r.time}`, r => r.mw);
+      getChart('chart-profile').setOption({
+        tooltip: { trigger: 'axis', valueFormatter: v => `${Math.round(v).toLocaleString()} MW` },
+        legend: { type: 'scroll', top: 0, itemWidth: 10, itemHeight: 10, textStyle: { fontSize: 10 } },
+        grid: { left: 50, right: 15, top: 30, bottom: 25 },
+        xAxis: { type: 'category', data: times.map(formatTime), boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 11 } },
+        yAxis: { type: 'value', axisLabel: { formatter: v => v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v } },
+        series: fuels.map(f => ({ name: f, type: 'line', stack: 'total', symbol: 'none', lineStyle: { width: 0 },
+          areaStyle: { opacity: 0.85 }, itemStyle: { color: fuelColor(f) },
+          data: times.map(t => lookup.get(`${f}|${t}`) || 0) })),
+      }, true);
+    }
+
+    // Generation-weighted price each fuel earned in its own region, against the plain average.
+    async function renderCapture(seq) {
+      const intraday = isIntradayMode();
+      const pView = intraday ? 'v_price' : 'v_price_daily';
+      const v = intraday ? 'GREATEST(sc.mw, 0)' : 'GREATEST(sc.mwh, 0)';
+      const rows = await runQuery(`
+        SELECT ${FUEL} AS fuel,
+          (SUM(${v} * p.price) / NULLIF(SUM(${v}), 0))::DOUBLE AS capture,
+          SUM(${v})::DOUBLE AS volume
+        FROM ${sql.fromScada()}
+        JOIN ${pView} p ON p.date = sc.date ${intraday ? 'AND p.time = sc.time' : ''} AND p.REGIONID = d.Region
+        WHERE ${sql.whereScada({ withFuel: false })} AND ${FUEL} <> 'Grid'
+        GROUP BY ALL HAVING SUM(${v}) > 0 ORDER BY capture`);
+      const avg = await runQuery(`SELECT AVG(p.price)::DOUBLE AS avg FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()}`);
+      if (seq !== _renderSeq) return;
+      document.getElementById('title-capture').textContent =
+        `Capture price by fuel ($/MWh${intraday ? '' : ', from daily prices'})`;
+      // Fuels with a sliver of output make noisy bars; keep those above 0.5% of the volume.
+      const total = rows.reduce((s, r) => s + r.volume, 0);
+      const shown = rows.filter(r => r.volume >= 0.005 * total);
+      if (!shown.length) return showEmpty('chart-capture');
+      getChart('chart-capture').setOption({
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => `$${v.toFixed(1)}` },
+        grid: { left: 150, right: 30, top: 10, bottom: 40 },
+        xAxis: { type: 'value', axisLabel: { formatter: '${value}' } },
+        yAxis: { type: 'category', data: shown.map(r => r.fuel), axisLabel: { fontSize: 11 } },
+        series: [{ type: 'bar', name: 'Capture price', barMaxWidth: 18,
+          data: shown.map(r => ({ value: Math.round(r.capture * 10) / 10, itemStyle: { color: fuelColor(r.fuel) } })),
+          markLine: avg[0]?.avg == null ? undefined : { symbol: 'none', label: { formatter: 'avg price ${c}', position: 'start', fontSize: 10, color: cssVar('--muted') },
+            lineStyle: { type: 'dashed', color: cssVar('--muted') }, data: [{ xAxis: Math.round(avg[0].avg * 10) / 10 }] } }],
+      }, true);
+    }
+
+    async function renderNegative(seq) {
+      const intraday = isIntradayMode();
+      const rows = await runQuery(`
+        SELECT p.REGIONID AS region, (100 * AVG(CASE WHEN p.price < 0 THEN 1 ELSE 0 END))::DOUBLE AS pct,
+          MIN(p.price)::DOUBLE AS lowest
+        FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()} GROUP BY ALL ORDER BY region`);
+      if (seq !== _renderSeq) return;
+      document.getElementById('title-neg').textContent = intraday
+        ? 'Share of 5-minute intervals with negative prices (%)' : 'Share of days with a negative average price (%)';
+      if (!rows.length) return showEmpty('chart-neg');
+      getChart('chart-neg').setOption({
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
+          formatter: ps => `${ps[0].name}<br><b>${ps[0].value.toFixed(1)}%</b> negative<br>lowest $${rows[ps[0].dataIndex].lowest.toFixed(0)}` },
+        grid: { left: 110, right: 30, top: 10, bottom: 25 },
+        xAxis: { type: 'value', axisLabel: { formatter: '{value}%' } },
+        yAxis: { type: 'category', data: rows.map(r => regionName(r.region)), axisLabel: { fontSize: 11 } },
+        series: [{ type: 'bar', barMaxWidth: 18, itemStyle: { color: '#2c7bb6' },
+          data: rows.map(r => Math.round(r.pct * 10) / 10) }],
+      }, true);
+    }
+
+    // Older energy_dim files (cached, or deployed before 2026-10-01) have no capacity columns.
+    let _hasCapacity = null;
+    async function hasCapacity() {
+      if (_hasCapacity == null) {
+        const r = await runQuery(`SELECT COUNT(*)::INTEGER AS n FROM information_schema.columns
+          WHERE table_catalog = 'dim' AND table_name = 'dim_duid' AND column_name = 'RegCapMW'`);
+        _hasCapacity = r[0]?.n > 0;
+      }
+      return _hasCapacity;
+    }
+
+    async function renderCapacityFactor(seq) {
+      if (!(await hasCapacity())) {
+        showEmpty('chart-cf', 'Capacity data not deployed yet');
+        return showEmpty('chart-cfunits', 'Capacity data not deployed yet');
+      }
+      const intraday = isIntradayMode();
+      // Hours in the range = intervals (or days) present in the price data for it.
+      const hours = intraday
+        ? `(SELECT COUNT(DISTINCT (p.date, p.time)) / 12.0 FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()})`
+        : `(SELECT COUNT(DISTINCT p.date) * 24.0 FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()})`;
+      const energy = intraday ? 'SUM(GREATEST(sc.mw, 0)) / 12.0' : 'SUM(GREATEST(sc.mwh, 0))';
+      const units = `
+        SELECT sc.DUID, ${FUEL} AS fuel, ANY_VALUE(d.StationName) AS station, ANY_VALUE(d.RegCapMW) AS cap,
+          ${energy} AS mwh
+        FROM ${sql.fromScada()} WHERE ${sql.whereScada()} AND d.RegCapMW > 0 AND ${FUEL} <> 'Grid'
+        GROUP BY sc.DUID, ${FUEL}`;
+      const [byFuel, top] = await Promise.all([
+        runQuery(`WITH u AS (${units}), h AS (SELECT ${hours} AS hours)
+          SELECT fuel, (100 * SUM(mwh) / (SUM(cap) * ANY_VALUE(h.hours)))::DOUBLE AS cf, SUM(cap)::DOUBLE AS cap
+          FROM u, h GROUP BY fuel HAVING SUM(cap) > 0 ORDER BY cf`),
+        runQuery(`WITH u AS (${units}), h AS (SELECT ${hours} AS hours)
+          SELECT DUID, fuel, station, cap, (100 * mwh / (cap * h.hours))::DOUBLE AS cf
+          FROM u, h ORDER BY cf DESC LIMIT 15`),
+      ]);
+      if (seq !== _renderSeq) return;
+      const pctAxis = { type: 'value', axisLabel: { formatter: '{value}%' } };
+      if (!byFuel.length) showEmpty('chart-cf');
+      else getChart('chart-cf').setOption({
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
+          formatter: ps => `${ps[0].name}<br><b>${ps[0].value.toFixed(1)}%</b> of ${Math.round(byFuel[ps[0].dataIndex].cap).toLocaleString()} MW registered` },
+        grid: { left: 150, right: 30, top: 10, bottom: 25 },
+        xAxis: pctAxis,
+        yAxis: { type: 'category', data: byFuel.map(r => r.fuel), axisLabel: { fontSize: 11 } },
+        series: [{ type: 'bar', barMaxWidth: 18,
+          data: byFuel.map(r => ({ value: Math.round(r.cf * 10) / 10, itemStyle: { color: fuelColor(r.fuel) } })) }],
+      }, true);
+      const topAsc = [...top].reverse();
+      if (!top.length) showEmpty('chart-cfunits');
+      else getChart('chart-cfunits').setOption({
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
+          formatter: ps => { const r = topAsc[ps[0].dataIndex];
+            return `${escapeHtml(r.DUID)} &middot; ${escapeHtml(r.station ?? '')}<br>${escapeHtml(r.fuel)}, ${Math.round(r.cap)} MW<br><b>${r.cf.toFixed(1)}%</b>`; } },
+        grid: { left: 90, right: 30, top: 10, bottom: 25 },
+        xAxis: pctAxis,
+        yAxis: { type: 'category', data: topAsc.map(r => r.DUID), axisLabel: { fontSize: 10 } },
+        series: [{ type: 'bar', barMaxWidth: 14,
+          data: topAsc.map(r => ({ value: Math.round(r.cf * 10) / 10, itemStyle: { color: fuelColor(r.fuel) } })) }],
+      }, true);
+      // Clicking a unit filters the whole page to it, like a click on the map.
+      const chart = getChart('chart-cfunits');
+      chart.off('click');
+      chart.on('click', params => {
+        const duid = topAsc[params.dataIndex]?.DUID;
+        if (!duid) return;
+        if (!crossFilter.duids.includes(duid)) crossFilter.duids.push(duid);
+        updateDuidTrigger();
+        renderAll();
+      });
+    }
+
     // --- Generator Map (geo scatter) ---
     let australiaMapRegistered = false;
 
@@ -1265,12 +1550,14 @@
           b.tabIndex = on ? 0 : -1;
         }
         const tab = btn.dataset.tab;
-        document.getElementById('view-dashboard').style.display = tab === 'dashboard' ? '' : 'none';
-        document.getElementById('view-analyze').style.display = tab === 'analyze' ? '' : 'none';
+        for (const t of ['dashboard', 'insights', 'analyze']) {
+          document.getElementById(`view-${t}`).style.display = tab === t ? '' : 'none';
+        }
+        if (tab === 'insights') renderInsights(_renderSeq);
         // Populate the SQL box the first time Analyze is opened; don't clobber manual edits after.
         if (tab === 'analyze' && !document.getElementById('analyzeSql').value.trim()) syncAnalyzeSql();
         // Charts drawn while hidden have zero size; resize once visible again.
-        if (tab === 'dashboard') Object.values(charts).forEach(c => c.resize());
+        if (tab !== 'analyze') Object.values(charts).forEach(c => c.resize());
       });
     }
 
@@ -1610,7 +1897,7 @@
     async function renderAll() {
       const seq = ++_renderSeq;
       if (!window._cutoffCached) setStatus("Querying...", "loading");
-      document.querySelector('.charts').classList.add('loading');
+      document.querySelectorAll('.charts').forEach(el => el.classList.add('loading'));
       updateFilterTags();
       const range = getDateRange();
       if (range.from && range.to && range.from > range.to) {
@@ -1623,11 +1910,13 @@
           const { from, to } = getDateRange();
           await ensurePeriods(periodsForRange(from, to), "Downloading detailed data...");
         }
-        await Promise.all([renderGeneration(seq), renderPrice(seq), renderMap(seq),
+        const insightsVisible = document.getElementById('view-insights').style.display !== 'none';
+        await Promise.all([renderGeneration(seq), renderPrice(seq), renderMap(seq), updateRenewablesKpi(seq),
+          insightsVisible ? renderInsights(seq) : null,
           runQuery(sql.generatorCount()).then(r => { if (seq === _renderSeq && r.length) document.getElementById('kpiGens').textContent = r[0].cnt.toLocaleString(); })
         ]);
         if (seq !== _renderSeq) return;
-        document.querySelector('.charts').classList.remove('loading');
+        document.querySelectorAll('.charts').forEach(el => el.classList.remove('loading'));
         if (!window._cutoffCached) {
           const cutoffResult = await runQuery(sql.cutoff);
           if (seq !== _renderSeq) return;
