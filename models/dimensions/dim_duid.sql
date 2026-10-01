@@ -67,12 +67,24 @@ WITH
   duid_aemo_ranked AS (
     {%- if has_registration %}
     SELECT DUID, Region, "Fuel Source - Descriptor" AS fuel, Participant,
+           "Station Name" AS StationName,
+           "Technology Type - Descriptor" AS TechnologyType,
+           TRY_CAST("Reg Cap generation (MW)" AS DOUBLE) AS RegCapMW,
+           TRY_CAST("Max Cap generation (MW)" AS DOUBLE) AS MaxCapMW,
+           -- the header has a trailing space in duid_data.csv and none in the workbook
+           TRY_CAST(COLUMNS('^Maximum storage capacity\s*$') AS DOUBLE) AS StorageMWh,
            CASE WHEN "Dispatch Type" ILIKE '%load%' THEN 1 ELSE 0 END AS priority
     FROM read_csv('{{ registration_csv }}', all_varchar = true)
     WHERE length(DUID) > 2
     UNION ALL
     {%- endif %}
-    SELECT DUID, Region, "Fuel Source - Descriptor", Participant, 2
+    SELECT DUID, Region, "Fuel Source - Descriptor", Participant,
+           "Station Name" AS StationName,
+           "Technology Type - Descriptor" AS TechnologyType,
+           TRY_CAST("Reg Cap generation (MW)" AS DOUBLE) AS RegCapMW,
+           TRY_CAST("Max Cap generation (MW)" AS DOUBLE) AS MaxCapMW,
+           TRY_CAST(COLUMNS('^Maximum storage capacity\s*$') AS DOUBLE) AS StorageMWh,
+           2
     FROM read_csv('{{ csv_archive_path }}/duid/duid_data.csv', all_varchar = true)
     WHERE length(DUID) > 2
   ),
@@ -82,7 +94,12 @@ WITH
       DUID,
       arg_min(Region, priority) AS Region,
       arg_min(fuel, priority) AS FuelSourceDescriptor,
-      arg_min(Participant, priority) AS Participant
+      arg_min(Participant, priority) AS Participant,
+      arg_min(StationName, priority) AS StationName,
+      arg_min(TechnologyType, priority) AS TechnologyType,
+      arg_min(RegCapMW, priority) AS RegCapMW,
+      arg_min(MaxCapMW, priority) AS MaxCapMW,
+      arg_min(StorageMWh, priority) AS StorageMWh
     FROM duid_aemo_ranked
     GROUP BY DUID
   ),
@@ -106,7 +123,12 @@ WITH
       wa_facilities.DUID,
       wa_facilities.Region,
       wa_energy.Technology AS FuelSourceDescriptor,
-      wa_facilities.Participant
+      wa_facilities.Participant,
+      NULL::VARCHAR AS StationName,
+      NULL::VARCHAR AS TechnologyType,
+      NULL::DOUBLE AS RegCapMW,
+      NULL::DOUBLE AS MaxCapMW,
+      NULL::DOUBLE AS StorageMWh
     FROM wa_facilities
     LEFT JOIN wa_energy ON wa_facilities.DUID = wa_energy.DUID
   ),
@@ -134,7 +156,14 @@ SELECT
   first(a.Participant) AS Participant,
   first(states.State) AS State,
   first(geo.latitude) AS latitude,
-  first(geo.longitude) AS longitude
+  first(geo.longitude) AS longitude,
+  -- Registered capacity, for capacity factors (added 2026-10-01). Rows inserted before then
+  -- were filled by a rebuild=dim_duid; WA units have none.
+  first(a.StationName) AS StationName,
+  first(a.TechnologyType) AS TechnologyType,
+  first(a.RegCapMW) AS RegCapMW,
+  first(a.MaxCapMW) AS MaxCapMW,
+  first(a.StorageMWh) AS StorageMWh
 FROM duid_all a
 JOIN states ON a.Region = states.RegionID
 LEFT JOIN geo ON a.duid = geo.duid

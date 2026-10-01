@@ -135,7 +135,7 @@ cutoff (downloaded, sanity-checked, spliced — `cache_catalog.export_cutoff`). 
 |-------|--------|-----------------|
 | stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
 | dim_calendar | mart | incremental append (the NOT-IN filter keeps existing dates out; runs 2 years ahead) |
-| dim_duid | mart | incremental insert-only merge on DUID |
+| dim_duid | mart | incremental insert-only merge on DUID; carries registered capacity (RegCapMW etc.) since 2026-10-01 |
 | fct_scada, fct_price | landing | incremental insert-only merge (by file) |
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
 

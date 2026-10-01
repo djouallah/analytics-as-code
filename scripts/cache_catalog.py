@@ -152,7 +152,8 @@ def export_dim_duid():
     con = connect_iceberg()
     con.execute(f"""
         COPY (
-            SELECT DUID, Region, FuelSourceDescriptor, Participant, State, latitude, longitude
+            SELECT DUID, Region, FuelSourceDescriptor, Participant, State, latitude, longitude,
+                StationName, TechnologyType, RegCapMW, MaxCapMW, StorageMWh
             FROM catalog.mart.dim_duid
         ) TO '{DASHBOARD_DIR}/dim_duid.parquet' (FORMAT PARQUET);
     """)

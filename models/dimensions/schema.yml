@@ -21,6 +21,16 @@ models:
         description: Unit latitude (from the geo reference CSV; null when unknown)
       - name: longitude
         description: Unit longitude (from the geo reference CSV; null when unknown)
+      - name: StationName
+        description: Power station the unit belongs to (AEMO registration list; null for WA)
+      - name: TechnologyType
+        description: AEMO technology descriptor, e.g. "Battery and Inverter", "Steam Sub-Critical"
+      - name: RegCapMW
+        description: Registered generating capacity (MW); the capacity-factor denominator
+      - name: MaxCapMW
+        description: Maximum generating capacity (MW)
+      - name: StorageMWh
+        description: Maximum storage capacity (MWh) for batteries; null otherwise
 
   - name: dim_calendar
     description: Calendar dimension with date attributes
