@@ -289,8 +289,10 @@
       // HEAD request to check if remote file changed
       let remoteTag = null;
       try {
-        const head = await fetch(url, { method: 'HEAD' });
-        remoteTag = head.headers.get('content-length');
+        // ETag first: a .duckdb file grows in 256 KB blocks, so a rebuilt file very often
+        // keeps its exact size and a content-length key would keep serving the stale copy.
+        const head = await fetch(url, { method: 'HEAD', cache: 'no-store' });
+        remoteTag = head.headers.get('etag') || head.headers.get('last-modified') || head.headers.get('content-length');
       } catch (e) {
         console.log(`[OPFS] HEAD request failed (offline?), will use cache if available`);
       }
@@ -425,8 +427,8 @@
       let d = new Date(from);
       const end = new Date(to);
       while (d <= end) {
-        const y = d.getFullYear();
-        const h = d.getMonth() < 6 ? 1 : 2;
+        const y = d.getUTCFullYear();
+        const h = d.getUTCMonth() < 6 ? 1 : 2;
         const tag = `${y}_h${h}`;
         if (!periods.includes(tag)) periods.push(tag);
         d = new Date(h === 1 ? `${y}-07-01` : `${y + 1}-01-01`);
@@ -567,6 +569,19 @@
 
     function yieldToUI() { return new Promise(r => setTimeout(r, 0)); }
 
+    function csvCell(v, kind) {
+      if (v == null) return '';
+      if (typeof v === 'bigint') v = Number(v);
+      if (typeof v === 'number' && kind.startsWith('Date')) v = new Date(v).toISOString().slice(0, 10);
+      else if (typeof v === 'number' && kind.startsWith('Timestamp')) v = new Date(v).toISOString().replace('T', ' ').replace(/(\.000)?Z$/, '');
+      const s = String(v);
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    }
+
+    function escapeHtml(v) {
+      return String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
     async function downloadCSVDirect(sqlStr, filename) {
       const exportConn = await _db.connect();
       try {
@@ -575,7 +590,9 @@
         let headerWritten = false;
         let rowCount = 0;
         for await (const batch of reader) {
-          const cols = batch.schema.fields.map(f => f.name);
+          const fields = batch.schema.fields;
+          const cols = fields.map(f => f.name);
+          const kinds = fields.map(f => String(f.type));
           let chunk = '';
           if (!headerWritten) {
             chunk += cols.join(',') + '\n';
@@ -583,11 +600,7 @@
           }
           const n = Number(batch.numRows);
           for (let i = 0; i < n; i++) {
-            const vals = cols.map(c => {
-              let v = batch.getChild(c).get(i);
-              if (typeof v === 'bigint') v = Number(v);
-              return v ?? '';
-            });
+            const vals = cols.map((c, j) => csvCell(batch.getChild(c).get(i), kinds[j]));
             chunk += vals.join(',') + '\n';
           }
           chunks.push(chunk);
@@ -610,13 +623,19 @@
     // 5. SQL QUERY BUILDERS
     // =========================================================================
 
+    // dim_duid only holds currently-registered units, while the facts go back to 2018 and
+    // include retired ones (~10% of daily rows). Facts are LEFT JOINed to it so those still
+    // count toward totals, and grouped under this label instead of disappearing.
+    const UNREGISTERED = 'Unregistered';
+    const FUEL = `COALESCE(d.FuelSourceDescriptor, '${UNREGISTERED}')`;
+
     const sql = {
       // --- FROM clauses (views defined in refreshViews) ---
       // Intraday (<=30d): 5-min grain | daily (>30d): pre-aggregated
       fromScada() {
         return `${isIntradayMode() ? 'v_scada' : 'v_scada_daily'} sc
           JOIN dim.dim_calendar c ON c.date = sc.date
-          JOIN dim.dim_duid d ON sc.DUID = d.DUID`;
+          LEFT JOIN dim.dim_duid d ON sc.DUID = d.DUID`;
       },
 
       fromPrice() {
@@ -631,7 +650,7 @@
         const { from, to } = getDateRange();
         const clauses = [`c.date >= '${from}' AND c.date <= '${to}'`];
         if (region) clauses.push(`d.Region = '${region}'`);
-        if (fuel) clauses.push(`d.FuelSourceDescriptor = '${fuel}'`);
+        if (fuel) clauses.push(`${FUEL} = '${fuel}'`);
         if (crossFilter.duids.length) clauses.push(`sc.DUID IN (${crossFilter.duids.map(d => `'${d}'`).join(',')})`);
         return clauses.join(" AND ");
       },
@@ -698,12 +717,12 @@
       // --- Map ---
       mapScatter(col) {
         return `
-          SELECT sc.DUID, d.FuelSourceDescriptor AS fuel, d.Region,
+          SELECT sc.DUID, ${FUEL} AS fuel, d.Region,
             d.latitude::DOUBLE AS lat, d.longitude::DOUBLE AS lon,
             AVG(${col})::DOUBLE AS mw
           FROM ${sql.fromScada()}
           WHERE ${sql.whereScada()} AND d.latitude IS NOT NULL
-          GROUP BY sc.DUID, d.FuelSourceDescriptor, d.Region, d.latitude, d.longitude`;
+          GROUP BY ALL`;
       },
 
       generatorCount() {
@@ -728,6 +747,20 @@
     }
     window.addEventListener('resize', () => { Object.values(charts).forEach(c => c.resize()); });
 
+    // An empty result replaces the chart with a message instead of leaving the previous
+    // render (and its KPIs) on screen as if it still matched the filters.
+    function showEmpty(id, msg = 'No data for the selected filters') {
+      getChart(id).setOption({
+        title: { text: msg, left: 'center', top: 'middle', textStyle: { color: '#8b949e', fontSize: 13, fontWeight: 'normal' } },
+        series: [],
+      }, true);
+    }
+    function setKpi(id, value, sub = '') {
+      document.getElementById(id).textContent = value;
+      const subEl = document.getElementById(id + 'Sub');
+      if (subEl) subEl.textContent = sub;
+    }
+
     // --- Generation by Fuel Type (stacked area) ---
     async function renderGeneration(seq) {
       const intraday = isIntradayMode();
@@ -739,11 +772,16 @@
         : `Generation by Fuel Type (${unit})`;
 
       const valCol = intraday ? 'sc.mw' : 'sc.mwh';
-      const seriesCol = drillFuel ? 'sc.DUID' : 'd.FuelSourceDescriptor';
-      const seriesAlias = drillFuel ? 'sc.DUID AS series' : 'd.FuelSourceDescriptor AS series';
+      const seriesCol = drillFuel ? 'sc.DUID' : FUEL;
+      const seriesAlias = drillFuel ? 'sc.DUID AS series' : `${FUEL} AS series`;
 
       const data = await runQuery(sql.generation(seriesAlias, seriesCol, valCol, intraday));
-      if (seq !== _renderSeq || !data.length) return;
+      if (seq !== _renderSeq) return;
+      if (!data.length) {
+        showEmpty('chart-generation');
+        setKpi('kpiGen', '--'); setKpi('kpiTopFuel', '--');
+        return updateLatestMW(seq);
+      }
 
       const { xKeys, xLabels } = buildTimeAxis(data, intraday);
       const lookup = buildLookup(data,
@@ -824,26 +862,31 @@
         const avgLabel = intraday ? 'MW avg' : 'MWh/day avg';
         document.getElementById('kpiTopFuelSub').textContent = `${Math.round(topFuel[1] / (uniqueIntervals || 1)).toLocaleString()} ${avgLabel}`;
       }
+      await updateLatestMW(seq);
+    }
 
-      // Latest MW: latest 5-min reading, respects region/fuel/DUID filters but ignores date
+    // Latest MW: latest 5-min reading, respects region/fuel/DUID filters but ignores date
+    async function updateLatestMW(seq) {
       const region = document.getElementById("regionFilter").value || crossFilter.region;
       const fuel = document.getElementById("fuelFilter").value || crossFilter.fuel;
       const mwFilters = [];
       if (region) mwFilters.push(`d.Region = '${region}'`);
-      if (fuel) mwFilters.push(`d.FuelSourceDescriptor = '${fuel}'`);
+      if (fuel) mwFilters.push(`${FUEL} = '${fuel}'`);
       if (crossFilter.duids.length) mwFilters.push(`sc.DUID IN (${crossFilter.duids.map(d => `'${d}'`).join(',')})`);
       const mwWhere = mwFilters.length ? `AND ${mwFilters.join(' AND ')}` : '';
       const latestMWResult = await runQuery(`
         SELECT SUM(sc.mw)::DOUBLE AS total_mw, CAST(sc.date AS VARCHAR) AS d, sc.time
         FROM today.scada_today sc
-        JOIN dim.dim_duid d ON sc.DUID = d.DUID
+        LEFT JOIN dim.dim_duid d ON sc.DUID = d.DUID
         WHERE sc.date = (SELECT MAX(date) FROM today.scada_today)
           AND sc.time = (SELECT MAX(time) FROM today.scada_today WHERE date = (SELECT MAX(date) FROM today.scada_today))
           ${mwWhere}
         GROUP BY sc.date, sc.time`);
+      if (seq !== _renderSeq) return;
       if (latestMWResult.length) {
-        document.getElementById('kpiLatestMW').textContent = Math.round(latestMWResult[0].total_mw).toLocaleString();
-        document.getElementById('kpiLatestMWSub').textContent = `at ${formatTime(latestMWResult[0].time)}`;
+        setKpi('kpiLatestMW', Math.round(latestMWResult[0].total_mw).toLocaleString(), `at ${formatTime(latestMWResult[0].time)}`);
+      } else {
+        setKpi('kpiLatestMW', '--');
       }
     }
 
@@ -852,7 +895,12 @@
       const intraday = isIntradayMode();
 
       const data = await runQuery(sql.price(intraday));
-      if (seq !== _renderSeq || !data.length) return;
+      if (seq !== _renderSeq) return;
+      if (!data.length) {
+        showEmpty('chart-price');
+        setKpi('kpiPrice', '--');
+        return updateLatestPrice(seq);
+      }
 
       const { xKeys, xLabels } = buildTimeAxis(data, intraday);
       const lookup = buildLookup(data,
@@ -903,9 +951,11 @@
       // KPI: avg price
       const avgPrice = data.reduce((s, d) => s + d.avg_price, 0) / data.length;
       document.getElementById('kpiPrice').textContent = '$' + avgPrice.toFixed(1);
+      await updateLatestPrice(seq);
+    }
 
-      // Latest Price: always from latest 5-min reading in today DB
-      // Latest Price: latest 5-min reading, respects region filter but ignores date
+    // Latest Price: latest 5-min reading, respects region filter but ignores date
+    async function updateLatestPrice(seq) {
       const regionP = document.getElementById("regionFilter").value || crossFilter.region;
       const priceWhere = regionP ? `AND p.REGIONID = '${regionP}'` : '';
       const latestPriceResult = await runQuery(`
@@ -915,9 +965,11 @@
           AND p.time = (SELECT MAX(time) FROM today.price_today WHERE date = (SELECT MAX(date) FROM today.price_today))
           ${priceWhere}
         GROUP BY p.date, p.time`);
+      if (seq !== _renderSeq) return;
       if (latestPriceResult.length) {
-        document.getElementById('kpiLatestPrice').textContent = '$' + latestPriceResult[0].avg_price.toFixed(1);
-        document.getElementById('kpiLatestPriceSub').textContent = `at ${formatTime(latestPriceResult[0].time)}`;
+        setKpi('kpiLatestPrice', '$' + latestPriceResult[0].avg_price.toFixed(1), `at ${formatTime(latestPriceResult[0].time)}`);
+      } else {
+        setKpi('kpiLatestPrice', '--');
       }
     }
 
@@ -925,26 +977,32 @@
     let australiaMapRegistered = false;
 
     async function registerAustraliaMap() {
-      if (australiaMapRegistered) return;
-      const resp = await fetch('https://raw.githubusercontent.com/rowanhogan/australian-states/master/states.geojson');
-      const geoJson = await resp.json();
-      echarts.registerMap('australia', geoJson);
-      australiaMapRegistered = true;
+      if (australiaMapRegistered) return true;
+      try {
+        const resp = await fetch('https://raw.githubusercontent.com/rowanhogan/australian-states/master/states.geojson');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        echarts.registerMap('australia', await resp.json());
+        australiaMapRegistered = true;
+      } catch (e) {
+        console.warn('[Map] Australia outline unavailable:', e);
+      }
+      return australiaMapRegistered;
     }
 
     async function renderMap(seq) {
-      await registerAustraliaMap();
+      const mapReady = await registerAustraliaMap();
       if (seq !== _renderSeq) return;
+      if (!mapReady) return showEmpty('chart-map', 'Map outline unavailable');
 
       const intraday = isIntradayMode();
       const unit = intraday ? 'MW' : 'MWh';
       const col = intraday ? 'sc.mw' : 'sc.mwh';
 
       const data = await runQuery(sql.mapScatter(col));
-      if (seq !== _renderSeq || !data.length) return;
+      if (seq !== _renderSeq) return;
 
       const fuels = [...new Set(data.map(d => d.fuel))].sort();
-      const maxMw = Math.max(...data.map(d => d.mw));
+      const maxMw = Math.max(1, ...data.map(d => d.mw));
 
       const series = fuels.map(fuel => ({
         name: fuel,
@@ -1137,7 +1195,7 @@
       }
 
       if (dimensions.duid && hasGen) { sel.push('sc.DUID'); grp.push('sc.DUID'); ord.push('sc.DUID'); }
-      if (dimensions.fuel && hasGen) { sel.push('d.FuelSourceDescriptor AS fuel'); grp.push('d.FuelSourceDescriptor'); }
+      if (dimensions.fuel && hasGen) { sel.push(`${FUEL} AS fuel`); grp.push(FUEL); }
       if (dimensions.region) {
         if (hasGen) { sel.push('d.Region AS region'); grp.push('d.Region'); }
         else { sel.push('p.REGIONID AS region'); grp.push('p.REGIONID'); }
@@ -1160,13 +1218,13 @@
         const timeJoin = raw ? 'AND sc.time = p.time' : '';
         from = `${scView} sc
           JOIN dim.dim_calendar c ON c.date = sc.date
-          JOIN dim.dim_duid d ON sc.DUID = d.DUID
+          LEFT JOIN dim.dim_duid d ON sc.DUID = d.DUID
           LEFT JOIN ${prView} p ON sc.date = p.date ${timeJoin} AND d.Region = p.REGIONID`;
       } else if (hasGen) {
         const scView = raw ? 'v_scada' : 'v_scada_daily';
         from = `${scView} sc
           JOIN dim.dim_calendar c ON c.date = sc.date
-          JOIN dim.dim_duid d ON sc.DUID = d.DUID`;
+          LEFT JOIN dim.dim_duid d ON sc.DUID = d.DUID`;
       } else {
         const prView = raw ? 'v_price' : 'v_price_daily';
         from = `${prView} p
@@ -1197,7 +1255,8 @@
     async function ensureAnalyzeData() {
       const { dimensions } = getAnalyzeOptions();
       if (dimensions.time) {
-        await ensurePeriods(null, "Downloading detailed data for export...");
+        const { from, to } = getDateRange();
+        await ensurePeriods(periodsForRange(from, to), "Downloading detailed data for export...");
       } else {
         if (!aggLoaded) await loadDailyAggDatabase();
       }
@@ -1232,9 +1291,9 @@
         }
 
         const cols = Object.keys(rows[0]);
-        let html = '<thead><tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
+        let html = '<thead><tr>' + cols.map(c => `<th>${escapeHtml(c)}</th>`).join('') + '</tr></thead><tbody>';
         for (const row of rows) {
-          html += '<tr>' + cols.map(c => `<td>${row[c] ?? ''}</td>`).join('') + '</tr>';
+          html += '<tr>' + cols.map(c => `<td>${escapeHtml(row[c])}</td>`).join('') + '</tr>';
         }
         html += '</tbody>';
         table.innerHTML = html;
@@ -1357,8 +1416,8 @@
       const minDateResult = await runQuery("SELECT CAST(MIN(date) AS VARCHAR) AS d FROM dim.dim_calendar");
       const maxDate = maxDateResult[0].d;
       const minDate = minDateResult[0].d;
-      const fromDate = new Date(maxDate);
-      fromDate.setDate(fromDate.getDate() - 3);
+      const fromDate = new Date(`${maxDate}T00:00:00Z`);
+      fromDate.setUTCDate(fromDate.getUTCDate() - 3);
       document.getElementById("dateTo").value = maxDate;
       document.getElementById("dateTo").min = minDate;
       document.getElementById("dateTo").max = maxDate;
@@ -1405,6 +1464,12 @@
       if (!window._cutoffCached) setStatus("Querying...", "loading");
       document.querySelector('.charts').classList.add('loading');
       updateFilterTags();
+      const range = getDateRange();
+      if (range.from && range.to && range.from > range.to) {
+        document.querySelector('.charts').classList.remove('loading');
+        setStatus("'From' date is after 'To' date", "error");
+        return;
+      }
       try {
         if (isIntradayMode()) {
           const { from, to } = getDateRange();
@@ -1419,8 +1484,10 @@
           const cutoffResult = await runQuery(sql.cutoff);
           if (seq !== _renderSeq) return;
           if (cutoffResult.length && cutoffResult[0].last_update) {
-            const updated = new Date(cutoffResult[0].last_update).toLocaleString("en-AU", { timeZone: "Australia/Brisbane", dateStyle: "medium", timeStyle: "short" });
-            window._cutoffCached = `${updated} AEST`;
+            // Already AEST wall clock: format the string as-is. new Date() would read it
+            // in the viewer's zone (wrong outside Brisbane, Invalid Date on Safari).
+            const [day, hhmm] = cutoffResult[0].last_update.split(' ');
+            window._cutoffCached = `${formatDate(day)} ${hhmm} AEST`;
           }
         }
         setStatus(window._cutoffCached || "Connected", "connected");
