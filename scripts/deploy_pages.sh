@@ -24,18 +24,24 @@ REMOTE=${DEPLOY_REMOTE:-"https://x-access-token:${NEMTRACKER_TOKEN}@github.com/N
 # function called as an `if` condition.
 publish_once() {
   local work=$1
-  git clone -q --depth 1 --filter=blob:none --no-checkout --branch main "$REMOTE" "$work" || return 1
+  # The clone has no blobs, and git fetches a missing one on demand whenever it wants an old
+  # file's content -- for the .duckdb files that is ~100 MB a deploy. Three places asked:
+  # autocrlf's safe-crlf check in `git add` (off: these are binary and published verbatim),
+  # porcelain `git diff` (diff-index below), and the thin-pack delta search in `git push`
+  # (pack.window=0 + --no-thin: send whole objects, never look for a base).
+  git clone -q -c core.autocrlf=false --depth 1 --filter=blob:none --no-checkout --branch main "$REMOTE" "$work" || return 1
   cd "$work" || return 1
   git read-tree HEAD || return 1               # index = deployed tree; no blobs downloaded
   cp -r "$SRC"/. . || return 1
   (cd "$SRC" && find . -type f -print0) | xargs -0 git add -f -- || return 1
-  if git diff --cached --quiet; then
+  # diff-index without rename detection compares hashes only.
+  if git diff-index --cached --quiet --no-renames HEAD; then
     echo "Nothing changed; skipping commit."
     return 0
   fi
-  git diff --cached --name-status              # hashes only: --stat would fetch old blobs
+  git diff-index --cached --name-status --no-renames HEAD
   git -c user.name=djouallah -c user.email=djouallah@users.noreply.github.com     commit -q -m "$MSG" || return 1
-  git push -q origin HEAD:main
+  git -c pack.window=0 push -q --no-thin origin HEAD:main
 }
 
 for attempt in 1 2 3 4 5; do

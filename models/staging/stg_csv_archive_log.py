@@ -326,8 +326,14 @@ def model(dbt, session):
         WHERE source_type LIKE 'duid_%'
     """).fetchone()[0]
 
+    # Also refresh at once if the log has never seen the registration list (it was added
+    # 2026-10-01): dim_duid reads it whenever it is there.
+    has_registration_log = session.sql(
+        "SELECT count(*) FROM _csv_archive_log WHERE source_type = 'duid_registration'"
+    ).fetchone()[0] > 0
     skip_duid = (
         last_duid_download is not None
+        and has_registration_log
         and (datetime.now(last_duid_download.tzinfo) - last_duid_download).total_seconds() < 86400
     )
 
@@ -346,6 +352,42 @@ def model(dbt, session):
                         {", header=true" if source_filename == "WA_ENERGY" else ""})
                 ) TO ('{csv_archive_path}/duid/{csv_filename}') (FORMAT CSV, HEADER)
             """)
+
+        # AEMO's NEM Registration and Exemption List, as archived weekly by
+        # djouallah/aemo_data (data/duid/registration/<name>_<YYYYMMDD>.xls, really an
+        # .xlsx). duid_data.csv above is a one-off conversion of it from 2026-07-27 that
+        # nothing refreshes, so every unit registered since was missing from dim_duid (55
+        # generating on 2026-10-01). Its generator sheet is saved as registration.csv; when
+        # this fails, dim_duid carries on with duid_data.csv alone.
+        try:
+            import json
+            api = "https://api.github.com/repos/djouallah/aemo_data/contents/data/duid/registration"
+            headers = {"User-Agent": "dbt-aemo"}
+            token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            listing = json.loads(urllib.request.urlopen(
+                urllib.request.Request(api, headers=headers), timeout=60).read())
+            latest = max((f for f in listing if f["name"].startswith("NEM-Registration")),
+                         key=lambda f: f["name"])
+            xlsx_bytes = urllib.request.urlopen(latest["download_url"], timeout=120).read()
+            with tempfile.TemporaryDirectory() as tmp:
+                xlsx_path = os.path.join(tmp, "registration.xlsx").replace("\\", "/")
+                with open(xlsx_path, "wb") as f:
+                    f.write(xlsx_bytes)
+                session.sql("INSTALL excel; LOAD excel;")
+                session.sql(f"""
+                    COPY (
+                        SELECT * FROM read_xlsx('{xlsx_path}', sheet = 'PU and Scheduled Loads',
+                                                all_varchar = true)
+                        WHERE DUID IS NOT NULL
+                    ) TO ('{csv_archive_path}/duid/registration.csv') (FORMAT CSV, HEADER)
+                """)
+            duid_sources.append(("duid_registration", latest["name"].rsplit(".", 1)[0],
+                                 latest["download_url"], "registration.csv"))
+            print(f"  DUID registration list: {latest['name']}")
+        except Exception as e:
+            print(f"  WARN: AEMO registration list unavailable, dim_duid keeps duid_data.csv only: {e}")
 
         # Delete old DUID log entries and re-insert
         session.sql("DELETE FROM _csv_archive_log WHERE source_type LIKE 'duid_%'")

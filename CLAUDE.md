@@ -48,6 +48,10 @@ Three deliberate local differences, all of which must survive a port:
    reference, self-gated on data rather than on a schedule: the DUID download is skipped while
    the last one is < 24h old, and the GitHub historical backfill listing only runs when AEMO
    returned fewer than `download_limit` new files. There is no `daily_refresh` env var.
+   The DUID refresh also saves the generator sheet of AEMO's **NEM Registration and Exemption
+   List** (the newest copy archived weekly in `djouallah/aemo_data/data/duid/registration/`) as
+   `Files/csv/duid/registration.csv`; `dim_duid` prefers it over `duid_data.csv`, a 2026-07
+   snapshot nothing refreshes (by 2026-10-01, 55 generating DUIDs were missing from it).
 3. Work is discovered from the **log table**, not a filesystem glob: each fact model's pre-hook
    (`macros/pending_archive_files.sql`) builds its path list from
    `SELECT DISTINCT stg_csv_archive_log.archive_path` filtered by `NOT EXISTS` against

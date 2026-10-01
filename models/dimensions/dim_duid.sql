@@ -1,10 +1,23 @@
 {% set csv_archive_path = get_csv_archive_path() %}
+{% set registration_csv = csv_archive_path ~ '/duid/registration.csv' %}
+
+{#- AEMO's current registration list (written by stg_csv_archive_log since 2026-10-01). Read
+    only when it exists, so a failed download or a fresh archive falls back to duid_data.csv. -#}
+{%- if execute -%}
+  {%- set has_registration = run_query("SELECT count(*) FROM glob('" ~ registration_csv ~ "')").rows[0][0] > 0 -%}
+{%- else -%}
+  {%- set has_registration = false -%}
+{%- endif -%}
 
 {# Check if there are new DUIDs not in the existing table #}
 {%- set check_new_duids_query -%}
   SELECT count(*) as cnt FROM (
     SELECT DUID FROM read_csv('{{ csv_archive_path }}/duid/duid_data.csv') WHERE length(DUID) > 2
     UNION
+    {%- if has_registration %}
+    SELECT DUID FROM read_csv('{{ registration_csv }}', all_varchar = true) WHERE length(DUID) > 2
+    UNION
+    {%- endif %}
     SELECT "Facility Code" AS DUID FROM read_csv_auto('{{ csv_archive_path }}/duid/facilities.csv')
   ) source_duids
   WHERE DUID NOT IN (SELECT DUID FROM {{ this }})
@@ -48,18 +61,30 @@ WITH
     UNION ALL SELECT 'VIC1', 'Victoria'
   ),
 
+  -- One row per DUID. The registration list wins over duid_data.csv (a 2026-07 snapshot of
+  -- it, kept for units that have since left the list); within the list a unit's generating
+  -- registration wins over its load registration (e.g. LIMOSF11 is listed as both).
+  duid_aemo_ranked AS (
+    {%- if has_registration %}
+    SELECT DUID, Region, "Fuel Source - Descriptor" AS fuel, Participant,
+           CASE WHEN "Dispatch Type" ILIKE '%load%' THEN 1 ELSE 0 END AS priority
+    FROM read_csv('{{ registration_csv }}', all_varchar = true)
+    WHERE length(DUID) > 2
+    UNION ALL
+    {%- endif %}
+    SELECT DUID, Region, "Fuel Source - Descriptor", Participant, 2
+    FROM read_csv('{{ csv_archive_path }}/duid/duid_data.csv', all_varchar = true)
+    WHERE length(DUID) > 2
+  ),
+
   duid_aemo AS (
     SELECT
-      DUID AS DUID,
-      first(Region) AS Region,
-      first("Fuel Source - Descriptor") AS FuelSourceDescriptor,
-      first(Participant) AS Participant
-    FROM
-      read_csv('{{ csv_archive_path }}/duid/duid_data.csv')
-    WHERE
-      length(DUID) > 2
-    GROUP BY
-      DUID
+      DUID,
+      arg_min(Region, priority) AS Region,
+      arg_min(fuel, priority) AS FuelSourceDescriptor,
+      arg_min(Participant, priority) AS Participant
+    FROM duid_aemo_ranked
+    GROUP BY DUID
   ),
 
   wa_facilities AS (
