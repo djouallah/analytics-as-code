@@ -3,9 +3,11 @@ def model(dbt, session):
 
     import os
     import io
+    import time
     import gzip
     import zipfile
     import tempfile
+    import urllib.error
     import urllib.request
     from datetime import datetime, timezone
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -59,26 +61,26 @@ def model(dbt, session):
             )
         """)
 
-    # Get existing source_filenames for dedup
-    existing = set()
-    for row in session.sql(
-        "SELECT source_type || '::' || source_filename FROM _csv_archive_log"
-    ).fetchall():
-        existing.add(row[0])
-
     # =========================================================================
     # Helper: download ZIP, extract CSVs to temp dir
     # =========================================================================
     def download_and_extract(url, temp_dir):
         """Download ZIP from url, extract CSV files to temp_dir. Thread-safe."""
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (dbt-aemo)"})
+        # Retry what is transient (5xx, 429, timeouts, connection resets); a 4xx such as a
+        # 404 will not change on a retry, so it fails straight away.
         for attempt in range(3):
             try:
                 zip_bytes = urllib.request.urlopen(req, timeout=60).read()
                 break
             except urllib.error.HTTPError as e:
+                if attempt < 2 and (e.code >= 500 or e.code == 429):
+                    time.sleep(2 ** attempt)
+                    continue
+                raise
+            except (urllib.error.URLError, TimeoutError, ConnectionError):
                 if attempt < 2:
-                    import time; time.sleep(2 ** attempt)
+                    time.sleep(2 ** attempt)
                     continue
                 raise
         z = zipfile.ZipFile(io.BytesIO(zip_bytes))

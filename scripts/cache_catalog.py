@@ -97,7 +97,7 @@ def export_scada_today():
                 CAST(strftime(SETTLEMENTDATE, '%H%M') AS SMALLINT) AS time,
                 CAST(ANY_VALUE(INITIALMW) AS REAL) AS mw
             FROM catalog.landing.fct_scada_today
-            WHERE CAST(SETTLEMENTDATE AS DATE) >= CURRENT_DATE - INTERVAL 14 DAY
+            WHERE DATE >= CURRENT_DATE - INTERVAL 14 DAY
                 AND INITIALMW <> 0
             GROUP BY DUID, CAST(SETTLEMENTDATE AS DATE), strftime(SETTLEMENTDATE, '%H%M')
         ) TO '{DASHBOARD_DIR}/fct_scada_today.parquet' (FORMAT PARQUET);
@@ -113,7 +113,7 @@ def export_price_today():
                 CAST(strftime(SETTLEMENTDATE, '%H%M') AS SMALLINT) AS time,
                 CAST(ANY_VALUE(RRP) AS REAL) AS price
             FROM catalog.landing.fct_price_today
-            WHERE CAST(SETTLEMENTDATE AS DATE) >= CURRENT_DATE - INTERVAL 14 DAY
+            WHERE DATE >= CURRENT_DATE - INTERVAL 14 DAY
                 AND INTERVENTION = 0
             GROUP BY REGIONID, CAST(SETTLEMENTDATE AS DATE), strftime(SETTLEMENTDATE, '%H%M')
         ) TO '{DASHBOARD_DIR}/fct_price_today.parquet' (FORMAT PARQUET);
@@ -143,6 +143,15 @@ def export_dim_calendar():
     con.close()
 
 
+def recent_periods_only():
+    """Only the current and previous half-year files change from one day to the next, so by
+    default those are the only ones rebuilt and redeployed; the older ones already sit in
+    the deploy repo (deploys use keep_files) and the deployed manifest is built from what is
+    there. Rewriting all ~17 files (~900 MB) daily only grew the Pages repo's history.
+    ALL_PERIODS=true rebuilds every half, e.g. after a rebuild=<fact> backfill of old data."""
+    return os.environ.get("ALL_PERIODS", "").lower() != "true"
+
+
 def build_daily():
     # Clean old files
     for f in os.listdir(DASHBOARD_DIR):
@@ -151,7 +160,7 @@ def build_daily():
 
     con = duckdb.connect(":memory:")
 
-    # Get distinct year-half periods from scada data
+    # Year-half periods present in the scada export; by default only the latest two.
     periods = [
         (r[0], r[1])
         for r in con.execute(
@@ -161,6 +170,8 @@ def build_daily():
                 ORDER BY year, half"""
         ).fetchall()
     ]
+    if recent_periods_only():
+        periods = periods[-2:]
 
     # Build per-half-year files with scada + price
     for year, half in periods:

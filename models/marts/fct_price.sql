@@ -1,23 +1,20 @@
-﻿-- Insert-only merge (WHEN MATCHED THEN DO NOTHING): every commit stays a single
+-- Insert-only merge (WHEN MATCHED THEN DO NOTHING): every commit stays a single
 -- append snapshot -- the OneLake catalog rejects commits that mix delete files and
 -- data files (BadRequest 400) -- while re-processed files dedupe on the unique_key
 -- instead of double-inserting. That only holds ACROSS batches: MERGE inserts every
--- not-matched source row, so the pre-hook's DISTINCT is what stops one file being read
--- twice within a batch (the log is append-only and lists a file once per run it waited).
+-- not-matched source row, so the pre-hook's DISTINCT (macros/pending_archive_files.sql)
+-- is what stops one file being read twice within a batch (the log is append-only and
+-- lists a file once per run it waited).
 {{ config(
     materialized='incremental',
     incremental_strategy='merge',
     merge_clauses={'when_matched': [{'action': 'do_nothing'}]},
     unique_key=['file', 'REGIONID', 'SETTLEMENTDATE','INTERVENTION'],
-    pre_hook="SET VARIABLE price_daily_paths = (SELECT COALESCE(NULLIF(list('{{ get_csv_archive_path() }}' || archive_path), []), ['']) FROM (SELECT DISTINCT archive_path FROM {{ ref('stg_csv_archive_log') }} WHERE source_type = 'daily'{% if is_incremental() %} AND csv_filename NOT IN (SELECT DISTINCT file FROM {{ this }}){% endif %} LIMIT {{ env_var('process_limit', '1000') }}))"
+    pre_hook="{{ set_pending_archive_paths('price_daily_paths', ref('stg_csv_archive_log'), 'daily') }}"
 ) }}
 
 {%- set check_files_query -%}
-SELECT COUNT(*) as cnt FROM {{ ref('stg_csv_archive_log') }}
-WHERE source_type = 'daily'
-{%- if is_incremental() %}
-AND csv_filename NOT IN (SELECT DISTINCT file FROM {{ this }})
-{%- endif -%}
+{{ pending_archive_count(ref('stg_csv_archive_log'), 'daily') }}
 {%- endset -%}
 
 {%- if execute and flags.WHICH in ('run', 'build', 'retry') -%}

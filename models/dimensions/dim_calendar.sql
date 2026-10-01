@@ -1,7 +1,9 @@
+-- Append-only: the NOT IN filter below already keeps existing dates out, so there is
+-- nothing to delete (and this catalog rejects commits that mix deletes with inserts).
+-- The series runs two years ahead of today; assert_calendar_covers_future guards it.
 {{ config(
     materialized='incremental',
-    unique_key='date',
-    incremental_strategy='delete+insert'
+    incremental_strategy='append'
 ) }}
 
 SELECT

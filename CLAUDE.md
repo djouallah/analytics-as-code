@@ -9,26 +9,22 @@
 - **Schemas:** `mart` (dim_calendar, dim_duid) / `landing` (facts, staging)
 - **Writes are insert-only merges** (`WHEN MATCHED DO NOTHING`): the OneLake catalog accepts
   one add-snapshot per commit and rejects commits mixing delete files + data files
-  (BadRequest 400). Same pattern as the sibling repo (dbt-fabric). `dim_calendar` keeps
-  `delete+insert` — its NOT-IN filter means incoming rows never match, so commits stay pure
-  appends.
+  (BadRequest 400). Same pattern as the sibling repo (dbt-fabric). `dim_calendar` is a plain
+  `append` — its NOT-IN filter keeps existing dates out; it runs to `current_date + 2 years`.
 
 ## The dbt project descends from the sibling repo
 The sibling is now [`dbt-fabric`](https://github.com/djouallah/dbt-fabric) (it replaced
-`dbt_fabric_python_iceberg`, which no longer exists). It runs the same AEMO models on five
-engines; the one that matches this repo is `dbt1/models/aemo/iceberg/` (tests in
-`dbt1/tests/aemo/iceberg/`). This repo was copied from the old sibling minus `fct_summary`
+`dbt_fabric_python_iceberg`, which no longer exists). It runs the same AEMO models on other
+engines. As of 2026-10-01 it has only `models/aemo/dwh/` (Fabric Warehouse) and
+`models/aemo/spark/` — the DuckDB/Iceberg variant this repo matched is gone, so ports are now
+by idea, not by file (`macros/new_source_files.sql` there is the counterpart of
+`macros/pending_archive_files.sql` here). This repo was copied from the old sibling minus `fct_summary`
 (the dashboard joins facts to `dim_duid`/prices client-side in DuckDB-WASM;
 `scripts/cache_catalog.py` only exports and pre-aggregates).
-**Look there first for fixes, and port them rather than diverging.** It is no longer a
-verbatim copy — as of 2026-09-25 the iceberg variant differs structurally:
-- Downloading moved out of dbt into `download_aemo.py`; `stg_csv_archive_log` is a plain view
-  in DuckDB's in-memory catalog over the parquet log, not an Iceberg table. That removes the
-  log table this repo had to rebuild on 2026-09-18.
-- The fact pre-hooks already have `SELECT DISTINCT archive_path` and add
-  `ORDER BY archive_path DESC` before `LIMIT process_limit`, so a partial load takes the
-  newest files first and is deterministic.
-- Model config comes from an `aemo_spec()` macro shared across engines.
+**Look there first for fixes, and port them rather than diverging.** Ideas worth knowing:
+- There, downloading lives outside dbt and the log is read straight from parquet, not from an
+  Iceberg table — which would remove the log table this repo had to rebuild on 2026-09-18.
+- `ORDER BY archive_path DESC` before `LIMIT process_limit` (ported here 2026-10-01).
 Three deliberate local differences, all of which must survive a port:
 - No `relationships → dim_duid` tests on `fct_scada`/`fct_scada_today` — `dim_duid` holds only
   currently-registered DUIDs while the facts go back to 2018 and are full of retired ones, so
@@ -53,8 +49,10 @@ Three deliberate local differences, all of which must survive a port:
    the last one is < 24h old, and the GitHub historical backfill listing only runs when AEMO
    returned fewer than `download_limit` new files. There is no `daily_refresh` env var.
 3. Work is discovered from the **log table**, not a filesystem glob: each fact model's pre-hook
-   builds its path list from `SELECT DISTINCT stg_csv_archive_log.archive_path` filtered by
-   `csv_filename NOT IN (SELECT file FROM {{ this }})`. The DISTINCT is load-bearing: the
+   (`macros/pending_archive_files.sql`) builds its path list from
+   `SELECT DISTINCT stg_csv_archive_log.archive_path` filtered by `NOT EXISTS` against
+   `{{ this }}.file` (not `NOT IN`: one NULL `file` would stop every load), newest first
+   (`ORDER BY archive_path DESC LIMIT process_limit`). The DISTINCT is load-bearing: the
    log table is append-only and can hold a file more than once (until 2026-09-18 the staging
    model re-appended the *whole* log every run, so a file that waited K runs had K rows), and
    MERGE only dedupes against the target, never within a batch. Without it a single
@@ -116,11 +114,21 @@ Env contract consumed by profiles.yml, the models and the scripts: `ONELAKE_ENDP
 transport fails the OneLake TLS handshake).
 `NEMTRACKER_TOKEN` (gh-pages deploy) is the one remaining true secret.
 
+## Dashboard deploy
+`build.yml` (index.html, dbt docs) and `import_data.yml` (the .duckdb files) publish into
+`NemTracker/nemtracker.github.io` with `scripts/deploy_pages.sh`: a blobless depth-1 clone, the
+published paths added with `-f`, push retried on a race. It replaced peaceiris/actions-gh-pages,
+whose full-history clone (~900 MB, ~2.5 min) made concurrent deploys collide, and whose
+`git add --all` skipped new files matching the deploy repo's `.gitignore` (`*.duckdb` was in it
+until 2026-10-01 — that is why `energy_data_2026_h2.duckdb` never deployed). The daily run
+rebuilds only the latest two half-year files; dispatch `import_data.yml` with
+`all_periods=true` after a backfill that touched older data.
+
 ## Models (7)
 | Model | Schema | Materialization |
 |-------|--------|-----------------|
 | stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
-| dim_calendar | mart | incremental delete+insert (pure append in practice — the NOT-IN filter means incoming rows never match) |
+| dim_calendar | mart | incremental append (the NOT-IN filter keeps existing dates out; runs 2 years ahead) |
 | dim_duid | mart | incremental insert-only merge on DUID |
 | fct_scada, fct_price | landing | incremental insert-only merge (by file) |
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |

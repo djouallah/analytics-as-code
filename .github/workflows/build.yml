@@ -10,6 +10,12 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+# Two quick pushes used to run in parallel and race both the "Update dbt docs" commit
+# and the deploy; queue them instead.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -21,7 +27,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
       - run: pip install -r requirements.txt
+      - name: Cache DuckDB extensions
+        # Extension binaries are keyed to the duckdb build, which requirements.txt pins.
+        uses: actions/cache@v4
+        with:
+          path: ~/.duckdb/extensions
+          key: duckdb-ext-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
       - name: Build, test and publish docs
         env:
           DBT_DUCKDB_PATH: ci.duckdb
@@ -48,10 +62,6 @@ jobs:
           cp -r dashboard/dag deploy/
       - name: Deploy to nemtracker
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          personal_token: ${{ secrets.NEMTRACKER_TOKEN }}
-          external_repository: NemTracker/nemtracker.github.io
-          publish_branch: main
-          publish_dir: ./deploy
-          keep_files: true
+        env:
+          NEMTRACKER_TOKEN: ${{ secrets.NEMTRACKER_TOKEN }}
+        run: bash scripts/deploy_pages.sh ./deploy "deploy from ${{ github.repository }}@${{ github.sha }}"
