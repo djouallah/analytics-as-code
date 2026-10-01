@@ -36,9 +36,10 @@ The 5-minute DispatchIS files already archived since 2026-08 also carry `REGIONS
   columns to the price exports; demand line over the generation stack, imports/exports per
   region.
 - [x] **Interconnector flows** — `fct_interconnector_today` from the `INTERCONNECTORRES` rows,
-  exported (last 14 days) into `energy_today.duckdb`; animated flow map + flow chart with
-  playback in Insights (2026-10-01). Follow-up: add flows to the half-year files for longer
-  history.
+  exported (last 14 days) into `energy_today.duckdb`; its own **Flows** tab: price-shaded map
+  with animated flows, live board, small multiples with limit bands, playback (2026-10-01).
+- [ ] **Flows beyond 14 days** — add `interconnector` to the half-year files and the daily
+  aggregate so the Flows page works on any range (the archive only goes back to 2026-08).
 - [ ] **Daily profile and price-by-hour beyond 30 days** — add an hour-of-day × month aggregate
   to the daily aggregate so those Insights charts work on long ranges.
 
