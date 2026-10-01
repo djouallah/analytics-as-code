@@ -7,12 +7,30 @@
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
   <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f1117; --card: #161b22; --input-bg: #0d1117; --border: #30363d; --row-line: #21262d;
+      --text: #e1e4e8; --muted: #8b949e; --faint: #6e7681; --disabled: #484f58; --accent: #58a6ff;
+      --header-bg: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); --hairline: rgba(255,255,255,0.06);
+      --chips-bg: rgba(210,153,34,0.08); --focus-ring: rgba(88,166,255,0.15); --hover: rgba(88,166,255,0.1);
+      --hover-soft: rgba(88,166,255,0.05); --shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        color-scheme: light;
+        --bg: #f6f8fa; --card: #ffffff; --input-bg: #ffffff; --border: #d0d7de; --row-line: #eaeef2;
+        --text: #1f2328; --muted: #57606a; --faint: #6e7781; --disabled: #8c959f; --accent: #0969da;
+        --header-bg: linear-gradient(135deg, #ffffff 0%, #eef2f7 100%); --hairline: rgba(31,35,40,0.08);
+        --chips-bg: rgba(212,167,44,0.12); --focus-ring: rgba(9,105,218,0.2); --hover: rgba(9,105,218,0.08);
+        --hover-soft: rgba(9,105,218,0.04); --shadow: 0 8px 24px rgba(140,149,159,0.3);
+      }
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #0f1117; color: #e1e4e8; }
-    header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 0.4rem 2rem; border-bottom: 1px solid rgba(255,255,255,0.06); display: flex; align-items: center; gap: 1.2rem; flex-wrap: wrap; }
+    body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); }
+    header { background: var(--header-bg); padding: 0.4rem 2rem; border-bottom: 1px solid var(--hairline); display: flex; align-items: center; gap: 1.2rem; flex-wrap: wrap; }
     header .title-block { display: flex; flex-direction: column; }
     header h1 { font-size: 1.2rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.3; }
-    header .subtitle { font-size: 0.7rem; color: #8b949e; }
+    header .subtitle { font-size: 0.7rem; color: var(--muted); }
     #status { font-size: 0.7rem; display: flex; align-items: center; gap: 0.4rem; margin-left: auto; }
     #status .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
     #status.connected .dot { background: #3fb950; box-shadow: 0 0 6px #3fb950; }
@@ -20,70 +38,85 @@
     #status.loading .dot { background: #d29922; box-shadow: 0 0 6px #d29922; animation: pulse 1.2s infinite; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
     .filter-group { display: flex; align-items: center; gap: 0.4rem; }
-    .filter-group label { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
-    .filter-group select { padding: 0.35rem 0.6rem; border: 1px solid #30363d; border-radius: 6px; font-size: 0.8rem; background: #0d1117; color: #e1e4e8; cursor: pointer; outline: none; transition: border-color 0.2s; }
-    .filter-group select:hover { border-color: #58a6ff; }
-    .filter-group select:focus { border-color: #58a6ff; box-shadow: 0 0 0 2px rgba(88,166,255,0.15); }
-    .active-filters { display: flex; gap: 0.4rem; padding: 0.5rem 2rem; background: rgba(210,153,34,0.08); flex-wrap: wrap; align-items: center; font-size: 0.75rem; }
+    .filter-group label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+    .filter-group select, .filter-group input[type=date] { padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.8rem; background: var(--input-bg); color: var(--text); cursor: pointer; outline: none; transition: border-color 0.2s; }
+    .filter-group select:hover { border-color: var(--accent); }
+    .filter-group select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring); }
+    .active-filters { display: flex; gap: 0.4rem; padding: 0.5rem 2rem; background: var(--chips-bg); flex-wrap: wrap; align-items: center; font-size: 0.75rem; }
     .active-filters:empty { display: none; }
-    .filter-tag { background: #58a6ff; color: #0d1117; padding: 0.15rem 0.5rem; border-radius: 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 0.25rem; font-weight: 600; font-size: 0.7rem; transition: background 0.2s; }
+    .filter-tag { background: var(--accent); color: #fff; padding: 0.15rem 0.5rem; border-radius: 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 0.25rem; font-weight: 600; font-size: 0.7rem; transition: background 0.2s; }
     .filter-tag:hover { background: #f85149; color: white; }
     .filter-tag::after { content: "\00d7"; font-size: 0.9rem; }
-    .kpi-row { display: flex; gap: 0.6rem; padding: 0.5rem 2rem; flex-wrap: wrap; }
-    .kpi-card { flex: 1; min-width: 140px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 0.5rem 0.8rem; }
-    .kpi-card .kpi-label { font-size: 0.65rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+    .kpi-row { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0.6rem; padding: 0.5rem 2rem; }
+    .kpi-card { min-width: 0; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.8rem; }
+    .kpi-card .kpi-label { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
     .kpi-card .kpi-value { font-size: 1.3rem; font-weight: 700; margin-top: 0.1rem; }
-    .kpi-card .kpi-sub { font-size: 0.65rem; color: #8b949e; margin-top: 0.05rem; }
+    .kpi-card .kpi-sub { font-size: 0.65rem; color: var(--muted); margin-top: 0.05rem; }
     .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; padding: 0 2rem 1rem; transition: opacity 0.2s; }
     .charts.loading { opacity: 0.4; }
-    .chart-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 0.6rem; }
-    .chart-card h2 { font-size: 0.8rem; font-weight: 600; margin-bottom: 0.3rem; color: #e1e4e8; display: inline; }
+    .chart-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem; }
+    .chart-card h2 { font-size: 0.8rem; font-weight: 600; margin-bottom: 0.3rem; color: var(--text); display: inline; }
     .chart-card .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.3rem; }
     .chart-card.full-width { grid-column: 1 / -1; }
     .duid-dropdown { position: relative; }
-    .duid-trigger { padding: 0.35rem 0.6rem; border: 1px solid #30363d; border-radius: 6px; font-size: 0.8rem; background: #0d1117; color: #e1e4e8; cursor: pointer; outline: none; transition: border-color 0.2s; white-space: nowrap; }
-    .duid-trigger:hover { border-color: #58a6ff; }
-    .duid-panel { display: none; position: absolute; top: 100%; left: 0; z-index: 1000; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; width: 280px; margin-top: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+    .duid-trigger { padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.8rem; background: var(--input-bg); color: var(--text); cursor: pointer; outline: none; transition: border-color 0.2s; white-space: nowrap; }
+    .duid-trigger:hover { border-color: var(--accent); }
+    .duid-panel { display: none; position: absolute; top: 100%; left: 0; z-index: 1000; background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; width: min(280px, calc(100vw - 2rem)); margin-top: 4px; box-shadow: var(--shadow); }
     .duid-panel.open { display: block; }
-    .duid-search { width: 100%; padding: 0.4rem 0.5rem; border: none; border-bottom: 1px solid #30363d; background: #161b22; color: #e1e4e8; font-size: 0.8rem; outline: none; border-radius: 6px 6px 0 0; box-sizing: border-box; }
+    .duid-search { width: 100%; padding: 0.4rem 0.5rem; border: none; border-bottom: 1px solid var(--border); background: var(--card); color: var(--text); font-size: 0.8rem; outline: none; border-radius: 6px 6px 0 0; box-sizing: border-box; }
     .duid-list { max-height: 240px; overflow-y: auto; }
-    .duid-list label { display: flex; align-items: center; gap: 0.4rem; padding: 0.25rem 0.5rem; cursor: pointer; font-size: 0.75rem; color: #e1e4e8; text-transform: none; letter-spacing: normal; font-weight: 400; }
-    .duid-list label:hover { background: rgba(88,166,255,0.1); }
-    .duid-list input[type=checkbox] { accent-color: #58a6ff; }
+    .duid-list label { display: flex; align-items: center; gap: 0.4rem; padding: 0.25rem 0.5rem; cursor: pointer; font-size: 0.75rem; color: var(--text); text-transform: none; letter-spacing: normal; font-weight: 400; }
+    .duid-list label:hover { background: var(--hover); }
+    .duid-list input[type=checkbox] { accent-color: var(--accent); }
     .chart-container { width: 100%; }
-    .tab-bar { display: flex; gap: 0; padding: 0 2rem; border-bottom: 1px solid #30363d; background: #0f1117; }
-    .tab-btn { padding: 0.5rem 1.2rem; font-size: 0.8rem; font-weight: 600; color: #8b949e; background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; transition: all 0.2s; }
-    .tab-btn:hover { color: #e1e4e8; }
-    .tab-btn.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+    .tab-bar { display: flex; gap: 0; padding: 0 2rem; border-bottom: 1px solid var(--border); background: var(--bg); }
+    .tab-btn { padding: 0.5rem 1.2rem; font-size: 0.8rem; font-weight: 600; color: var(--muted); background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; transition: all 0.2s; }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
     .analyze-controls { display: flex; gap: 0.8rem; padding: 0.8rem 2rem; align-items: center; flex-wrap: wrap; }
-    .analyze-controls label { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+    .analyze-controls label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
     .multi-dropdown { position: relative; }
-    .multi-dropdown .dd-trigger { padding: 0.35rem 0.6rem; border: 1px solid #30363d; border-radius: 6px; font-size: 0.8rem; background: #0d1117; color: #e1e4e8; cursor: pointer; outline: none; transition: border-color 0.2s; white-space: nowrap; }
-    .multi-dropdown .dd-trigger:hover { border-color: #58a6ff; }
-    .multi-dropdown .dd-panel { display: none; position: absolute; top: 100%; left: 0; z-index: 1000; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; min-width: 200px; margin-top: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+    .multi-dropdown .dd-trigger { padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.8rem; background: var(--input-bg); color: var(--text); cursor: pointer; outline: none; transition: border-color 0.2s; white-space: nowrap; }
+    .multi-dropdown .dd-trigger:hover { border-color: var(--accent); }
+    .multi-dropdown .dd-panel { display: none; position: absolute; top: 100%; left: 0; z-index: 1000; background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; min-width: 200px; margin-top: 4px; box-shadow: var(--shadow); }
     .multi-dropdown .dd-panel.open { display: block; }
-    .multi-dropdown .dd-panel label { display: flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.8rem; color: #e1e4e8; text-transform: none; letter-spacing: normal; font-weight: 400; }
-    .multi-dropdown .dd-panel label:hover { background: rgba(88,166,255,0.1); }
-    .multi-dropdown .dd-panel label.disabled { color: #484f58; cursor: default; }
-    .multi-dropdown .dd-panel input[type=checkbox] { accent-color: #58a6ff; }
-    .btn-analyze { padding: 0.4rem 1rem; border: 1px solid #30363d; border-radius: 6px; font-size: 0.8rem; font-weight: 600; background: none; color: #e1e4e8; cursor: pointer; transition: all 0.2s; }
-    .btn-analyze:hover { border-color: #58a6ff; color: #58a6ff; }
+    .multi-dropdown .dd-panel label { display: flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.8rem; color: var(--text); text-transform: none; letter-spacing: normal; font-weight: 400; }
+    .multi-dropdown .dd-panel label:hover { background: var(--hover); }
+    .multi-dropdown .dd-panel label.disabled { color: var(--disabled); cursor: default; }
+    .multi-dropdown .dd-panel input[type=checkbox] { accent-color: var(--accent); }
+    .btn-analyze { padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.8rem; font-weight: 600; background: none; color: var(--text); cursor: pointer; transition: all 0.2s; }
+    .btn-analyze:hover { border-color: var(--accent); color: var(--accent); }
     .btn-analyze.primary { background: #238636; border-color: #238636; color: #fff; }
     .btn-analyze.primary:hover { background: #2ea043; border-color: #2ea043; }
     .btn-analyze:disabled { opacity: 0.5; cursor: not-allowed; }
-    .analyze-info { font-size: 0.75rem; color: #8b949e; padding: 0 2rem; }
+    .analyze-info { font-size: 0.75rem; color: var(--muted); padding: 0 2rem; }
     .analyze-sql { padding: 0 2rem 0.4rem; }
     .analyze-sql-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem; }
-    .analyze-sql-head label { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
-    .analyze-sql-head label span { text-transform: none; letter-spacing: 0; font-weight: 400; color: #6e7681; }
-    .analyze-sql textarea { width: 100%; box-sizing: border-box; min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.78rem; line-height: 1.5; background: #0d1117; color: #e1e4e8; border: 1px solid #30363d; border-radius: 6px; padding: 0.6rem 0.8rem; resize: vertical; white-space: pre; }
-    .analyze-sql textarea:focus { outline: none; border-color: #58a6ff; }
+    .analyze-sql-head label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+    .analyze-sql-head label span { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--faint); }
+    .analyze-sql textarea { width: 100%; box-sizing: border-box; min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.78rem; line-height: 1.5; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.8rem; resize: vertical; white-space: pre; }
+    .analyze-sql textarea:focus { outline: none; border-color: var(--accent); }
     .analyze-table-wrap { padding: 0 2rem 1rem; overflow-x: auto; max-height: 60vh; overflow-y: auto; }
     .analyze-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
-    .analyze-table th { position: sticky; top: 0; background: #161b22; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.7rem; font-weight: 600; padding: 0.4rem 0.6rem; border-bottom: 1px solid #30363d; text-align: left; }
-    .analyze-table td { padding: 0.3rem 0.6rem; border-bottom: 1px solid #21262d; color: #e1e4e8; }
-    .analyze-table tr:hover td { background: rgba(88,166,255,0.05); }
-    @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } .kpi-row { flex-direction: column; } }
+    .analyze-table th { position: sticky; top: 0; background: var(--card); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.7rem; font-weight: 600; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); text-align: left; }
+    .analyze-table td { padding: 0.3rem 0.6rem; border-bottom: 1px solid var(--row-line); color: var(--text); }
+    .analyze-table tr:hover td { background: var(--hover-soft); }
+    .chart-card h2 .chart-note { font-weight: 400; color: var(--muted); font-size: 0.7rem; }
+    .chart-toggle { font-size: 0.7rem; color: var(--muted); display: inline-flex; align-items: center; gap: 0.3rem; cursor: pointer; }
+    .chart-toggle input { accent-color: var(--accent); }
+    .tab-btn:focus-visible, .duid-trigger:focus-visible, .dd-trigger:focus-visible, .btn-analyze:focus-visible, .filter-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .header-link { color: var(--muted); text-decoration: none; display: inline-flex; align-items: center; gap: 3px; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.05em; }
+    .header-link svg { fill: currentColor; }
+    @media (max-width: 1100px) { .kpi-row { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
+    @media (max-width: 600px) {
+      header, .kpi-row, .tab-bar, .analyze-controls, .analyze-sql, .analyze-info, .analyze-table-wrap, .active-filters { padding-left: 1rem; padding-right: 1rem; }
+      header { gap: 0.6rem; }
+      #status { margin-left: 0; width: 100%; }
+      .charts { padding: 0 1rem 1rem; }
+      .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .kpi-card .kpi-value { font-size: 1.1rem; }
+    }
   </style>
 </head>
 <body>
@@ -92,42 +125,42 @@
       <h1>Australian Energy Dashboard</h1>
     </div>
     <div class="filter-group">
-      <label>Region</label>
+      <label for="regionFilter">Region</label>
       <select id="regionFilter"><option value="">All Regions</option></select>
     </div>
     <div class="filter-group">
-      <label>Fuel</label>
+      <label for="fuelFilter">Fuel</label>
       <select id="fuelFilter"><option value="">All Fuel Types</option></select>
     </div>
     <div class="filter-group">
-      <label>DUID</label>
+      <label for="duidTrigger">DUID</label>
       <div class="duid-dropdown" id="duidDropdown">
-        <button class="duid-trigger" id="duidTrigger" type="button">All DUIDs</button>
+        <button class="duid-trigger" id="duidTrigger" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="duidPanel">All DUIDs</button>
         <div class="duid-panel" id="duidPanel">
-          <input type="text" class="duid-search" id="duidSearch" placeholder="Search DUIDs...">
+          <input type="text" class="duid-search" id="duidSearch" placeholder="Search DUIDs..." aria-label="Search DUIDs">
           <div class="duid-list" id="duidList"></div>
         </div>
       </div>
     </div>
     <div class="filter-group">
-      <label>From</label>
-      <input type="date" id="dateFrom" style="padding:0.35rem 0.4rem;border:1px solid #30363d;border-radius:6px;font-size:0.8rem;background:#0d1117;color:#e1e4e8;cursor:pointer;outline:none;">
+      <label for="dateFrom">From</label>
+      <input type="date" id="dateFrom">
     </div>
     <div class="filter-group">
-      <label>To</label>
-      <input type="date" id="dateTo" style="padding:0.35rem 0.4rem;border:1px solid #30363d;border-radius:6px;font-size:0.8rem;background:#0d1117;color:#e1e4e8;cursor:pointer;outline:none;">
+      <label for="dateTo">To</label>
+      <input type="date" id="dateTo">
     </div>
-    <a href="https://github.com/djouallah/analytics-as-code" target="_blank" style="color:#8b949e;text-decoration:none;display:inline-flex;align-items:center;gap:3px;" title="View on GitHub"><svg height="16" width="16" viewBox="0 0 16 16" fill="#8b949e"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
-    <a href="dag/#!/overview?g_v=1" target="_blank" style="color:#8b949e;text-decoration:none;font-size:0.75rem;font-weight:600;letter-spacing:0.05em;" title="View dbt DAG">DAG</a>
-    <div id="status" class="loading"><span class="dot"></span><span id="statusText">Loading...</span></div>
+    <a href="https://github.com/djouallah/analytics-as-code" target="_blank" rel="noopener" class="header-link" title="View on GitHub" aria-label="View on GitHub"><svg height="16" width="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+    <a href="dag/#!/overview?g_v=1" target="_blank" rel="noopener" class="header-link" title="View dbt DAG">DAG</a>
+    <div id="status" class="loading" role="status" aria-live="polite"><span class="dot" aria-hidden="true"></span><span id="statusText">Loading...</span></div>
   </header>
   <div class="active-filters" id="activeFilters"></div>
-  <div class="tab-bar">
-    <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
-    <button class="tab-btn" data-tab="analyze">Analyze</button>
+  <div class="tab-bar" role="tablist">
+    <button class="tab-btn active" data-tab="dashboard" role="tab" id="tab-dashboard" aria-selected="true" aria-controls="view-dashboard">Dashboard</button>
+    <button class="tab-btn" data-tab="analyze" role="tab" id="tab-analyze" aria-selected="false" aria-controls="view-analyze" tabindex="-1">Analyze</button>
   </div>
 
-  <div id="view-dashboard">
+  <div id="view-dashboard" role="tabpanel" aria-labelledby="tab-dashboard">
   <div class="kpi-row">
     <div class="kpi-card"><div class="kpi-label">Total Generation</div><div class="kpi-value" id="kpiGen">--</div><div class="kpi-sub" id="kpiGenSub">Average MW</div></div>
     <div class="kpi-card"><div class="kpi-label">Avg Price</div><div class="kpi-value" id="kpiPrice">--</div><div class="kpi-sub">$/MWh across regions</div></div>
@@ -143,20 +176,21 @@
       <div class="chart-container" id="chart-generation" style="height:320px;"></div>
     </div>
     <div class="chart-card">
-      <div class="chart-header"><h2>Average Price by Region ($/MWh)</h2></div>
+      <div class="chart-header"><h2>Average Price by Region ($/MWh)</h2><label class="chart-toggle"><input type="checkbox" id="clipSpikes" checked> Clip spikes</label></div>
       <div class="chart-container" id="chart-price" style="height:280px;"></div>
     </div>
     <div class="chart-card">
+      <div class="chart-header"><h2 id="title-map">Generators (average MW)</h2></div>
       <div class="chart-container" id="chart-map" style="height:280px;"></div>
     </div>
   </div>
   </div>
 
-  <div id="view-analyze" style="display:none">
+  <div id="view-analyze" role="tabpanel" aria-labelledby="tab-analyze" style="display:none">
     <div class="analyze-controls">
       <label>Measures</label>
       <div class="multi-dropdown" id="measDropdown">
-        <button class="dd-trigger" id="measTrigger" type="button">Generation, Price</button>
+        <button class="dd-trigger" id="measTrigger" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="measPanel">Generation, Price</button>
         <div class="dd-panel" id="measPanel">
           <label><input type="checkbox" id="measGeneration" checked> Generation</label>
           <label><input type="checkbox" id="measPrice" checked> Price</label>
@@ -164,7 +198,7 @@
       </div>
       <label>Dimensions</label>
       <div class="multi-dropdown" id="dimDropdown">
-        <button class="dd-trigger" id="dimTrigger" type="button">Date</button>
+        <button class="dd-trigger" id="dimTrigger" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="dimPanel">Date</button>
         <div class="dd-panel" id="dimPanel">
           <label class="disabled"><input type="checkbox" checked disabled> Date</label>
           <label><input type="checkbox" id="dimTime"> Time</label>
@@ -179,7 +213,7 @@
     </div>
     <div class="analyze-sql">
       <div class="analyze-sql-head">
-        <label>SQL <span>— editable; Preview / Download run this</span></label>
+        <label for="analyzeSql">SQL <span>— editable; Preview / Download run this</span></label>
         <button class="btn-analyze" id="analyzeSqlReset" type="button">Reset to generated</button>
       </div>
       <textarea id="analyzeSql" spellcheck="false" wrap="off"></textarea>
@@ -197,6 +231,7 @@
     // 1. CONSTANTS & THEME
     // =========================================================================
 
+    // Chart theme follows the page's colour scheme (CSS tokens on :root); see applyScheme().
     const darkTheme = {
       backgroundColor: 'transparent',
       textStyle: { color: '#8b949e' },
@@ -212,10 +247,24 @@
       timeAxis: { axisLine: { lineStyle: { color: '#30363d' } }, axisTick: { lineStyle: { color: '#30363d' } }, axisLabel: { color: '#8b949e' }, splitLine: { lineStyle: { color: '#21262d' } } },
     };
     echarts.registerTheme('dark-custom', darkTheme);
+    echarts.registerTheme('light-custom', {
+      backgroundColor: 'transparent',
+      textStyle: { color: '#57606a' },
+      title: { textStyle: { color: '#1f2328' } },
+      legend: { textStyle: { color: '#57606a' }, pageTextStyle: { color: '#57606a' } },
+      tooltip: { backgroundColor: 'rgba(255,255,255,0.97)', borderColor: '#d0d7de', textStyle: { color: '#1f2328', fontSize: 12 } },
+      categoryAxis: { axisLine: { lineStyle: { color: '#d0d7de' } }, axisTick: { lineStyle: { color: '#d0d7de' } }, axisLabel: { color: '#57606a' }, splitLine: { lineStyle: { color: '#eaeef2' } } },
+      valueAxis: { axisLine: { lineStyle: { color: '#d0d7de' } }, axisTick: { lineStyle: { color: '#d0d7de' } }, axisLabel: { color: '#57606a' }, splitLine: { lineStyle: { color: '#eaeef2' } } },
+    });
+    const schemeQuery = window.matchMedia('(prefers-color-scheme: light)');
+    const isLight = () => schemeQuery.matches;
+    const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
+    // Negative output (batteries and pumped hydro charging) is its own series below the axis.
+    const CHARGING = ' (charging)';
     const PALETTE = ['#58a6ff','#f0883e','#3fb950','#bc8cff','#f778ba','#d29922','#79c0ff','#56d364','#db6d28','#ff7b72','#7ee787','#a5d6ff'];
     const FUEL_COLORS = {
-      'Black coal': '#444444',
+      'Black coal': '#5c6370',   // dark grey that still reads on the dark card (was #444)
       'Brown coal': '#8B4513',
       'Natural gas': '#f0883e',
       'Natural gas / fuel oil': '#d29922',
@@ -232,7 +281,13 @@
       'Other': '#aaaaaa',
       '-': '#aaaaaa',
     };
-    function fuelColor(name) { return FUEL_COLORS[name] || PALETTE[Math.abs([...name].reduce((h,c)=>h*31+c.charCodeAt(0)|0,0)) % PALETTE.length]; }
+    FUEL_COLORS['Unregistered'] = '#9e9e9e';
+    FUEL_COLORS['Unknown'] = '#bdbdbd';
+    function fuelColor(name) {
+      if (name.endsWith(CHARGING)) name = name.slice(0, -CHARGING.length);
+      if (name === 'Black coal' && isLight()) return '#2b2b2b';
+      return FUEL_COLORS[name] || PALETTE[Math.abs([...name].reduce((h,c)=>h*31+c.charCodeAt(0)|0,0)) % PALETTE.length];
+    }
 
     // =========================================================================
     // 2. STATE & DOM UTILITIES
@@ -244,32 +299,30 @@
     }
 
     const crossFilter = { fuel: null, region: null, duids: [] };
+    // The header dropdowns win over a chart click-filter (updateFilterTags says so).
+    const activeRegion = () => document.getElementById("regionFilter").value || crossFilter.region;
+    const activeFuel = () => document.getElementById("fuelFilter").value || crossFilter.fuel;
+    const sqlStr = v => `'${String(v).replace(/'/g, "''")}'`;
+    const duidList = () => crossFilter.duids.map(sqlStr).join(',');
     let aggLoaded = false;
     let _renderSeq = 0;
 
     function updateFilterTags() {
       const el = document.getElementById("activeFilters");
       el.innerHTML = "";
-      if (crossFilter.fuel) {
-        const tag = document.createElement("span");
+      const addTag = (text, onRemove, overridden) => {
+        const tag = document.createElement("button");
+        tag.type = "button";
         tag.className = "filter-tag";
-        tag.textContent = crossFilter.fuel;
-        tag.addEventListener("click", () => { crossFilter.fuel = null; renderAll(); });
+        tag.textContent = overridden ? `${text} (overridden by dropdown)` : text;
+        tag.setAttribute("aria-label", `Remove filter ${text}`);
+        tag.addEventListener("click", () => { onRemove(); renderAll(); });
         el.append(tag);
-      }
-      if (crossFilter.region) {
-        const tag = document.createElement("span");
-        tag.className = "filter-tag";
-        tag.textContent = crossFilter.region;
-        tag.addEventListener("click", () => { crossFilter.region = null; renderAll(); });
-        el.append(tag);
-      }
+      };
+      if (crossFilter.fuel) addTag(crossFilter.fuel, () => { crossFilter.fuel = null; }, !!document.getElementById("fuelFilter").value);
+      if (crossFilter.region) addTag(crossFilter.region, () => { crossFilter.region = null; }, !!document.getElementById("regionFilter").value);
       for (const duid of crossFilter.duids) {
-        const tag = document.createElement("span");
-        tag.className = "filter-tag";
-        tag.textContent = duid;
-        tag.addEventListener("click", () => { crossFilter.duids = crossFilter.duids.filter(d => d !== duid); updateDuidTrigger(); renderAll(); });
-        el.append(tag);
+        addTag(duid, () => { crossFilter.duids = crossFilter.duids.filter(d => d !== duid); updateDuidTrigger(); });
       }
     }
 
@@ -281,8 +334,18 @@
 
     // Cache a remote .duckdb file in OPFS. Downloads if missing or stale.
     // source: 'opfs-hit' | 'opfs-miss' | 'opfs-refresh'; buffer: the download, only if it couldn't be cached
-    async function cacheInOPFS(db, url, filename) {
-      const root = await navigator.storage.getDirectory();
+    async function cacheInOPFS(url, filename) {
+      let root;
+      try {
+        root = await navigator.storage.getDirectory();
+      } catch (e) {
+        // No OPFS (some private windows, older browsers): no cache, read from memory.
+        console.log(`[OPFS] unavailable (${e}), loading ${filename} into memory`);
+        setStatus("Downloading database...");
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`Failed to fetch ${filename}: HTTP ${resp.status}`);
+        return { source: 'no-opfs', buffer: new Uint8Array(await resp.arrayBuffer()) };
+      }
       const cacheKey = `opfs_etag_${filename}`;
       const cachedTag = localStorage.getItem(cacheKey);
 
@@ -365,9 +428,9 @@
     }
 
     // Download (or reuse from OPFS) data/<file> and ATTACH it as <alias>.
-    const SOURCE_LABEL = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded', 'opfs-refresh': 'refreshed' };
+    const SOURCE_LABEL = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded', 'opfs-refresh': 'refreshed', 'no-opfs': 'downloaded, not cached' };
     async function loadDb(file, alias) {
-      const res = await cacheInOPFS(_db, `${_baseUrl}/data/${file}`, file);
+      const res = await cacheInOPFS(`${_baseUrl}/data/${file}`, file);
       const mode = await attachCached(_db, file, alias, res.buffer);
       console.log(`[OPFS] ${alias}: ${SOURCE_LABEL[res.source]} (${mode})`);
     }
@@ -492,10 +555,13 @@
       // Columnar: extract all columns as arrays at once (much faster than per-row .get())
       const columns = fields.map(f => {
         const col = result.getChild(f.name);
-        const arr = col.toArray();
-        // Convert BigInt64Array to regular numbers
-        if (arr instanceof BigInt64Array || arr instanceof BigUint64Array) {
-          return Array.from(arr, v => Number(v));
+        // toArray() returns the raw value buffer and ignores the validity bitmap, so a NULL
+        // came back as whatever value sat in its slot (e.g. a neighbouring row's price).
+        // Columns with nulls are read element by element, which honours it.
+        const arr = col.nullCount > 0 ? Array.from({ length: col.length }, (_, i) => col.get(i)) : col.toArray();
+        // BigInt64 -> regular numbers
+        if (arr instanceof BigInt64Array || arr instanceof BigUint64Array || (arr.length && typeof arr[0] === 'bigint')) {
+          return Array.from(arr, v => v == null ? v : Number(v));
         }
         return arr;
       });
@@ -507,6 +573,7 @@
         }
         rows[i] = row;
       }
+      if (_queryCache.size >= 200) _queryCache.delete(_queryCache.keys().next().value);  // oldest first
       _queryCache.set(key, rows);
       return rows;
     }
@@ -546,7 +613,7 @@
         const xKeys = [...new Set(rows.map(d => `${d.date}|${padTime(d.time)}`))].sort();
         const xLabels = xKeys.map(k => {
           const [dt, tm] = k.split('|');
-          return formatDate(dt) + ' ' + formatTime(parseInt(tm));
+          return formatDate(dt).replace(/ \d{4}$/, '') + ' ' + formatTime(parseInt(tm));
         });
         return { xKeys, xLabels };
       }
@@ -563,7 +630,7 @@
 
     function dataZoomConfig(timeDetail) {
       return timeDetail
-        ? [{ type: 'inside', start: 0, end: 100 }, { type: 'slider', start: 0, end: 100, height: 20, bottom: 35 }]
+        ? [{ type: 'inside', start: 0, end: 100 }, { type: 'slider', start: 0, end: 100, height: 18, bottom: 5 }]
         : [];
     }
 
@@ -623,11 +690,12 @@
     // 5. SQL QUERY BUILDERS
     // =========================================================================
 
-    // dim_duid only holds currently-registered units, while the facts go back to 2018 and
-    // include retired ones (~10% of daily rows). Facts are LEFT JOINed to it so those still
-    // count toward totals, and grouped under this label instead of disappearing.
+    // dim_duid only holds units on the registration list it is built from: retired ones (~10%
+    // of daily rows) and any the list hasn't caught up with yet are missing. Facts are LEFT
+    // JOINed to it so those still count toward totals, grouped as "Unregistered"; units that
+    // are in it without a fuel are "Unknown".
     const UNREGISTERED = 'Unregistered';
-    const FUEL = `COALESCE(d.FuelSourceDescriptor, '${UNREGISTERED}')`;
+    const FUEL = `CASE WHEN d.DUID IS NULL THEN '${UNREGISTERED}' ELSE COALESCE(d.FuelSourceDescriptor, 'Unknown') END`;
 
     const sql = {
       // --- FROM clauses (views defined in refreshViews) ---
@@ -645,30 +713,27 @@
 
       // --- WHERE clauses ---
       whereScada() {
-        const region = document.getElementById("regionFilter").value || crossFilter.region;
-        const fuel = document.getElementById("fuelFilter").value || crossFilter.fuel;
+        const region = activeRegion(), fuel = activeFuel();
         const { from, to } = getDateRange();
-        const clauses = [`c.date >= '${from}' AND c.date <= '${to}'`];
-        if (region) clauses.push(`d.Region = '${region}'`);
-        if (fuel) clauses.push(`${FUEL} = '${fuel}'`);
-        if (crossFilter.duids.length) clauses.push(`sc.DUID IN (${crossFilter.duids.map(d => `'${d}'`).join(',')})`);
+        const clauses = [`c.date >= ${sqlStr(from)} AND c.date <= ${sqlStr(to)}`];
+        if (region) clauses.push(`d.Region = ${sqlStr(region)}`);
+        if (fuel) clauses.push(`${FUEL} = ${sqlStr(fuel)}`);
+        if (crossFilter.duids.length) clauses.push(`sc.DUID IN (${duidList()})`);
         return clauses.join(" AND ");
       },
 
       wherePrice() {
-        const region = document.getElementById("regionFilter").value || crossFilter.region;
+        const region = activeRegion();
         const { from, to } = getDateRange();
-        const clauses = [`c.date >= '${from}' AND c.date <= '${to}'`];
-        if (region) clauses.push(`p.REGIONID = '${region}'`);
+        const clauses = [`c.date >= ${sqlStr(from)} AND c.date <= ${sqlStr(to)}`];
+        if (region) clauses.push(`p.REGIONID = ${sqlStr(region)}`);
         if (!region && (crossFilter.duids.length || crossFilter.fuel)) {
-          const fuel = document.getElementById("fuelFilter").value || crossFilter.fuel;
-          let regionFilter;
+          const fuel = activeFuel();
           if (crossFilter.duids.length) {
-            regionFilter = `p.REGIONID IN (SELECT Region FROM dim.dim_duid WHERE DUID IN (${crossFilter.duids.map(d => `'${d}'`).join(',')}))`;
+            clauses.push(`p.REGIONID IN (SELECT Region FROM dim.dim_duid WHERE DUID IN (${duidList()}))`);
           } else if (fuel) {
-            regionFilter = `p.REGIONID IN (SELECT DISTINCT Region FROM dim.dim_duid WHERE FuelSourceDescriptor = '${fuel}')`;
+            clauses.push(`p.REGIONID IN (SELECT DISTINCT Region FROM dim.dim_duid WHERE FuelSourceDescriptor = ${sqlStr(fuel)})`);
           }
-          if (regionFilter) clauses.push(regionFilter);
         }
         return clauses.join(" AND ");
       },
@@ -679,21 +744,17 @@
       allDuids: "SELECT DUID, Region, FuelSourceDescriptor AS fuel FROM dim.dim_duid WHERE DUID IS NOT NULL ORDER BY DUID",
 
       // --- Generation chart ---
-      generation(seriesAlias, seriesCol, valCol, intraday) {
-        if (intraday) {
-          return `
-            SELECT CAST(sc.date AS VARCHAR) AS date, CAST(sc.time AS INTEGER) AS time, ${seriesAlias}, SUM(${valCol})::DOUBLE AS total_mw, CAST(COUNT(*) AS INTEGER) AS row_cnt
-            FROM ${sql.fromScada()}
-            WHERE ${sql.whereScada()}
-            GROUP BY sc.date, sc.time, ${seriesCol}
-            ORDER BY sc.date, sc.time`;
-        }
+      // Rows with negative output (charging) form their own "<series> (charging)" series, so
+      // they sit below the axis instead of being netted into, and cutting into, the stack.
+      generation(seriesCol, valCol, intraday) {
+        const series = `CASE WHEN ${valCol} < 0 THEN ${seriesCol} || '${CHARGING}' ELSE ${seriesCol} END AS series`;
+        const time = intraday ? ', CAST(sc.time AS INTEGER) AS time' : '';
         return `
-          SELECT CAST(sc.date AS VARCHAR) AS date, ${seriesAlias}, SUM(${valCol})::DOUBLE AS total_mw, CAST(COUNT(*) AS INTEGER) AS row_cnt
+          SELECT CAST(sc.date AS VARCHAR) AS date${time}, ${series}, SUM(${valCol})::DOUBLE AS total_mw
           FROM ${sql.fromScada()}
           WHERE ${sql.whereScada()}
-          GROUP BY sc.date, ${seriesCol}
-          ORDER BY sc.date`;
+          GROUP BY ALL
+          ORDER BY ALL`;
       },
 
       // --- Price chart ---
@@ -742,9 +803,14 @@
 
     const charts = {};
     function getChart(id) {
-      if (!charts[id]) charts[id] = echarts.init(document.getElementById(id), 'dark-custom');
+      if (!charts[id]) charts[id] = echarts.init(document.getElementById(id), isLight() ? 'light-custom' : 'dark-custom');
       return charts[id];
     }
+    // Switching the OS/browser theme re-creates the charts in the matching ECharts theme.
+    schemeQuery.addEventListener('change', () => {
+      for (const id of Object.keys(charts)) { charts[id].dispose(); delete charts[id]; }
+      renderAll();
+    });
     window.addEventListener('resize', () => { Object.values(charts).forEach(c => c.resize()); });
 
     // An empty result replaces the chart with a message instead of leaving the previous
@@ -765,7 +831,8 @@
     async function renderGeneration(seq) {
       const intraday = isIntradayMode();
       const unit = intraday ? 'MW' : 'MWh';
-      const drillFuel = crossFilter.fuel;
+      // A fuel chosen in the dropdown drills into its units exactly like clicking the fuel.
+      const drillFuel = activeFuel();
 
       document.getElementById("title-generation").textContent = drillFuel
         ? `${drillFuel} by DUID (${unit})`
@@ -773,9 +840,8 @@
 
       const valCol = intraday ? 'sc.mw' : 'sc.mwh';
       const seriesCol = drillFuel ? 'sc.DUID' : FUEL;
-      const seriesAlias = drillFuel ? 'sc.DUID AS series' : `${FUEL} AS series`;
 
-      const data = await runQuery(sql.generation(seriesAlias, seriesCol, valCol, intraday));
+      const data = await runQuery(sql.generation(seriesCol, valCol, intraday));
       if (seq !== _renderSeq) return;
       if (!data.length) {
         showEmpty('chart-generation');
@@ -789,27 +855,42 @@
         row => row.total_mw
       );
 
-      // Sort series by total descending, limit to top 15 in drill mode
+      // Sort series by absolute total, descending. In drill mode the top 15 units are drawn and
+      // the rest summed into one "Other units" series, so the stack still adds up.
       const seriesTotals = {};
       for (const row of data) seriesTotals[row.series] = (seriesTotals[row.series] || 0) + row.total_mw;
-      let seriesNames = Object.entries(seriesTotals).sort((a, b) => b[1] - a[1]).map(e => e[0]);
-      if (drillFuel && seriesNames.length > 15) seriesNames = seriesNames.slice(0, 15);
+      let seriesNames = Object.entries(seriesTotals).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).map(e => e[0]);
+      // Two buckets, so the charging remainder stays below the axis with the other charging series.
+      const OTHER = 'Other units', OTHER_CHARGING = OTHER + CHARGING;
+      const buckets = { [OTHER]: [], [OTHER_CHARGING]: [] };
+      if (drillFuel && seriesNames.length > 15) {
+        for (const n of seriesNames.slice(15)) buckets[n.endsWith(CHARGING) ? OTHER_CHARGING : OTHER].push(n);
+        seriesNames = [...seriesNames.slice(0, 15), ...Object.keys(buckets).filter(b => buckets[b].length)];
+      }
+      const isOther = name => name in buckets;
+      const valueAt = (k, name) => isOther(name)
+        ? buckets[name].reduce((s, n) => s + (lookup.get(`${k}|${n}`) || 0), 0)
+        : (lookup.get(`${k}|${name}`) || 0);
+      const colorOf = (name, i) => isOther(name) ? '#9e9e9e' : drillFuel ? PALETTE[i % PALETTE.length] : fuelColor(name);
 
       const largeMode = xKeys.length > 2000;
       const series = seriesNames.map((name, i) => ({
         name,
         type: 'line',
-        stack: 'total',
-        areaStyle: { opacity: 0.85 },
+        // Charging below the axis gets its own stack; everything else stacks upward.
+        stack: name.endsWith(CHARGING) ? 'charging' : 'total',
+        areaStyle: { opacity: name.endsWith(CHARGING) ? 0.5 : 0.85 },
         lineStyle: { width: 0 },
         symbol: 'none',
         emphasis: { focus: 'series' },
         triggerLineEvent: true,
-        sampling: 'lttb',
+        // Not 'lttb': it keeps different points per series, so a stacked chart misaligns
+        // and draws vertical spikes down to zero. 'average' buckets every series alike.
+        sampling: 'average',
         large: largeMode,
         progressive: largeMode ? 500 : 0,
-        itemStyle: { color: drillFuel ? PALETTE[i % PALETTE.length] : fuelColor(name) },
-        data: xKeys.map(k => lookup.get(`${k}|${name}`) || 0),
+        itemStyle: { color: colorOf(name, i) },
+        data: xKeys.map(k => valueAt(k, name)),
       }));
 
       let hoveredSeries = '';
@@ -820,14 +901,15 @@
       chart.setOption({
         tooltip: { trigger: 'axis', axisPointer: { type: 'line' }, formatter: params => {
           const target = hoveredSeries ? params.find(p => p.seriesName === hoveredSeries) : null;
-          const p = target || params.filter(p => p.value > 0).sort((a, b) => b.value - a.value)[0];
+          const p = target || params.filter(p => p.value !== 0).sort((a, b) => Math.abs(b.value) - Math.abs(a.value))[0];
           if (!p) return '';
-          return `<div style="color:#8b949e;margin-bottom:2px">${params[0].axisValueLabel}</div><div style="font-weight:600">${p.marker} ${p.seriesName}: ${Math.round(p.value).toLocaleString()} ${unit}</div>`;
+          return `<div style="color:${cssVar('--muted')};margin-bottom:2px">${params[0].axisValueLabel}</div><div style="font-weight:600">${p.marker} ${escapeHtml(p.seriesName)}: ${Math.round(p.value).toLocaleString()} ${unit}</div>`;
         }},
-        legend: { type: 'scroll', top: 0, icon: 'none', itemGap: 12, selectedMode: false, data: seriesNames.map((name, i) => ({ name, textStyle: { color: drillFuel ? PALETTE[i % PALETTE.length] : fuelColor(name), fontSize: 11 } })) },
-        grid: { left: 60, right: 20, top: 35, bottom: 25 },
-        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { rotate: intraday ? 45 : 0, fontSize: intraday ? 10 : 12 } },
-        yAxis: { type: 'value', min: 0, name: unit, nameTextStyle: { color: '#8b949e', fontSize: 11 }, axisLabel: { formatter: v => v >= 1000 ? (v/1000).toFixed(0) + 'k' : v } },
+        // Click a legend entry to hide/show that series; click the chart area to drill.
+        legend: { type: 'scroll', top: 0, itemGap: 12, itemWidth: 10, itemHeight: 10, data: seriesNames.map((name, i) => ({ name, itemStyle: { color: colorOf(name, i) } })) },
+        grid: { left: 60, right: 20, top: 35, bottom: intraday ? 60 : 25 },
+        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 11 } },
+        yAxis: { type: 'value', axisLabel: { formatter: v => Math.abs(v) >= 1000 ? (v/1000).toFixed(0) + 'k' : v } },
         dataZoom: dataZoomConfig(intraday),
         series,
         animationDuration: 600,
@@ -837,26 +919,27 @@
       // Click: fuel view -> drill into fuel; DUID view -> select DUID
       chart.off('click');
       chart.on('click', (params) => {
-        if (!params.seriesName) return;
+        if (!params.seriesName || isOther(params.seriesName)) return;
+        const name = params.seriesName.endsWith(CHARGING) ? params.seriesName.slice(0, -CHARGING.length) : params.seriesName;
         if (drillFuel) {
-          const duid = params.seriesName;
+          const duid = name;
           const idx = crossFilter.duids.indexOf(duid);
           if (idx >= 0) crossFilter.duids.splice(idx, 1);
           else crossFilter.duids.push(duid);
           updateDuidTrigger();
         } else {
-          crossFilter.fuel = params.seriesName;
+          crossFilter.fuel = name;
         }
         renderAll();
       });
 
-      // KPIs
+      // KPIs: generation only, so charging (negative) rows are left out
       const uniqueIntervals = intraday ? xKeys.length : [...new Set(data.map(d => d.date))].length;
-      const totalGen = data.reduce((s, d) => s + d.total_mw, 0) / (uniqueIntervals || 1);
+      const totalGen = data.reduce((s, d) => s + Math.max(d.total_mw, 0), 0) / (uniqueIntervals || 1);
       document.getElementById('kpiGen').textContent = Math.round(totalGen).toLocaleString();
       document.getElementById('kpiGenSub').textContent = intraday ? 'Average MW' : 'Average MWh/day';
 
-      const topFuel = Object.entries(seriesTotals).sort((a, b) => b[1] - a[1])[0];
+      const topFuel = Object.entries(seriesTotals).filter(([n]) => !n.endsWith(CHARGING)).sort((a, b) => b[1] - a[1])[0];
       if (topFuel) {
         document.getElementById('kpiTopFuel').textContent = topFuel[0];
         const avgLabel = intraday ? 'MW avg' : 'MWh/day avg';
@@ -867,15 +950,14 @@
 
     // Latest MW: latest 5-min reading, respects region/fuel/DUID filters but ignores date
     async function updateLatestMW(seq) {
-      const region = document.getElementById("regionFilter").value || crossFilter.region;
-      const fuel = document.getElementById("fuelFilter").value || crossFilter.fuel;
+      const region = activeRegion(), fuel = activeFuel();
       const mwFilters = [];
-      if (region) mwFilters.push(`d.Region = '${region}'`);
-      if (fuel) mwFilters.push(`${FUEL} = '${fuel}'`);
-      if (crossFilter.duids.length) mwFilters.push(`sc.DUID IN (${crossFilter.duids.map(d => `'${d}'`).join(',')})`);
+      if (region) mwFilters.push(`d.Region = ${sqlStr(region)}`);
+      if (fuel) mwFilters.push(`${FUEL} = ${sqlStr(fuel)}`);
+      if (crossFilter.duids.length) mwFilters.push(`sc.DUID IN (${duidList()})`);
       const mwWhere = mwFilters.length ? `AND ${mwFilters.join(' AND ')}` : '';
       const latestMWResult = await runQuery(`
-        SELECT SUM(sc.mw)::DOUBLE AS total_mw, CAST(sc.date AS VARCHAR) AS d, sc.time
+        SELECT SUM(GREATEST(sc.mw, 0))::DOUBLE AS total_mw, CAST(sc.date AS VARCHAR) AS d, sc.time
         FROM today.scada_today sc
         LEFT JOIN dim.dim_duid d ON sc.DUID = d.DUID
         WHERE sc.date = (SELECT MAX(date) FROM today.scada_today)
@@ -927,15 +1009,24 @@
         }),
       }));
 
+      // One $15k interval flattens a week of $50-150 prices into a line on zero. "Clip spikes"
+      // caps the axis at the 1st/99th percentile; the tooltip still shows the real value.
+      const clip = document.getElementById('clipSpikes').checked;
+      const vals = data.map(d => d.avg_price).sort((a, b) => a - b);
+      const pct = q => vals[Math.min(vals.length - 1, Math.floor(q * vals.length))];
+      const nice = v => Math.sign(v) * Math.ceil(Math.abs(v) / 50) * 50;
+      const yMax = clip ? nice(pct(0.99)) : null;
+      const yMin = clip ? Math.min(0, nice(pct(0.01))) : null;
+
       const chart = getChart('chart-price');
       chart.setOption({
         color: PALETTE,
         tooltip: { trigger: 'axis', axisPointer: { type: 'line' } },
-        legend: { bottom: 0, textStyle: { fontSize: 11 } },
-        grid: { left: 55, right: 15, top: 15, bottom: intraday ? 55 : 40 },
-        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { rotate: intraday ? 45 : 0, fontSize: intraday ? 10 : 12 } },
-        yAxis: { type: 'value', name: '$/MWh', nameTextStyle: { color: '#8b949e', fontSize: 11 }, axisLabel: { formatter: v => '$' + v } },
-        dataZoom: dataZoomConfig(intraday),
+        legend: { type: 'scroll', bottom: 0, textStyle: { fontSize: 11 } },
+        grid: { left: 55, right: 15, top: 15, bottom: intraday ? 80 : 40 },
+        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 11 } },
+        yAxis: { type: 'value', max: yMax, min: yMin, axisLabel: { formatter: v => '$' + v } },
+        dataZoom: intraday ? [{ type: 'inside' }, { type: 'slider', height: 18, bottom: 28 }] : [],
         series,
         animationDuration: 600,
       }, true);
@@ -956,8 +1047,8 @@
 
     // Latest Price: latest 5-min reading, respects region filter but ignores date
     async function updateLatestPrice(seq) {
-      const regionP = document.getElementById("regionFilter").value || crossFilter.region;
-      const priceWhere = regionP ? `AND p.REGIONID = '${regionP}'` : '';
+      const regionP = activeRegion();
+      const priceWhere = regionP ? `AND p.REGIONID = ${sqlStr(regionP)}` : '';
       const latestPriceResult = await runQuery(`
         SELECT AVG(p.price)::DOUBLE AS avg_price, CAST(p.date AS VARCHAR) AS d, p.time
         FROM today.price_today p
@@ -997,6 +1088,7 @@
       const intraday = isIntradayMode();
       const unit = intraday ? 'MW' : 'MWh';
       const col = intraday ? 'sc.mw' : 'sc.mwh';
+      document.getElementById('title-map').textContent = `Generators (average ${intraday ? 'MW' : 'MWh/day'}, sized by output)`;
 
       const data = await runQuery(sql.mapScatter(col));
       if (seq !== _renderSeq) return;
@@ -1014,7 +1106,7 @@
           region: d.Region,
           itemStyle: { opacity: 0.85 },
         })),
-        symbolSize: d => Math.max(5, Math.sqrt(d[2] / maxMw) * 25),
+        symbolSize: d => Math.max(5, Math.sqrt(Math.max(d[2], 0) / maxMw) * 25),
         itemStyle: { color: fuelColor(fuel) },
         emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(88,166,255,0.5)' }, scale: 1.3 },
       }));
@@ -1025,7 +1117,7 @@
         geo: {
           map: 'australia',
           roam: true,
-          itemStyle: { areaColor: '#1a1f2e', borderColor: '#30363d', borderWidth: 1 },
+          itemStyle: { areaColor: isLight() ? '#eef2f7' : '#1a1f2e', borderColor: cssVar('--border'), borderWidth: 1 },
           emphasis: { disabled: true },
           label: { show: false },
           zoom: 1.1,
@@ -1034,8 +1126,9 @@
         tooltip: { trigger: 'item', formatter: p => {
           if (!p.data?.duid) return '';
           const d = p.data;
-          return `<div style="font-weight:600">${d.duid}</div><div>${p.seriesName} &middot; ${d.region}</div><div style="margin-top:4px"><b>${Math.round(d.value[2]).toLocaleString()} ${unit}</b></div>`;
+          return `<div style="font-weight:600">${escapeHtml(d.duid)}</div><div>${escapeHtml(p.seriesName)} &middot; ${escapeHtml(d.region)}</div><div style="margin-top:4px"><b>${Math.round(d.value[2]).toLocaleString()} ${unit}</b></div>`;
         }},
+        legend: { type: 'scroll', bottom: 0, itemWidth: 10, itemHeight: 10, textStyle: { fontSize: 10 } },
         series,
         animationDuration: 600,
       }, true);
@@ -1083,7 +1176,7 @@
           updateDuidTrigger();
           renderAll();
         });
-        label.append(cb, ` ${d.DUID} (${d.Region}, ${d.fuel})`);
+        label.append(cb, ` ${d.DUID} (${d.Region}, ${d.fuel ?? 'Unknown'})`);
         list.append(label);
       }
     }
@@ -1093,10 +1186,26 @@
       btn.textContent = crossFilter.duids.length ? `${crossFilter.duids.length} selected` : 'All DUIDs';
     }
 
+    // Open/close a dropdown panel, keeping its trigger's aria-expanded in step.
+    function setPanel(panel, open) {
+      panel.classList.toggle('open', open);
+      document.querySelector(`[aria-controls="${panel.id}"]`)?.setAttribute('aria-expanded', String(open));
+    }
+    function closeAllPanels() {
+      document.querySelectorAll('.duid-panel.open, .dd-panel.open').forEach(p => setPanel(p, false));
+    }
+    document.addEventListener('keydown', e => {
+      if (e.key !== 'Escape') return;
+      const open = document.querySelector('.duid-panel.open, .dd-panel.open');
+      if (open) { closeAllPanels(); document.querySelector(`[aria-controls="${open.id}"]`)?.focus(); }
+    });
+
     document.getElementById('duidTrigger').addEventListener('click', (e) => {
       e.stopPropagation();
       const panel = document.getElementById('duidPanel');
-      const isOpen = panel.classList.toggle('open');
+      const isOpen = !panel.classList.contains('open');
+      closeAllPanels();
+      setPanel(panel, isOpen);
       if (isOpen) {
         document.getElementById('duidSearch').value = '';
         renderDuidList();
@@ -1104,19 +1213,31 @@
       }
     });
     document.getElementById('duidPanel').addEventListener('click', e => e.stopPropagation());
-    document.addEventListener('click', () => { document.getElementById('duidPanel').classList.remove('open'); document.querySelectorAll('.dd-panel.open').forEach(p => p.classList.remove('open')); });
+    document.addEventListener('click', closeAllPanels);
     document.getElementById('duidSearch').addEventListener('input', e => renderDuidList(e.target.value));
 
     // --- Tab switching ---
-    for (const btn of document.querySelectorAll('.tab-btn')) {
+    const tabs = [...document.querySelectorAll('.tab-btn')];
+    for (const btn of tabs) {
+      btn.addEventListener('keydown', e => {
+        if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+        const next = tabs[(tabs.indexOf(btn) + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+        next.focus(); next.click();
+      });
       btn.addEventListener('click', () => {
-        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
+        for (const b of tabs) {
+          const on = b === btn;
+          b.classList.toggle('active', on);
+          b.setAttribute('aria-selected', String(on));
+          b.tabIndex = on ? 0 : -1;
+        }
         const tab = btn.dataset.tab;
         document.getElementById('view-dashboard').style.display = tab === 'dashboard' ? '' : 'none';
         document.getElementById('view-analyze').style.display = tab === 'analyze' ? '' : 'none';
         // Populate the SQL box the first time Analyze is opened; don't clobber manual edits after.
         if (tab === 'analyze' && !document.getElementById('analyzeSql').value.trim()) syncAnalyzeSql();
+        // Charts drawn while hidden have zero size; resize once visible again.
+        if (tab === 'dashboard') Object.values(charts).forEach(c => c.resize());
       });
     }
 
@@ -1126,9 +1247,9 @@
       const panel = document.getElementById(panelId);
       trigger.addEventListener('click', (e) => {
         e.stopPropagation();
-        // Close other panels
-        document.querySelectorAll('.dd-panel.open').forEach(p => { if (p !== panel) p.classList.remove('open'); });
-        panel.classList.toggle('open');
+        const open = !panel.classList.contains('open');
+        closeAllPanels();
+        setPanel(panel, open);
       });
       panel.addEventListener('click', e => e.stopPropagation());
     }
@@ -1168,16 +1289,11 @@
     }
 
     // --- Analyze: query builder ---
-    function buildAnalyzeSQL(limit) {
+    function buildAnalyzeSQL() {
       const { measures, dimensions } = getAnalyzeOptions();
       const hasGen = measures.generation;
       const hasPrice = measures.price;
       const raw = dimensions.time; // time dimension = 5-min raw, else daily
-
-      // Build SELECT columns, GROUP BY, ORDER BY
-      const selectCols = ['CAST(sc.date AS VARCHAR) AS date'];
-      const groupCols = ['sc.date'];
-      const orderCols = ['sc.date'];
 
       // For price-only mode, use p. alias
       const selDate = hasGen ? 'CAST(sc.date AS VARCHAR) AS date' : 'CAST(p.date AS VARCHAR) AS date';
@@ -1234,10 +1350,7 @@
       // WHERE
       const where = hasGen ? sql.whereScada() : sql.wherePrice();
 
-      const inner = `SELECT ${sel.join(', ')}\nFROM ${from}\nWHERE ${where}\nGROUP BY ${grp.join(', ')}\nORDER BY ${ord.join(', ')}`;
-
-      if (limit) return `SELECT * FROM (${inner}) LIMIT ${limit}`;
-      return inner;
+      return `SELECT ${sel.join(', ')}\nFROM ${from}\nWHERE ${where}\nGROUP BY ${grp.join(', ')}\nORDER BY ${ord.join(', ')}`;
     }
 
     // The Analyze SQL textarea is the source of truth for Preview/Plan/Download — it shows the
@@ -1245,7 +1358,7 @@
     // builder inputs (measures / dimensions / filters) change, or via "Reset to generated".
     function syncAnalyzeSql() {
       const ta = document.getElementById('analyzeSql');
-      if (ta) ta.value = buildAnalyzeSQL(null);
+      if (ta) ta.value = buildAnalyzeSQL();
     }
     function getAnalyzeSql() {
       return document.getElementById('analyzeSql').value.trim().replace(/;+\s*$/, '');
@@ -1458,6 +1571,8 @@
       });
     }
 
+    document.getElementById('clipSpikes').addEventListener('change', () => renderAll());
+
     // --- Render all ---
     async function renderAll() {
       const seq = ++_renderSeq;
@@ -1503,7 +1618,12 @@
       await populateFilters();
       await renderAll();
       // Load year databases in background, then silently refresh
-      loadDailyAggDatabase().then(renderAll).catch(e => console.warn('[OPFS] Agg load failed:', e));
+      // agg only feeds the daily-grain views (ranges over 30 days); don't redraw an intraday view.
+      loadDailyAggDatabase().then(() => {
+        if (!isIntradayMode()) renderAll();
+        else setStatus(window._cutoffCached || "Connected", "connected");   // clear "Downloading..."
+      })
+        .catch(e => console.warn('[OPFS] Agg load failed:', e));
     } catch (e) {
       setStatus("Error: " + e.message, "error");
       console.error(e);
