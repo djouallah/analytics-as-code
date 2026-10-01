@@ -24,11 +24,12 @@ REMOTE=${DEPLOY_REMOTE:-"https://x-access-token:${NEMTRACKER_TOKEN}@github.com/N
 # function called as an `if` condition.
 publish_once() {
   local work=$1
-  # The clone has no blobs, and git fetches a missing one on demand whenever it wants an old
-  # file's content -- for the .duckdb files that is ~100 MB a deploy. Three places asked:
-  # autocrlf's safe-crlf check in `git add` (off: these are binary and published verbatim),
-  # porcelain `git diff` (diff-index below), and the thin-pack delta search in `git push`
-  # (pack.window=0 + --no-thin: send whole objects, never look for a base).
+  # The clone has no blobs, and git fetches any missing one it wants on demand. Left alone
+  # that pulled the whole repo (364 MB, ~140 s) on every attempt -- the write-tree inside
+  # `git commit` checks that every blob in the index exists. So: plumbing only, each step
+  # chosen not to look at old blobs -- add with autocrlf off (its safe-crlf check reads the
+  # old blob), diff-index, write-tree --missing-ok + commit-tree, and a push that never
+  # searches for delta bases (pack.window=0, --no-thin).
   git clone -q -c core.autocrlf=false --depth 1 --filter=blob:none --no-checkout --branch main "$REMOTE" "$work" || return 1
   cd "$work" || return 1
   git read-tree HEAD || return 1               # index = deployed tree; no blobs downloaded
@@ -40,9 +41,15 @@ publish_once() {
     return 0
   fi
   git diff-index --cached --name-status --no-renames HEAD
-  git -c user.name=djouallah -c user.email=djouallah@users.noreply.github.com     commit -q -m "$MSG" || return 1
+  local tree commit
+  tree=$(git write-tree --missing-ok) || return 1   # skips the existence check that fetched every blob
+  commit=$(git commit-tree "$tree" -p HEAD -m "$MSG") || return 1
+  git update-ref HEAD "$commit" || return 1
   git -c pack.window=0 push -q --no-thin origin HEAD:main
 }
+
+export GIT_AUTHOR_NAME=djouallah GIT_AUTHOR_EMAIL=djouallah@users.noreply.github.com
+export GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
 
 for attempt in 1 2 3 4 5; do
   WORK=$(mktemp -d)
