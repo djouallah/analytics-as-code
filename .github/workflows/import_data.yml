@@ -68,16 +68,16 @@ jobs:
           #
           # The .duckdb files are read client-side by the DuckDB-WASM reader already
           # deployed to the NemTracker dashboard, so their on-disk format must stay
-          # at 1.5.1. But 1.5.1 SEGFAULTS reading tables that compaction rewrote with
-          # 1.6.0.dev365 -- export_scada_today started dying with exit 139 as soon as
+          # on the 1.5 line. But 1.5.1 SEGFAULTED reading tables that compaction rewrote
+          # with the 1.6/2.0 dev build -- export_scada_today died with exit 139 as soon as
           # fct_scada_today had been compacted. Reading the catalog with the same
-          # duckdb that wrote it fixes that.
+          # duckdb that wrote it (requirements.txt's pin) fixes that.
           #
           # Parquet is the handoff between them, so the dashboard format is untouched.
           python -m venv .venv-read
-          .venv-read/bin/pip install -q "duckdb==1.6.0.dev365"
+          .venv-read/bin/pip install -q "duckdb==2.0.0.dev2609250715"
           python -m venv .venv-write
-          .venv-write/bin/pip install -q "duckdb==1.5.1"
+          .venv-write/bin/pip install -q "duckdb==1.5.6"
 
       # --- Phase 1: Intraday (always) + dims (daily only) â†’ deploy immediately ---
       - name: Export fct_scada_today

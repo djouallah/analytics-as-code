@@ -151,14 +151,18 @@ RENAMEs it into place, and RENAME has never been probed against this catalog.
 
 ## DuckDB version policy
 Everything is pinned — no workflow floats on "latest".
-- **`process_data.yml`, `build.yml`, `table_maintenance.yml` pin
-  `duckdb==1.6.0.dev365`** (dbt via `requirements.txt`, which also pins `dbt-core`/`dbt-duckdb`
-  exactly — the insert-only merges lean on adapter internals). That nightly is required, not incidental:
-  `iceberg_rewrite_data_files()` (duckdb-iceberg#1035, merged 2026-07-09) isn't in a stable
-  release yet, and the compaction job needs it. Pinning the same build everywhere means the
+- **`process_data.yml`, `build.yml`, `table_maintenance.yml` and `import_data.yml`'s read venv
+  pin `duckdb==2.0.0.dev2609250715`** (dbt via `requirements.txt`, which also pins `dbt-core`/`dbt-duckdb`
+  exactly — the insert-only merges lean on adapter internals). 1.6.0 never shipped as stable:
+  the line became **DuckDB 2.0.0** (stable due 2026-10-21), and from 2026-09 its pre-releases are
+  published as `2.0.0.devYYMMDDHHMM` (the old `1.6.0.dev365` pin was the same line). The
+  pre-release is required, not incidental: `iceberg_rewrite_data_files()` (duckdb-iceberg#1035,
+  merged 2026-07-09) isn't in a stable release yet, and the compaction job needs it. Pinning the same build everywhere means the
   catalog is only ever touched by one known duckdb. The `iceberg` extension is installed from
   `core` first (`compact_iceberg.py` falls back to `core_nightly`) and its binary is keyed to
-  the duckdb build, so pinning duckdb pins the extension too. Collapse them back to a stable release once 1.6.0 ships.
+  the duckdb build, so pinning duckdb pins the extension too. Move every pin to `duckdb==2.0.0`
+  once it ships. duckdb-iceberg has no `expire_snapshots` yet (duckdb-iceberg#1341 is open), so
+  pyiceberg stays until that merges.
 - **`pyiceberg==0.11.1`** (snapshot expiry, `table_maintenance.yml` only) is pinned on its own
   schedule — it never touches the duckdb file format, only the REST catalog, and the script
   reaches into `RestCatalog._supported_endpoints`, which is exactly the kind of internal a
@@ -167,9 +171,11 @@ Everything is pinned — no workflow floats on "latest".
   GET/HEAD-only config. The live catalog advertises 13 endpoints including
   `POST /v1/{prefix}/namespaces/{namespace}/tables/{table}` (checked 2026-08-25), so the
   override doesn't fire — the script logs the list each run, which is the evidence.
-- **`import_data.yml` stays on `duckdb==1.5.1`.** Different reason, deliberately unchanged: it
+- **`import_data.yml`'s write venv stays on the 1.5 line (`duckdb==1.5.6`).** Different reason: it
   builds the `.duckdb` files deployed to the NemTracker dashboard, read client-side by
-  DuckDB-WASM, so the on-disk file format must stay stable for the *already deployed* reader.
+  DuckDB-WASM (1.5.x), so the on-disk file format must stay stable for the *already deployed*
+  reader. Patch releases within 1.5 keep the format; don't move it to 2.0 until a duckdb-wasm
+  build on 2.0 is pinned in the dashboard.
 - **The dashboard pins `@duckdb/duckdb-wasm@1.33.1-dev65.0`** (DuckDB 1.5.x line), a dev build
   because nothing stable has shipped since 1.33.0 (Dec 2025). Don't take npm's `latest` tag:
   it points at `1.33.1-dev57.0`, which the DuckDB blog says breaks OPFS. The dev build lets

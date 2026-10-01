@@ -6,9 +6,9 @@ up with ~48 tiny data files a day and nothing ever folds them back together. Thi
 iceberg_rewrite_data_files() over each table, consolidating files below the target size.
 
 iceberg_rewrite_data_files landed in duckdb/duckdb-iceberg#1035 and is not in a stable
-duckdb release yet — the workflow pins duckdb==1.6.0.dev365 (it self-identifies as
-v2.0.0-alpha), and the iceberg extension binary is keyed to the duckdb build, so pinning
-duckdb pins the extension too.
+duckdb release yet; it first ships stable with duckdb 2.0.0. The workflow pins the
+pre-release duckdb==2.0.0.dev2609250715, and the iceberg extension binary is keyed to the duckdb
+build, so pinning duckdb pins the extension too.
 
 This is the OneLake edition of the R2 original (both live in this repo's git history; the
 sibling copy is dbt_fabric_python_iceberg/.github/scripts/compact_iceberg.py). Two things
@@ -70,8 +70,9 @@ AZURE_TRANSPORT = os.environ.get("AZURE_TRANSPORT_OPTION_TYPE", "default")
 
 def connect():
     con = duckdb.connect(":memory:")
-    # Plain install first. duckdb 1.6.0.dev365 identifies itself as v2.0.0-alpha*, and
-    # nightly-extensions.duckdb.org has no iceberg build under that version — asking
+    # Plain install first. The pinned 2.0 pre-release (and the 1.6.0.dev builds before it)
+    # identify as v2.0.0-alpha*, and nightly-extensions.duckdb.org has no iceberg build
+    # under that version — asking
     # core_nightly first just buys a 404 and a scary log line. The core extension for
     # this build does carry iceberg_rewrite_data_files.
     try:
