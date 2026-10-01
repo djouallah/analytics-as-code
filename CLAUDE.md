@@ -125,8 +125,10 @@ published paths added with `-f`, push retried on a race. It replaced peaceiris/a
 whose full-history clone (~900 MB, ~2.5 min) made concurrent deploys collide, and whose
 `git add --all` skipped new files matching the deploy repo's `.gitignore` (`*.duckdb` was in it
 until 2026-10-01 — that is why `energy_data_2026_h2.duckdb` never deployed). The daily run
-rebuilds only the latest two half-year files; dispatch `import_data.yml` with
-`all_periods=true` after a backfill that touched older data.
+exports from Iceberg, rebuilds and redeploys only the latest two half-years: older half-year
+files stay as deployed, and `energy_daily_agg.duckdb` keeps the deployed rows before the
+cutoff (downloaded, sanity-checked, spliced — `cache_catalog.export_cutoff`). Dispatch
+`import_data.yml` with `all_periods=true` after a backfill that touched older data.
 
 ## Models (7)
 | Model | Schema | Materialization |

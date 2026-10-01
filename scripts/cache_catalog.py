@@ -15,7 +15,9 @@ Usage:
 import json
 import os
 import sys
-from datetime import datetime, timezone
+import tempfile
+import urllib.request
+from datetime import date, datetime, timezone
 
 import duckdb
 
@@ -59,6 +61,31 @@ def connect_iceberg():
     return con
 
 
+def export_cutoff():
+    """First day of the previous half-year, or None for a full export (#2).
+
+    Only the current and previous half-year change from one day to the next (late daily
+    files land in the previous half for a while after a boundary). Everything older is
+    already deployed -- its energy_data_<half>.duckdb files and its rows in
+    energy_daily_agg.duckdb -- so the daily run neither re-exports it from Iceberg nor
+    rebuilds or redeploys it. ALL_PERIODS=true exports and rebuilds everything, e.g. after
+    a rebuild=<fact> backfill of old data."""
+    if os.environ.get("ALL_PERIODS", "").lower() == "true":
+        return None
+    today = datetime.now(timezone.utc).date()
+    current_half = date(today.year, 1 if today.month <= 6 else 7, 1)
+    previous_half = (date(current_half.year - 1, 7, 1) if current_half.month == 1
+                     else date(current_half.year, 1, 1))
+    return previous_half.isoformat()
+
+
+def cutoff_filter():
+    """WHERE fragment for the facts' DATE column (cast from the AEMO string, so the right
+    calendar day, and prunable from file statistics)."""
+    cutoff = export_cutoff()
+    return f"AND DATE >= DATE '{cutoff}'" if cutoff else ""
+
+
 def export_scada():
     con = connect_iceberg()
     con.execute(f"""
@@ -67,7 +94,7 @@ def export_scada():
                 CAST(strftime(SETTLEMENTDATE, '%H%M') AS SMALLINT) AS time,
                 CAST(ANY_VALUE(INITIALMW) AS REAL) AS mw
             FROM catalog.landing.fct_scada
-            WHERE INTERVENTION = 0 AND INITIALMW <> 0
+            WHERE INTERVENTION = 0 AND INITIALMW <> 0 {cutoff_filter()}
             GROUP BY DUID, CAST(SETTLEMENTDATE AS DATE), strftime(SETTLEMENTDATE, '%H%M')
         ) TO '{DASHBOARD_DIR}/fct_scada.parquet' (FORMAT PARQUET);
     """)
@@ -82,7 +109,7 @@ def export_price():
                 CAST(strftime(SETTLEMENTDATE, '%H%M') AS SMALLINT) AS time,
                 CAST(ANY_VALUE(RRP) AS REAL) AS price
             FROM catalog.landing.fct_price
-            WHERE INTERVENTION = 0
+            WHERE INTERVENTION = 0 {cutoff_filter()}
             GROUP BY REGIONID, CAST(SETTLEMENTDATE AS DATE), strftime(SETTLEMENTDATE, '%H%M')
         ) TO '{DASHBOARD_DIR}/fct_price.parquet' (FORMAT PARQUET);
     """)
@@ -143,15 +170,6 @@ def export_dim_calendar():
     con.close()
 
 
-def recent_periods_only():
-    """Only the current and previous half-year files change from one day to the next, so by
-    default those are the only ones rebuilt and redeployed; the older ones already sit in
-    the deploy repo (deploys use keep_files) and the deployed manifest is built from what is
-    there. Rewriting all ~17 files (~900 MB) daily only grew the Pages repo's history.
-    ALL_PERIODS=true rebuilds every half, e.g. after a rebuild=<fact> backfill of old data."""
-    return os.environ.get("ALL_PERIODS", "").lower() != "true"
-
-
 def build_daily():
     # Clean old files
     for f in os.listdir(DASHBOARD_DIR):
@@ -160,7 +178,8 @@ def build_daily():
 
     con = duckdb.connect(":memory:")
 
-    # Year-half periods present in the scada export; by default only the latest two.
+    # Year-half periods present in the scada export -- by default only the latest two,
+    # because that is all export_scada exported (see export_cutoff).
     periods = [
         (r[0], r[1])
         for r in con.execute(
@@ -170,8 +189,6 @@ def build_daily():
                 ORDER BY year, half"""
         ).fetchall()
     ]
-    if recent_periods_only():
-        periods = periods[-2:]
 
     # Build per-half-year files with scada + price
     for year, half in periods:
@@ -209,14 +226,39 @@ def build_daily():
     con.close()
 
 
+DEPLOYED_DATA_URL = os.environ.get("DEPLOYED_DATA_URL", "https://nemtracker.github.io/data")
+
+
 def build_daily_agg():
     agg_path = os.path.join(DASHBOARD_DIR, "energy_daily_agg.duckdb")
     if os.path.exists(agg_path):
         os.remove(agg_path)
 
+    # With a cutoff the parquet exports only start there, so the rows before it come from
+    # the currently deployed aggregate. Any doubt about that file fails the step: a
+    # silently truncated history would be deployed over the good one.
+    cutoff = export_cutoff()
+    keep_old = {"scada_daily": "", "price_daily": ""}
+    tmp = None
+    if cutoff:
+        tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False).name
+        urllib.request.urlretrieve(f"{DEPLOYED_DATA_URL}/energy_daily_agg.duckdb", tmp)
+        check = duckdb.connect(tmp, read_only=True)
+        for table in keep_old:
+            first, last = check.execute(f"SELECT min(date), max(date) FROM {table}").fetchone()
+            if first is None or str(first) >= cutoff or str(last) < cutoff:
+                raise SystemExit(f"Deployed {table} covers {first}..{last}, which doesn't reach "
+                                 f"{cutoff}; refusing to splice. Dispatch with all_periods=true.")
+        check.close()
+        keep_old = {t: f"SELECT * FROM old.{t} WHERE date < DATE '{cutoff}' UNION ALL "
+                    for t in keep_old}
+
     con = duckdb.connect(agg_path)
+    if cutoff:
+        con.execute(f"ATTACH '{tmp}' AS old (READ_ONLY)")
     con.execute(f"""
         CREATE TABLE scada_daily AS
+        {keep_old["scada_daily"]}
         SELECT DUID, date, CAST(SUM(mw) / 12.0 AS REAL) AS mwh
         FROM '{DASHBOARD_DIR}/fct_scada.parquet'
         GROUP BY DUID, date
@@ -224,12 +266,18 @@ def build_daily_agg():
     """)
     con.execute(f"""
         CREATE TABLE price_daily AS
+        {keep_old["price_daily"]}
         SELECT REGIONID, date, CAST(AVG(price) AS REAL) AS price
         FROM '{DASHBOARD_DIR}/fct_price.parquet'
         GROUP BY REGIONID, date
         ORDER BY REGIONID, date
     """)
+    rows = {t: con.execute(f"SELECT count(*), min(date), max(date) FROM {t}").fetchone()
+            for t in ("scada_daily", "price_daily")}
     con.close()
+    if tmp:
+        os.remove(tmp)
+    print(f"Daily aggregate (kept deployed rows before {cutoff or 'nothing'}): {rows}")
 
     # Clean up parquet intermediates (shared with build_daily)
     for f in ["fct_scada.parquet", "fct_price.parquet"]:

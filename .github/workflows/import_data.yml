@@ -9,7 +9,7 @@ on:
   workflow_dispatch:  # manual = daily (full refresh)
     inputs:
       all_periods:
-        description: 'Rebuild and redeploy EVERY half-year file, not just the latest two (after a backfill of old data)'
+        description: 'Export, rebuild and redeploy ALL history, not just the latest two half-years (after a backfill of old data)'
         type: boolean
         default: false
 
@@ -41,6 +41,10 @@ jobs:
       WAREHOUSE_PATH: ${{ vars.WS_ID }}/${{ vars.LH_ID }}
       AZURE_TRANSPORT_OPTION_TYPE: curl
       CURL_CA_INFO: /etc/ssl/certs/ca-certificates.crt
+      # Daily runs export and rebuild only the latest two half-years and splice them into the
+      # deployed history (scripts/cache_catalog.py export_cutoff, #2). Dispatch with
+      # all_periods=true to export and rebuild everything.
+      ALL_PERIODS: ${{ inputs.all_periods && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -146,11 +150,8 @@ jobs:
         run: .venv-read/bin/python scripts/cache_catalog.py export_price
 
       - name: Build daily databases
-        # Only the latest two half-years by default (see recent_periods_only in
-        # scripts/cache_catalog.py); older files stay as deployed.
+        # Only the half-years export_scada exported; older files stay as deployed.
         if: steps.mode.outputs.is_daily == 'true'
-        env:
-          ALL_PERIODS: ${{ inputs.all_periods && 'true' || 'false' }}
         run: .venv-write/bin/python scripts/cache_catalog.py build_daily
 
       - name: Build daily aggregate database
