@@ -15,15 +15,14 @@
       --chips-bg: rgba(210,153,34,0.08); --focus-ring: rgba(88,166,255,0.15); --hover: rgba(88,166,255,0.1);
       --hover-soft: rgba(88,166,255,0.05); --shadow: 0 8px 24px rgba(0,0,0,0.4);
     }
-    @media (prefers-color-scheme: light) {
-      :root {
-        color-scheme: light;
-        --bg: #f6f8fa; --card: #ffffff; --input-bg: #ffffff; --border: #d0d7de; --row-line: #eaeef2;
-        --text: #1f2328; --muted: #57606a; --faint: #6e7781; --disabled: #8c959f; --accent: #0969da;
-        --header-bg: linear-gradient(135deg, #ffffff 0%, #eef2f7 100%); --hairline: rgba(31,35,40,0.08);
-        --chips-bg: rgba(212,167,44,0.12); --focus-ring: rgba(9,105,218,0.2); --hover: rgba(9,105,218,0.08);
-        --hover-soft: rgba(9,105,218,0.04); --shadow: 0 8px 24px rgba(140,149,159,0.3);
-      }
+    /* Dark is the default; the header toggle switches to light (remembered per browser). */
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f6f8fa; --card: #ffffff; --input-bg: #ffffff; --border: #d0d7de; --row-line: #eaeef2;
+      --text: #1f2328; --muted: #57606a; --faint: #6e7781; --disabled: #8c959f; --accent: #0969da;
+      --header-bg: linear-gradient(135deg, #ffffff 0%, #eef2f7 100%); --hairline: rgba(31,35,40,0.08);
+      --chips-bg: rgba(212,167,44,0.12); --focus-ring: rgba(9,105,218,0.2); --hover: rgba(9,105,218,0.08);
+      --hover-soft: rgba(9,105,218,0.04); --shadow: 0 8px 24px rgba(140,149,159,0.3);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); }
@@ -107,6 +106,9 @@
     .tab-btn:focus-visible, .duid-trigger:focus-visible, .dd-trigger:focus-visible, .btn-analyze:focus-visible, .filter-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .header-link { color: var(--muted); text-decoration: none; display: inline-flex; align-items: center; gap: 3px; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.05em; }
     .header-link svg { fill: currentColor; }
+    .theme-toggle { background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); cursor: pointer; font-size: 0.9rem; line-height: 1; padding: 0.3rem 0.45rem; }
+    .theme-toggle:hover { color: var(--accent); border-color: var(--accent); }
+    .theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     @media (max-width: 1100px) { .kpi-row { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
     @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
     @media (max-width: 600px) {
@@ -152,6 +154,7 @@
     </div>
     <a href="https://github.com/djouallah/analytics-as-code" target="_blank" rel="noopener" class="header-link" title="View on GitHub" aria-label="View on GitHub"><svg height="16" width="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
     <a href="dag/#!/overview?g_v=1" target="_blank" rel="noopener" class="header-link" title="View dbt DAG">DAG</a>
+    <button type="button" class="theme-toggle" id="themeToggle" aria-label="Switch to light theme" title="Switch to light theme">&#9728;</button>
     <div id="status" class="loading" role="status" aria-live="polite"><span class="dot" aria-hidden="true"></span><span id="statusText">Loading...</span></div>
   </header>
   <div class="active-filters" id="activeFilters"></div>
@@ -256,8 +259,10 @@
       categoryAxis: { axisLine: { lineStyle: { color: '#d0d7de' } }, axisTick: { lineStyle: { color: '#d0d7de' } }, axisLabel: { color: '#57606a' }, splitLine: { lineStyle: { color: '#eaeef2' } } },
       valueAxis: { axisLine: { lineStyle: { color: '#d0d7de' } }, axisTick: { lineStyle: { color: '#d0d7de' } }, axisLabel: { color: '#57606a' }, splitLine: { lineStyle: { color: '#eaeef2' } } },
     });
-    const schemeQuery = window.matchMedia('(prefers-color-scheme: light)');
-    const isLight = () => schemeQuery.matches;
+    // Dark by default; the header toggle switches theme and the choice is remembered.
+    function storedTheme() { try { return localStorage.getItem('theme'); } catch { return null; } }
+    if (storedTheme() === 'light') document.documentElement.dataset.theme = 'light';
+    const isLight = () => document.documentElement.dataset.theme === 'light';
     const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
     // Negative output (batteries and pumped hydro charging) is its own series below the axis.
@@ -301,6 +306,11 @@
     const crossFilter = { fuel: null, region: null, duids: [] };
     // The header dropdowns win over a chart click-filter (updateFilterTags says so).
     const activeRegion = () => document.getElementById("regionFilter").value || crossFilter.region;
+    // Display names for the AEMO region codes (#1). Display only: filters, SQL and joins keep
+    // using the codes, and every UI element maps back to them.
+    const REGION_NAMES = { NSW1: 'New South Wales', QLD1: 'Queensland', SA1: 'South Australia', TAS1: 'Tasmania', VIC1: 'Victoria', WA1: 'Western Australia' };
+    const regionName = code => REGION_NAMES[code] ?? code;
+    const regionCode = name => Object.keys(REGION_NAMES).find(c => REGION_NAMES[c] === name) ?? name;
     const activeFuel = () => document.getElementById("fuelFilter").value || crossFilter.fuel;
     const sqlStr = v => `'${String(v).replace(/'/g, "''")}'`;
     const duidList = () => crossFilter.duids.map(sqlStr).join(',');
@@ -320,7 +330,7 @@
         el.append(tag);
       };
       if (crossFilter.fuel) addTag(crossFilter.fuel, () => { crossFilter.fuel = null; }, !!document.getElementById("fuelFilter").value);
-      if (crossFilter.region) addTag(crossFilter.region, () => { crossFilter.region = null; }, !!document.getElementById("regionFilter").value);
+      if (crossFilter.region) addTag(regionName(crossFilter.region), () => { crossFilter.region = null; }, !!document.getElementById("regionFilter").value);
       for (const duid of crossFilter.duids) {
         addTag(duid, () => { crossFilter.duids = crossFilter.duids.filter(d => d !== duid); updateDuidTrigger(); });
       }
@@ -806,8 +816,19 @@
       if (!charts[id]) charts[id] = echarts.init(document.getElementById(id), isLight() ? 'light-custom' : 'dark-custom');
       return charts[id];
     }
-    // Switching the OS/browser theme re-creates the charts in the matching ECharts theme.
-    schemeQuery.addEventListener('change', () => {
+    // Switching theme re-creates the charts in the matching ECharts theme.
+    function syncThemeToggle() {
+      const btn = document.getElementById('themeToggle');
+      btn.innerHTML = isLight() ? '&#9790;' : '&#9728;';
+      btn.title = `Switch to ${isLight() ? 'dark' : 'light'} theme`;
+      btn.setAttribute('aria-label', btn.title);
+    }
+    syncThemeToggle();
+    document.getElementById('themeToggle').addEventListener('click', () => {
+      if (isLight()) delete document.documentElement.dataset.theme;
+      else document.documentElement.dataset.theme = 'light';
+      try { localStorage.setItem('theme', isLight() ? 'light' : 'dark'); } catch {}
+      syncThemeToggle();
       for (const id of Object.keys(charts)) { charts[id].dispose(); delete charts[id]; }
       renderAll();
     });
@@ -828,6 +849,10 @@
     }
 
     // --- Generation by Fuel Type (stacked area) ---
+    // In drill mode the chart shows the top `drillShown` series; clicking "Other units" shows
+    // 15 more. Back to 15 whenever the drill (fuel, region, dates) changes.
+    const DRILL_STEP = 15;
+    let drillShown = DRILL_STEP, drillKey = '';
     async function renderGeneration(seq) {
       const intraday = isIntradayMode();
       const unit = intraday ? 'MW' : 'MWh';
@@ -840,6 +865,8 @@
 
       const valCol = intraday ? 'sc.mw' : 'sc.mwh';
       const seriesCol = drillFuel ? 'sc.DUID' : FUEL;
+      const key = [drillFuel, activeRegion(), ...Object.values(getDateRange())].join('|');
+      if (key !== drillKey) { drillKey = key; drillShown = DRILL_STEP; }
 
       const data = await runQuery(sql.generation(seriesCol, valCol, intraday));
       if (seq !== _renderSeq) return;
@@ -855,17 +882,20 @@
         row => row.total_mw
       );
 
-      // Sort series by absolute total, descending. In drill mode the top 15 units are drawn and
-      // the rest summed into one "Other units" series, so the stack still adds up.
+      // Sort series by absolute total, descending. In drill mode the top series are drawn and
+      // the rest summed into "Other units" (click it for more), so the stack still adds up.
       const seriesTotals = {};
       for (const row of data) seriesTotals[row.series] = (seriesTotals[row.series] || 0) + row.total_mw;
       let seriesNames = Object.entries(seriesTotals).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).map(e => e[0]);
       // Two buckets, so the charging remainder stays below the axis with the other charging series.
       const OTHER = 'Other units', OTHER_CHARGING = OTHER + CHARGING;
       const buckets = { [OTHER]: [], [OTHER_CHARGING]: [] };
-      if (drillFuel && seriesNames.length > 15) {
-        for (const n of seriesNames.slice(15)) buckets[n.endsWith(CHARGING) ? OTHER_CHARGING : OTHER].push(n);
-        seriesNames = [...seriesNames.slice(0, 15), ...Object.keys(buckets).filter(b => buckets[b].length)];
+      const totalSeries = seriesNames.length;
+      if (drillFuel && totalSeries > drillShown) {
+        for (const n of seriesNames.slice(drillShown)) buckets[n.endsWith(CHARGING) ? OTHER_CHARGING : OTHER].push(n);
+        seriesNames = [...seriesNames.slice(0, drillShown), ...Object.keys(buckets).filter(b => buckets[b].length)];
+        document.getElementById("title-generation").textContent +=
+          ` (top ${drillShown} of ${totalSeries}; click "Other units" for ${DRILL_STEP} more)`;
       }
       const isOther = name => name in buckets;
       const valueAt = (k, name) => isOther(name)
@@ -903,7 +933,8 @@
           const target = hoveredSeries ? params.find(p => p.seriesName === hoveredSeries) : null;
           const p = target || params.filter(p => p.value !== 0).sort((a, b) => Math.abs(b.value) - Math.abs(a.value))[0];
           if (!p) return '';
-          return `<div style="color:${cssVar('--muted')};margin-bottom:2px">${params[0].axisValueLabel}</div><div style="font-weight:600">${p.marker} ${escapeHtml(p.seriesName)}: ${Math.round(p.value).toLocaleString()} ${unit}</div>`;
+          const hint = isOther(p.seriesName) ? `<div style="color:${cssVar('--muted')};margin-top:2px">${buckets[p.seriesName].length} series, click to show ${DRILL_STEP} more</div>` : '';
+          return `<div style="color:${cssVar('--muted')};margin-bottom:2px">${params[0].axisValueLabel}</div><div style="font-weight:600">${p.marker} ${escapeHtml(p.seriesName)}: ${Math.round(p.value).toLocaleString()} ${unit}</div>${hint}`;
         }},
         // Click a legend entry to hide/show that series; click the chart area to drill.
         legend: { type: 'scroll', top: 0, itemGap: 12, itemWidth: 10, itemHeight: 10, data: seriesNames.map((name, i) => ({ name, itemStyle: { color: colorOf(name, i) } })) },
@@ -919,7 +950,8 @@
       // Click: fuel view -> drill into fuel; DUID view -> select DUID
       chart.off('click');
       chart.on('click', (params) => {
-        if (!params.seriesName || isOther(params.seriesName)) return;
+        if (!params.seriesName) return;
+        if (isOther(params.seriesName)) { drillShown += DRILL_STEP; renderAll(); return; }
         const name = params.seriesName.endsWith(CHARGING) ? params.seriesName.slice(0, -CHARGING.length) : params.seriesName;
         if (drillFuel) {
           const duid = name;
@@ -994,7 +1026,7 @@
 
       const largeModeP = xKeys.length > 2000;
       const series = regions.map((region, i) => ({
-        name: region,
+        name: regionName(region),
         type: 'line',
         symbol: 'none',
         lineStyle: { width: largeModeP ? 1 : 2 },
@@ -1034,7 +1066,8 @@
       chart.off('click');
       chart.on('click', (params) => {
         if (params.seriesName) {
-          crossFilter.region = crossFilter.region === params.seriesName ? null : params.seriesName;
+          const code = regionCode(params.seriesName);
+          crossFilter.region = crossFilter.region === code ? null : code;
           renderAll();
         }
       });
@@ -1103,7 +1136,7 @@
         data: data.filter(d => d.fuel === fuel).map(d => ({
           value: [d.lon, d.lat, d.mw],
           duid: d.DUID,
-          region: d.Region,
+          region: regionName(d.Region),
           itemStyle: { opacity: 0.85 },
         })),
         symbolSize: d => Math.max(5, Math.sqrt(Math.max(d[2], 0) / maxMw) * 25),
@@ -1176,7 +1209,7 @@
           updateDuidTrigger();
           renderAll();
         });
-        label.append(cb, ` ${d.DUID} (${d.Region}, ${d.fuel ?? 'Unknown'})`);
+        label.append(cb, ` ${d.DUID} (${regionName(d.Region)}, ${d.fuel ?? 'Unknown'})`);
         list.append(label);
       }
     }
@@ -1519,7 +1552,7 @@
       const regions = await runQuery(sql.regions);
       const fuels = await runQuery(sql.fuels);
       const regionSelect = document.getElementById("regionFilter");
-      for (const r of regions) regionSelect.add(new Option(r.Region, r.Region));
+      for (const r of regions) regionSelect.add(new Option(regionName(r.Region), r.Region));
       const fuelSelect = document.getElementById("fuelFilter");
       for (const f of fuels) fuelSelect.add(new Option(f.fuel, f.fuel));
       allDuids = await runQuery(sql.allDuids);
