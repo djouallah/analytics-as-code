@@ -134,7 +134,9 @@
     .rg-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 0.4rem; vertical-align: -1px; }
     .rg-price, .rg-net { font-variant-numeric: tabular-nums; text-align: right; }
     .rg-net { font-size: 0.72rem; min-width: 6.5rem; }
-    .price-legend { display: flex; flex-wrap: wrap; gap: 0.3rem 0.9rem; font-size: 0.7rem; color: var(--muted); padding: 0.2rem 0.4rem 0; }
+    .price-legend { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.7rem; color: var(--muted); padding: 0.2rem 0.4rem 0; }
+    .price-legend > div > span { margin-right: 0.6rem; white-space: nowrap; }
+    .price-legend b { color: var(--text); margin-right: 0.3rem; }
     .flows-minis { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 0.6rem; padding: 0 2rem 0.6rem; }
     @media (max-width: 900px) { .flows-main { grid-template-columns: 1fr; } }
     @media (max-width: 600px) { .flows-bar, .flows-main, .flows-minis { padding-left: 1rem; padding-right: 1rem; } .flows-time { font-size: 1.2rem; } }
@@ -225,7 +227,7 @@
 
   <div id="view-flows" role="tabpanel" aria-labelledby="tab-flows" style="display:none">
     <div class="flows-bar">
-      <div class="flows-time" id="flowsTime">--<small id="flowsTimeSub">Interconnector flows and regional prices</small></div>
+      <div class="flows-time" id="flowsTime">--<small id="flowsTimeSub">Power flow between regions (MW) and spot price ($/MWh) in this 5-minute interval</small></div>
       <button type="button" class="flows-btn" id="icPlay" aria-label="Play the flows through the selected range">&#9654; Play</button>
       <label class="chart-toggle" for="icSpeed">Speed</label>
       <select id="icSpeed"><option value="0.5">0.5&times;</option><option value="1" selected>1&times;</option><option value="2">2&times;</option><option value="4">4&times;</option></select>
@@ -234,17 +236,18 @@
     <div class="flows-main">
       <div class="chart-card">
         <div class="chart-container" id="chart-flowmap" style="height:540px;"></div>
-        <div class="price-legend" id="priceLegend" aria-label="Regional price colours"></div>
+        <div class="price-legend" id="priceLegend" aria-label="Map key"></div>
       </div>
       <div class="chart-card flows-board">
-        <h3>Interconnectors</h3>
+        <h3>Interconnectors &middot; flow now (MW)</h3>
         <div id="icBoard"></div>
-        <h3 style="margin-top:0.8rem">Regions</h3>
+        <h3 style="margin-top:0.8rem">Regions &middot; spot price &middot; net flow</h3>
         <div id="regionBoard"></div>
       </div>
     </div>
     <div class="flows-minis" id="icMinis"></div>
     <p class="insights-note">
+      MW is power at that moment; $/MWh is the wholesale spot price, not the cost of the flow.
       AEMO 5-minute dispatch, last 14 days. Arrows point the way power flows; their thickness is the
       flow and their colour how close the link runs to its limit (green &lt; 70% &le; amber &lt; 90%
       &le; red). Regions are shaded by their price in that interval. In the small charts the band is
@@ -1423,8 +1426,12 @@
           if (use != null) icState.prices.set(`${k}|${code}`, use);
         }
       }
-      document.getElementById('priceLegend').innerHTML = 'Regional price ' + PRICE_BANDS.map(b =>
-        `<span><span class="rg-swatch" style="background:${b.color}"></span>${b.label}</span>`).join('');
+      const swatch = (color, label) => `<span><span class="rg-swatch" style="background:${color}"></span>${label}</span>`;
+      document.getElementById('priceLegend').innerHTML =
+        `<div><b>Arrows</b> power flowing now (MW), thicker = more; colour = share of the link's limit ` +
+          [[0, '&lt; 70%'], [0.7, '70&ndash;90%'], [0.9, '&ge; 90%']].map(([u, l]) => swatch(utilColor(u), l)).join(' ') + '</div>' +
+        `<div><b>Dots</b> ${swatch('#3fb950', 'net exporter')} ${swatch('#f0883e', 'net importer')}</div>` +
+        `<div><b>Shading</b> spot price ($/MWh) ` + PRICE_BANDS.map(b => swatch(b.color, b.label)).join(' ') + '</div>';
       icState.ids = Object.keys(INTERCONNECTORS).filter(id => shown.some(r => r.id === id));
 
       // Small multiples: one chart per link, flow line over its limit band, all sharing a cursor.
@@ -1510,7 +1517,7 @@
       document.getElementById('regionBoard').innerHTML = Object.keys(REGION_ANCHORS).map(code => {
         const p = price(code), n = Math.round(net[code] || 0);
         return `<div class="rg-row"><div><span class="rg-swatch" style="background:${priceColor(p)}"></span>${regionName(code)}</div>
-          <div class="rg-price">${fmtPrice(p)}</div>
+          <div class="rg-price">${fmtPrice(p)}${p == null ? '' : '<small style="color:var(--muted);font-weight:400">/MWh</small>'}</div>
           <div class="rg-net" style="color:${n >= 0 ? '#3fb950' : '#f0883e'}">${n >= 0 ? 'exports' : 'imports'} ${Math.abs(n).toLocaleString()} MW</div></div>`;
       }).join('');
 
@@ -1538,7 +1545,7 @@
           { type: 'lines', coordinateSystem: 'geo', zlevel: 2,
             effect: { show: true, period: 2.5, trailLength: 0.2, symbol: 'arrow', symbolSize: 11, color: light ? '#1f2328' : '#ffffff' },
             label: { show: true, position: 'middle', fontSize: 11, fontWeight: 600, color: light ? '#1f2328' : '#ffffff',
-              textBorderColor: light ? '#ffffff' : '#0f1117', textBorderWidth: 3, formatter: p => `${p.data.name} ${p.data.value}` },
+              textBorderColor: light ? '#ffffff' : '#0f1117', textBorderWidth: 3, formatter: p => `${p.data.name} ${p.data.value} MW` },
             data: enriched.map(({ r, ic, a, b, util }) => ({
               name: ic.name, dir: `${short(a)}→${short(b)}`, value: Math.round(Math.abs(r.mw)), util,
               coords: [REGION_ANCHORS[a], REGION_ANCHORS[b]],
@@ -1549,7 +1556,7 @@
             symbolSize: v => 9 + Math.min(14, Math.abs(v[2]) / 120),
             label: { show: true, position: 'right', fontSize: 12, fontWeight: 700, color: light ? '#1f2328' : '#ffffff',
               textBorderColor: light ? '#ffffff' : '#0f1117', textBorderWidth: 3,
-              formatter: p => { const pr = price(p.name); return `${short(p.name)}${pr == null ? '' : '  ' + fmtPrice(pr)}`; } },
+              formatter: p => { const pr = price(p.name); return `${short(p.name)}${pr == null ? '' : '  ' + fmtPrice(pr) + '/MWh'}`; } },
             data: Object.entries(REGION_ANCHORS).map(([code, xy]) => ({
               name: code, value: [...xy, Math.round(net[code] || 0)],
               itemStyle: { color: (net[code] || 0) >= 0 ? '#3fb950' : '#f0883e', borderColor: light ? '#ffffff' : '#0f1117', borderWidth: 1.5 },
