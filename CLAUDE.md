@@ -18,7 +18,8 @@ The sibling is now [`dbt-fabric`](https://github.com/djouallah/dbt-fabric) (it r
 `dbt_fabric_python_iceberg`, which no longer exists). It runs the same AEMO models on five
 engines; the one that matches this repo is `dbt1/models/aemo/iceberg/` (tests in
 `dbt1/tests/aemo/iceberg/`). This repo was copied from the old sibling minus `fct_summary`
-(the dashboard computes that join client-side in `scripts/cache_catalog.py`).
+(the dashboard joins facts to `dim_duid`/prices client-side in DuckDB-WASM;
+`scripts/cache_catalog.py` only exports and pre-aggregates).
 **Look there first for fixes, and port them rather than diverging.** It is no longer a
 verbatim copy — as of 2026-09-25 the iceberg variant differs structurally:
 - Downloading moved out of dbt into `download_aemo.py`; `stg_csv_archive_log` is a plain view
@@ -93,11 +94,10 @@ it **succeeded without applying** whenever the predicate contained subqueries ov
 Iceberg tables, silently no-op'ing for weeks. Both histories point the same way: design the
 path so it needs no `DELETE`, and never assume one landed — re-count and log the delta.
 
-`scripts/catalog_capabilities.py` probes CREATE/INSERT/DELETE/UPDATE/MERGE/DROP against a
-freshly created table. That matrix is the standing evidence for what this catalog actually
-does; check it before relying on any claim here. It runs **on demand** —
-`catalog_capabilities.yml` is `workflow_dispatch`-only, since the answer only moves when the
-catalog or the duckdb pin moves. Re-run it after either, and read the run's log.
+The catalog capability probe (CREATE/INSERT/DELETE/UPDATE/MERGE/DROP against a freshly
+created table) lives in the user's **separate repo**, not here (removed 2026-10-01). Its
+matrix is the standing evidence for what this catalog actually does; ask for it before
+relying on any claim here, and ask for a re-run after the catalog or the duckdb pin moves.
 
 ## Auth (GitHub Actions) — no secrets
 OIDC only: `azure/login@v2` with a federated credential, then each job mints a short-lived
@@ -131,7 +131,7 @@ place. **Rebuilding a table = dispatch `process_data.yml` with `rebuild=<table>`
 dbt run that follows recreates the table with a plain CTAS, refilling at `process_limit`
 files per run. It also works on a table the catalog can no longer serve (the pre-drop count
 is best-effort). Do not use `dbt run --full-refresh`: dbt-duckdb builds `<table>__dbt_tmp` and
-RENAMEs it into place, and RENAME is not in the probed capability matrix.
+RENAMEs it into place, and RENAME has never been probed against this catalog.
 
 ## Profiles: ci (in-memory, no Iceberg), dev/prod (OneLake Iceberg REST catalog)
 
@@ -151,13 +151,14 @@ RENAMEs it into place, and RENAME is not in the probed capability matrix.
 
 ## DuckDB version policy
 Everything is pinned — no workflow floats on "latest".
-- **`process_data.yml`, `build.yml`, `table_maintenance.yml`, `catalog_capabilities.yml` pin
-  `duckdb==1.6.0.dev365`.** That nightly is required, not incidental:
+- **`process_data.yml`, `build.yml`, `table_maintenance.yml` pin
+  `duckdb==1.6.0.dev365`** (dbt via `requirements.txt`, which also pins `dbt-core`/`dbt-duckdb`
+  exactly — the insert-only merges lean on adapter internals). That nightly is required, not incidental:
   `iceberg_rewrite_data_files()` (duckdb-iceberg#1035, merged 2026-07-09) isn't in a stable
   release yet, and the compaction job needs it. Pinning the same build everywhere means the
-  catalog is only ever touched by one known duckdb. The `iceberg` extension comes from
-  `core_nightly` and its binary is keyed to the duckdb build, so pinning duckdb pins the
-  extension too. Collapse them back to a stable release once 1.6.0 ships.
+  catalog is only ever touched by one known duckdb. The `iceberg` extension is installed from
+  `core` first (`compact_iceberg.py` falls back to `core_nightly`) and its binary is keyed to
+  the duckdb build, so pinning duckdb pins the extension too. Collapse them back to a stable release once 1.6.0 ships.
 - **`pyiceberg==0.11.1`** (snapshot expiry, `table_maintenance.yml` only) is pinned on its own
   schedule — it never touches the duckdb file format, only the REST catalog, and the script
   reaches into `RestCatalog._supported_endpoints`, which is exactly the kind of internal a

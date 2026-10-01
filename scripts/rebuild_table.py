@@ -3,7 +3,7 @@
 This is the only way to get rid of bad rows on this catalog: every write is an append
 and DELETE is off the table (see CLAUDE.md). Don't reach for `dbt run --full-refresh`
 instead — dbt-duckdb's full-refresh path builds `<table>__dbt_tmp` and then RENAMEs it
-into place, and RENAME is not in the probed capability matrix. Dropping the table and
+into place, and RENAME has never been probed against this catalog. Dropping the table and
 letting the next incremental run find no existing relation takes the plain CTAS path,
 the one that built every table on 2026-08-25.
 

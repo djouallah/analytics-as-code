@@ -184,36 +184,28 @@ def model(dbt, session):
                 )
             """)
         # Backfill from GitHub — opportunistic: if the listing API is unavailable
-        # (rate limit, outage), continue with the AEMO current files only.
-        try:
-            session.sql("""
-                INSERT INTO daily_files_web
-                WITH
-                  api_responses AS (
-                    SELECT 2018 AS year, content AS json_content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2018')
-                    UNION ALL SELECT 2019, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2019')
-                    UNION ALL SELECT 2020, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2020')
-                    UNION ALL SELECT 2021, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2021')
-                    UNION ALL SELECT 2022, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2022')
-                    UNION ALL SELECT 2023, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2023')
-                    UNION ALL SELECT 2024, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2024')
-                    UNION ALL SELECT 2025, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2025')
-                    UNION ALL SELECT 2026, content FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/2026')
-                  ),
-                  parsed_files AS (
-                    SELECT year, unnest(from_json(json_content, '["json"]')) AS file_info
-                    FROM api_responses
-                  )
-                SELECT
-                  json_extract_string(file_info, '$.download_url') AS full_url,
-                  split_part(json_extract_string(file_info, '$.name'), '.', 1) AS filename
-                FROM parsed_files
-                WHERE json_extract_string(file_info, '$.name') LIKE 'PUBLIC_DAILY%.zip'
-                  AND split_part(json_extract_string(file_info, '$.name'), '.', 1)
-                      NOT IN (SELECT filename FROM daily_files_web)
-            """)
-        except Exception as e:
-            print(f"  WARN: GitHub backfill listing unavailable, continuing with AEMO files only: {e}")
+        # (rate limit, outage), continue with the AEMO current files only. One listing
+        # per year, each on its own: the years run up to the current one, and a year
+        # whose archive directory doesn't exist yet (early January) must not take the
+        # older years down with it.
+        for year in range(2018, datetime.now(timezone.utc).year + 1):
+            try:
+                session.sql(f"""
+                    INSERT INTO daily_files_web
+                    WITH parsed_files AS (
+                      SELECT unnest(from_json(content, '["json"]')) AS file_info
+                      FROM read_text('https://api.github.com/repos/djouallah/aemo_data/contents/data/archive/{year}')
+                    )
+                    SELECT
+                      json_extract_string(file_info, '$.download_url') AS full_url,
+                      split_part(json_extract_string(file_info, '$.name'), '.', 1) AS filename
+                    FROM parsed_files
+                    WHERE json_extract_string(file_info, '$.name') LIKE 'PUBLIC_DAILY%.zip'
+                      AND split_part(json_extract_string(file_info, '$.name'), '.', 1)
+                          NOT IN (SELECT filename FROM daily_files_web)
+                """)
+            except Exception as e:
+                print(f"  WARN: GitHub backfill listing for {year} unavailable, skipping it: {e}")
 
     # Get new daily files to download
     daily_to_download = session.sql(f"""

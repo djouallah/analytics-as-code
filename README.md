@@ -80,7 +80,7 @@ federated `azure/login`:
 ### Local Development
 
 ```bash
-pip install dbt-duckdb
+pip install -r requirements.txt
 
 # Validate SQL in-memory (no catalog needed)
 dbt build --target ci --profiles-dir .

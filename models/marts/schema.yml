@@ -88,7 +88,7 @@ models:
 exposures:
   - name: dashboard_summary
     type: application
-    description: "Builds scada + price + dim_duid + dim_calendar into dashboard/energy.duckdb via scripts/cache_catalog.py"
+    description: "Exports scada + price + dim_duid + dim_calendar into the dashboard .duckdb files (energy_dim / energy_today / energy_daily_agg / energy_data_<year>_h<n>) via scripts/cache_catalog.py"
     depends_on:
       - ref('fct_scada')
       - ref('fct_price')

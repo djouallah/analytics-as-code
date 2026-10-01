@@ -22,7 +22,8 @@
 -- stale/empty view of the table can at worst re-insert nothing that survives the
 -- merge, instead of the old wipe-and-reload appending a full duplicate copy.
 -- Consequence: attribute changes (region/fuel/geo) never update in place;
--- `dbt run --full-refresh -s dim_duid` is the reconciliation lever.
+-- dispatching process_data.yml with rebuild=dim_duid is the reconciliation lever
+-- (not --full-refresh: its RENAME step is untested on this catalog).
 {{ config(
     materialized='incremental',
     incremental_strategy='merge',
