@@ -9,12 +9,9 @@ next unless an item says otherwise.
   because `energy_today.duckdb` (8 MB) is redeployed every 30 min and git keeps every copy.
   Weekly job: replace the history with one fresh commit of the current tree. The site stays
   identical. **Force-pushes the deploy repo — needs an explicit OK before it is built.**
-- [ ] **Station drill level** — group units by `dim_duid.StationName` (added 2026-10-01) as an
+- [x] **Station drill level** — group units by `dim_duid.StationName` (added 2026-10-01) as an
   option next to the fuel → DUID drill in `dashboard/index.html`.
-- [ ] **Last two unregistered units** — `PIONEER`, `PORTWF` aren't on the "PU and Scheduled
-  Loads" sheet; check the workbook's exemption / ceased sheets in
-  `models/staging/stg_csv_archive_log.py` (registration download) and `dim_duid.sql`.
-- [ ] **Document the 5-day seam** — history uses `INITIALMW`, the last 5 days `SCADAVALUE`
+- [x] **Document the 5-day seam** — history uses `INITIALMW`, the last 5 days `SCADAVALUE`
   (`fct_scada_today.sql`), so the two measures meet in the dashboard. Note it in CLAUDE.md (a
   rebuild to unify them isn't worth it).
 - [ ] **DuckDB 2.0.0 stable** (due 2026-10-21) — replace `2.0.0.dev2609250715` in

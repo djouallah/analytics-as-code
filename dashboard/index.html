@@ -207,7 +207,9 @@
 
   <div class="charts">
     <div class="chart-card full-width">
-      <div class="chart-header"><h2 id="title-generation">Generation by Fuel Type (MW)</h2></div>
+      <div class="chart-header"><h2 id="title-generation">Generation by Fuel Type (MW)</h2>
+        <label class="chart-toggle" id="drillLevelWrap" hidden>Show
+          <select id="drillLevel" aria-label="Group the drilled fuel by unit or by power station"><option value="unit">Units</option><option value="station">Stations</option></select></label></div>
       <div class="chart-container" id="chart-generation" style="height:320px;"></div>
     </div>
     <div class="chart-card">
@@ -966,13 +968,18 @@
       // A fuel chosen in the dropdown drills into its units exactly like clicking the fuel.
       const drillFuel = activeFuel();
 
+      // In a drill, units can be grouped by power station (dim_duid.StationName; units without
+      // one stay on their own).
+      const stationsAvailable = drillFuel ? await hasCapacity() : false;
+      document.getElementById('drillLevelWrap').hidden = !stationsAvailable;
+      const byStation = stationsAvailable && document.getElementById('drillLevel').value === 'station';
       document.getElementById("title-generation").textContent = drillFuel
-        ? `${drillFuel} by DUID (${unit})`
+        ? `${drillFuel} by ${byStation ? 'station' : 'DUID'} (${unit})`
         : `Generation by Fuel Type (${unit})`;
 
       const valCol = intraday ? 'sc.mw' : 'sc.mwh';
-      const seriesCol = drillFuel ? 'sc.DUID' : FUEL;
-      const key = [drillFuel, activeRegion(), ...Object.values(getDateRange())].join('|');
+      const seriesCol = drillFuel ? (byStation ? 'COALESCE(d.StationName, sc.DUID)' : 'sc.DUID') : FUEL;
+      const key = [drillFuel, byStation, activeRegion(), ...Object.values(getDateRange())].join('|');
       if (key !== drillKey) { drillKey = key; drillShown = DRILL_STEP; }
 
       const data = await runQuery(sql.generation(seriesCol, valCol, intraday));
@@ -1056,15 +1063,20 @@
 
       // Click: fuel view -> drill into fuel; DUID view -> select DUID
       chart.off('click');
-      chart.on('click', (params) => {
+      chart.on('click', async (params) => {
         if (!params.seriesName) return;
         if (isOther(params.seriesName)) { drillShown += DRILL_STEP; renderAll(); return; }
         const name = params.seriesName.endsWith(CHARGING) ? params.seriesName.slice(0, -CHARGING.length) : params.seriesName;
         if (drillFuel) {
-          const duid = name;
-          const idx = crossFilter.duids.indexOf(duid);
-          if (idx >= 0) crossFilter.duids.splice(idx, 1);
-          else crossFilter.duids.push(duid);
+          // A station toggles all its units as a group; a unit toggles itself.
+          const duids = byStation
+            ? (await runQuery(`SELECT DUID FROM dim.dim_duid WHERE StationName = ${sqlStr(name)}`)).map(r => r.DUID)
+            : [];
+          const group = duids.length ? duids : [name];
+          const allOn = group.every(d => crossFilter.duids.includes(d));
+          crossFilter.duids = allOn
+            ? crossFilter.duids.filter(d => !group.includes(d))
+            : [...new Set([...crossFilter.duids, ...group])];
           updateDuidTrigger();
         } else {
           crossFilter.fuel = name;
@@ -2198,6 +2210,7 @@
     }
 
     document.getElementById('clipSpikes').addEventListener('change', () => renderAll());
+    document.getElementById('drillLevel').addEventListener('change', () => renderAll());
 
     // --- Render all ---
     async function renderAll() {

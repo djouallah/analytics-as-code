@@ -158,6 +158,13 @@ RENAMEs it into place, and RENAME has never been probed against this catalog.
   `scripts/cache_catalog.py` does) — a Brisbane session shifts every date and time by +10h,
   which is what the dashboard showed from the 2026-08-25 refactor until 2026-09-25. Fixing
   it at the writer would change the column's values and mean rebuilding all four facts.
+- **The dashboard's MW changes source at the 5-day mark.** History (`fct_scada`) is
+  `INITIALMW` from the `DUNIT` rows of AEMO's next-day `PUBLIC_DAILY` files; the last 5 days
+  (`fct_scada_today`) are `SCADAVALUE` from the intraday `Dispatch_SCADA` files, renamed to
+  `INITIALMW` in the model so the exports treat both alike. They are different AEMO columns
+  from different reports, so a small step where the two meet in a chart is expected, not a
+  bug. `fct_scada_today` has no `INTERVENTION` column, so its export can't filter on it.
+  Unifying them would mean rebuilding a fact; not worth it.
 - Pre-hooks set DuckDB VARIABLEs with the file paths to process, read from the log table
 - CSVs read from gzipped archives in OneLake Files via `read_csv()` with `ignore_errors=true`
 - CI target uses plain DuckDB (no Iceberg) for SQL validation; `FILES_PATH` is unset there so
