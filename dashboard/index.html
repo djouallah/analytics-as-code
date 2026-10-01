@@ -110,6 +110,13 @@
     .theme-toggle:hover { color: var(--accent); border-color: var(--accent); }
     .theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     @media (max-width: 1100px) { .kpi-row { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+    .ic-wrap { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 0.6rem; }
+    .ic-controls { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.3rem; font-size: 0.75rem; color: var(--muted); }
+    .ic-controls input[type=range] { flex: 1; accent-color: var(--accent); }
+    .ic-play { background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--text); cursor: pointer; font-size: 0.75rem; padding: 0.2rem 0.6rem; min-width: 4.5rem; }
+    .ic-play:hover { border-color: var(--accent); color: var(--accent); }
+    #icFrameLabel { min-width: 8.5rem; text-align: right; font-variant-numeric: tabular-nums; }
+    @media (max-width: 900px) { .ic-wrap { grid-template-columns: 1fr; } }
     .insights-note { font-size: 0.72rem; color: var(--muted); padding: 0 2rem 1rem; line-height: 1.5; }
     @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
     @media (max-width: 600px) {
@@ -195,6 +202,20 @@
   <div id="view-insights" role="tabpanel" aria-labelledby="tab-insights" style="display:none">
     <div class="charts">
       <div class="chart-card full-width">
+        <div class="chart-header"><h2 id="title-ic">Interconnector flows <span class="chart-note">(MW; on the lines, + = first region &rarr; second)</span></h2></div>
+        <div class="ic-wrap">
+          <div>
+            <div class="chart-container" id="chart-icmap" style="height:340px;"></div>
+            <div class="ic-controls">
+              <button type="button" class="ic-play" id="icPlay" aria-label="Play the flows through the selected range">&#9654; Play</button>
+              <input type="range" id="icFrame" min="0" max="0" value="0" aria-label="Dispatch interval shown on the map">
+              <span id="icFrameLabel" aria-live="off"></span>
+            </div>
+          </div>
+          <div class="chart-container" id="chart-icflow" style="height:370px;"></div>
+        </div>
+      </div>
+      <div class="chart-card full-width">
         <div class="chart-header"><h2 id="title-re">Renewable share of generation (%)</h2></div>
         <div class="chart-container" id="chart-re" style="height:240px;"></div>
       </div>
@@ -229,7 +250,9 @@
       ("Grid") are storage and count on neither side. Capture price = generation-weighted price the
       fuel earned in its region (5-minute prices for ranges up to 30 days, daily averages beyond).
       Capacity factor = energy / (registered capacity &times; hours), over units that generated in
-      the range. All charts follow the header filters.
+      the range. Interconnector flows are AEMO's 5-minute dispatch targets for the last 14 days;
+      arrows point the way power flows, thickness is the flow and colour how close it runs to its
+      limit. All charts follow the header filters.
     </p>
   </div>
 
@@ -1175,9 +1198,167 @@
     }
 
     async function renderInsights(seq) {
-      await Promise.all([renderRenewables(seq), renderHeatmap(seq), renderProfile(seq),
-        renderCapture(seq), renderNegative(seq), renderCapacityFactor(seq)]);
+      await Promise.all([renderInterconnectors(seq), renderRenewables(seq), renderHeatmap(seq),
+        renderProfile(seq), renderCapture(seq), renderNegative(seq), renderCapacityFactor(seq)]);
     }
+
+    // --- Interconnector flows: animated map + flow lines, with playback ---
+    // AEMO's sign convention: MWFLOW is positive from the first region in the id to the second.
+    const INTERCONNECTORS = {
+      'NSW1-QLD1': { from: 'NSW1', to: 'QLD1', name: 'QNI', curve: 0.18 },
+      'N-Q-MNSP1': { from: 'NSW1', to: 'QLD1', name: 'Terranora', curve: -0.3 },
+      'VIC1-NSW1': { from: 'VIC1', to: 'NSW1', name: 'VNI', curve: 0.12 },
+      'V-SA':      { from: 'VIC1', to: 'SA1',  name: 'Heywood', curve: 0.2 },
+      'V-S-MNSP1': { from: 'VIC1', to: 'SA1',  name: 'Murraylink', curve: -0.3 },
+      'T-V-MNSP1': { from: 'TAS1', to: 'VIC1', name: 'Basslink', curve: 0.12 },
+      'NSW1-SA1':  { from: 'NSW1', to: 'SA1',  name: 'EnergyConnect', curve: 0.15 },
+    };
+    // Rough load centres, where the arrows start and end.
+    const REGION_ANCHORS = { QLD1: [151.6, -26.6], NSW1: [149.6, -32.9], VIC1: [144.6, -37.4], SA1: [138.7, -33.6], TAS1: [146.8, -42.0] };
+    const icLabel = id => INTERCONNECTORS[id]?.name ?? id;
+    const utilColor = u => u >= 0.9 ? '#f85149' : u >= 0.7 ? '#d29922' : '#3fb950';
+
+    const icState = { frames: [], byFrame: new Map(), frame: 0, timer: null };
+
+    async function renderInterconnectors(seq) {
+      icStop();
+      const { from, to } = getDateRange();
+      const region = activeRegion();
+      const rows = await runQuery(`
+        SELECT interconnector AS id, CAST(date AS VARCHAR) AS date, CAST(time AS INTEGER) AS time,
+          mw::DOUBLE AS mw, export_limit::DOUBLE AS export_limit, import_limit::DOUBLE AS import_limit
+        FROM today.interconnector_today
+        WHERE date BETWEEN ${sqlStr(from)} AND ${sqlStr(to)}
+        ORDER BY date, time`).catch(() => []);   // older energy_today files have no such table
+      const mapReady = await registerAustraliaMap();
+      if (seq !== _renderSeq) return;
+      const shown = rows.filter(r => INTERCONNECTORS[r.id] &&
+        (!region || INTERCONNECTORS[r.id].from === region || INTERCONNECTORS[r.id].to === region));
+      if (!shown.length) {
+        showEmpty('chart-icflow', 'Interconnector flows cover the last 14 days; choose a range inside them');
+        showEmpty('chart-icmap', ' ');
+        document.getElementById('icFrameLabel').textContent = '';
+        icState.frames = [];
+        return;
+      }
+      const { xKeys, xLabels } = buildTimeAxis(shown, true);
+      icState.frames = xKeys.map((k, i) => ({ key: k, label: xLabels[i] }));
+      icState.byFrame = new Map();
+      for (const r of shown) {
+        const k = `${r.date}|${padTime(r.time)}`;
+        if (!icState.byFrame.has(k)) icState.byFrame.set(k, []);
+        icState.byFrame.get(k).push(r);
+      }
+      const ids = Object.keys(INTERCONNECTORS).filter(id => shown.some(r => r.id === id));
+      const lookup = buildLookup(shown, r => `${r.date}|${padTime(r.time)}|${r.id}`, r => r);
+      const flowChart = getChart('chart-icflow');
+      flowChart.setOption({
+        color: PALETTE,
+        tooltip: { trigger: 'axis', formatter: ps => {
+          const head = `<div style="color:${cssVar('--muted')};margin-bottom:2px">${ps[0].axisValueLabel}</div>`;
+          return head + ps.map(p => {
+            const r = lookup.get(`${xKeys[p.dataIndex]}|${ids[p.seriesIndex]}`);
+            if (!r) return '';
+            const ic = INTERCONNECTORS[r.id], dir = r.mw >= 0 ? `${ic.from}&rarr;${ic.to}` : `${ic.to}&rarr;${ic.from}`;
+            const limit = r.mw >= 0 ? r.export_limit : -r.import_limit;
+            const util = limit > 0 ? ` &middot; ${Math.round(100 * Math.abs(r.mw) / limit)}% of limit` : '';
+            return `<div>${p.marker} ${ic.name} ${dir}: <b>${Math.round(Math.abs(r.mw))} MW</b>${util}</div>`;
+          }).join('');
+        } },
+        legend: { type: 'scroll', top: 0, itemWidth: 10, itemHeight: 10, textStyle: { fontSize: 11 } },
+        grid: { left: 55, right: 15, top: 30, bottom: 60 },
+        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 11 } },
+        yAxis: { type: 'value',
+          axisLabel: { formatter: v => Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + 'k' : v } },
+        dataZoom: dataZoomConfig(true),
+        series: ids.map(id => ({ name: `${icLabel(id)} (${INTERCONNECTORS[id].from.replace('1', '')}→${INTERCONNECTORS[id].to.replace('1', '')})`,
+          type: 'line', symbol: 'none', sampling: 'average', lineStyle: { width: 1.5 },
+          data: xKeys.map(k => { const r = lookup.get(`${k}|${id}`); return r ? Math.round(r.mw) : null; }) })),
+      }, true);
+      // Hovering the flow chart moves the map to that interval.
+      flowChart.off('updateAxisPointer');
+      flowChart.on('updateAxisPointer', e => {
+        const i = e.axesInfo?.[0]?.value;
+        if (Number.isInteger(i) && !icState.timer) icShow(i);
+      });
+
+      const slider = document.getElementById('icFrame');
+      slider.max = String(icState.frames.length - 1);
+      if (!mapReady) showEmpty('chart-icmap', 'Map outline unavailable');
+      icShow(icState.frames.length - 1);   // latest interval in the range
+    }
+
+    function icShow(i) {
+      if (!icState.frames.length || !australiaMapRegistered) return;
+      icState.frame = Math.max(0, Math.min(i, icState.frames.length - 1));
+      const { key, label } = icState.frames[icState.frame];
+      document.getElementById('icFrame').value = String(icState.frame);
+      document.getElementById('icFrameLabel').textContent = label;
+      const rows = icState.byFrame.get(key) ?? [];
+      const maxAbs = Math.max(100, ...rows.map(r => Math.abs(r.mw)));
+      // Net position per region: + exporting, - importing.
+      const net = {};
+      for (const r of rows) {
+        const ic = INTERCONNECTORS[r.id];
+        net[ic.from] = (net[ic.from] || 0) + r.mw;
+        net[ic.to] = (net[ic.to] || 0) - r.mw;
+      }
+      const lines = rows.map(r => {
+        const ic = INTERCONNECTORS[r.id];
+        const [a, b] = r.mw >= 0 ? [ic.from, ic.to] : [ic.to, ic.from];
+        const limit = r.mw >= 0 ? r.export_limit : -r.import_limit;
+        const util = limit > 0 ? Math.abs(r.mw) / limit : 0;
+        return {
+          name: ic.name, value: Math.round(Math.abs(r.mw)),
+          coords: [REGION_ANCHORS[a], REGION_ANCHORS[b]],
+          lineStyle: { width: 1.5 + 7 * Math.abs(r.mw) / maxAbs, color: utilColor(util), curveness: ic.curve, opacity: 0.85 },
+          // Small flows keep their arrow but drop the label, which would crowd the parallel links.
+          label: { show: Math.abs(r.mw) >= 0.08 * maxAbs },
+          util,
+        };
+      });
+      const nodes = Object.entries(REGION_ANCHORS).map(([code, xy]) => ({
+        name: code, value: [...xy, Math.round(net[code] || 0)],
+        itemStyle: { color: (net[code] || 0) >= 0 ? '#3fb950' : '#f0883e' },
+      }));
+      getChart('chart-icmap').setOption({
+        tooltip: { trigger: 'item', formatter: p => p.seriesType === 'lines'
+          ? `<b>${p.name}</b><br>${p.value.toLocaleString()} MW &middot; ${Math.round(100 * p.data.util)}% of limit`
+          : `<b>${regionName(p.name)}</b><br>${p.value[2] >= 0 ? 'exporting' : 'importing'} ${Math.abs(p.value[2]).toLocaleString()} MW` },
+        geo: { map: 'australia', roam: false, center: [145.2, -35.2], zoom: 2.25,
+          itemStyle: { areaColor: isLight() ? '#eef2f7' : '#1a1f2e', borderColor: cssVar('--border') },
+          emphasis: { disabled: true }, silent: true },
+        series: [
+          { type: 'lines', coordinateSystem: 'geo', zlevel: 2, data: lines,
+            effect: { show: true, period: 3, trailLength: 0.15, symbol: 'arrow', symbolSize: 9, color: '#ffffff' },
+            label: { show: true, position: 'middle', fontSize: 10, color: cssVar('--text'),
+              formatter: p => `${p.name} ${p.value}` } },
+          { type: 'effectScatter', coordinateSystem: 'geo', zlevel: 3, data: nodes, rippleEffect: { scale: 2.5, brushType: 'stroke' },
+            symbolSize: v => 8 + Math.min(14, Math.abs(v[2]) / 150),
+            label: { show: true, position: 'right', fontSize: 11, fontWeight: 600, color: cssVar('--text'),
+              formatter: p => `${p.name.replace('1', '')} ${p.value[2] >= 0 ? '+' : ''}${p.value[2]}` } },
+        ],
+      }, true);
+    }
+
+    function icStop() {
+      if (icState.timer) clearInterval(icState.timer);
+      icState.timer = null;
+      document.getElementById('icPlay').innerHTML = '&#9654; Play';
+    }
+    document.getElementById('icPlay').addEventListener('click', () => {
+      if (icState.timer) return icStop();
+      if (!icState.frames.length) return;
+      // Play from the start (or carry on), about 12 s for any range.
+      if (icState.frame >= icState.frames.length - 1) icShow(0);
+      const step = Math.max(1, Math.round(icState.frames.length / 120));
+      document.getElementById('icPlay').innerHTML = '&#10074;&#10074; Pause';
+      icState.timer = setInterval(() => {
+        if (icState.frame >= icState.frames.length - 1) return icStop();
+        icShow(icState.frame + step);
+      }, 100);
+    });
+    document.getElementById('icFrame').addEventListener('input', e => { icStop(); icShow(+e.target.value); });
 
     async function renderRenewables(seq) {
       const intraday = isIntradayMode();

@@ -130,7 +130,7 @@ files stay as deployed, and `energy_daily_agg.duckdb` keeps the deployed rows be
 cutoff (downloaded, sanity-checked, spliced — `cache_catalog.export_cutoff`). Dispatch
 `import_data.yml` with `all_periods=true` after a backfill that touched older data.
 
-## Models (7)
+## Models (8)
 | Model | Schema | Materialization |
 |-------|--------|-----------------|
 | stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
@@ -138,6 +138,7 @@ cutoff (downloaded, sanity-checked, spliced — `cache_catalog.export_cutoff`). 
 | dim_duid | mart | incremental insert-only merge on DUID; carries registered capacity (RegCapMW etc.) since 2026-10-01 |
 | fct_scada, fct_price | landing | incremental insert-only merge (by file) |
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
+| fct_interconnector_today | landing | incremental insert-only merge (by file) — the INTERCONNECTORRES rows of the same archived DispatchIS files as fct_price_today (added 2026-10-01, filled from the archive) |
 
 `dim_duid`'s insert-only merge means attribute changes (region/fuel/geo) never update in
 place. **Rebuilding a table = dispatch `process_data.yml` with `rebuild=<table>`**: it runs

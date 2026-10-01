@@ -5,6 +5,7 @@ Usage:
     python cache_catalog.py export_price
     python cache_catalog.py export_scada_today
     python cache_catalog.py export_price_today
+    python cache_catalog.py export_interconnector_today
     python cache_catalog.py export_dim_duid
     python cache_catalog.py export_dim_calendar
     python cache_catalog.py build_dim
@@ -145,6 +146,31 @@ def export_price_today():
             GROUP BY REGIONID, CAST(SETTLEMENTDATE AS DATE), strftime(SETTLEMENTDATE, '%H%M')
         ) TO '{DASHBOARD_DIR}/fct_price_today.parquet' (FORMAT PARQUET);
     """)
+    con.close()
+
+
+def export_interconnector_today():
+    """Interconnector flows (MW, positive from the first region in the ID to the second) and
+    limits, last 14 days. The table is new (2026-10-01): until the pipeline has created it, an
+    empty file with the same columns keeps build_today and the dashboard working."""
+    con = connect_iceberg()
+    query = """
+        SELECT INTERCONNECTORID AS interconnector, CAST(SETTLEMENTDATE AS DATE) AS date,
+            CAST(strftime(SETTLEMENTDATE, '%H%M') AS SMALLINT) AS time,
+            CAST(ANY_VALUE(MWFLOW) AS REAL) AS mw,
+            CAST(ANY_VALUE(EXPORTLIMIT) AS REAL) AS export_limit,
+            CAST(ANY_VALUE(IMPORTLIMIT) AS REAL) AS import_limit
+        FROM catalog.landing.fct_interconnector_today
+        WHERE DATE >= CURRENT_DATE - INTERVAL 14 DAY AND INTERVENTION = 0
+        GROUP BY ALL
+    """
+    try:
+        con.execute(f"COPY ({query}) TO '{DASHBOARD_DIR}/fct_interconnector_today.parquet' (FORMAT PARQUET)")
+    except duckdb.CatalogException as e:
+        print(f"  fct_interconnector_today not there yet ({e}); exporting an empty table")
+        con.execute(f"""COPY (SELECT ''::VARCHAR AS interconnector, NULL::DATE AS date, 0::SMALLINT AS time,
+            0::REAL AS mw, 0::REAL AS export_limit, 0::REAL AS import_limit LIMIT 0)
+            TO '{DASHBOARD_DIR}/fct_interconnector_today.parquet' (FORMAT PARQUET)""")
     con.close()
 
 
@@ -314,9 +340,10 @@ def build_today():
     con = duckdb.connect(DB_TODAY_PATH)
     con.execute(f"CREATE TABLE scada_today AS SELECT * FROM '{DASHBOARD_DIR}/fct_scada_today.parquet' ORDER BY DUID, date, time")
     con.execute(f"CREATE TABLE price_today AS SELECT * FROM '{DASHBOARD_DIR}/fct_price_today.parquet' ORDER BY REGIONID, date, time")
+    con.execute(f"CREATE TABLE interconnector_today AS SELECT * FROM '{DASHBOARD_DIR}/fct_interconnector_today.parquet' ORDER BY interconnector, date, time")
     con.close()
 
-    for f in ["fct_scada_today.parquet", "fct_price_today.parquet"]:
+    for f in ["fct_scada_today.parquet", "fct_price_today.parquet", "fct_interconnector_today.parquet"]:
         path = os.path.join(DASHBOARD_DIR, f)
         if os.path.exists(path):
             os.remove(path)
@@ -333,6 +360,7 @@ COMMANDS = {
     "export_price": export_price,
     "export_scada_today": export_scada_today,
     "export_price_today": export_price_today,
+    "export_interconnector_today": export_interconnector_today,
     "export_dim_duid": export_dim_duid,
     "export_dim_calendar": export_dim_calendar,
     "build_dim": build_dim,

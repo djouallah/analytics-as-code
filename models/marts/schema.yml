@@ -66,6 +66,33 @@ models:
         tests:
           - not_null
 
+  - name: fct_interconnector_today
+    description: Interconnector flows and limits every 5 minutes, from the INTERCONNECTORRES rows of the archived DispatchIS files
+    columns:
+      - name: INTERCONNECTORID
+        description: AEMO interconnector id; flows are positive from its first region to its second
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['N-Q-MNSP1', 'NSW1-QLD1', 'NSW1-SA1', 'T-V-MNSP1', 'V-S-MNSP1', 'V-SA', 'VIC1-NSW1']
+              config:
+                severity: warn
+      - name: SETTLEMENTDATE
+        description: 5-minute dispatch interval timestamp (timestamptz)
+        tests:
+          - not_null
+      - name: MWFLOW
+        description: Dispatch target flow (MW)
+      - name: EXPORTLIMIT
+        description: Flow limit in the positive direction (MW)
+      - name: IMPORTLIMIT
+        description: Flow limit in the negative direction (MW)
+      - name: file
+        description: Source CSV filename the row was ingested from (part of the merge key)
+        tests:
+          - not_null
+
   - name: fct_scada_today
     description: Intraday generation SCADA readings per unit from AEMO dispatch files
     columns:

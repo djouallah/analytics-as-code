@@ -35,9 +35,10 @@ The 5-minute DispatchIS files already archived since 2026-08 also carry `REGIONS
   `NETINTERCHANGE`); new model `fct_regionsum_today` from the `REGIONSUM` rows. Add both
   columns to the price exports; demand line over the generation stack, imports/exports per
   region.
-- [ ] **Interconnector flows** — new model `fct_interconnector_today` from the
-  `INTERCONNECTORRES` rows (history back to 2026-08 from the archive), new small export table,
-  flow arrows on the map and flow vs. limit chart. New tables go in `scripts/iceberg_tables.py`.
+- [x] **Interconnector flows** — `fct_interconnector_today` from the `INTERCONNECTORRES` rows,
+  exported (last 14 days) into `energy_today.duckdb`; animated flow map + flow chart with
+  playback in Insights (2026-10-01). Follow-up: add flows to the half-year files for longer
+  history.
 - [ ] **Daily profile and price-by-hour beyond 30 days** — add an hour-of-day × month aggregate
   to the daily aggregate so those Insights charts work on long ranges.
 

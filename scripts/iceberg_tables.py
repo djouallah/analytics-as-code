@@ -14,6 +14,7 @@ most.
 TABLES = [
     "landing.fct_price_today",
     "landing.fct_scada_today",
+    "landing.fct_interconnector_today",
     "mart.dim_calendar",
     "mart.dim_duid",
     "landing.stg_csv_archive_log",

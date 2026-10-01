@@ -112,6 +112,9 @@ jobs:
       - name: Export fct_price_today
         run: .venv-read/bin/python scripts/cache_catalog.py export_price_today
 
+      - name: Export fct_interconnector_today
+        run: .venv-read/bin/python scripts/cache_catalog.py export_interconnector_today
+
       - name: Build energy_today.duckdb
         run: .venv-write/bin/python scripts/cache_catalog.py build_today
 
