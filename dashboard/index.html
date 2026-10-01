@@ -110,13 +110,34 @@
     .theme-toggle:hover { color: var(--accent); border-color: var(--accent); }
     .theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     @media (max-width: 1100px) { .kpi-row { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-    .ic-wrap { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 0.6rem; }
-    .ic-controls { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.3rem; font-size: 0.75rem; color: var(--muted); }
-    .ic-controls input[type=range] { flex: 1; accent-color: var(--accent); }
-    .ic-play { background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--text); cursor: pointer; font-size: 0.75rem; padding: 0.2rem 0.6rem; min-width: 4.5rem; }
-    .ic-play:hover { border-color: var(--accent); color: var(--accent); }
-    #icFrameLabel { min-width: 8.5rem; text-align: right; font-variant-numeric: tabular-nums; }
-    @media (max-width: 900px) { .ic-wrap { grid-template-columns: 1fr; } }
+    /* --- Flows page --- */
+    .flows-bar { display: flex; align-items: center; gap: 0.8rem; padding: 0.6rem 2rem 0.2rem; flex-wrap: wrap; }
+    .flows-time { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; min-width: 12rem; }
+    .flows-time small { display: block; font-size: 0.7rem; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+    .flows-bar input[type=range] { flex: 1; min-width: 160px; accent-color: var(--accent); }
+    .flows-btn { background: var(--card); border: 1px solid var(--border); border-radius: 6px; color: var(--text); cursor: pointer; font-size: 0.8rem; font-weight: 600; padding: 0.35rem 0.8rem; }
+    .flows-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .flows-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .flows-bar select { background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0.3rem; font-size: 0.8rem; }
+    .flows-main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); gap: 0.6rem; padding: 0.5rem 2rem; }
+    .flows-board h3 { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 0.2rem 0 0.4rem; }
+    .ic-row { display: grid; grid-template-columns: 1fr auto; gap: 0.1rem 0.6rem; padding: 0.45rem 0; border-bottom: 1px solid var(--row-line); }
+    .ic-row:last-child { border-bottom: none; }
+    .ic-name { font-size: 0.82rem; font-weight: 600; }
+    .ic-name span { font-weight: 500; color: var(--muted); margin-left: 0.3rem; }
+    .ic-mw { font-size: 0.9rem; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+    .ic-bar { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: var(--row-line); overflow: hidden; }
+    .ic-bar span { display: block; height: 100%; border-radius: 3px; transition: width 0.15s linear; }
+    .ic-util { grid-column: 1 / -1; font-size: 0.68rem; color: var(--muted); }
+    .rg-row { display: grid; grid-template-columns: 1fr auto auto; gap: 0.6rem; align-items: center; padding: 0.3rem 0; font-size: 0.8rem; border-bottom: 1px solid var(--row-line); }
+    .rg-row:last-child { border-bottom: none; }
+    .rg-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 0.4rem; vertical-align: -1px; }
+    .rg-price, .rg-net { font-variant-numeric: tabular-nums; text-align: right; }
+    .rg-net { font-size: 0.72rem; min-width: 6.5rem; }
+    .price-legend { display: flex; flex-wrap: wrap; gap: 0.3rem 0.9rem; font-size: 0.7rem; color: var(--muted); padding: 0.2rem 0.4rem 0; }
+    .flows-minis { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 0.6rem; padding: 0 2rem 0.6rem; }
+    @media (max-width: 900px) { .flows-main { grid-template-columns: 1fr; } }
+    @media (max-width: 600px) { .flows-bar, .flows-main, .flows-minis { padding-left: 1rem; padding-right: 1rem; } .flows-time { font-size: 1.2rem; } }
     .insights-note { font-size: 0.72rem; color: var(--muted); padding: 0 2rem 1rem; line-height: 1.5; }
     @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
     @media (max-width: 600px) {
@@ -168,6 +189,7 @@
   <div class="active-filters" id="activeFilters"></div>
   <div class="tab-bar" role="tablist">
     <button class="tab-btn active" data-tab="dashboard" role="tab" id="tab-dashboard" aria-selected="true" aria-controls="view-dashboard">Dashboard</button>
+    <button class="tab-btn" data-tab="flows" role="tab" id="tab-flows" aria-selected="false" aria-controls="view-flows" tabindex="-1">Flows</button>
     <button class="tab-btn" data-tab="insights" role="tab" id="tab-insights" aria-selected="false" aria-controls="view-insights" tabindex="-1">Insights</button>
     <button class="tab-btn" data-tab="analyze" role="tab" id="tab-analyze" aria-selected="false" aria-controls="view-analyze" tabindex="-1">Analyze</button>
   </div>
@@ -199,22 +221,38 @@
   </div>
   </div>
 
+  <div id="view-flows" role="tabpanel" aria-labelledby="tab-flows" style="display:none">
+    <div class="flows-bar">
+      <div class="flows-time" id="flowsTime">--<small id="flowsTimeSub">Interconnector flows and regional prices</small></div>
+      <button type="button" class="flows-btn" id="icPlay" aria-label="Play the flows through the selected range">&#9654; Play</button>
+      <label class="chart-toggle" for="icSpeed">Speed</label>
+      <select id="icSpeed"><option value="0.5">0.5&times;</option><option value="1" selected>1&times;</option><option value="2">2&times;</option><option value="4">4&times;</option></select>
+      <input type="range" id="icFrame" min="0" max="0" value="0" aria-label="Dispatch interval shown">
+    </div>
+    <div class="flows-main">
+      <div class="chart-card">
+        <div class="chart-container" id="chart-flowmap" style="height:540px;"></div>
+        <div class="price-legend" id="priceLegend" aria-label="Regional price colours"></div>
+      </div>
+      <div class="chart-card flows-board">
+        <h3>Interconnectors</h3>
+        <div id="icBoard"></div>
+        <h3 style="margin-top:0.8rem">Regions</h3>
+        <div id="regionBoard"></div>
+      </div>
+    </div>
+    <div class="flows-minis" id="icMinis"></div>
+    <p class="insights-note">
+      AEMO 5-minute dispatch, last 14 days. Arrows point the way power flows; their thickness is the
+      flow and their colour how close the link runs to its limit (green &lt; 70% &le; amber &lt; 90%
+      &le; red). Regions are shaded by their price in that interval. In the small charts the band is
+      the link's import&ndash;export limit and the line the flow, positive from the first region in
+      the name to the second. Hover any small chart to move the map; Play steps through the range.
+    </p>
+  </div>
+
   <div id="view-insights" role="tabpanel" aria-labelledby="tab-insights" style="display:none">
     <div class="charts">
-      <div class="chart-card full-width">
-        <div class="chart-header"><h2 id="title-ic">Interconnector flows <span class="chart-note">(MW; on the lines, + = first region &rarr; second)</span></h2></div>
-        <div class="ic-wrap">
-          <div>
-            <div class="chart-container" id="chart-icmap" style="height:340px;"></div>
-            <div class="ic-controls">
-              <button type="button" class="ic-play" id="icPlay" aria-label="Play the flows through the selected range">&#9654; Play</button>
-              <input type="range" id="icFrame" min="0" max="0" value="0" aria-label="Dispatch interval shown on the map">
-              <span id="icFrameLabel" aria-live="off"></span>
-            </div>
-          </div>
-          <div class="chart-container" id="chart-icflow" style="height:370px;"></div>
-        </div>
-      </div>
       <div class="chart-card full-width">
         <div class="chart-header"><h2 id="title-re">Renewable share of generation (%)</h2></div>
         <div class="chart-container" id="chart-re" style="height:240px;"></div>
@@ -250,9 +288,7 @@
       ("Grid") are storage and count on neither side. Capture price = generation-weighted price the
       fuel earned in its region (5-minute prices for ranges up to 30 days, daily averages beyond).
       Capacity factor = energy / (registered capacity &times; hours), over units that generated in
-      the range. Interconnector flows are AEMO's 5-minute dispatch targets for the last 14 days;
-      arrows point the way power flows, thickness is the flow and colour how close it runs to its
-      limit. All charts follow the header filters.
+      the range. All charts follow the header filters.
     </p>
   </div>
 
@@ -1198,11 +1234,14 @@
     }
 
     async function renderInsights(seq) {
-      await Promise.all([renderInterconnectors(seq), renderRenewables(seq), renderHeatmap(seq),
+      await Promise.all([renderRenewables(seq), renderHeatmap(seq),
         renderProfile(seq), renderCapture(seq), renderNegative(seq), renderCapacityFactor(seq)]);
     }
 
-    // --- Interconnector flows: animated map + flow lines, with playback ---
+    // =========================================================================
+    // 6c. FLOWS PAGE (interconnectors + regional prices, with playback)
+    // =========================================================================
+
     // AEMO's sign convention: MWFLOW is positive from the first region in the id to the second.
     const INTERCONNECTORS = {
       'NSW1-QLD1': { from: 'NSW1', to: 'QLD1', name: 'QNI', curve: 0.18 },
@@ -1215,130 +1254,211 @@
     };
     // Rough load centres, where the arrows start and end.
     const REGION_ANCHORS = { QLD1: [151.6, -26.6], NSW1: [149.6, -32.9], VIC1: [144.6, -37.4], SA1: [138.7, -33.6], TAS1: [146.8, -42.0] };
-    const icLabel = id => INTERCONNECTORS[id]?.name ?? id;
+    // GeoJSON states coloured by their region's price (ACT is in NSW1; WA and NT aren't in the NEM).
+    const STATE_REGION = { 'Queensland': 'QLD1', 'New South Wales': 'NSW1', 'Australian Capital Territory': 'NSW1',
+      'Victoria': 'VIC1', 'South Australia': 'SA1', 'Tasmania': 'TAS1' };
+    const short = code => code.replace('1', '');
     const utilColor = u => u >= 0.9 ? '#f85149' : u >= 0.7 ? '#d29922' : '#3fb950';
+    // Price bands shared by the map shading and the region board.
+    const PRICE_BANDS = [
+      { lt: 0, color: '#2c7bb6', label: '< $0' },
+      { gte: 0, lt: 50, color: '#74add1', label: '$0–50' },
+      { gte: 50, lt: 100, color: '#e0d38a', label: '$50–100' },
+      { gte: 100, lt: 300, color: '#fdae61', label: '$100–300' },
+      { gte: 300, lt: 1000, color: '#f46d43', label: '$300–1k' },
+      { gte: 1000, color: '#a50026', label: '≥ $1k' },
+    ];
+    const fmtPrice = (v, dp = 0) => v == null ? '--' : `${v < 0 ? '-' : ''}$${Math.abs(v).toFixed(dp)}`;
+    const priceColor = v => v == null ? '#888' : PRICE_BANDS.find(b => (b.gte == null || v >= b.gte) && (b.lt == null || v < b.lt)).color;
 
-    const icState = { frames: [], byFrame: new Map(), frame: 0, timer: null };
+    const icState = { frames: [], flows: new Map(), prices: new Map(), frame: 0, timer: null, ids: [] };
 
-    async function renderInterconnectors(seq) {
+    async function renderFlows(seq) {
       icStop();
       const { from, to } = getDateRange();
       const region = activeRegion();
-      const rows = await runQuery(`
-        SELECT interconnector AS id, CAST(date AS VARCHAR) AS date, CAST(time AS INTEGER) AS time,
-          mw::DOUBLE AS mw, export_limit::DOUBLE AS export_limit, import_limit::DOUBLE AS import_limit
-        FROM today.interconnector_today
-        WHERE date BETWEEN ${sqlStr(from)} AND ${sqlStr(to)}
-        ORDER BY date, time`).catch(() => []);   // older energy_today files have no such table
+      // Both straight from the 14-day `today` file, at 5-minute grain whatever the range.
+      const [flows, prices] = await Promise.all([
+        runQuery(`SELECT interconnector AS id, CAST(date AS VARCHAR) AS date, CAST(time AS INTEGER) AS time,
+            mw::DOUBLE AS mw, export_limit::DOUBLE AS export_limit, import_limit::DOUBLE AS import_limit
+          FROM today.interconnector_today WHERE date BETWEEN ${sqlStr(from)} AND ${sqlStr(to)} ORDER BY date, time`).catch(() => []),
+        runQuery(`SELECT REGIONID AS region, CAST(date AS VARCHAR) AS date, CAST(time AS INTEGER) AS time, price::DOUBLE AS price
+          FROM today.price_today WHERE date BETWEEN ${sqlStr(from)} AND ${sqlStr(to)}`),
+      ]);
       const mapReady = await registerAustraliaMap();
       if (seq !== _renderSeq) return;
-      const shown = rows.filter(r => INTERCONNECTORS[r.id] &&
+      const shown = flows.filter(r => INTERCONNECTORS[r.id] &&
         (!region || INTERCONNECTORS[r.id].from === region || INTERCONNECTORS[r.id].to === region));
+      const minis = document.getElementById('icMinis');
       if (!shown.length) {
-        showEmpty('chart-icflow', 'Interconnector flows cover the last 14 days; choose a range inside them');
-        showEmpty('chart-icmap', ' ');
-        document.getElementById('icFrameLabel').textContent = '';
+        showEmpty('chart-flowmap', 'Flows cover the last 14 days: choose a range inside them');
+        document.getElementById('icBoard').innerHTML = '';
+        document.getElementById('regionBoard').innerHTML = '';
+        for (const id of Object.keys(charts).filter(k => k.startsWith('chart-mini-'))) { charts[id].dispose(); delete charts[id]; }
+        minis.innerHTML = '';
+        document.getElementById('flowsTime').firstChild.textContent = '--';
         icState.frames = [];
         return;
       }
       const { xKeys, xLabels } = buildTimeAxis(shown, true);
       icState.frames = xKeys.map((k, i) => ({ key: k, label: xLabels[i] }));
-      icState.byFrame = new Map();
+      icState.flows = new Map();
       for (const r of shown) {
         const k = `${r.date}|${padTime(r.time)}`;
-        if (!icState.byFrame.has(k)) icState.byFrame.set(k, []);
-        icState.byFrame.get(k).push(r);
+        if (!icState.flows.has(k)) icState.flows.set(k, []);
+        icState.flows.get(k).push(r);
       }
-      const ids = Object.keys(INTERCONNECTORS).filter(id => shown.some(r => r.id === id));
-      const lookup = buildLookup(shown, r => `${r.date}|${padTime(r.time)}|${r.id}`, r => r);
-      const flowChart = getChart('chart-icflow');
-      flowChart.setOption({
-        color: PALETTE,
-        tooltip: { trigger: 'axis', formatter: ps => {
-          const head = `<div style="color:${cssVar('--muted')};margin-bottom:2px">${ps[0].axisValueLabel}</div>`;
-          return head + ps.map(p => {
-            const r = lookup.get(`${xKeys[p.dataIndex]}|${ids[p.seriesIndex]}`);
-            if (!r) return '';
-            const ic = INTERCONNECTORS[r.id], dir = r.mw >= 0 ? `${ic.from}&rarr;${ic.to}` : `${ic.to}&rarr;${ic.from}`;
-            const limit = r.mw >= 0 ? r.export_limit : -r.import_limit;
-            const util = limit > 0 ? ` &middot; ${Math.round(100 * Math.abs(r.mw) / limit)}% of limit` : '';
-            return `<div>${p.marker} ${ic.name} ${dir}: <b>${Math.round(Math.abs(r.mw))} MW</b>${util}</div>`;
-          }).join('');
-        } },
-        legend: { type: 'scroll', top: 0, itemWidth: 10, itemHeight: 10, textStyle: { fontSize: 11 } },
-        grid: { left: 55, right: 15, top: 30, bottom: 60 },
-        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 11 } },
-        yAxis: { type: 'value',
-          axisLabel: { formatter: v => Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + 'k' : v } },
-        dataZoom: dataZoomConfig(true),
-        series: ids.map(id => ({ name: `${icLabel(id)} (${INTERCONNECTORS[id].from.replace('1', '')}→${INTERCONNECTORS[id].to.replace('1', '')})`,
-          type: 'line', symbol: 'none', sampling: 'average', lineStyle: { width: 1.5 },
-          data: xKeys.map(k => { const r = lookup.get(`${k}|${id}`); return r ? Math.round(r.mw) : null; }) })),
-      }, true);
-      // Hovering the flow chart moves the map to that interval.
-      flowChart.off('updateAxisPointer');
-      flowChart.on('updateAxisPointer', e => {
-        const i = e.axesInfo?.[0]?.value;
-        if (Number.isInteger(i) && !icState.timer) icShow(i);
-      });
+      // Prices per frame, carried forward so a frame without a fresh price keeps the last one.
+      const raw = new Map(prices.map(p => [`${p.date}|${padTime(p.time)}|${p.region}`, p.price]));
+      icState.prices = new Map();
+      const last = {};
+      const firstPrice = {};
+      for (const p of [...prices].sort((a, b) => a.date.localeCompare(b.date) || a.time - b.time)) firstPrice[p.region] ??= p.price;
+      for (const k of xKeys) {
+        for (const code of Object.keys(REGION_ANCHORS)) {
+          const v = raw.get(`${k}|${code}`);
+          if (v != null) last[code] = v;
+          const use = last[code] ?? firstPrice[code];
+          if (use != null) icState.prices.set(`${k}|${code}`, use);
+        }
+      }
+      document.getElementById('priceLegend').innerHTML = 'Regional price ' + PRICE_BANDS.map(b =>
+        `<span><span class="rg-swatch" style="background:${b.color}"></span>${b.label}</span>`).join('');
+      icState.ids = Object.keys(INTERCONNECTORS).filter(id => shown.some(r => r.id === id));
 
-      const slider = document.getElementById('icFrame');
-      slider.max = String(icState.frames.length - 1);
-      if (!mapReady) showEmpty('chart-icmap', 'Map outline unavailable');
-      icShow(icState.frames.length - 1);   // latest interval in the range
+      // Small multiples: one chart per link, flow line over its limit band, all sharing a cursor.
+      for (const id of Object.keys(charts).filter(k => k.startsWith('chart-mini-'))) { charts[id].dispose(); delete charts[id]; }
+      minis.innerHTML = icState.ids.map(id => {
+        const ic = INTERCONNECTORS[id];
+        return `<div class="chart-card"><div class="chart-header"><h2>${ic.name} <span class="chart-note">${short(ic.from)} &rarr; ${short(ic.to)} (MW)</span></h2></div>
+          <div class="chart-container" id="chart-mini-${id}" style="height:170px;"></div></div>`;
+      }).join('');
+      const lookup = buildLookup(shown, r => `${r.date}|${padTime(r.time)}|${r.id}`, r => r);
+      for (const id of icState.ids) {
+        const ser = xKeys.map(k => lookup.get(`${k}|${id}`));
+        const chart = getChart(`chart-mini-${id}`);
+        chart.group = 'ic-minis';
+        chart.setOption({
+          tooltip: { trigger: 'axis', formatter: ps => {
+            const r = ser[ps[0].dataIndex];
+            if (!r) return '';
+            const ic = INTERCONNECTORS[id], [a, b] = r.mw >= 0 ? [ic.from, ic.to] : [ic.to, ic.from];
+            return `<div style="color:${cssVar('--muted')}">${ps[0].axisValueLabel}</div><b>${Math.round(Math.abs(r.mw))} MW</b> ${short(a)}&rarr;${short(b)}<br>limits ${Math.round(r.import_limit)} / ${Math.round(r.export_limit)} MW`;
+          } },
+          grid: { left: 48, right: 10, top: 8, bottom: 22 },
+          xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 10 } },
+          yAxis: { type: 'value', splitNumber: 3, axisLabel: { fontSize: 10, formatter: v => Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + 'k' : v } },
+          series: [
+            // The band: an invisible base at the import limit, then the gap up to the export limit.
+            // stackStrategy 'all': the default stacks negatives and positives apart, which
+            // splits a band that crosses zero.
+            { type: 'line', stack: 'band', stackStrategy: 'all', symbol: 'none', lineStyle: { opacity: 0 }, silent: true,
+              data: ser.map(r => r ? r.import_limit : null) },
+            { type: 'line', stack: 'band', stackStrategy: 'all', symbol: 'none', lineStyle: { opacity: 0 }, silent: true,
+              areaStyle: { color: isLight() ? 'rgba(9,105,218,0.10)' : 'rgba(88,166,255,0.12)' },
+              data: ser.map(r => r ? r.export_limit - r.import_limit : null) },
+            { type: 'line', symbol: 'none', sampling: 'average', lineStyle: { width: 1.6, color: '#58a6ff' },
+              data: ser.map(r => r ? Math.round(r.mw) : null),
+              markLine: { symbol: 'none', silent: true, label: { show: false },
+                lineStyle: { color: cssVar('--faint'), type: 'dashed', width: 1 }, data: [{ yAxis: 0 }] } },
+          ],
+        }, true);
+        chart.off('updateAxisPointer');
+        chart.on('updateAxisPointer', e => {
+          const i = e.axesInfo?.[0]?.value;
+          if (Number.isInteger(i) && !icState.timer && i !== icState.frame) icShow(i);
+        });
+      }
+      echarts.connect('ic-minis');
+
+      document.getElementById('icFrame').max = String(icState.frames.length - 1);
+      if (!mapReady) showEmpty('chart-flowmap', 'Map outline unavailable');
+      icShow(icState.frames.length - 1);   // the latest interval in the range
     }
 
     function icShow(i) {
-      if (!icState.frames.length || !australiaMapRegistered) return;
+      if (!icState.frames.length) return;
       icState.frame = Math.max(0, Math.min(i, icState.frames.length - 1));
       const { key, label } = icState.frames[icState.frame];
       document.getElementById('icFrame').value = String(icState.frame);
-      document.getElementById('icFrameLabel').textContent = label;
-      const rows = icState.byFrame.get(key) ?? [];
-      const maxAbs = Math.max(100, ...rows.map(r => Math.abs(r.mw)));
-      // Net position per region: + exporting, - importing.
-      const net = {};
+      document.getElementById('flowsTime').firstChild.textContent = label + ' ';
+      const rows = icState.flows.get(key) ?? [];
+      const price = code => icState.prices.get(`${key}|${code}`);
+      const net = {};   // + exporting, - importing
       for (const r of rows) {
         const ic = INTERCONNECTORS[r.id];
         net[ic.from] = (net[ic.from] || 0) + r.mw;
         net[ic.to] = (net[ic.to] || 0) - r.mw;
       }
-      const lines = rows.map(r => {
+      const maxAbs = Math.max(150, ...rows.map(r => Math.abs(r.mw)));
+      const enriched = rows.map(r => {
         const ic = INTERCONNECTORS[r.id];
         const [a, b] = r.mw >= 0 ? [ic.from, ic.to] : [ic.to, ic.from];
         const limit = r.mw >= 0 ? r.export_limit : -r.import_limit;
-        const util = limit > 0 ? Math.abs(r.mw) / limit : 0;
-        return {
-          name: ic.name, value: Math.round(Math.abs(r.mw)),
-          coords: [REGION_ANCHORS[a], REGION_ANCHORS[b]],
-          lineStyle: { width: 1.5 + 7 * Math.abs(r.mw) / maxAbs, color: utilColor(util), curveness: ic.curve, opacity: 0.85 },
-          // Small flows keep their arrow but drop the label, which would crowd the parallel links.
-          label: { show: Math.abs(r.mw) >= 0.08 * maxAbs },
-          util,
-        };
-      });
-      const nodes = Object.entries(REGION_ANCHORS).map(([code, xy]) => ({
-        name: code, value: [...xy, Math.round(net[code] || 0)],
-        itemStyle: { color: (net[code] || 0) >= 0 ? '#3fb950' : '#f0883e' },
-      }));
-      getChart('chart-icmap').setOption({
-        tooltip: { trigger: 'item', formatter: p => p.seriesType === 'lines'
-          ? `<b>${p.name}</b><br>${p.value.toLocaleString()} MW &middot; ${Math.round(100 * p.data.util)}% of limit`
-          : `<b>${regionName(p.name)}</b><br>${p.value[2] >= 0 ? 'exporting' : 'importing'} ${Math.abs(p.value[2]).toLocaleString()} MW` },
-        geo: { map: 'australia', roam: false, center: [145.2, -35.2], zoom: 2.25,
-          itemStyle: { areaColor: isLight() ? '#eef2f7' : '#1a1f2e', borderColor: cssVar('--border') },
-          emphasis: { disabled: true }, silent: true },
+        return { r, ic, a, b, util: limit > 0 ? Math.min(1.5, Math.abs(r.mw) / limit) : 0 };
+      }).sort((x, y) => Object.keys(INTERCONNECTORS).indexOf(x.r.id) - Object.keys(INTERCONNECTORS).indexOf(y.r.id));
+
+      // --- board ---
+      document.getElementById('icBoard').innerHTML = enriched.map(({ r, ic, a, b, util }) => `
+        <div class="ic-row">
+          <div class="ic-name">${ic.name}<span>${short(a)} &rarr; ${short(b)}</span></div>
+          <div class="ic-mw">${Math.round(Math.abs(r.mw)).toLocaleString()} MW</div>
+          <div class="ic-bar"><span style="width:${Math.min(100, Math.round(100 * util))}%;background:${utilColor(util)}"></span></div>
+          <div class="ic-util">${Math.round(100 * util)}% of its ${short(a)}&rarr;${short(b)} limit</div>
+        </div>`).join('');
+      document.getElementById('regionBoard').innerHTML = Object.keys(REGION_ANCHORS).map(code => {
+        const p = price(code), n = Math.round(net[code] || 0);
+        return `<div class="rg-row"><div><span class="rg-swatch" style="background:${priceColor(p)}"></span>${regionName(code)}</div>
+          <div class="rg-price">${fmtPrice(p)}</div>
+          <div class="rg-net" style="color:${n >= 0 ? '#3fb950' : '#f0883e'}">${n >= 0 ? 'exports' : 'imports'} ${Math.abs(n).toLocaleString()} MW</div></div>`;
+      }).join('');
+
+      // --- map ---
+      if (!australiaMapRegistered) return;
+      const light = isLight();
+      getChart('chart-flowmap').setOption({
+        tooltip: { trigger: 'item', formatter: p => {
+          if (p.seriesType === 'lines') return `<b>${p.data.name}</b> ${p.data.dir}<br>${p.data.value.toLocaleString()} MW &middot; ${Math.round(100 * p.data.util)}% of limit`;
+          if (p.seriesType === 'effectScatter') return `<b>${regionName(p.name)}</b><br>${p.value[2] >= 0 ? 'exporting' : 'importing'} ${Math.abs(p.value[2]).toLocaleString()} MW`;
+          return '';
+        } },
+        geo: { map: 'australia', nameProperty: 'STATE_NAME', roam: true, center: [145.4, -31.8], zoom: 1.85,
+          // Land clearly lighter than the card, borders visible; WA and NT (not in the NEM) stay neutral.
+          itemStyle: { areaColor: light ? '#dfe5ec' : '#2b3446', borderColor: light ? '#8c959f' : '#7d8899', borderWidth: 1 },
+          emphasis: { disabled: true },
+          tooltip: { show: true, formatter: p => {
+            const code = STATE_REGION[p.name], v = code ? price(code) : null;
+            return code ? `<b>${p.name}</b> (${code})<br>${v == null ? 'no price' : fmtPrice(v, 2) + '/MWh'}` : `${p.name}<br>not in the NEM`;
+          } },
+          // NEM states shaded by their region's price in this interval.
+          regions: Object.entries(STATE_REGION).map(([state, code]) => ({
+            name: state, itemStyle: { areaColor: price(code) == null ? (light ? '#dfe5ec' : '#2b3446') : priceColor(price(code)), opacity: light ? 0.75 : 0.55 } })) },
         series: [
-          { type: 'lines', coordinateSystem: 'geo', zlevel: 2, data: lines,
-            effect: { show: true, period: 3, trailLength: 0.15, symbol: 'arrow', symbolSize: 9, color: '#ffffff' },
-            label: { show: true, position: 'middle', fontSize: 10, color: cssVar('--text'),
-              formatter: p => `${p.name} ${p.value}` } },
-          { type: 'effectScatter', coordinateSystem: 'geo', zlevel: 3, data: nodes, rippleEffect: { scale: 2.5, brushType: 'stroke' },
-            symbolSize: v => 8 + Math.min(14, Math.abs(v[2]) / 150),
-            label: { show: true, position: 'right', fontSize: 11, fontWeight: 600, color: cssVar('--text'),
-              formatter: p => `${p.name.replace('1', '')} ${p.value[2] >= 0 ? '+' : ''}${p.value[2]}` } },
+          { type: 'lines', coordinateSystem: 'geo', zlevel: 2,
+            effect: { show: true, period: 2.5, trailLength: 0.2, symbol: 'arrow', symbolSize: 11, color: light ? '#1f2328' : '#ffffff' },
+            label: { show: true, position: 'middle', fontSize: 11, fontWeight: 600, color: light ? '#1f2328' : '#ffffff',
+              textBorderColor: light ? '#ffffff' : '#0f1117', textBorderWidth: 3, formatter: p => `${p.data.name} ${p.data.value}` },
+            data: enriched.map(({ r, ic, a, b, util }) => ({
+              name: ic.name, dir: `${short(a)}→${short(b)}`, value: Math.round(Math.abs(r.mw)), util,
+              coords: [REGION_ANCHORS[a], REGION_ANCHORS[b]],
+              lineStyle: { width: 2 + 9 * Math.abs(r.mw) / maxAbs, color: utilColor(util), curveness: ic.curve, opacity: 0.9 },
+              label: { show: Math.abs(r.mw) >= 0.08 * maxAbs },
+            })) },
+          { type: 'effectScatter', coordinateSystem: 'geo', zlevel: 3, rippleEffect: { scale: 3, brushType: 'stroke' },
+            symbolSize: v => 9 + Math.min(14, Math.abs(v[2]) / 120),
+            label: { show: true, position: 'right', fontSize: 12, fontWeight: 700, color: light ? '#1f2328' : '#ffffff',
+              textBorderColor: light ? '#ffffff' : '#0f1117', textBorderWidth: 3,
+              formatter: p => { const pr = price(p.name); return `${short(p.name)}${pr == null ? '' : '  ' + fmtPrice(pr)}`; } },
+            data: Object.entries(REGION_ANCHORS).map(([code, xy]) => ({
+              name: code, value: [...xy, Math.round(net[code] || 0)],
+              itemStyle: { color: (net[code] || 0) >= 0 ? '#3fb950' : '#f0883e', borderColor: light ? '#ffffff' : '#0f1117', borderWidth: 1.5 },
+            })) },
         ],
       }, true);
+      // Keep the small charts' cursor on the shown interval while playing.
+      if (icState.timer) {
+        for (const id of icState.ids) charts[`chart-mini-${id}`]?.dispatchAction({ type: 'showTip', seriesIndex: 2, dataIndex: icState.frame });
+      }
     }
 
     function icStop() {
@@ -1349,14 +1469,17 @@
     document.getElementById('icPlay').addEventListener('click', () => {
       if (icState.timer) return icStop();
       if (!icState.frames.length) return;
-      // Play from the start (or carry on), about 12 s for any range.
       if (icState.frame >= icState.frames.length - 1) icShow(0);
-      const step = Math.max(1, Math.round(icState.frames.length / 120));
       document.getElementById('icPlay').innerHTML = '&#10074;&#10074; Pause';
+      // At 1x a day of 5-minute intervals plays in ~15 s.
       icState.timer = setInterval(() => {
+        const step = Math.max(1, Math.round(+document.getElementById('icSpeed').value));
         if (icState.frame >= icState.frames.length - 1) return icStop();
         icShow(icState.frame + step);
-      }, 100);
+      }, Math.round(50 / Math.min(1, +document.getElementById('icSpeed').value)));
+    });
+    document.getElementById('icSpeed').addEventListener('change', () => {
+      if (icState.timer) { icStop(); document.getElementById('icPlay').click(); }
     });
     document.getElementById('icFrame').addEventListener('input', e => { icStop(); icShow(+e.target.value); });
 
@@ -1731,10 +1854,12 @@
           b.tabIndex = on ? 0 : -1;
         }
         const tab = btn.dataset.tab;
-        for (const t of ['dashboard', 'insights', 'analyze']) {
+        for (const t of ['dashboard', 'flows', 'insights', 'analyze']) {
           document.getElementById(`view-${t}`).style.display = tab === t ? '' : 'none';
         }
         if (tab === 'insights') renderInsights(_renderSeq);
+        if (tab === 'flows') renderFlows(_renderSeq);
+        else icStop();
         // Populate the SQL box the first time Analyze is opened; don't clobber manual edits after.
         if (tab === 'analyze' && !document.getElementById('analyzeSql').value.trim()) syncAnalyzeSql();
         // Charts drawn while hidden have zero size; resize once visible again.
@@ -2091,9 +2216,10 @@
           const { from, to } = getDateRange();
           await ensurePeriods(periodsForRange(from, to), "Downloading detailed data...");
         }
-        const insightsVisible = document.getElementById('view-insights').style.display !== 'none';
+        const visible = id => document.getElementById(id).style.display !== 'none';
         await Promise.all([renderGeneration(seq), renderPrice(seq), renderMap(seq), updateRenewablesKpi(seq),
-          insightsVisible ? renderInsights(seq) : null,
+          visible('view-insights') ? renderInsights(seq) : null,
+          visible('view-flows') ? renderFlows(seq) : null,
           runQuery(sql.generatorCount()).then(r => { if (seq === _renderSeq && r.length) document.getElementById('kpiGens').textContent = r[0].cnt.toLocaleString(); })
         ]);
         if (seq !== _renderSeq) return;
