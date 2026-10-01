@@ -1,0 +1,30 @@
+name: Squash Deploy Repo
+
+# Weekly: replace NemTracker/nemtracker.github.io's history with one commit of its current
+# tree (scripts/squash_deploy_repo.sh). The site is unchanged; the ~0.5 GB/day of superseded
+# .duckdb versions stop piling up. Force-pushes the deploy repo by design.
+on:
+  schedule:
+    - cron: '0 17 * * 0'   # Sunday 17:00 UTC = Monday 3am AEST, between the daily imports
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+# No concurrency group: sharing import-data's would let a queued squash cancel a pending
+# import. A deploy that lands meanwhile just makes the force-with-lease fail and the script
+# retry; a deploy that loses to the squash retries in deploy_pages.sh.
+
+permissions:
+  contents: read
+
+jobs:
+  squash:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Squash deploy repo history
+        env:
+          NEMTRACKER_TOKEN: ${{ secrets.NEMTRACKER_TOKEN }}
+        run: bash scripts/squash_deploy_repo.sh

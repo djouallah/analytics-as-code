@@ -129,6 +129,11 @@ exports from Iceberg, rebuilds and redeploys only the latest two half-years: old
 files stay as deployed, and `energy_daily_agg.duckdb` keeps the deployed rows before the
 cutoff (downloaded, sanity-checked, spliced — `cache_catalog.export_cutoff`). Dispatch
 `import_data.yml` with `all_periods=true` after a backfill that touched older data.
+`squash_deploy_repo.yml` (weekly, Sunday 17:00 UTC, also dispatchable) replaces the deploy
+repo's history with one commit of its current tree (`scripts/squash_deploy_repo.sh`,
+force-with-lease): `energy_today.duckdb` is redeployed every 30 min, and the kept copies had
+grown the repo to ~16 GB by 2026-10-01. The site is unchanged; GitHub reclaims the space on
+its own schedule.
 
 ## Models (8)
 | Model | Schema | Materialization |

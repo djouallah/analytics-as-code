@@ -5,7 +5,7 @@ next unless an item says otherwise.
 
 ## Stage 1 — simple (an hour or two each)
 
-- [ ] **Deploy repo history squash** — `NemTracker/nemtracker.github.io` is 16.5 GB (2026-10-01)
+- [x] **Deploy repo history squash** — `NemTracker/nemtracker.github.io` is 16.5 GB (2026-10-01)
   because `energy_today.duckdb` (8 MB) is redeployed every 30 min and git keeps every copy.
   Weekly job: replace the history with one fresh commit of the current tree. The site stays
   identical. **Force-pushes the deploy repo — needs an explicit OK before it is built.**
