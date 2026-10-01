@@ -1,7 +1,14 @@
 # TODO
 
-Simplest first, in stages. Tick items off as they land; each stage is independent of the
-next unless an item says otherwise.
+Ideas, not requirements. The only goal is a dashboard that is more useful; an item that
+doesn't serve that can be dropped, and none of them has to land as written.
+
+- **No workarounds.** If an item only works through a hack (hand-made rows, guessed mappings,
+  interpolation, values copied from another source to fill a hole), don't build it.
+- **Don't invent data.** If AEMO doesn't publish it, or the archive doesn't go back far
+  enough, the chart shows the gap ("no data before …") or the item is dropped. Never fill it.
+- **Simplest first.** Tick items off as they land; each stage stands alone unless an item
+  says otherwise.
 
 ## Stage 1 — simple (an hour or two each)
 
@@ -27,7 +34,7 @@ The 5-minute DispatchIS files already archived since 2026-08 also carry `REGIONS
 - [ ] **Curtailment, up to yesterday** — `fct_scada` has `AVAILABILITY` and `TOTALCLEARED`; add
   daily curtailed MWh per semi-scheduled wind/solar unit to `energy_daily_agg.duckdb`
   (`scripts/cache_catalog.py build_daily_agg`), chart it in Insights. The last 5 days have no
-  availability, so it ends yesterday.
+  availability, so it ends yesterday — don't estimate the last 5 days.
 - [ ] **Demand and net interchange** — history is in `fct_price` (`TOTALDEMAND`,
   `NETINTERCHANGE`); new model `fct_regionsum_today` from the `REGIONSUM` rows. Add both
   columns to the price exports; demand line over the generation stack, imports/exports per
@@ -36,7 +43,8 @@ The 5-minute DispatchIS files already archived since 2026-08 also carry `REGIONS
   exported (last 14 days) into `energy_today.duckdb`; its own **Flows** tab: price-shaded map
   with animated flows, live board, small multiples with limit bands, playback (2026-10-01).
 - [ ] **Flows beyond 14 days** — add `interconnector` to the half-year files and the daily
-  aggregate so the Flows page works on any range (the archive only goes back to 2026-08).
+  aggregate so the Flows page works on longer ranges. The archive only goes back to 2026-08:
+  the range starts there, no backfill from other sources.
 - [ ] **Daily profile and price-by-hour beyond 30 days** — add an hour-of-day × month aggregate
   to the daily aggregate so those Insights charts work on long ranges.
 
@@ -44,10 +52,12 @@ The 5-minute DispatchIS files already archived since 2026-08 also carry `REGIONS
 
 - [ ] **Retired units + emissions** — AEMO MMSDM monthly archive: `GENUNITS` (fuel, CO2
   factor), `DUALLOC` (DUID → unit), `DUDETAILSUMMARY` (region). Gives region/fuel to the ~10%
-  "Unregistered" history and an emissions-intensity KPI and chart.
+  "Unregistered" history and an emissions-intensity KPI and chart. DUIDs that MMSDM doesn't
+  cover stay "Unregistered"; no guessed fuel, region or CO2 factor.
 - [ ] **Rooftop solar** — new feed from AEMO `ROOFTOP_PV/ACTUAL` (30-min, per region) with an
   archive/MMSDM backfill; rooftop in the generation stack and renewable share with and without
-  it (today's share is utility-scale only).
+  it (today's share is utility-scale only). Backfill only as far as AEMO's archive goes;
+  before that the share stays utility-only and is labelled as such.
 
 ## Waiting on upstream
 
