@@ -93,6 +93,31 @@ models:
         tests:
           - not_null
 
+  - name: fct_regionsum_today
+    description: Regional demand, net interchange and supply every 5 minutes, from the REGIONSUM rows of the archived DispatchIS files
+    columns:
+      - name: REGIONID
+        description: NEM region identifier
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['QLD1', 'NSW1', 'VIC1', 'SA1', 'TAS1']
+              config:
+                severity: warn
+      - name: SETTLEMENTDATE
+        description: 5-minute dispatch interval timestamp (timestamptz)
+        tests:
+          - not_null
+      - name: TOTALDEMAND
+        description: Operational demand (MW); rooftop solar is not in it
+      - name: NETINTERCHANGE
+        description: Net interconnector flow out of the region (MW); positive = export
+      - name: file
+        description: Source CSV filename the row was ingested from (part of the merge key)
+        tests:
+          - not_null
+
   - name: fct_scada_today
     description: Intraday generation SCADA readings per unit from AEMO dispatch files
     columns:
@@ -121,6 +146,8 @@ exposures:
       - ref('fct_price')
       - ref('fct_scada_today')
       - ref('fct_price_today')
+      - ref('fct_regionsum_today')
+      - ref('fct_interconnector_today')
       - ref('dim_duid')
       - ref('dim_calendar')
     owner:

@@ -34,19 +34,22 @@ The 5-minute DispatchIS files already archived since 2026-08 also carry `REGIONS
 - [ ] **Curtailment, up to yesterday** — `fct_scada` has `AVAILABILITY` and `TOTALCLEARED`; add
   daily curtailed MWh per semi-scheduled wind/solar unit to `energy_daily_agg.duckdb`
   (`scripts/cache_catalog.py build_daily_agg`), chart it in Insights. The last 5 days have no
-  availability, so it ends yesterday — don't estimate the last 5 days.
-- [ ] **Demand and net interchange** — history is in `fct_price` (`TOTALDEMAND`,
-  `NETINTERCHANGE`); new model `fct_regionsum_today` from the `REGIONSUM` rows. Add both
-  columns to the price exports; demand line over the generation stack, imports/exports per
-  region.
+  per-unit availability, so the per-unit view ends yesterday — don't estimate it.
+  `fct_regionsum_today` does carry regional `SS_SOLAR_UIGF`/`SS_WIND_UIGF` against
+  `SS_*_CLEAREDMW` for the last days, so a per-region view can be real right up to now.
+- [x] **Demand and net interchange** — history from `fct_price` (`TOTALDEMAND`,
+  `NETINTERCHANGE`), the last days from the new `fct_regionsum_today` (REGIONSUM rows); both in
+  the price exports. Dashed demand line over the generation stack, net exports chart in
+  Insights (2026-10-01).
 - [x] **Interconnector flows** — `fct_interconnector_today` from the `INTERCONNECTORRES` rows,
   exported (last 14 days) into `energy_today.duckdb`; its own **Flows** tab: price-shaded map
   with animated flows, live board, small multiples with limit bands, playback (2026-10-01).
 - [ ] **Flows beyond 14 days** — add `interconnector` to the half-year files and the daily
   aggregate so the Flows page works on longer ranges. The archive only goes back to 2026-08:
   the range starts there, no backfill from other sources.
-- [ ] **Daily profile and price-by-hour beyond 30 days** — add an hour-of-day × month aggregate
-  to the daily aggregate so those Insights charts work on long ranges.
+- [x] **Daily profile and price-by-hour beyond 30 days** — hour-of-day × month tables in the
+  daily aggregate; beyond 30 days both charts are hourly over the whole months the range
+  touches (2026-10-01).
 
 ## Stage 3 — bigger (new AEMO feeds)
 

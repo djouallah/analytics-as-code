@@ -103,12 +103,16 @@ def export_scada():
 
 
 def export_price():
+    """Price, operational demand and net interchange (positive = the region exports), all
+    from the DREGION rows of the next-day files."""
     con = connect_iceberg()
     con.execute(f"""
         COPY (
             SELECT REGIONID, CAST(SETTLEMENTDATE AS DATE) AS date,
                 CAST(strftime(SETTLEMENTDATE, '%H%M') AS SMALLINT) AS time,
-                CAST(ANY_VALUE(RRP) AS REAL) AS price
+                CAST(ANY_VALUE(RRP) AS REAL) AS price,
+                CAST(ANY_VALUE(TOTALDEMAND) AS REAL) AS demand,
+                CAST(ANY_VALUE(NETINTERCHANGE) AS REAL) AS net_interchange
             FROM catalog.landing.fct_price
             WHERE INTERVENTION = 0 {cutoff_filter()}
             GROUP BY REGIONID, CAST(SETTLEMENTDATE AS DATE), strftime(SETTLEMENTDATE, '%H%M')
@@ -134,18 +138,40 @@ def export_scada_today():
 
 
 def export_price_today():
+    """Price from the PRICE rows, demand and net interchange from the REGIONSUM rows of the
+    same DispatchIS files (fct_regionsum_today), last 14 days. fct_regionsum_today is new
+    (2026-10-01) and fills from the archive newest first: intervals it doesn't have yet keep
+    a NULL demand, and until the pipeline has created it the columns are all NULL."""
     con = connect_iceberg()
-    con.execute(f"""
-        COPY (
-            SELECT REGIONID, CAST(SETTLEMENTDATE AS DATE) AS date,
-                CAST(strftime(SETTLEMENTDATE, '%H%M') AS SMALLINT) AS time,
-                CAST(ANY_VALUE(RRP) AS REAL) AS price
-            FROM catalog.landing.fct_price_today
-            WHERE DATE >= CURRENT_DATE - INTERVAL 14 DAY
-                AND INTERVENTION = 0
-            GROUP BY REGIONID, CAST(SETTLEMENTDATE AS DATE), strftime(SETTLEMENTDATE, '%H%M')
-        ) TO '{DASHBOARD_DIR}/fct_price_today.parquet' (FORMAT PARQUET);
-    """)
+    price = """
+        SELECT REGIONID, SETTLEMENTDATE, CAST(ANY_VALUE(RRP) AS REAL) AS price
+        FROM catalog.landing.fct_price_today
+        WHERE DATE >= CURRENT_DATE - INTERVAL 14 DAY AND INTERVENTION = 0
+        GROUP BY ALL
+    """
+    regionsum = """
+        SELECT REGIONID, SETTLEMENTDATE,
+            CAST(ANY_VALUE(TOTALDEMAND) AS REAL) AS demand,
+            CAST(ANY_VALUE(NETINTERCHANGE) AS REAL) AS net_interchange
+        FROM catalog.landing.fct_regionsum_today
+        WHERE DATE >= CURRENT_DATE - INTERVAL 14 DAY AND INTERVENTION = 0
+        GROUP BY ALL
+    """
+    query = f"""
+        WITH p AS ({price}), r AS ({{regionsum}})
+        SELECT p.REGIONID, CAST(p.SETTLEMENTDATE AS DATE) AS date,
+            CAST(strftime(p.SETTLEMENTDATE, '%H%M') AS SMALLINT) AS time,
+            p.price, r.demand, r.net_interchange
+        FROM p LEFT JOIN r ON r.REGIONID = p.REGIONID AND r.SETTLEMENTDATE = p.SETTLEMENTDATE
+    """
+    target = f"'{DASHBOARD_DIR}/fct_price_today.parquet' (FORMAT PARQUET)"
+    try:
+        con.execute(f"COPY ({query.format(regionsum=regionsum)}) TO {target}")
+    except duckdb.CatalogException as e:
+        print(f"  fct_regionsum_today not there yet ({e}); exporting price with NULL demand")
+        empty = ("SELECT NULL::VARCHAR AS REGIONID, NULL::TIMESTAMPTZ AS SETTLEMENTDATE, "
+                 "NULL::REAL AS demand, NULL::REAL AS net_interchange LIMIT 0")
+        con.execute(f"COPY ({query.format(regionsum=empty)}) TO {target}")
     con.close()
 
 
@@ -261,46 +287,73 @@ def build_daily_agg():
     if os.path.exists(agg_path):
         os.remove(agg_path)
 
+    scada = f"'{DASHBOARD_DIR}/fct_scada.parquet'"
+    price = f"'{DASHBOARD_DIR}/fct_price.parquet'"
+    # Each table: (date column, its query over the parquet exports).
+    # - scada_daily / price_daily: one row per unit (region) and day, for ranges over 30 days.
+    # - scada_hourly / price_hourly / month_days: hour of day x month, so the daily-profile and
+    #   price-by-hour charts work on long ranges. scada_hourly keeps the positive output only
+    #   (the profile leaves charging out); a range's average MW at hour h is SUM(mwh) over its
+    #   months / SUM(days) over the same months. hour = time // 100, like the 5-minute charts.
+    tables = {
+        "scada_daily": ("date", f"""
+            SELECT DUID, date, CAST(SUM(mw) / 12.0 AS REAL) AS mwh
+            FROM {scada} GROUP BY ALL ORDER BY DUID, date"""),
+        "price_daily": ("date", f"""
+            SELECT REGIONID, date, CAST(AVG(price) AS REAL) AS price,
+                CAST(AVG(demand) AS REAL) AS demand,
+                CAST(AVG(net_interchange) AS REAL) AS net_interchange
+            FROM {price} GROUP BY ALL ORDER BY REGIONID, date"""),
+        "scada_hourly": ("month", f"""
+            SELECT DUID, CAST(date_trunc('month', date) AS DATE) AS month,
+                CAST(time // 100 AS TINYINT) AS hour, CAST(SUM(mw) / 12.0 AS REAL) AS mwh
+            FROM {scada} WHERE mw > 0 GROUP BY ALL ORDER BY DUID, month, hour"""),
+        "price_hourly": ("month", f"""
+            SELECT REGIONID, CAST(date_trunc('month', date) AS DATE) AS month,
+                CAST(time // 100 AS TINYINT) AS hour, CAST(AVG(price) AS REAL) AS price,
+                CAST(COUNT(*) AS INTEGER) AS n
+            FROM {price} GROUP BY ALL ORDER BY REGIONID, month, hour"""),
+        "month_days": ("month", f"""
+            SELECT CAST(date_trunc('month', date) AS DATE) AS month,
+                CAST(COUNT(DISTINCT date) AS SMALLINT) AS days
+            FROM {scada} GROUP BY ALL ORDER BY month"""),
+    }
+
     # With a cutoff the parquet exports only start there, so the rows before it come from
     # the currently deployed aggregate. Any doubt about that file fails the step: a
-    # silently truncated history would be deployed over the good one.
+    # silently truncated history would be deployed over the good one. The cutoff is the
+    # first day of a half-year, so the monthly tables split cleanly on it too.
     cutoff = export_cutoff()
-    keep_old = {"scada_daily": "", "price_daily": ""}
+    keep_old = {t: "" for t in tables}
     tmp = None
     if cutoff:
         tmp = tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False).name
         urllib.request.urlretrieve(f"{DEPLOYED_DATA_URL}/energy_daily_agg.duckdb", tmp)
         check = duckdb.connect(tmp, read_only=True)
-        for table in keep_old:
-            first, last = check.execute(f"SELECT min(date), max(date) FROM {table}").fetchone()
+        for table, (col, query) in tables.items():
+            want = [d[0] for d in check.execute(f"DESCRIBE {query}").fetchall()]
+            try:
+                have = [d[0] for d in check.execute(f"DESCRIBE {table}").fetchall()]
+                first, last = check.execute(f"SELECT min({col}), max({col}) FROM {table}").fetchone()
+            except duckdb.CatalogException:
+                have, first, last = [], None, None
+            if have != want:
+                raise SystemExit(f"Deployed {table} has columns {have}, not {want}; refusing to "
+                                 f"splice. Dispatch with all_periods=true.")
             if first is None or str(first) >= cutoff or str(last) < cutoff:
                 raise SystemExit(f"Deployed {table} covers {first}..{last}, which doesn't reach "
                                  f"{cutoff}; refusing to splice. Dispatch with all_periods=true.")
         check.close()
-        keep_old = {t: f"SELECT * FROM old.{t} WHERE date < DATE '{cutoff}' UNION ALL "
-                    for t in keep_old}
+        keep_old = {t: f"SELECT * FROM old.{t} WHERE {col} < DATE '{cutoff}' UNION ALL "
+                    for t, (col, _) in tables.items()}
 
     con = duckdb.connect(agg_path)
     if cutoff:
         con.execute(f"ATTACH '{tmp}' AS old (READ_ONLY)")
-    con.execute(f"""
-        CREATE TABLE scada_daily AS
-        {keep_old["scada_daily"]}
-        SELECT DUID, date, CAST(SUM(mw) / 12.0 AS REAL) AS mwh
-        FROM '{DASHBOARD_DIR}/fct_scada.parquet'
-        GROUP BY DUID, date
-        ORDER BY DUID, date
-    """)
-    con.execute(f"""
-        CREATE TABLE price_daily AS
-        {keep_old["price_daily"]}
-        SELECT REGIONID, date, CAST(AVG(price) AS REAL) AS price
-        FROM '{DASHBOARD_DIR}/fct_price.parquet'
-        GROUP BY REGIONID, date
-        ORDER BY REGIONID, date
-    """)
-    rows = {t: con.execute(f"SELECT count(*), min(date), max(date) FROM {t}").fetchone()
-            for t in ("scada_daily", "price_daily")}
+    for table, (_, query) in tables.items():
+        con.execute(f"CREATE TABLE {table} AS {keep_old[table]} {query}")
+    rows = {t: con.execute(f"SELECT count(*), min({col}), max({col}) FROM {t}").fetchone()
+            for t, (col, _) in tables.items()}
     con.close()
     if tmp:
         os.remove(tmp)

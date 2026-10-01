@@ -275,6 +275,10 @@
         <div class="chart-header"><h2 id="title-neg">Negative prices by region</h2></div>
         <div class="chart-container" id="chart-neg" style="height:300px;"></div>
       </div>
+      <div class="chart-card full-width">
+        <div class="chart-header"><h2 id="title-net">Net exports by region (MW; below zero = importing)</h2></div>
+        <div class="chart-container" id="chart-net" style="height:260px;"></div>
+      </div>
       <div class="chart-card">
         <div class="chart-header"><h2 id="title-cf">Capacity factor by fuel (%)</h2></div>
         <div class="chart-container" id="chart-cf" style="height:320px;"></div>
@@ -290,7 +294,11 @@
       ("Grid") are storage and count on neither side. Capture price = generation-weighted price the
       fuel earned in its region (5-minute prices for ranges up to 30 days, daily averages beyond).
       Capacity factor = energy / (registered capacity &times; hours), over units that generated in
-      the range. All charts follow the header filters.
+      the range. Net exports = AEMO's net interconnector flow out of each region. Beyond 30 days
+      the price heatmap and the average day are hourly, over the whole months the range touches.
+      The dashed Demand line on the generation chart is AEMO's operational demand (it excludes
+      rooftop solar); with a region selected, the gap between it and the stack is roughly that
+      region's net exports. All charts follow the header filters.
     </p>
   </div>
 
@@ -372,6 +380,8 @@
 
     // Negative output (batteries and pumped hydro charging) is its own series below the axis.
     const CHARGING = ' (charging)';
+    // The demand line drawn over the generation stack (not a fuel, never stacked or clicked).
+    const DEMAND = 'Demand';
     const PALETTE = ['#58a6ff','#f0883e','#3fb950','#bc8cff','#f778ba','#d29922','#79c0ff','#56d364','#db6d28','#ff7b72','#7ee787','#a5d6ff'];
     const FUEL_COLORS = {
       'Black coal': '#5c6370',   // dark grey that still reads on the dark card (was #444)
@@ -627,27 +637,54 @@
       setStatus(window._cutoffCached || "Connected", "connected");
     }
 
+    // Columns of each attached table, read once per refreshViews. Files deployed before
+    // 2026-10-02 have no demand/net_interchange (and agg no hourly tables); a column a file
+    // lacks reads as NULL, which the charts show as "no data", never as a number.
+    let _columns = new Map();
+    async function loadColumns() {
+      const r = await conn.query(`SELECT table_catalog || '.' || table_name AS t, column_name AS c
+        FROM information_schema.columns`);
+      _columns = new Map();
+      for (const { t, c } of r.toArray()) {
+        if (!_columns.has(t)) _columns.set(t, new Set());
+        _columns.get(t).add(c);
+      }
+    }
+    const hasTable = t => _columns.has(t);
+    const colOrNull = (t, c, expr = c, alias = c) => _columns.get(t)?.has(c) ? `${expr} AS ${alias}` : `NULL::REAL AS ${alias}`;
+
     // The four views every query reads. The last 5 days come from `today` (refreshed
     // intraday), everything older from the half-year periods (5-min) or agg (daily).
     // Until agg is attached, the daily views only cover `today`.
     async function refreshViews() {
+      await loadColumns();
       const OLD = 'date < CURRENT_DATE - INTERVAL 5 DAY', RECENT = 'date >= CURRENT_DATE - INTERVAL 5 DAY';
-      const raw = (cols, table) => [
-        ...[..._attachedPeriods].map(p => `SELECT ${cols} FROM p${p}.${table} WHERE ${OLD}`),
-        `SELECT ${cols} FROM today.${table}_today WHERE ${RECENT}`,
-      ].join(' UNION ALL ');
+      const raw = (cols, table, extra = []) => [
+        ...[..._attachedPeriods].map(p => [`p${p}`, table]), ['today', `${table}_today`],
+      ].map(([db, t]) => `SELECT ${[cols, ...extra.map(c => colOrNull(`${db}.${t}`, c))].join(', ')}
+          FROM ${db}.${t} WHERE ${db === 'today' ? RECENT : OLD}`).join(' UNION ALL ');
       const daily = (aggSql, todaySql) => aggLoaded
         ? `${aggSql} WHERE ${OLD} UNION ALL ${todaySql} WHERE ${RECENT} GROUP BY ALL`
         : `${todaySql} GROUP BY ALL`;
+      const DEMAND_COLS = ['demand', 'net_interchange'];
 
       await conn.query(`CREATE OR REPLACE VIEW v_scada AS ${raw('DUID, date, time, mw', 'scada')}`);
-      await conn.query(`CREATE OR REPLACE VIEW v_price AS ${raw('REGIONID, date, time, price', 'price')}`);
+      await conn.query(`CREATE OR REPLACE VIEW v_price AS ${raw('REGIONID, date, time, price', 'price', DEMAND_COLS)}`);
       await conn.query(`CREATE OR REPLACE VIEW v_scada_daily AS ${daily(
         'SELECT DUID, date, mwh FROM agg.scada_daily',
         'SELECT DUID, date, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM today.scada_today')}`);
+      // Daily demand/net_interchange are average MW; demand_mwh is the day's energy (a whole
+      // day in agg, the intervals so far today, like v_scada_daily.mwh). A day from `today`
+      // with any interval missing demand (fct_regionsum_today still filling) stays NULL.
+      const complete = (c, agg) => `CASE WHEN COUNT(${c}) = COUNT(*) THEN ${agg} END`;
       await conn.query(`CREATE OR REPLACE VIEW v_price_daily AS ${daily(
-        'SELECT REGIONID, date, price FROM agg.price_daily',
-        'SELECT REGIONID, date, CAST(AVG(price) AS REAL) AS price FROM today.price_today')}`);
+        `SELECT REGIONID, date, price, ${DEMAND_COLS.map(c => colOrNull('agg.price_daily', c)).join(', ')},
+          ${colOrNull('agg.price_daily', 'demand', 'demand * 24', 'demand_mwh')}
+          FROM agg.price_daily`,
+        `SELECT REGIONID, date, CAST(AVG(price) AS REAL) AS price,
+          ${DEMAND_COLS.map(c => colOrNull('today.price_today', c, `CAST(${complete(c, `AVG(${c})`)} AS REAL)`)).join(', ')},
+          ${colOrNull('today.price_today', 'demand', complete('demand', 'SUM(demand) / 12.0'), 'demand_mwh')}
+          FROM today.price_today`)}`);
       // Queries over the views keep the same SQL text, so results cached before this
       // redefinition must never be served after it (see runQuery).
       _viewGen++;
@@ -832,29 +869,39 @@
 
       // --- WHERE clauses ---
       whereScada({ withFuel = true } = {}) {
-        const region = activeRegion(), fuel = withFuel ? activeFuel() : null;
         const { from, to } = getDateRange();
-        const clauses = [`c.date >= ${sqlStr(from)} AND c.date <= ${sqlStr(to)}`];
+        return [`c.date >= ${sqlStr(from)} AND c.date <= ${sqlStr(to)}`, ...sql.scadaFilters('sc.DUID', withFuel)].join(" AND ");
+      },
+
+      // Region / fuel / unit filters on a unit table joined to dim_duid as d.
+      scadaFilters(duidCol, withFuel = true) {
+        const region = activeRegion(), fuel = withFuel ? activeFuel() : null;
+        const clauses = [];
         if (region) clauses.push(`d.Region = ${sqlStr(region)}`);
         if (fuel) clauses.push(`${FUEL} = ${sqlStr(fuel)}`);
-        if (crossFilter.duids.length) clauses.push(`sc.DUID IN (${duidList()})`);
-        return clauses.join(" AND ");
+        if (crossFilter.duids.length) clauses.push(`${duidCol} IN (${duidList()})`);
+        return clauses;
       },
 
       wherePrice() {
-        const region = activeRegion();
         const { from, to } = getDateRange();
-        const clauses = [`c.date >= ${sqlStr(from)} AND c.date <= ${sqlStr(to)}`];
-        if (region) clauses.push(`p.REGIONID = ${sqlStr(region)}`);
+        return [`c.date >= ${sqlStr(from)} AND c.date <= ${sqlStr(to)}`, ...sql.priceFilters('p.REGIONID')].join(" AND ");
+      },
+
+      // The region filter on a price table; a fuel or unit pick narrows it to their regions.
+      priceFilters(regionCol) {
+        const region = activeRegion();
+        const clauses = [];
+        if (region) clauses.push(`${regionCol} = ${sqlStr(region)}`);
         if (!region && (crossFilter.duids.length || crossFilter.fuel)) {
           const fuel = activeFuel();
           if (crossFilter.duids.length) {
-            clauses.push(`p.REGIONID IN (SELECT Region FROM dim.dim_duid WHERE DUID IN (${duidList()}))`);
+            clauses.push(`${regionCol} IN (SELECT Region FROM dim.dim_duid WHERE DUID IN (${duidList()}))`);
           } else if (fuel) {
-            clauses.push(`p.REGIONID IN (SELECT DISTINCT Region FROM dim.dim_duid WHERE FuelSourceDescriptor = ${sqlStr(fuel)})`);
+            clauses.push(`${regionCol} IN (SELECT DISTINCT Region FROM dim.dim_duid WHERE FuelSourceDescriptor = ${sqlStr(fuel)})`);
           }
         }
-        return clauses.join(" AND ");
+        return clauses;
       },
 
       // --- Filter population ---
@@ -892,6 +939,25 @@
           WHERE ${sql.wherePrice()}
           GROUP BY p.date, p.REGIONID
           ORDER BY p.date`;
+      },
+
+      // --- Demand line over the generation chart ---
+      // Operational demand of the filtered region, or the sum of all regions: MW per interval,
+      // MWh per day. An interval (day) where a region has no demand yet is left out, not
+      // undercounted.
+      demand(intraday) {
+        const region = activeRegion();
+        const { from, to } = getDateRange();
+        const [view, val, time] = intraday
+          ? ['v_price', 'p.demand', ', CAST(p.time AS INTEGER) AS time']
+          : ['v_price_daily', 'p.demand_mwh', ''];
+        return `
+          SELECT CAST(p.date AS VARCHAR) AS date${time}, SUM(${val})::DOUBLE AS demand
+          FROM ${view} p
+          WHERE p.date >= ${sqlStr(from)} AND p.date <= ${sqlStr(to)}${region ? ` AND p.REGIONID = ${sqlStr(region)}` : ''}
+          GROUP BY ALL
+          HAVING COUNT(${val}) = COUNT(*)
+          ORDER BY ALL`;
       },
 
       // --- Map ---
@@ -982,7 +1048,12 @@
       const key = [drillFuel, byStation, activeRegion(), ...Object.values(getDateRange())].join('|');
       if (key !== drillKey) { drillKey = key; drillShown = DRILL_STEP; }
 
-      const data = await runQuery(sql.generation(seriesCol, valCol, intraday));
+      // Demand is regional, so it only sits over the fuel view, not over a drill or a unit pick.
+      const withDemand = !drillFuel && !crossFilter.duids.length;
+      const [data, demandRows] = await Promise.all([
+        runQuery(sql.generation(seriesCol, valCol, intraday)),
+        withDemand ? runQuery(sql.demand(intraday)) : [],
+      ]);
       if (seq !== _renderSeq) return;
       if (!data.length) {
         showEmpty('chart-generation');
@@ -1036,6 +1107,16 @@
         itemStyle: { color: colorOf(name, i) },
         data: xKeys.map(k => valueAt(k, name)),
       }));
+      // Not stacked: the gap between the stack and the line is the region's net exports (or
+      // imports), plus the small non-scheduled generation AEMO's demand leaves out.
+      const demandAt = buildLookup(demandRows,
+        r => intraday ? `${r.date}|${padTime(r.time)}` : r.date, r => r.demand);
+      const hasDemand = demandRows.length > 0;
+      if (hasDemand) series.push({
+        name: DEMAND, type: 'line', symbol: 'none', z: 5, sampling: 'average',
+        lineStyle: { width: 1.5, type: 'dashed', color: cssVar('--text') }, itemStyle: { color: cssVar('--text') },
+        data: xKeys.map(k => demandAt.get(k) ?? null),
+      });
 
       let hoveredSeries = '';
       const chart = getChart('chart-generation');
@@ -1044,14 +1125,22 @@
       chart.on('mouseout', () => { hoveredSeries = ''; });
       chart.setOption({
         tooltip: { trigger: 'axis', axisPointer: { type: 'line' }, formatter: params => {
-          const target = hoveredSeries ? params.find(p => p.seriesName === hoveredSeries) : null;
-          const p = target || params.filter(p => p.value !== 0).sort((a, b) => Math.abs(b.value) - Math.abs(a.value))[0];
-          if (!p) return '';
-          const hint = isOther(p.seriesName) ? `<div style="color:${cssVar('--muted')};margin-top:2px">${buckets[p.seriesName].length} series, click to show ${DRILL_STEP} more</div>` : '';
-          return `<div style="color:${cssVar('--muted')};margin-bottom:2px">${params[0].axisValueLabel}</div><div style="font-weight:600">${p.marker} ${escapeHtml(p.seriesName)}: ${Math.round(p.value).toLocaleString()} ${unit}</div>${hint}`;
+          const gen = params.filter(p => p.seriesName !== DEMAND);
+          const target = hoveredSeries && hoveredSeries !== DEMAND ? gen.find(p => p.seriesName === hoveredSeries) : null;
+          const p = target || gen.filter(p => p.value !== 0).sort((a, b) => Math.abs(b.value) - Math.abs(a.value))[0];
+          const d = params.find(p => p.seriesName === DEMAND && p.value != null);
+          if (!p && !d) return '';
+          const hint = p && isOther(p.seriesName) ? `<div style="color:${cssVar('--muted')};margin-top:2px">${buckets[p.seriesName].length} series, click to show ${DRILL_STEP} more</div>` : '';
+          const line = q => `${q.marker} ${escapeHtml(q.seriesName)}: ${Math.round(q.value).toLocaleString()} ${unit}`;
+          return `<div style="color:${cssVar('--muted')};margin-bottom:2px">${params[0].axisValueLabel}</div>`
+            + (p ? `<div style="font-weight:600">${line(p)}</div>${hint}` : '')
+            + (d ? `<div style="margin-top:2px">${line(d)}</div>` : '');
         }},
         // Click a legend entry to hide/show that series; click the chart area to drill.
-        legend: { type: 'scroll', top: 0, itemGap: 12, itemWidth: 10, itemHeight: 10, data: seriesNames.map((name, i) => ({ name, itemStyle: { color: colorOf(name, i) } })) },
+        legend: { type: 'scroll', top: 0, itemGap: 12, itemWidth: 10, itemHeight: 10, data: [
+          ...seriesNames.map((name, i) => ({ name, itemStyle: { color: colorOf(name, i) } })),
+          ...(hasDemand ? [{ name: DEMAND, icon: 'path://M0,4h4v2h-4zM6,4h4v2h-4z', itemStyle: { color: cssVar('--text') } }] : []),
+        ] },
         grid: { left: 60, right: 20, top: 35, bottom: intraday ? 60 : 25 },
         xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 11 } },
         yAxis: { type: 'value', axisLabel: { formatter: v => Math.abs(v) >= 1000 ? (v/1000).toFixed(0) + 'k' : v } },
@@ -1064,7 +1153,7 @@
       // Click: fuel view -> drill into fuel; DUID view -> select DUID
       chart.off('click');
       chart.on('click', async (params) => {
-        if (!params.seriesName) return;
+        if (!params.seriesName || params.seriesName === DEMAND) return;
         if (isOther(params.seriesName)) { drillShown += DRILL_STEP; renderAll(); return; }
         const name = params.seriesName.endsWith(CHARGING) ? params.seriesName.slice(0, -CHARGING.length) : params.seriesName;
         if (drillFuel) {
@@ -1247,7 +1336,7 @@
 
     async function renderInsights(seq) {
       await Promise.all([renderRenewables(seq), renderHeatmap(seq),
-        renderProfile(seq), renderCapture(seq), renderNegative(seq), renderCapacityFactor(seq)]);
+        renderProfile(seq), renderCapture(seq), renderNegative(seq), renderNetExports(seq), renderCapacityFactor(seq)]);
     }
 
     // =========================================================================
@@ -1515,27 +1604,44 @@
       }, true);
     }
 
-    // Intraday: hour of day x date. Daily: region x date (there is no time of day).
+    // Ranges over 30 days read the hour-of-day x month tables of agg (scripts/cache_catalog.py
+    // build_daily_agg): whole months, the ones the range touches. Until agg is attached, or
+    // while the deployed agg predates those tables, the chart says so instead of guessing.
+    const monthsSql = col => {
+      const { from, to } = getDateRange();
+      return `${col} >= date_trunc('month', DATE ${sqlStr(from)}) AND ${col} <= DATE ${sqlStr(to)}`;
+    };
+    const formatMonth = str => formatDate(str).replace(/^\d+ /, '');
+    function hourlyMissing(id, table) {
+      if (hasTable(`agg.${table}`)) return false;
+      showEmpty(id, aggLoaded ? 'Hourly history not deployed yet' : 'Loading history...');
+      return true;
+    }
+
+    // Price by hour of day: x date (5-minute data) or x month (ranges over 30 days).
     async function renderHeatmap(seq) {
       const intraday = isIntradayMode();
+      document.getElementById('title-heat').textContent = intraday
+        ? 'Price by hour of day ($/MWh)' : 'Price by hour of day and month ($/MWh)';
+      if (!intraday && hourlyMissing('chart-heat', 'price_hourly')) return;
       const rows = await runQuery(intraday ? `
           SELECT CAST(p.date AS VARCHAR) AS date, CAST(p.time // 100 AS INTEGER) AS y, AVG(p.price)::DOUBLE AS price
           FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()} GROUP BY ALL ORDER BY ALL` : `
-          SELECT CAST(p.date AS VARCHAR) AS date, p.REGIONID AS y, AVG(p.price)::DOUBLE AS price
-          FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()} GROUP BY ALL ORDER BY ALL`);
+          SELECT CAST(h.month AS VARCHAR) AS date, CAST(h.hour AS INTEGER) AS y, (SUM(h.price * h.n) / SUM(h.n))::DOUBLE AS price
+          FROM agg.price_hourly h WHERE ${[monthsSql('h.month'), ...sql.priceFilters('h.REGIONID')].join(' AND ')}
+          GROUP BY ALL ORDER BY ALL`);
       if (seq !== _renderSeq) return;
-      document.getElementById('title-heat').textContent = intraday
-        ? 'Price by hour of day ($/MWh)' : 'Daily price by region ($/MWh)';
       if (!rows.length) return showEmpty('chart-heat');
       const dates = [...new Set(rows.map(r => r.date))].sort();
-      const ys = intraday ? [...Array(24).keys()] : [...new Set(rows.map(r => r.y))].sort();
-      const yLabels = intraday ? ys.map(h => `${String(h).padStart(2, '0')}:00`) : ys.map(regionName);
+      const xLabel = intraday ? formatDate : formatMonth;
+      const ys = [...Array(24).keys()];
+      const yLabels = ys.map(h => `${String(h).padStart(2, '0')}:00`);
       const vals = rows.map(r => r.price).sort((a, b) => a - b);
       const q = f => vals[Math.min(vals.length - 1, Math.floor(f * vals.length))];
       getChart('chart-heat').setOption({
-        tooltip: { position: 'top', formatter: p => `${formatDate(dates[p.value[0]])} &middot; ${yLabels[p.value[1]]}<br><b>$${p.value[2].toFixed(1)}</b>` },
-        grid: { left: intraday ? 50 : 110, right: 15, top: 10, bottom: 70 },
-        xAxis: { type: 'category', data: dates.map(d => formatDate(d).replace(/ \d{4}$/, '')), axisLabel: { hideOverlap: true, fontSize: 11 } },
+        tooltip: { position: 'top', formatter: p => `${xLabel(dates[p.value[0]])} &middot; ${yLabels[p.value[1]]}<br><b>$${p.value[2].toFixed(1)}</b>` },
+        grid: { left: 50, right: 15, top: 10, bottom: 70 },
+        xAxis: { type: 'category', data: dates.map(d => intraday ? formatDate(d).replace(/ \d{4}$/, '') : formatMonth(d)), axisLabel: { hideOverlap: true, fontSize: 11 } },
         yAxis: { type: 'category', data: yLabels, axisLabel: { fontSize: 10 } },
         // Scale clipped to the 2nd-98th percentile so one spike doesn't wash out the rest.
         visualMap: { min: Math.min(0, Math.floor(q(0.02))), max: Math.max(1, Math.ceil(q(0.98))), calculable: true,
@@ -1547,15 +1653,28 @@
     }
 
     // Average MW at each time of day, by fuel: the "duck curve" when solar is in the mix.
+    // 5-minute steps up to 30 days; beyond, hourly over the whole months the range touches
+    // (energy in each hour / days in those months).
     async function renderProfile(seq) {
-      if (!isIntradayMode()) return showEmpty('chart-profile', 'Choose a range of 30 days or less (needs 5-minute data)');
-      const rows = await runQuery(`
+      const intraday = isIntradayMode();
+      document.getElementById('title-profile').textContent = 'Average day by fuel (MW)';
+      if (!intraday && hourlyMissing('chart-profile', 'scada_hourly')) return;
+      const months = `SELECT month, days FROM agg.month_days WHERE ${monthsSql('month')}`;
+      const [rows, span] = await Promise.all([runQuery(intraday ? `
         SELECT ${FUEL} AS fuel, CAST(sc.time AS INTEGER) AS time,
           (SUM(GREATEST(sc.mw, 0)) / COUNT(DISTINCT sc.date))::DOUBLE AS mw
         FROM ${sql.fromScada()} WHERE ${sql.whereScada()} AND ${FUEL} <> 'Grid'
-        GROUP BY ALL ORDER BY ALL`);
+        GROUP BY ALL ORDER BY ALL` : `
+        SELECT ${FUEL} AS fuel, CAST(h.hour AS INTEGER) * 100 AS time,
+          (SUM(h.mwh) / (SELECT SUM(days) FROM (${months})))::DOUBLE AS mw
+        FROM agg.scada_hourly h LEFT JOIN dim.dim_duid d ON h.DUID = d.DUID
+        WHERE ${['h.month IN (SELECT month FROM (' + months + '))', ...sql.scadaFilters('h.DUID'), `${FUEL} <> 'Grid'`].join(' AND ')}
+        GROUP BY ALL ORDER BY ALL`),
+        intraday ? [] : runQuery(`SELECT CAST(MIN(month) AS VARCHAR) AS first, CAST(MAX(month) AS VARCHAR) AS last FROM (${months})`)]);
       if (seq !== _renderSeq) return;
       if (!rows.length) return showEmpty('chart-profile');
+      if (span[0]?.first) document.getElementById('title-profile').textContent =
+        `Average day by fuel (MW, hourly, ${formatMonth(span[0].first)}${span[0].last !== span[0].first ? ` – ${formatMonth(span[0].last)}` : ''})`;
       const times = [...new Set(rows.map(r => r.time))].sort((a, b) => a - b);
       const totals = {};
       for (const r of rows) totals[r.fuel] = (totals[r.fuel] || 0) + r.mw;
@@ -1624,6 +1743,36 @@
         yAxis: { type: 'category', data: rows.map(r => regionName(r.region)), axisLabel: { fontSize: 11 } },
         series: [{ type: 'bar', barMaxWidth: 18, itemStyle: { color: '#2c7bb6' },
           data: rows.map(r => Math.round(r.pct * 10) / 10) }],
+      }, true);
+    }
+
+    // AEMO's net interchange per region: positive = exporting. 5-minute values up to 30 days,
+    // daily averages beyond. Intervals without it (files deployed before it was exported,
+    // fct_regionsum_today still filling) are gaps in the line.
+    async function renderNetExports(seq) {
+      const intraday = isIntradayMode();
+      const rows = await runQuery(`
+        SELECT CAST(p.date AS VARCHAR) AS date${intraday ? ', CAST(p.time AS INTEGER) AS time' : ''},
+          p.REGIONID AS region, AVG(p.net_interchange)::DOUBLE AS mw
+        FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()}
+        GROUP BY ALL ORDER BY ALL`);
+      if (seq !== _renderSeq) return;
+      document.getElementById('title-net').textContent =
+        `Net exports by region (${intraday ? 'MW' : 'daily average MW'}; below zero = importing)`;
+      if (!rows.some(r => r.mw != null)) return showEmpty('chart-net', 'No net interchange data for this range yet');
+      const { xKeys, xLabels } = buildTimeAxis(rows, intraday);
+      const lookup = buildLookup(rows, r => `${intraday ? `${r.date}|${padTime(r.time)}` : r.date}|${r.region}`, r => r.mw);
+      const regions = [...new Set(rows.map(r => r.region))].sort();
+      getChart('chart-net').setOption({
+        color: PALETTE,
+        tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '-' : `${Math.round(v).toLocaleString()} MW` },
+        legend: { type: 'scroll', top: 0, textStyle: { fontSize: 11 } },
+        grid: { left: 55, right: 20, top: 30, bottom: intraday ? 60 : 25 },
+        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 11 } },
+        yAxis: { type: 'value', axisLabel: { formatter: v => Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + 'k' : v } },
+        dataZoom: dataZoomConfig(intraday),
+        series: regions.map(region => ({ name: regionName(region), type: 'line', symbol: 'none', sampling: 'lttb',
+          lineStyle: { width: 1.5 }, data: xKeys.map(k => lookup.get(`${k}|${region}`) ?? null) })),
       }, true);
     }
 

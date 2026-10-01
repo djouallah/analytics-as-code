@@ -135,7 +135,15 @@ force-with-lease): `energy_today.duckdb` is redeployed every 30 min, and the kep
 grown the repo to ~16 GB by 2026-10-01. The site is unchanged; GitHub reclaims the space on
 its own schedule.
 
-## Models (8)
+A daily run refuses to splice when the deployed aggregate's tables or columns differ from what
+`build_daily_agg` now builds, so a change to them needs one `all_periods=true` dispatch. The
+page itself reads any column or table a deployed file lacks as "no data"
+(`index.html` `loadColumns`/`colOrNull`), so a new page can go out before the data does.
+`energy_daily_agg.duckdb` holds, besides the per-day tables, hour-of-day × month tables
+(`scada_hourly`, `price_hourly`, `month_days`) that the daily-profile and price heatmap read
+for ranges over 30 days.
+
+## Models (9)
 | Model | Schema | Materialization |
 |-------|--------|-----------------|
 | stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
@@ -144,6 +152,7 @@ its own schedule.
 | fct_scada, fct_price | landing | incremental insert-only merge (by file) |
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
 | fct_interconnector_today | landing | incremental insert-only merge (by file) — the INTERCONNECTORRES rows of the same archived DispatchIS files as fct_price_today (added 2026-10-01, filled from the archive) |
+| fct_regionsum_today | landing | incremental insert-only merge (by file) — the REGIONSUM rows (v9) of the same files: demand, net interchange (positive = export), regional semi-scheduled UIGF/cleared MW (added 2026-10-01, filled from the archive). History's demand/net interchange come from fct_price's DREGION rows |
 
 `dim_duid`'s insert-only merge means attribute changes (region/fuel/geo) never update in
 place. **Rebuilding a table = dispatch `process_data.yml` with `rebuild=<table>`**: it runs
