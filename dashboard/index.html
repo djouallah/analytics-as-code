@@ -41,13 +41,21 @@
     .filter-group select, .filter-group input[type=date] { padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.8rem; background: var(--input-bg); color: var(--text); cursor: pointer; outline: none; transition: border-color 0.2s; }
     .filter-group select:hover { border-color: var(--accent); }
     .filter-group select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring); }
+    .filter-group.presets { gap: 0.25rem; }
+    .preset-btn { padding: 0.3rem 0.5rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.72rem; font-weight: 600; background: var(--input-bg); color: var(--muted); cursor: pointer; transition: all 0.2s; }
+    .preset-btn:hover, .preset-btn.active { border-color: var(--accent); color: var(--accent); }
+    .preset-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .active-filters { display: flex; gap: 0.4rem; padding: 0.5rem 2rem; background: var(--chips-bg); flex-wrap: wrap; align-items: center; font-size: 0.75rem; }
     .active-filters:empty { display: none; }
     .filter-tag { background: var(--accent); color: #fff; padding: 0.15rem 0.5rem; border-radius: 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 0.25rem; font-weight: 600; font-size: 0.7rem; transition: background 0.2s; }
     .filter-tag:hover { background: #f85149; color: white; }
     .filter-tag::after { content: "\00d7"; font-size: 0.9rem; }
     .kpi-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0.6rem; padding: 0.5rem 2rem; }
-    .kpi-card { min-width: 0; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.8rem; }
+    .kpi-card { min-width: 0; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.8rem; position: relative; }
+    .kpi-spark { position: absolute; right: 0.7rem; top: 1.45rem; width: 34%; height: 1.5rem; pointer-events: none; }
+    .kpi-card .kpi-delta { font-weight: 600; color: var(--text); min-height: 1.2em; }
+    .kpi-card .kpi-delta.up { color: #3fb950; }
+    .kpi-card .kpi-delta.down { color: #f85149; }
     .kpi-card .kpi-label { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
     .kpi-card .kpi-value { font-size: 1.3rem; font-weight: 700; margin-top: 0.1rem; }
     .kpi-card .kpi-sub { font-size: 0.65rem; color: var(--muted); margin-top: 0.05rem; }
@@ -114,6 +122,8 @@
     .flows-bar { display: flex; align-items: center; gap: 0.8rem; padding: 0.6rem 2rem 0.2rem; flex-wrap: wrap; }
     .flows-time { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; min-width: 12rem; }
     .flows-time small { display: block; font-size: 0.7rem; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+    .flows-now { display: block; font-size: 0.85rem; font-weight: 600; letter-spacing: 0; min-height: 1.2em; }
+    .flows-now b { color: #3fb950; }
     .flows-bar input[type=range] { flex: 1; min-width: 160px; accent-color: var(--accent); }
     .flows-btn { background: var(--card); border: 1px solid var(--border); border-radius: 6px; color: var(--text); cursor: pointer; font-size: 0.8rem; font-weight: 600; padding: 0.35rem 0.8rem; }
     .flows-btn:hover { border-color: var(--accent); color: var(--accent); }
@@ -141,6 +151,15 @@
     @media (max-width: 900px) { .flows-main { grid-template-columns: 1fr; } }
     @media (max-width: 600px) { .flows-bar, .flows-main, .flows-minis { padding-left: 1rem; padding-right: 1rem; } .flows-time { font-size: 1.2rem; } }
     .insights-note { font-size: 0.72rem; color: var(--muted); padding: 0 2rem 1rem; line-height: 1.5; }
+    .chart-toggle select { background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0.15rem 0.3rem; font-size: 0.72rem; }
+    /* --- History page --- */
+    .kpi-row.records { grid-template-columns: repeat(6, minmax(0, 1fr)); padding-top: 0.6rem; padding-bottom: 0.6rem; }
+    .record-card { text-align: left; font: inherit; color: inherit; cursor: pointer; transition: border-color 0.2s; }
+    .record-card:hover { border-color: var(--accent); }
+    .record-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .record-new { background: #238636; color: #fff; border-radius: 8px; padding: 0 0.35rem; margin-left: 0.3rem; font-size: 0.6rem; font-weight: 700; text-transform: uppercase; }
+    @media (max-width: 1100px) { .kpi-row.records { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    @media (max-width: 600px) { .kpi-row.records { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
     @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
     @media (max-width: 600px) {
       header, .kpi-row, .tab-bar, .analyze-controls, .analyze-sql, .analyze-info, .analyze-table-wrap, .active-filters { padding-left: 1rem; padding-right: 1rem; }
@@ -183,6 +202,13 @@
       <label for="dateTo">To</label>
       <input type="date" id="dateTo">
     </div>
+    <div class="filter-group presets" role="group" aria-label="Date range presets">
+      <button type="button" class="preset-btn" data-preset="3" title="Last 3 days">3d</button>
+      <button type="button" class="preset-btn" data-preset="7" title="Last 7 days">7d</button>
+      <button type="button" class="preset-btn" data-preset="30" title="Last 30 days">30d</button>
+      <button type="button" class="preset-btn" data-preset="365" title="Last year">1y</button>
+      <button type="button" class="preset-btn" data-preset="all" title="All of the history">All</button>
+    </div>
     <a href="https://github.com/djouallah/analytics-as-code" target="_blank" rel="noopener" class="header-link" title="View on GitHub" aria-label="View on GitHub"><svg height="16" width="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
     <a href="dag/#!/overview?g_v=1" target="_blank" rel="noopener" class="header-link" title="View dbt DAG">DAG</a>
     <button type="button" class="theme-toggle" id="themeToggle" aria-label="Switch to light theme" title="Switch to light theme">&#9728;</button>
@@ -193,15 +219,16 @@
     <button class="tab-btn active" data-tab="dashboard" role="tab" id="tab-dashboard" aria-selected="true" aria-controls="view-dashboard">Dashboard</button>
     <button class="tab-btn" data-tab="flows" role="tab" id="tab-flows" aria-selected="false" aria-controls="view-flows" tabindex="-1">Flows</button>
     <button class="tab-btn" data-tab="insights" role="tab" id="tab-insights" aria-selected="false" aria-controls="view-insights" tabindex="-1">Insights</button>
+    <button class="tab-btn" data-tab="history" role="tab" id="tab-history" aria-selected="false" aria-controls="view-history" tabindex="-1">History</button>
     <button class="tab-btn" data-tab="analyze" role="tab" id="tab-analyze" aria-selected="false" aria-controls="view-analyze" tabindex="-1">Analyze</button>
   </div>
 
   <div id="view-dashboard" role="tabpanel" aria-labelledby="tab-dashboard">
   <div class="kpi-row">
-    <div class="kpi-card"><div class="kpi-label">Total Generation</div><div class="kpi-value" id="kpiGen">--</div><div class="kpi-sub" id="kpiGenSub">Average MW</div></div>
-    <div class="kpi-card"><div class="kpi-label">Avg Price</div><div class="kpi-value" id="kpiPrice">--</div><div class="kpi-sub">$/MWh across regions</div></div>
+    <div class="kpi-card"><div class="kpi-label">Total Generation</div><div class="kpi-value" id="kpiGen">--</div><svg class="kpi-spark" id="kpiGenSpark" aria-hidden="true"></svg><div class="kpi-sub" id="kpiGenSub">Average MW</div><div class="kpi-sub kpi-delta" id="kpiGenDelta"></div></div>
+    <div class="kpi-card"><div class="kpi-label">Avg Price</div><div class="kpi-value" id="kpiPrice">--</div><svg class="kpi-spark" id="kpiPriceSpark" aria-hidden="true"></svg><div class="kpi-sub">$/MWh across regions</div><div class="kpi-sub kpi-delta" id="kpiPriceDelta"></div></div>
     <div class="kpi-card"><div class="kpi-label">Active Generators</div><div class="kpi-value" id="kpiGens">--</div><div class="kpi-sub">DUIDs reporting</div></div>
-    <div class="kpi-card"><div class="kpi-label">Renewables</div><div class="kpi-value" id="kpiRE">--</div><div class="kpi-sub" id="kpiRESub">share of generation</div></div>
+    <div class="kpi-card"><div class="kpi-label">Renewables</div><div class="kpi-value" id="kpiRE">--</div><svg class="kpi-spark" id="kpiRESpark" aria-hidden="true"></svg><div class="kpi-sub" id="kpiRESub">share of generation</div><div class="kpi-sub kpi-delta" id="kpiREDelta"></div></div>
     <div class="kpi-card"><div class="kpi-label">Top Fuel Source</div><div class="kpi-value" id="kpiTopFuel">--</div><div class="kpi-sub" id="kpiTopFuelSub">by generation</div></div>
     <div class="kpi-card"><div class="kpi-label">Latest MW</div><div class="kpi-value" id="kpiLatestMW">--</div><div class="kpi-sub" id="kpiLatestMWSub">total generation</div></div>
     <div class="kpi-card"><div class="kpi-label">Latest Price</div><div class="kpi-value" id="kpiLatestPrice">--</div><div class="kpi-sub" id="kpiLatestPriceSub">avg $/MWh</div></div>
@@ -227,11 +254,12 @@
 
   <div id="view-flows" role="tabpanel" aria-labelledby="tab-flows" style="display:none">
     <div class="flows-bar">
-      <div class="flows-time" id="flowsTime">--<small id="flowsTimeSub">Power flow between regions (MW) and spot price ($/MWh) in this 5-minute interval</small></div>
+      <div class="flows-time" id="flowsTime">--<span class="flows-now" id="flowsNow"></span><small id="flowsTimeSub">Generators, power flow between regions (MW) and spot price ($/MWh) in this 5-minute interval</small></div>
       <button type="button" class="flows-btn" id="icPlay" aria-label="Play the flows through the selected range">&#9654; Play</button>
       <label class="chart-toggle" for="icSpeed">Speed</label>
       <select id="icSpeed"><option value="0.5">0.5&times;</option><option value="1" selected>1&times;</option><option value="2">2&times;</option><option value="4">4&times;</option></select>
       <input type="range" id="icFrame" min="0" max="0" value="0" aria-label="Dispatch interval shown">
+      <label class="chart-toggle"><input type="checkbox" id="icGens" checked> Generators</label>
     </div>
     <div class="flows-main">
       <div class="chart-card">
@@ -250,7 +278,9 @@
       MW is power at that moment; $/MWh is the wholesale spot price, not the cost of the flow.
       AEMO 5-minute dispatch, last 14 days. Arrows point the way power flows; their thickness is the
       flow and their colour how close the link runs to its limit (green &lt; 70% &le; amber &lt; 90%
-      &le; red). Regions are shaded by their price in that interval. In the small charts the band is
+      &le; red). Regions are shaded by their price in that interval. Bubbles are the generating
+      units, sized by their output in that interval and coloured by fuel; a ring is a unit
+      charging (batteries, pumped hydro). In the small charts the band is
       the link's import&ndash;export limit and the line the flow, positive from the first region in
       the name to the second. Hover any small chart to move the map; Play steps through the range.
     </p>
@@ -290,6 +320,14 @@
         <div class="chart-header"><h2 id="title-cfunits">Capacity factor, top units (%)</h2></div>
         <div class="chart-container" id="chart-cfunits" style="height:320px;"></div>
       </div>
+      <div class="chart-card">
+        <div class="chart-header"><h2 id="title-battery">Batteries: average day (MW) and price</h2></div>
+        <div class="chart-container" id="chart-battery" style="height:320px;"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header"><h2 id="title-owners">Who generated it: energy by owner and station</h2></div>
+        <div class="chart-container" id="chart-owners" style="height:320px;"></div>
+      </div>
     </div>
     <p class="insights-note">
       Utility-scale only: rooftop solar is not in AEMO's dispatch data, so renewable shares are
@@ -301,7 +339,35 @@
       the price heatmap and the average day are hourly, over the whole months the range touches.
       The dashed Demand line on the generation chart is AEMO's operational demand (it excludes
       rooftop solar); with a region selected, the gap between it and the stack is roughly that
-      region's net exports. All charts follow the header filters.
+      region's net exports. Batteries: the average day of the battery fleet, output above the
+      axis and charging below, with the price it saw; "bought" and "sold" are the prices weighted
+      by the energy charged and discharged (5-minute ranges only, since a day's total nets one
+      against the other). Who generated it: energy by owner and power station, coloured by fuel;
+      click an owner to zoom in. All charts follow the header filters.
+    </p>
+  </div>
+
+  <div id="view-history" role="tabpanel" aria-labelledby="tab-history" style="display:none">
+    <div class="kpi-row records" id="historyRecords"></div>
+    <div class="charts">
+      <div class="chart-card full-width">
+        <div class="chart-header"><h2 id="title-calendar">Every day of the history</h2>
+          <label class="chart-toggle">Show
+            <select id="calMetric" aria-label="Measure shown in the calendar">
+              <option value="re">Renewable share</option>
+              <option value="price">Average price</option>
+              <option value="demand">Demand</option>
+              <option value="solar">Solar output</option>
+              <option value="wind">Wind output</option>
+            </select></label></div>
+        <div class="chart-container" id="chart-calendar" style="height:300px;"></div>
+      </div>
+    </div>
+    <p class="insights-note">
+      One cell per day, over all of the history. This page follows the region filter only: the
+      date range and the other filters don't apply. The records are daily figures (a share or an
+      average over a whole day), not 5-minute peaks. The newest day is still filling and is left
+      out. Click a day or a record to open it on the Dashboard at 5-minute detail.
     </p>
   </div>
 
@@ -700,10 +766,12 @@
     let _viewGen = 0;
     function clearQueryCache() { _queryCache.clear(); }
 
+    let _queriesRun = 0;   // queries that reached the engine (cache misses), for the status readout
     async function runQuery(sqlStr) {
       const key = `${_viewGen}|${sqlStr}`;
       const cached = _queryCache.get(key);
       if (cached) return cached;
+      _queriesRun++;
       const result = await conn.query(sqlStr);
       const numRows = Number(result.numRows);
       const fields = result.schema.fields;
@@ -747,6 +815,13 @@
     }
     function isIntradayMode() {
       return rangeDays() <= 30;
+    }
+
+    // A date string moved by n days.
+    function shiftDate(date, n) {
+      const d = new Date(`${date}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + n);
+      return d.toISOString().slice(0, 10);
     }
 
     function padTime(time) { return String(time).padStart(4, '0'); }
@@ -1021,9 +1096,52 @@
       }, true);
     }
     function setKpi(id, value, sub = '') {
-      document.getElementById(id).textContent = value;
+      const el = document.getElementById(id);
+      cancelAnimationFrame(_kpiAnim.get(id));
+      delete el.dataset.value;
+      el.textContent = value;
       const subEl = document.getElementById(id + 'Sub');
       if (subEl) subEl.textContent = sub;
+    }
+    // A numeric KPI counts from the value it replaces (from zero the first time) to the new one.
+    const _kpiAnim = new Map();
+    function setKpiNumber(id, value, format, sub) {
+      const el = document.getElementById(id);
+      cancelAnimationFrame(_kpiAnim.get(id));
+      const from = Number(el.dataset.value ?? 0);
+      el.dataset.value = value;
+      if (sub != null) document.getElementById(id + 'Sub').textContent = sub;
+      if (matchMedia('(prefers-reduced-motion: reduce)').matches) { el.textContent = format(value); return; }
+      const t0 = performance.now();
+      const tick = now => {
+        const t = Math.min(1, (now - t0) / 400);
+        el.textContent = format(from + (value - from) * (1 - Math.pow(1 - t, 3)));
+        if (t < 1) _kpiAnim.set(id, requestAnimationFrame(tick));
+      };
+      _kpiAnim.set(id, requestAnimationFrame(tick));
+    }
+    // Sparkline of a KPI's own series: an SVG line, averaged down to 80 points. `clip` keeps the
+    // scale to the 2nd-98th percentile so one price spike doesn't flatten the rest.
+    function setSpark(id, values, color, clip = false) {
+      const el = document.getElementById(id);
+      let v = values.filter(x => x != null && isFinite(x));
+      if (v.length < 2) { el.innerHTML = ''; return; }
+      if (clip) {
+        const s = [...v].sort((a, b) => a - b);
+        const lo = s[Math.floor(0.02 * s.length)], hi = s[Math.min(s.length - 1, Math.floor(0.98 * s.length))];
+        v = v.map(x => Math.min(hi, Math.max(lo, x)));
+      }
+      const n = Math.min(80, v.length), step = v.length / n;
+      const pts = Array.from({ length: n }, (_, i) => {
+        const part = v.slice(Math.floor(i * step), Math.max(Math.floor(i * step) + 1, Math.floor((i + 1) * step)));
+        return part.reduce((s, x) => s + x, 0) / part.length;
+      });
+      const min = Math.min(...pts), span = (Math.max(...pts) - min) || 1;
+      const W = 100, H = 24;
+      const line = pts.map((p, i) => `${(i * W / (n - 1)).toFixed(1)},${(H - 2 - (p - min) / span * (H - 4)).toFixed(1)}`).join(' ');
+      el.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      el.setAttribute('preserveAspectRatio', 'none');
+      el.innerHTML = `<polyline points="${line}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
     }
 
     // --- Generation by Fuel Type (stacked area) ---
@@ -1061,6 +1179,7 @@
       if (!data.length) {
         showEmpty('chart-generation');
         setKpi('kpiGen', '--'); setKpi('kpiTopFuel', '--');
+        setSpark('kpiGenSpark', []);
         return updateLatestMW(seq);
       }
 
@@ -1179,8 +1298,13 @@
       // KPIs: generation only, so charging (negative) rows are left out
       const uniqueIntervals = intraday ? xKeys.length : [...new Set(data.map(d => d.date))].length;
       const totalGen = data.reduce((s, d) => s + Math.max(d.total_mw, 0), 0) / (uniqueIntervals || 1);
-      document.getElementById('kpiGen').textContent = Math.round(totalGen).toLocaleString();
-      document.getElementById('kpiGenSub').textContent = intraday ? 'Average MW' : 'Average MWh/day';
+      setKpiNumber('kpiGen', totalGen, v => Math.round(v).toLocaleString(), intraday ? 'Average MW' : 'Average MWh/day');
+      const totalAt = new Map();
+      for (const d of data) {
+        const k = intraday ? `${d.date}|${padTime(d.time)}` : d.date;
+        totalAt.set(k, (totalAt.get(k) || 0) + Math.max(d.total_mw, 0));
+      }
+      setSpark('kpiGenSpark', xKeys.map(k => totalAt.get(k) ?? 0), cssVar('--accent'));
 
       const topFuel = Object.entries(seriesTotals).filter(([n]) => !n.endsWith(CHARGING)).sort((a, b) => b[1] - a[1])[0];
       if (topFuel) {
@@ -1209,7 +1333,7 @@
         GROUP BY sc.date, sc.time`);
       if (seq !== _renderSeq) return;
       if (latestMWResult.length) {
-        setKpi('kpiLatestMW', Math.round(latestMWResult[0].total_mw).toLocaleString(), `at ${formatTime(latestMWResult[0].time)}`);
+        setKpiNumber('kpiLatestMW', latestMWResult[0].total_mw, v => Math.round(v).toLocaleString(), `at ${formatTime(latestMWResult[0].time)}`);
       } else {
         setKpi('kpiLatestMW', '--');
       }
@@ -1224,6 +1348,7 @@
       if (!data.length) {
         showEmpty('chart-price');
         setKpi('kpiPrice', '--');
+        setSpark('kpiPriceSpark', []);
         return updateLatestPrice(seq);
       }
 
@@ -1285,7 +1410,14 @@
 
       // KPI: avg price
       const avgPrice = data.reduce((s, d) => s + d.avg_price, 0) / data.length;
-      document.getElementById('kpiPrice').textContent = '$' + avgPrice.toFixed(1);
+      setKpiNumber('kpiPrice', avgPrice, v => '$' + v.toFixed(1));
+      const priceAt = new Map();   // interval (day) -> [sum, regions]
+      for (const d of data) {
+        const k = intraday ? `${d.date}|${padTime(d.time)}` : d.date;
+        const acc = priceAt.get(k) ?? priceAt.set(k, [0, 0]).get(k);
+        acc[0] += d.avg_price; acc[1]++;
+      }
+      setSpark('kpiPriceSpark', xKeys.map(k => priceAt.has(k) ? priceAt.get(k)[0] / priceAt.get(k)[1] : null), '#d29922', true);
       await updateLatestPrice(seq);
     }
 
@@ -1302,7 +1434,7 @@
         GROUP BY p.date, p.time`);
       if (seq !== _renderSeq) return;
       if (latestPriceResult.length) {
-        setKpi('kpiLatestPrice', '$' + latestPriceResult[0].avg_price.toFixed(1), `at ${formatTime(latestPriceResult[0].time)}`);
+        setKpiNumber('kpiLatestPrice', latestPriceResult[0].avg_price, v => '$' + v.toFixed(1), `at ${formatTime(latestPriceResult[0].time)}`);
       } else {
         setKpi('kpiLatestPrice', '--');
       }
@@ -1330,16 +1462,71 @@
       const rows = await runQuery(renewableShareSql());
       if (seq !== _renderSeq) return;
       const re = rows.reduce((s, r) => s + r.re, 0), total = rows.reduce((s, r) => s + r.total, 0);
+      setSpark('kpiRESpark', total ? rows.map(r => r.total ? r.re / r.total : null) : [], '#3fb950');
       if (!total) return setKpi('kpiRE', '--', 'share of generation');
       let peak = null;
       for (const r of rows) if (r.total > 0 && (!peak || r.re / r.total > peak.share)) peak = { share: r.re / r.total, r };
       const when = peak.r.time != null ? `${formatDate(peak.r.date).replace(/ \d{4}$/, '')} ${formatTime(peak.r.time)}` : formatDate(peak.r.date);
-      setKpi('kpiRE', `${(100 * re / total).toFixed(1)}%`, `peak ${(100 * peak.share).toFixed(0)}% (${when})`);
+      setKpiNumber('kpiRE', 100 * re / total, v => `${v.toFixed(1)}%`, `peak ${(100 * peak.share).toFixed(0)}% (${when})`);
+    }
+
+    // Change against the days just before the range, as many as the range has. Both sides come
+    // from the daily views in one query each, so this never opens the 5-minute history. The
+    // newest day in the data is still filling and is left out of both sides.
+    async function updateKpiDeltas(seq) {
+      const show = (id, text = '', cls = '') => {
+        const el = document.getElementById(id);
+        el.textContent = text;
+        el.className = `kpi-sub kpi-delta ${cls}`;
+      };
+      const ids = ['kpiGenDelta', 'kpiPriceDelta', 'kpiREDelta'];
+      const { from, to } = getDateRange();
+      const maxDate = document.getElementById('dateTo').max, minDate = document.getElementById('dateFrom').min;
+      const last = to >= maxDate ? shiftDate(maxDate, -1) : to;
+      const days = Math.round((new Date(last) - new Date(from)) / 86400000) + 1;
+      const prevFrom = shiftDate(from, -days);
+      if (!(days >= 1) || prevFrom < minDate) return ids.forEach(id => show(id));
+
+      const dates = a => `${a}.date >= DATE ${sqlStr(prevFrom)} AND ${a}.date <= DATE ${sqlStr(last)}`;
+      const cur = a => `CAST(${a}.date >= DATE ${sqlStr(from)} AS INTEGER) AS cur, CAST(COUNT(DISTINCT ${a}.date) AS INTEGER) AS n`;
+      const out = 'GREATEST(sc.mwh, 0)';
+      const DIM = 'LEFT JOIN dim.dim_duid d ON sc.DUID = d.DUID';
+      const [gen, price, re] = await Promise.all([
+        runQuery(`SELECT ${cur('sc')}, (SUM(${out}) / COUNT(DISTINCT sc.date))::DOUBLE AS v
+          FROM v_scada_daily sc ${activeRegion() || activeFuel() ? DIM : ''}
+          WHERE ${[dates('sc'), ...sql.scadaFilters('sc.DUID')].join(' AND ')} GROUP BY ALL`),
+        runQuery(`SELECT ${cur('p')}, AVG(p.price)::DOUBLE AS v FROM v_price_daily p
+          WHERE ${[dates('p'), ...sql.priceFilters('p.REGIONID')].join(' AND ')} GROUP BY ALL`),
+        runQuery(`SELECT ${cur('sc')},
+            (100 * SUM(CASE WHEN ${FUEL} IN (${renewableSql()}) THEN ${out} ELSE 0 END)
+              / NULLIF(SUM(CASE WHEN ${FUEL} <> 'Grid' THEN ${out} ELSE 0 END), 0))::DOUBLE AS v
+          FROM v_scada_daily sc ${DIM}
+          WHERE ${[dates('sc'), ...sql.scadaFilters('sc.DUID', false)].join(' AND ')} GROUP BY ALL`),
+      ]);
+      if (seq !== _renderSeq) return;
+      const vs = days === 1 ? 'vs the day before' : `vs previous ${days} days`;
+      // A side that doesn't hold every day of its period (the daily history not attached yet,
+      // a gap in the data) gives no comparison.
+      const pair = rows => [1, 0].map(c => rows.find(r => r.cur === c && r.n === days)?.v);
+      // A change that rounds to zero reads "unchanged", not as an arrow on 0.0.
+      const delta = (id, d, fmt, cls = '') => {
+        const size = Math.abs(d).toFixed(1);
+        if (+size === 0) show(id, `unchanged ${vs}`);
+        else show(id, `${d > 0 ? '▲' : '▼'} ${fmt(size)} ${vs}`, cls && (d > 0 ? 'up' : 'down'));
+      };
+      const [g1, g0] = pair(gen), [p1, p0] = pair(price), [r1, r0] = pair(re);
+      if (g1 == null || !g0) show(ids[0]);
+      else delta(ids[0], 100 * (g1 - g0) / g0, s => `${s}%`);
+      if (p1 == null || p0 == null) show(ids[1]);
+      else delta(ids[1], p1 - p0, s => `$${s}`);
+      if (r1 == null || r0 == null) show(ids[2]);
+      else delta(ids[2], r1 - r0, s => `${s} pts`, 'coloured');
     }
 
     async function renderInsights(seq) {
       await Promise.all([renderRenewables(seq), renderHeatmap(seq),
-        renderProfile(seq), renderCapture(seq), renderNegative(seq), renderNetExports(seq), renderCapacityFactor(seq)]);
+        renderProfile(seq), renderCapture(seq), renderNegative(seq), renderNetExports(seq), renderCapacityFactor(seq),
+        renderBattery(seq), renderOwners(seq)]);
     }
 
     // =========================================================================
@@ -1375,7 +1562,51 @@
     const fmtPrice = (v, dp = 0) => v == null ? '--' : `${v < 0 ? '-' : ''}$${Math.abs(v).toFixed(dp)}`;
     const priceColor = v => v == null ? '#888' : PRICE_BANDS.find(b => (b.gte == null || v >= b.gte) && (b.lt == null || v < b.lt)).color;
 
-    const icState = { frames: [], flows: new Map(), prices: new Map(), frame: 0, timer: null, ids: [] };
+    const icState = { frames: [], flows: new Map(), prices: new Map(), frame: 0, timer: null, ids: [],
+      gens: new Map(), gensLoading: new Set() };
+
+    // Generators on the flow map. Every unit's fuel, region and position once; their output one
+    // day at a time, one row per interval ("DUID:mw,DUID:mw,..."), straight from the 14-day file.
+    const GEN_FULL_MW = 750;   // output drawn at the largest bubble size
+    const GEN_LEGEND = ['Black coal', 'Brown coal', 'Natural gas', 'Water', 'Wind', 'Solar', 'Grid'];
+    let _genUnits = null;
+    async function genUnits() {
+      _genUnits ??= new Map((await runQuery(`SELECT DUID, FuelSourceDescriptor AS fuel, Region,
+        latitude::DOUBLE AS lat, longitude::DOUBLE AS lon FROM dim.dim_duid`)).map(u => [u.DUID, u]));
+      return _genUnits;
+    }
+    async function ensureGens(date) {
+      if (icState.gens.has(date) || icState.gensLoading.has(date)) return;
+      icState.gensLoading.add(date);
+      try {
+        const [rows] = await Promise.all([runQuery(`
+          SELECT CAST(time AS INTEGER) AS time,
+            string_agg(DUID || ':' || CAST(CAST(ROUND(mw) AS INTEGER) AS VARCHAR), ',') AS g
+          FROM today.scada_today WHERE date = ${sqlStr(date)} AND abs(mw) >= 1 GROUP BY time`), genUnits()]);
+        icState.gens.set(date, new Map(rows.map(r => [padTime(r.time), r.g])));
+      } catch (e) {
+        console.warn('[Flows] generators unavailable:', e);
+        icState.gens.set(date, new Map());
+      } finally {
+        icState.gensLoading.delete(date);
+      }
+      // Draw them if the map is still on that day.
+      if (document.getElementById('view-flows').style.display !== 'none'
+        && icState.frames[icState.frame]?.key.startsWith(date + '|')) icShow(icState.frame);
+    }
+    // The units of one interval as { duid, mw, unit }, within the region filter.
+    function frameGens(packed) {
+      if (!packed) return [];
+      const region = activeRegion();
+      const out = [];
+      for (const part of packed.split(',')) {
+        const i = part.lastIndexOf(':');
+        const duid = part.slice(0, i), unit = _genUnits.get(duid);
+        if (region && unit?.Region !== region) continue;
+        out.push({ duid, mw: +part.slice(i + 1), unit });
+      }
+      return out;
+    }
 
     async function renderFlows(seq) {
       icStop();
@@ -1401,6 +1632,7 @@
         for (const id of Object.keys(charts).filter(k => k.startsWith('chart-mini-'))) { charts[id].dispose(); delete charts[id]; }
         minis.innerHTML = '';
         document.getElementById('flowsTime').firstChild.textContent = '--';
+        document.getElementById('flowsNow').textContent = '';
         icState.frames = [];
         return;
       }
@@ -1431,6 +1663,8 @@
         `<div><b>Arrows</b> power flowing now (MW), thicker = more; colour = share of the link's limit ` +
           [[0, '&lt; 70%'], [0.7, '70&ndash;90%'], [0.9, '&ge; 90%']].map(([u, l]) => swatch(utilColor(u), l)).join(' ') + '</div>' +
         `<div><b>Dots</b> ${swatch('#3fb950', 'net exporter')} ${swatch('#f0883e', 'net importer')}</div>` +
+        `<div><b>Bubbles</b> generators, sized by output; ring = charging ` +
+          GEN_LEGEND.map(f => swatch(fuelColor(f), f === 'Grid' ? 'Battery' : f)).join(' ') + '</div>' +
         `<div><b>Shading</b> spot price ($/MWh) ` + PRICE_BANDS.map(b => swatch(b.color, b.label)).join(' ') + '</div>';
       icState.ids = Object.keys(INTERCONNECTORS).filter(id => shown.some(r => r.id === id));
 
@@ -1492,6 +1726,25 @@
       document.getElementById('flowsTime').firstChild.textContent = label + ' ';
       const rows = icState.flows.get(key) ?? [];
       const price = code => icState.prices.get(`${key}|${code}`);
+
+      // --- generators in this interval (loaded a day at a time, the next day ahead of play) ---
+      const [day, hhmm] = key.split('|');
+      let gens = [];
+      if (document.getElementById('icGens').checked) {
+        if (icState.gens.has(day)) gens = frameGens(icState.gens.get(day).get(hhmm));
+        else ensureGens(day);
+        ensureGens(icState.frames[Math.min(icState.frame + 288, icState.frames.length - 1)].key.split('|')[0]);
+      }
+      // Same definition as the Renewables KPI: output only, batteries on neither side.
+      let genMw = 0, reMw = 0;
+      for (const g of gens) {
+        if (g.mw <= 0 || g.unit?.fuel === 'Grid') continue;
+        genMw += g.mw;
+        if (RENEWABLE_FUELS.includes(g.unit?.fuel)) reMw += g.mw;
+      }
+      document.getElementById('flowsNow').innerHTML = genMw
+        ? `${Math.round(genMw).toLocaleString()} MW generating &middot; <b>${Math.round(100 * reMw / genMw)}%</b> renewable`
+        : '';
       const net = {};   // + exporting, - importing
       for (const r of rows) {
         const ic = INTERCONNECTORS[r.id];
@@ -1528,6 +1781,7 @@
         tooltip: { trigger: 'item', formatter: p => {
           if (p.seriesType === 'lines') return `<b>${p.data.name}</b> ${p.data.dir}<br>${p.data.value.toLocaleString()} MW &middot; ${Math.round(100 * p.data.util)}% of limit`;
           if (p.seriesType === 'effectScatter') return `<b>${regionName(p.name)}</b><br>${p.value[2] >= 0 ? 'exporting' : 'importing'} ${Math.abs(p.value[2]).toLocaleString()} MW`;
+          if (p.seriesType === 'scatter') return `<b>${escapeHtml(p.name)}</b><br>${escapeHtml(p.data.fuel)} &middot; ${Math.abs(p.value[2]).toLocaleString()} MW${p.value[2] < 0 ? ' charging' : ''}`;
           return '';
         } },
         geo: { map: 'australia', nameProperty: 'STATE_NAME', roam: true, center: [145.4, -31.8], zoom: 1.85,
@@ -1542,6 +1796,13 @@
           regions: Object.entries(STATE_REGION).map(([state, code]) => ({
             name: state, itemStyle: { areaColor: price(code) == null ? (light ? '#dfe5ec' : '#2b3446') : priceColor(price(code)), opacity: light ? 0.75 : 0.55 } })) },
         series: [
+          { type: 'scatter', coordinateSystem: 'geo', zlevel: 1, animation: false,
+            symbolSize: v => 3 + 20 * Math.sqrt(Math.min(1, Math.abs(v[2]) / GEN_FULL_MW)),
+            data: gens.filter(g => g.unit?.lat != null && g.unit.lon != null).map(g => {
+              const fuel = g.unit.fuel ?? 'Unknown', color = fuelColor(fuel);
+              return { name: g.duid, fuel, value: [g.unit.lon, g.unit.lat, g.mw],
+                itemStyle: g.mw < 0 ? { color: 'transparent', borderColor: color, borderWidth: 1.5 } : { color, opacity: 0.8 } };
+            }) },
           { type: 'lines', coordinateSystem: 'geo', zlevel: 2,
             effect: { show: true, period: 2.5, trailLength: 0.2, symbol: 'arrow', symbolSize: 11, color: light ? '#1f2328' : '#ffffff' },
             label: { show: true, position: 'middle', fontSize: 11, fontWeight: 600, color: light ? '#1f2328' : '#ffffff',
@@ -1590,6 +1851,7 @@
       if (icState.timer) { icStop(); document.getElementById('icPlay').click(); }
     });
     document.getElementById('icFrame').addEventListener('input', e => { icStop(); icShow(+e.target.value); });
+    document.getElementById('icGens').addEventListener('change', () => icShow(icState.frame));
 
     async function renderRenewables(seq) {
       const intraday = isIntradayMode();
@@ -1854,6 +2116,219 @@
       });
     }
 
+    // The battery fleet's average day: output above the axis, charging below, and the price it
+    // saw. "Bought" and "sold" are the prices weighted by the energy charged and discharged.
+    // The fuel filter is ignored (the chart is about one fuel); 5-minute data only, because a
+    // day's total nets charging against discharging.
+    async function renderBattery(seq) {
+      const title = document.getElementById('title-battery');
+      title.textContent = 'Batteries: average day (MW) and price';
+      if (!isIntradayMode()) return showEmpty('chart-battery', 'Choose 30 days or less: daily totals net charging against output');
+      const BATTERY = `d.FuelSourceDescriptor = 'Grid'`;
+      const [rows, fleet] = await Promise.all([
+        runQuery(`
+          SELECT CAST(sc.time AS INTEGER) AS time,
+            (SUM(GREATEST(sc.mw, 0)) / COUNT(DISTINCT sc.date))::DOUBLE AS discharge,
+            (SUM(LEAST(sc.mw, 0)) / COUNT(DISTINCT sc.date))::DOUBLE AS charge,
+            AVG(p.price)::DOUBLE AS price,
+            SUM(GREATEST(sc.mw, 0) * p.price)::DOUBLE AS sold, SUM(GREATEST(sc.mw, 0))::DOUBLE AS sold_mw,
+            SUM(LEAST(sc.mw, 0) * p.price)::DOUBLE AS bought, SUM(LEAST(sc.mw, 0))::DOUBLE AS bought_mw
+          FROM ${sql.fromScada()}
+          JOIN v_price p ON p.date = sc.date AND p.time = sc.time AND p.REGIONID = d.Region
+          WHERE ${sql.whereScada({ withFuel: false })} AND ${BATTERY}
+          GROUP BY ALL ORDER BY ALL`),
+        runQuery(`
+          SELECT COUNT(*)::INTEGER AS units, ${colOrNull('dim.dim_duid', 'RegCapMW', 'SUM(d.RegCapMW)::DOUBLE', 'mw')},
+            ${colOrNull('dim.dim_duid', 'StorageMWh', 'SUM(d.StorageMWh)::DOUBLE', 'mwh')}
+          FROM dim.dim_duid d WHERE ${[BATTERY, ...sql.scadaFilters('d.DUID', false)].join(' AND ')}`),
+      ]);
+      if (seq !== _renderSeq) return;
+      if (!rows.length) return showEmpty('chart-battery', 'No battery output for the selected filters');
+
+      const sum = k => rows.reduce((s, r) => s + (r[k] || 0), 0);
+      const sold = sum('sold_mw') ? sum('sold') / sum('sold_mw') : null;
+      const bought = sum('bought_mw') ? sum('bought') / sum('bought_mw') : null;
+      const f = fleet[0];
+      title.innerHTML = 'Batteries: average day'
+        + (sold != null && bought != null ? `, bought at ${fmtPrice(bought)}, sold at ${fmtPrice(sold)} (spread ${fmtPrice(sold - bought)}/MWh)` : '')
+        + (f?.units ? ` <span class="chart-note">${f.units} unit${f.units === 1 ? '' : 's'}${f.mw ? `, ${Math.round(f.mw).toLocaleString()} MW` : ''}${f.mwh ? ` / ${Math.round(f.mwh).toLocaleString()} MWh` : ''}</span>` : '');
+
+      const color = fuelColor('Grid'), gold = '#d29922';
+      const area = (name, key, opacity) => ({ name, type: 'line', symbol: 'none', lineStyle: { width: 0 },
+        areaStyle: { opacity }, itemStyle: { color }, data: rows.map(r => Math.round(r[key])) });
+      getChart('chart-battery').setOption({
+        tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '-' : Math.round(v).toLocaleString() },
+        legend: { top: 0, itemWidth: 10, itemHeight: 10, textStyle: { fontSize: 10 } },
+        grid: { left: 50, right: 50, top: 30, bottom: 25 },
+        xAxis: { type: 'category', data: rows.map(r => formatTime(r.time)), boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 11 } },
+        yAxis: [
+          { type: 'value', name: 'MW', nameTextStyle: { fontSize: 10 } },
+          { type: 'value', name: '$/MWh', nameTextStyle: { fontSize: 10 }, splitLine: { show: false }, axisLabel: { formatter: '${value}' } },
+        ],
+        series: [
+          area('Output (MW)', 'discharge', 0.85), area('Charging (MW)', 'charge', 0.45),
+          { name: 'Price ($/MWh)', type: 'line', yAxisIndex: 1, symbol: 'none', lineStyle: { width: 1.5, color: gold },
+            itemStyle: { color: gold }, data: rows.map(r => r.price == null ? null : Math.round(r.price * 10) / 10) },
+        ],
+      }, true);
+    }
+
+    // Energy by owner (dim_duid.Participant) and power station, coloured by fuel. Units that are
+    // not in dim_duid, or have no owner there, are grouped as "Unknown".
+    async function renderOwners(seq) {
+      if (!_columns.get('dim.dim_duid')?.has('Participant')) return showEmpty('chart-owners', 'Ownership data not deployed yet');
+      const intraday = isIntradayMode();
+      const energy = intraday ? 'SUM(GREATEST(sc.mw, 0)) / 12.0' : 'SUM(GREATEST(sc.mwh, 0))';
+      const rows = await runQuery(`
+        SELECT COALESCE(d.Participant, 'Unknown') AS owner, COALESCE(d.StationName, sc.DUID) AS station,
+          ${FUEL} AS fuel, (${energy})::DOUBLE AS mwh
+        FROM ${sql.fromScada()} WHERE ${sql.whereScada()}
+        GROUP BY ALL HAVING ${energy} > 0 ORDER BY mwh DESC`);
+      if (seq !== _renderSeq) return;
+      if (!rows.length) return showEmpty('chart-owners');
+      const total = rows.reduce((s, r) => s + r.mwh, 0);
+      const owners = new Map();
+      for (const r of rows) {
+        if (!owners.has(r.owner)) owners.set(r.owner, { name: r.owner, value: 0, children: [] });
+        const o = owners.get(r.owner);
+        o.value += r.mwh;
+        o.children.push({ name: r.station, value: r.mwh, fuel: r.fuel, itemStyle: { color: fuelColor(r.fuel) } });
+      }
+      getChart('chart-owners').setOption({
+        tooltip: { formatter: p => {
+          const share = `${(100 * p.value / total).toFixed(1)}% of the energy shown`;
+          const path = p.treePathInfo.slice(1).map(n => escapeHtml(n.name)).join(' &middot; ');
+          return `<b>${path}</b>${p.data.fuel ? `<br>${escapeHtml(p.data.fuel)}` : ''}<br>${fmtGwh(p.value)} &middot; ${share}`;
+        } },
+        series: [{ type: 'treemap', name: 'All owners', roam: false, nodeClick: 'zoomToNode',
+          left: 0, right: 0, top: 0, bottom: 22,
+          breadcrumb: { bottom: 0, height: 18, itemStyle: { color: cssVar('--input-bg'), borderColor: cssVar('--border'), textStyle: { color: cssVar('--text'), fontSize: 10 } } },
+          label: { fontSize: 10, formatter: '{b}' },
+          upperLabel: { show: true, height: 16, fontSize: 10, fontWeight: 600, color: cssVar('--text') },
+          levels: [
+            { itemStyle: { gapWidth: 3, borderWidth: 0 } },
+            { itemStyle: { borderColor: cssVar('--row-line'), borderWidth: 2, gapWidth: 1 } },
+            { itemStyle: { borderColor: cssVar('--card'), borderWidth: 0 } },
+          ],
+          data: [...owners.values()] }],
+      }, true);
+    }
+
+    // =========================================================================
+    // 6d. HISTORY PAGE (every day of the daily tables: records + calendar)
+    // =========================================================================
+
+    // Low-to-high colour ramps that read on the dark and on the light card.
+    const RAMPS = {
+      green:  { dark: ['#12261a', '#1f6f3a', '#3fb950', '#aff5b4'], light: ['#e6f4ea', '#9bd6a8', '#3fb950', '#116329'] },
+      blue:   { dark: ['#161f33', '#1f4b8f', '#58a6ff', '#cae8ff'], light: ['#e7f1fb', '#9cc7f5', '#3b82d6', '#0a3069'] },
+      yellow: { dark: ['#2a2208', '#8a6a10', '#f7c948', '#fff3b0'], light: ['#fdf6d8', '#f7dc7a', '#e3b111', '#7a5a00'] },
+    };
+    const PRICE_RAMP = ['#2c7bb6', '#abd9e9', '#ffffbf', '#fdae61', '#d7191c'];
+    const fmtGwh = v => `${(v / 1000).toFixed(1)} GWh`;
+    const CAL_METRICS = {
+      re:     { title: 'renewable share of generation', fmt: v => `${v.toFixed(1)}%`, ramp: () => RAMPS.green[isLight() ? 'light' : 'dark'] },
+      price:  { title: 'average price', fmt: v => `${fmtPrice(v, 1)}/MWh`, ramp: () => PRICE_RAMP },
+      demand: { title: 'average demand', fmt: v => `${Math.round(v).toLocaleString()} MW`, ramp: () => RAMPS.blue[isLight() ? 'light' : 'dark'] },
+      solar:  { title: 'solar output', fmt: fmtGwh, ramp: () => RAMPS.yellow[isLight() ? 'light' : 'dark'] },
+      wind:   { title: 'wind output', fmt: fmtGwh, ramp: () => RAMPS.blue[isLight() ? 'light' : 'dark'] },
+    };
+
+    // Opens one day on the Dashboard (an older day loads its 5-minute history on the way).
+    function openDay(date) {
+      document.getElementById('dateFrom').value = date;
+      document.getElementById('dateTo').value = date;
+      document.getElementById('tab-dashboard').click();
+      document.getElementById('dateTo').dispatchEvent(new Event('change'));
+    }
+
+    async function renderHistory(seq) {
+      const recordsEl = document.getElementById('historyRecords');
+      if (!aggLoaded) {
+        recordsEl.innerHTML = '';
+        return showEmpty('chart-calendar', 'Loading history...');
+      }
+      const region = activeRegion();
+      // The newest day is still filling: its energy and its share are not a day's yet.
+      const before = `< DATE ${sqlStr(document.getElementById('dateTo').max)}`;
+      const sumIf = (cond, alias) => `SUM(CASE WHEN ${cond} THEN GREATEST(sc.mwh, 0) ELSE 0 END)::DOUBLE AS ${alias}`;
+      const [gen, price] = await Promise.all([
+        runQuery(`
+          SELECT CAST(sc.date AS VARCHAR) AS date, ${sumIf(`${FUEL} IN (${renewableSql()})`, 're')},
+            ${sumIf(`${FUEL} <> 'Grid'`, 'total')}, ${sumIf(`${FUEL} = 'Solar'`, 'solar')}, ${sumIf(`${FUEL} = 'Wind'`, 'wind')}
+          FROM v_scada_daily sc LEFT JOIN dim.dim_duid d ON sc.DUID = d.DUID
+          WHERE sc.date ${before}${region ? ` AND d.Region = ${sqlStr(region)}` : ''}
+          GROUP BY ALL ORDER BY ALL`),
+        runQuery(`
+          SELECT CAST(p.date AS VARCHAR) AS date, AVG(p.price)::DOUBLE AS price,
+            (CASE WHEN COUNT(p.demand) = COUNT(*) THEN SUM(p.demand) END)::DOUBLE AS demand
+          FROM v_price_daily p
+          WHERE p.date ${before}${region ? ` AND p.REGIONID = ${sqlStr(region)}` : ''}
+          GROUP BY ALL ORDER BY ALL`),
+      ]);
+      if (seq !== _renderSeq) return;
+      const days = {
+        re: gen.filter(r => r.total > 0).map(r => [r.date, 100 * r.re / r.total]),
+        solar: gen.filter(r => r.solar > 0).map(r => [r.date, r.solar]),
+        wind: gen.filter(r => r.wind > 0).map(r => [r.date, r.wind]),
+        price: price.filter(r => r.price != null).map(r => [r.date, r.price]),
+        demand: price.filter(r => r.demand != null).map(r => [r.date, r.demand]),
+      };
+
+      // --- records: the best day of each measure; "new" when it fell in the last 14 days ---
+      const newSince = shiftDate(document.getElementById('dateTo').max, -14);
+      const best = (list, sign = 1) => list.reduce((b, d) => !b || sign * d[1] > sign * b[1] ? d : b, null);
+      const records = [
+        ['Highest renewable share', 're', best(days.re)],
+        ['Biggest solar day', 'solar', best(days.solar)],
+        ['Biggest wind day', 'wind', best(days.wind)],
+        ['Highest demand day', 'demand', best(days.demand)],
+        ['Highest price day', 'price', best(days.price)],
+        ['Lowest price day', 'price', best(days.price, -1)],
+      ].filter(([, , d]) => d && d[1] != null);
+      recordsEl.innerHTML = records.map(([label, metric, [date, v]]) => `
+        <button type="button" class="kpi-card record-card" data-date="${date}" title="Open ${formatDate(date)} on the Dashboard">
+          <div class="kpi-label">${label}</div><div class="kpi-value">${CAL_METRICS[metric].fmt(v)}</div>
+          <div class="kpi-sub">${formatDate(date)}${date >= newSince ? '<span class="record-new">new</span>' : ''}</div>
+        </button>`).join('');
+      for (const card of recordsEl.querySelectorAll('.record-card')) card.addEventListener('click', () => openDay(card.dataset.date));
+
+      // --- calendar: one strip per year, newest on top ---
+      const metric = CAL_METRICS[document.getElementById('calMetric').value];
+      const shown = days[document.getElementById('calMetric').value];
+      if (!shown.length) return showEmpty('chart-calendar');
+      document.getElementById('title-calendar').textContent =
+        `Every day since ${formatDate(shown[0][0])}: ${metric.title}${region ? `, ${regionName(region)}` : ''}`;
+      const years = [...new Set(shown.map(d => d[0].slice(0, 4)))].sort().reverse();
+      const STRIP = 140;
+      document.getElementById('chart-calendar').style.height = `${55 + years.length * STRIP}px`;
+      const chart = getChart('chart-calendar');
+      chart.resize();
+      // Scale clipped to the 2nd-98th percentile so one extreme day doesn't wash out the rest.
+      const vals = shown.map(d => d[1]).sort((a, b) => a - b);
+      const q = f => vals[Math.min(vals.length - 1, Math.floor(f * vals.length))];
+      const muted = cssVar('--muted');
+      chart.setOption({
+        tooltip: { formatter: p => `${formatDate(p.value[0])}<br><b>${metric.fmt(p.value[1])}</b>` },
+        visualMap: { min: q(0.02), max: Math.max(q(0.98), q(0.02) + 1e-6), calculable: true, orient: 'horizontal',
+          left: 'center', top: 0, itemHeight: 160, textStyle: { fontSize: 10, color: muted },
+          formatter: v => metric.fmt(v), seriesIndex: years.map((_, i) => i), inRange: { color: metric.ramp() } },
+        calendar: years.map((year, i) => ({
+          range: year, top: 70 + i * STRIP, left: 70, right: 20, cellSize: ['auto', 15],
+          itemStyle: { color: 'transparent', borderColor: cssVar('--row-line'), borderWidth: 1 },
+          splitLine: { lineStyle: { color: cssVar('--border'), width: 1 } },
+          yearLabel: { color: muted, fontSize: 14 }, monthLabel: { color: muted, fontSize: 10 },
+          dayLabel: { color: cssVar('--faint'), fontSize: 9, firstDay: 1 },
+        })),
+        series: years.map((year, i) => ({ type: 'heatmap', coordinateSystem: 'calendar', calendarIndex: i,
+          emphasis: { itemStyle: { borderColor: cssVar('--text'), borderWidth: 1 } },
+          data: shown.filter(d => d[0].startsWith(year)) })),
+      }, true);
+      chart.off('click');
+      chart.on('click', p => { if (p.componentType === 'series') openDay(p.value[0]); });
+    }
+    document.getElementById('calMetric').addEventListener('change', () => renderHistory(_renderSeq));
+
     // --- Generator Map (geo scatter) ---
     let australiaMapRegistered = false;
 
@@ -2022,10 +2497,11 @@
           b.tabIndex = on ? 0 : -1;
         }
         const tab = btn.dataset.tab;
-        for (const t of ['dashboard', 'flows', 'insights', 'analyze']) {
+        for (const t of ['dashboard', 'flows', 'insights', 'history', 'analyze']) {
           document.getElementById(`view-${t}`).style.display = tab === t ? '' : 'none';
         }
         if (tab === 'insights') renderInsights(_renderSeq);
+        if (tab === 'history') renderHistory(_renderSeq);
         if (tab === 'flows') renderFlows(_renderSeq);
         else icStop();
         // Populate the SQL box the first time Analyze is opened; don't clobber manual edits after.
@@ -2331,6 +2807,7 @@
       document.getElementById("dateFrom").value = fromDate.toISOString().split('T')[0];
       document.getElementById("dateFrom").min = minDate;
       document.getElementById("dateFrom").max = maxDate;
+      syncPresets();
     }
 
     // --- Filter change listeners ---
@@ -2365,12 +2842,38 @@
       });
     }
 
+    // --- Date presets: the last N days up to the newest day in the data, or all of the history ---
+    const presetButtons = [...document.querySelectorAll('.preset-btn')];
+    function presetFrom(preset) {
+      const from = document.getElementById('dateFrom');
+      if (preset === 'all') return from.min;
+      const start = shiftDate(from.max, -Number(preset));
+      return start < from.min ? from.min : start;
+    }
+    function syncPresets() {
+      const { from, to } = getDateRange();
+      const newest = document.getElementById('dateTo').max;
+      for (const b of presetButtons) b.classList.toggle('active', !!newest && to === newest && from === presetFrom(b.dataset.preset));
+    }
+    for (const b of presetButtons) {
+      b.addEventListener('click', () => {
+        const to = document.getElementById('dateTo');
+        if (!to.max) return;   // the data's date span isn't known yet
+        document.getElementById('dateFrom').value = presetFrom(b.dataset.preset);
+        to.value = to.max;
+        to.dispatchEvent(new Event('change'));
+      });
+    }
+    for (const id of ['dateFrom', 'dateTo']) document.getElementById(id).addEventListener('change', syncPresets);
+
     document.getElementById('clipSpikes').addEventListener('change', () => renderAll());
     document.getElementById('drillLevel').addEventListener('change', () => renderAll());
 
     // --- Render all ---
+    let _renderNote = '';   // " · N queries, S s" of the last render, shown after the data's cutoff
     async function renderAll() {
       const seq = ++_renderSeq;
+      const started = performance.now(), ranBefore = _queriesRun;
       if (!window._cutoffCached) setStatus("Querying...", "loading");
       document.querySelectorAll('.charts').forEach(el => el.classList.add('loading'));
       updateFilterTags();
@@ -2387,9 +2890,11 @@
         }
         const visible = id => document.getElementById(id).style.display !== 'none';
         await Promise.all([renderGeneration(seq), renderPrice(seq), renderMap(seq), updateRenewablesKpi(seq),
+          updateKpiDeltas(seq).catch(e => console.warn('[KPI] deltas unavailable:', e)),
           visible('view-insights') ? renderInsights(seq) : null,
+          visible('view-history') ? renderHistory(seq) : null,
           visible('view-flows') ? renderFlows(seq) : null,
-          runQuery(sql.generatorCount()).then(r => { if (seq === _renderSeq && r.length) document.getElementById('kpiGens').textContent = r[0].cnt.toLocaleString(); })
+          runQuery(sql.generatorCount()).then(r => { if (seq === _renderSeq && r.length) setKpiNumber('kpiGens', r[0].cnt, v => Math.round(v).toLocaleString()); })
         ]);
         if (seq !== _renderSeq) return;
         document.querySelectorAll('.charts').forEach(el => el.classList.remove('loading'));
@@ -2403,7 +2908,10 @@
             window._cutoffCached = `${formatDate(day)} ${hhmm} AEST`;
           }
         }
-        setStatus(window._cutoffCached || "Connected", "connected");
+        // What this render cost: queries that ran (a cached view runs none) and wall time.
+        const ran = _queriesRun - ranBefore;
+        _renderNote = ` · ${ran} ${ran === 1 ? 'query' : 'queries'}, ${((performance.now() - started) / 1000).toFixed(2)} s`;
+        setStatus((window._cutoffCached || "Connected") + _renderNote, "connected");
       } catch (e) {
         setStatus("Query error: " + e.message, "error");
         console.error(e);
@@ -2418,8 +2926,11 @@
       // Load year databases in background, then silently refresh
       // agg only feeds the daily-grain views (ranges over 30 days); don't redraw an intraday view.
       loadDailyAggDatabase().then(() => {
-        if (!isIntradayMode()) renderAll();
-        else setStatus(window._cutoffCached || "Connected", "connected");   // clear "Downloading..."
+        if (!isIntradayMode()) return renderAll();
+        setStatus((window._cutoffCached || "Connected") + _renderNote, "connected");   // clear "Downloading..."
+        // The daily history is what a comparison with earlier days, and the History page, read.
+        updateKpiDeltas(_renderSeq).catch(e => console.warn('[KPI] deltas unavailable:', e));
+        if (document.getElementById('view-history').style.display !== 'none') renderHistory(_renderSeq);
       })
         .catch(e => console.warn('[OPFS] Agg load failed:', e));
     } catch (e) {
