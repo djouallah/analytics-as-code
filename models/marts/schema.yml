@@ -67,7 +67,7 @@ models:
           - not_null
 
   - name: fct_interconnector_today
-    description: Interconnector flows and limits every 5 minutes, from the INTERCONNECTORRES rows of the archived DispatchIS files
+    description: Interconnector flows and limits every 5 minutes since 2018, from the INTERCONNECTORRES rows of the archived DispatchIS files (2026-08 on) and of AEMO's monthly MMSDM archive before that
     columns:
       - name: INTERCONNECTORID
         description: AEMO interconnector id; flows are positive from its first region to its second

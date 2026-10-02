@@ -276,7 +276,7 @@
     <div class="flows-minis" id="icMinis"></div>
     <p class="insights-note">
       MW is power at that moment; $/MWh is the wholesale spot price, not the cost of the flow.
-      AEMO 5-minute dispatch, last 14 days. Arrows point the way power flows; their thickness is the
+      AEMO 5-minute dispatch since 2018, up to 30 days at a time. Arrows point the way power flows; their thickness is the
       flow and their colour how close the link runs to its limit (green &lt; 70% &le; amber &lt; 90%
       &le; red). Regions are shaded by their price in that interval. Bubbles are the generating
       units, sized by their output in that interval and coloured by fuel; a ring is a unit
@@ -722,7 +722,7 @@
     const hasTable = t => _columns.has(t);
     const colOrNull = (t, c, expr = c, alias = c) => _columns.get(t)?.has(c) ? `${expr} AS ${alias}` : `NULL::REAL AS ${alias}`;
 
-    // The four views every query reads. The last 5 days come from `today` (refreshed
+    // The views every query reads. The last 5 days come from `today` (refreshed
     // intraday), everything older from the half-year periods (5-min) or agg (daily).
     // Until agg is attached, the daily views only cover `today`.
     async function refreshViews() {
@@ -754,6 +754,21 @@
           ${DEMAND_COLS.map(c => colOrNull('today.price_today', c, `CAST(${complete(c, `AVG(${c})`)} AS REAL)`)).join(', ')},
           ${colOrNull('today.price_today', 'demand', complete('demand', 'SUM(demand) / 12.0'), 'demand_mwh')}
           FROM today.price_today`)}`);
+      // Link flows: the half-year files carry them back to 2018 (files built before
+      // 2026-10-03 have no such table), `today` the last 14 days. `today` supplies whatever
+      // is newer than the attached files hold, so a file without the table, or a daily
+      // import that is behind, leaves no hole in the last 14 days.
+      const FLOW_COLS = 'interconnector, date, time, mw, export_limit, import_limit';
+      const flowPeriods = [..._attachedPeriods].filter(p => hasTable(`p${p}.interconnector`))
+        .map(p => `SELECT ${FLOW_COLS} FROM p${p}.interconnector WHERE ${OLD}`).join(' UNION ALL ');
+      const flowToday = hasTable('today.interconnector_today')
+        ? `SELECT ${FLOW_COLS} FROM today.interconnector_today`
+        : `SELECT NULL::VARCHAR AS interconnector, NULL::DATE AS date, NULL::SMALLINT AS time,
+            NULL::REAL AS mw, NULL::REAL AS export_limit, NULL::REAL AS import_limit WHERE false`;
+      await conn.query(`CREATE OR REPLACE VIEW v_interconnector AS ${flowPeriods
+        ? `${flowPeriods} UNION ALL SELECT * FROM (${flowToday})
+            WHERE date > (SELECT COALESCE(MAX(date), DATE '1900-01-01') FROM (${flowPeriods}))`
+        : flowToday}`);
       // Queries over the views keep the same SQL text, so results cached before this
       // redefinition must never be served after it (see runQuery).
       _viewGen++;
@@ -1566,7 +1581,7 @@
       gens: new Map(), gensLoading: new Set() };
 
     // Generators on the flow map. Every unit's fuel, region and position once; their output one
-    // day at a time, one row per interval ("DUID:mw,DUID:mw,..."), straight from the 14-day file.
+    // day at a time, one row per interval ("DUID:mw,DUID:mw,...").
     const GEN_FULL_MW = 750;   // output drawn at the largest bubble size
     const GEN_LEGEND = ['Black coal', 'Brown coal', 'Natural gas', 'Water', 'Wind', 'Solar', 'Grid'];
     let _genUnits = null;
@@ -1582,7 +1597,7 @@
         const [rows] = await Promise.all([runQuery(`
           SELECT CAST(time AS INTEGER) AS time,
             string_agg(DUID || ':' || CAST(CAST(ROUND(mw) AS INTEGER) AS VARCHAR), ',') AS g
-          FROM today.scada_today WHERE date = ${sqlStr(date)} AND abs(mw) >= 1 GROUP BY time`), genUnits()]);
+          FROM v_scada WHERE date = ${sqlStr(date)} AND abs(mw) >= 1 GROUP BY time`), genUnits()]);
         icState.gens.set(date, new Map(rows.map(r => [padTime(r.time), r.g])));
       } catch (e) {
         console.warn('[Flows] generators unavailable:', e);
@@ -1612,21 +1627,9 @@
       icStop();
       const { from, to } = getDateRange();
       const region = activeRegion();
-      // Both straight from the 14-day `today` file, at 5-minute grain whatever the range.
-      const [flows, prices] = await Promise.all([
-        runQuery(`SELECT interconnector AS id, CAST(date AS VARCHAR) AS date, CAST(time AS INTEGER) AS time,
-            mw::DOUBLE AS mw, export_limit::DOUBLE AS export_limit, import_limit::DOUBLE AS import_limit
-          FROM today.interconnector_today WHERE date BETWEEN ${sqlStr(from)} AND ${sqlStr(to)} ORDER BY date, time`).catch(() => []),
-        runQuery(`SELECT REGIONID AS region, CAST(date AS VARCHAR) AS date, CAST(time AS INTEGER) AS time, price::DOUBLE AS price
-          FROM today.price_today WHERE date BETWEEN ${sqlStr(from)} AND ${sqlStr(to)}`),
-      ]);
-      const mapReady = await registerAustraliaMap();
-      if (seq !== _renderSeq) return;
-      const shown = flows.filter(r => INTERCONNECTORS[r.id] &&
-        (!region || INTERCONNECTORS[r.id].from === region || INTERCONNECTORS[r.id].to === region));
       const minis = document.getElementById('icMinis');
-      if (!shown.length) {
-        showEmpty('chart-flowmap', 'Flows cover the last 14 days: choose a range inside them');
+      const empty = msg => {
+        showEmpty('chart-flowmap', msg);
         document.getElementById('icBoard').innerHTML = '';
         document.getElementById('regionBoard').innerHTML = '';
         for (const id of Object.keys(charts).filter(k => k.startsWith('chart-mini-'))) { charts[id].dispose(); delete charts[id]; }
@@ -1634,8 +1637,21 @@
         document.getElementById('flowsTime').firstChild.textContent = '--';
         document.getElementById('flowsNow').textContent = '';
         icState.frames = [];
-        return;
-      }
+      };
+      // Always 5-minute frames, so only the ranges whose half-year files renderAll loads.
+      if (!isIntradayMode()) return empty('Choose 30 days or less to play the flows');
+      const [flows, prices] = await Promise.all([
+        runQuery(`SELECT interconnector AS id, CAST(date AS VARCHAR) AS date, CAST(time AS INTEGER) AS time,
+            mw::DOUBLE AS mw, export_limit::DOUBLE AS export_limit, import_limit::DOUBLE AS import_limit
+          FROM v_interconnector WHERE date BETWEEN ${sqlStr(from)} AND ${sqlStr(to)} ORDER BY date, time`).catch(() => []),
+        runQuery(`SELECT REGIONID AS region, CAST(date AS VARCHAR) AS date, CAST(time AS INTEGER) AS time, price::DOUBLE AS price
+          FROM v_price WHERE date BETWEEN ${sqlStr(from)} AND ${sqlStr(to)}`),
+      ]);
+      const mapReady = await registerAustraliaMap();
+      if (seq !== _renderSeq) return;
+      const shown = flows.filter(r => INTERCONNECTORS[r.id] &&
+        (!region || INTERCONNECTORS[r.id].from === region || INTERCONNECTORS[r.id].to === region));
+      if (!shown.length) return empty('No flows for these dates');
       const { xKeys, xLabels } = buildTimeAxis(shown, true);
       icState.frames = xKeys.map((k, i) => ({ key: k, label: xLabels[i] }));
       icState.flows = new Map();

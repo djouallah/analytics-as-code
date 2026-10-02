@@ -7,11 +7,14 @@
        and MERGE dedupes against the target, never within a batch.
      - ORDER BY archive_path DESC before LIMIT (ported from the sibling's new_source_files):
        a backlog or a rebuild=<table> refill takes the newest files first, deterministically,
-       instead of an arbitrary process_limit subset. --#}
+       instead of an arbitrary process_limit subset.
+     - source_type is one type or a list of them (fct_interconnector_today reads the
+       DispatchIS files and the monthly archive). --#}
 
 {% macro pending_archive_filter(log_relation, source_type) -%}
+{%- set source_types = [source_type] if source_type is string else source_type -%}
 FROM {{ log_relation }} l
-WHERE l.source_type = '{{ source_type }}'
+WHERE l.source_type IN ('{{ source_types | join("', '") }}')
 {%- if is_incremental() %}
   AND NOT EXISTS (SELECT 1 FROM {{ this }} t WHERE t.file = l.csv_filename)
 {%- endif %}

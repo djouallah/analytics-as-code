@@ -87,7 +87,8 @@ def model(dbt, session):
         results = []
         for name in z.namelist():
             if name.upper().endswith(".CSV"):
-                safe_name = name.replace("/", "_")
+                # '#': the monthly archive's member names carry it since 2024-08.
+                safe_name = name.replace("/", "_").replace("#", "_")
                 gz_name = safe_name + ".gz"
                 gz_path = os.path.join(temp_dir, gz_name)
                 with gzip.open(gz_path, "wb") as f:
@@ -288,6 +289,43 @@ def model(dbt, session):
 
     if price_to_download:
         process_downloads(price_to_download, 'price_today', 'price_today')
+
+    # =========================================================================
+    # INTERCONNECTOR HISTORY (AEMO's monthly archive, a finite backfill)
+    # =========================================================================
+
+    # The DispatchIS files above are only archived from 2026-08. AEMO's monthly MMSDM
+    # archive holds the same INTERCONNECTORRES record, one zip a month: 2018-01 to 2026-08
+    # is what fct_interconnector_today needs to go back as far as the other facts. The
+    # file name changed in 2024-08; all 104 URLs this builds were checked on 2026-10-02.
+    # Newest months first, and like the GitHub backfill only once the daily feed has caught
+    # up. When every month is in the log there is nothing left to do here.
+    if aemo_new < download_limit:
+        archived_months = {row[0] for row in session.sql("""
+            SELECT source_filename FROM _csv_archive_log
+            WHERE source_type = 'interconnector_monthly'
+        """).fetchall()}
+        months_to_download = []
+        for year, month in sorted(
+            ((y, m) for y in range(2018, 2027) for m in range(1, 13) if (y, m) <= (2026, 8)),
+            reverse=True,
+        ):
+            stamp = f"{year}{month:02d}010000"
+            source_filename = f"DISPATCHINTERCONNECTORRES_{stamp}"
+            if source_filename in archived_months:
+                continue
+            zip_name = (
+                f"PUBLIC_DVD_DISPATCHINTERCONNECTORRES_{stamp}" if (year, month) < (2024, 8)
+                else f"PUBLIC_ARCHIVE%23DISPATCHINTERCONNECTORRES%23FILE01%23{stamp}"
+            )
+            months_to_download.append((
+                "https://nemweb.com.au/Data_Archive/Wholesale_Electricity/MMSDM/"
+                f"{year}/MMSDM_{year}_{month:02d}/MMSDM_Historical_Data_SQLLoader/DATA/{zip_name}.zip",
+                source_filename,
+            ))
+        if months_to_download:
+            process_downloads(months_to_download[:download_limit],
+                              'interconnector_monthly', 'interconnector_monthly')
 
     # =========================================================================
     # DUID REFERENCE DATA (skip if downloaded less than 24 hours ago)

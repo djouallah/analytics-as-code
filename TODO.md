@@ -44,9 +44,11 @@ The 5-minute DispatchIS files already archived since 2026-08 also carry `REGIONS
 - [x] **Interconnector flows** — `fct_interconnector_today` from the `INTERCONNECTORRES` rows,
   exported (last 14 days) into `energy_today.duckdb`; its own **Flows** tab: price-shaded map
   with animated flows, live board, small multiples with limit bands, playback (2026-10-01).
-- [ ] **Flows beyond 14 days** — add `interconnector` to the half-year files and the daily
-  aggregate so the Flows page works on longer ranges. The archive only goes back to 2026-08:
-  the range starts there, no backfill from other sources.
+- [x] **Flows back to 2018** — AEMO's monthly MMSDM archive holds the same `INTERCONNECTORRES`
+  record as the DispatchIS files; its 104 months (2018-01 → 2026-08) load into
+  `fct_interconnector_today` as more rows, the half-year files gain an `interconnector` table,
+  and the Flows page plays any range of up to 30 days (2026-10-02). After the backfill:
+  one `import_data.yml` dispatch with `all_periods=true`.
 - [x] **Daily profile and price-by-hour beyond 30 days** — hour-of-day × month tables in the
   daily aggregate; beyond 30 days both charts are hourly over the whole months the range
   touches (2026-10-01).

@@ -6,6 +6,7 @@ Usage:
     python cache_catalog.py export_scada_today
     python cache_catalog.py export_price_today
     python cache_catalog.py export_interconnector_today
+    python cache_catalog.py export_interconnector
     python cache_catalog.py export_dim_duid
     python cache_catalog.py export_dim_calendar
     python cache_catalog.py build_dim
@@ -175,29 +176,42 @@ def export_price_today():
     con.close()
 
 
-def export_interconnector_today():
+def _export_interconnector(date_filter, parquet):
     """Interconnector flows (MW, positive from the first region in the ID to the second) and
-    limits, last 14 days. The table is new (2026-10-01): until the pipeline has created it, an
-    empty file with the same columns keeps build_today and the dashboard working."""
+    limits. The table was new on 2026-10-01: until the pipeline has created it, an empty
+    file with the same columns keeps the builds and the dashboard working. ANY_VALUE also
+    settles August 2026, which the table holds from two sources."""
     con = connect_iceberg()
-    query = """
+    query = f"""
         SELECT INTERCONNECTORID AS interconnector, CAST(SETTLEMENTDATE AS DATE) AS date,
             CAST(strftime(SETTLEMENTDATE, '%H%M') AS SMALLINT) AS time,
             CAST(ANY_VALUE(MWFLOW) AS REAL) AS mw,
             CAST(ANY_VALUE(EXPORTLIMIT) AS REAL) AS export_limit,
             CAST(ANY_VALUE(IMPORTLIMIT) AS REAL) AS import_limit
         FROM catalog.landing.fct_interconnector_today
-        WHERE DATE >= CURRENT_DATE - INTERVAL 14 DAY AND INTERVENTION = 0
+        WHERE INTERVENTION = 0 {date_filter}
         GROUP BY ALL
     """
     try:
-        con.execute(f"COPY ({query}) TO '{DASHBOARD_DIR}/fct_interconnector_today.parquet' (FORMAT PARQUET)")
+        con.execute(f"COPY ({query}) TO '{DASHBOARD_DIR}/{parquet}' (FORMAT PARQUET)")
     except duckdb.CatalogException as e:
         print(f"  fct_interconnector_today not there yet ({e}); exporting an empty table")
         con.execute(f"""COPY (SELECT ''::VARCHAR AS interconnector, NULL::DATE AS date, 0::SMALLINT AS time,
             0::REAL AS mw, 0::REAL AS export_limit, 0::REAL AS import_limit LIMIT 0)
-            TO '{DASHBOARD_DIR}/fct_interconnector_today.parquet' (FORMAT PARQUET)""")
+            TO '{DASHBOARD_DIR}/{parquet}' (FORMAT PARQUET)""")
     con.close()
+
+
+def export_interconnector_today():
+    """The last 14 days, for energy_today.duckdb."""
+    _export_interconnector("AND DATE >= CURRENT_DATE - INTERVAL 14 DAY",
+                           "fct_interconnector_today.parquet")
+
+
+def export_interconnector():
+    """The history (2018 on: AEMO's monthly archive, then the DispatchIS files), for the
+    half-year files. Same cutoff as scada and price."""
+    _export_interconnector(cutoff_filter(), "fct_interconnector.parquet")
 
 
 def export_dim_duid():
@@ -243,7 +257,7 @@ def build_daily():
         ).fetchall()
     ]
 
-    # Build per-half-year files with scada + price
+    # Build per-half-year files with scada + price + interconnector
     for year, half in periods:
         tag = f"{year}_h{half}"
         month_lo = 1 if half == 1 else 7
@@ -263,6 +277,13 @@ def build_daily():
             WHERE EXTRACT(YEAR FROM date) = {year}
               AND EXTRACT(MONTH FROM date) BETWEEN {month_lo} AND {month_hi}
             ORDER BY REGIONID, date, time
+        """)
+        ycon.execute(f"""
+            CREATE TABLE interconnector AS
+            SELECT * FROM '{DASHBOARD_DIR}/fct_interconnector.parquet'
+            WHERE EXTRACT(YEAR FROM date) = {year}
+              AND EXTRACT(MONTH FROM date) BETWEEN {month_lo} AND {month_hi}
+            ORDER BY interconnector, date, time
         """)
         ycon.close()
         size_mb = os.path.getsize(path) / 1024 / 1024
@@ -360,7 +381,7 @@ def build_daily_agg():
     print(f"Daily aggregate (kept deployed rows before {cutoff or 'nothing'}): {rows}")
 
     # Clean up parquet intermediates (shared with build_daily)
-    for f in ["fct_scada.parquet", "fct_price.parquet"]:
+    for f in ["fct_scada.parquet", "fct_price.parquet", "fct_interconnector.parquet"]:
         path = os.path.join(DASHBOARD_DIR, f)
         if os.path.exists(path):
             os.remove(path)
@@ -414,6 +435,7 @@ COMMANDS = {
     "export_scada_today": export_scada_today,
     "export_price_today": export_price_today,
     "export_interconnector_today": export_interconnector_today,
+    "export_interconnector": export_interconnector,
     "export_dim_duid": export_dim_duid,
     "export_dim_calendar": export_dim_calendar,
     "build_dim": build_dim,
