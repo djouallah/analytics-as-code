@@ -119,9 +119,10 @@ def rooftop_units(con, date_filter, scada_table):
     Returns '' while the table doesn't exist."""
     if not has_rooftop(con):
         return ""
-    newest = con.execute(f"""SELECT max(SETTLEMENTDATE) FROM {scada_table}
-                             WHERE DATE >= CURRENT_DATE - INTERVAL 7 DAY""").fetchone()[0]
-    cap = f"AND ts <= TIMESTAMPTZ '{newest}'" if newest else ""
+    # The newest interval of the units, left in SQL: fetching a TIMESTAMPTZ into Python needs
+    # pytz, which the import job's venv doesn't have (that broke the import on 2026-10-02).
+    cap = f"""AND ts <= COALESCE((SELECT max(SETTLEMENTDATE) FROM {scada_table}
+                                  WHERE DATE >= CURRENT_DATE - INTERVAL 7 DAY), 'infinity'::TIMESTAMPTZ)"""
     return f"""
         UNION ALL
         SELECT DUID, CAST(ts AS DATE) AS date, CAST(strftime(ts, '%H%M') AS SMALLINT) AS time,
