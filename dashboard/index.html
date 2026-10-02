@@ -1729,10 +1729,16 @@
 
       // --- generators in this interval (loaded a day at a time, the next day ahead of play) ---
       const [day, hhmm] = key.split('|');
-      let gens = [];
+      let gens = [], gensTime = hhmm;
       if (document.getElementById('icGens').checked) {
-        if (icState.gens.has(day)) gens = frameGens(icState.gens.get(day).get(hhmm));
-        else ensureGens(day);
+        if (icState.gens.has(day)) {
+          // The generators' feed can trail the flows by an interval or two: such a frame shows
+          // their latest interval within 15 minutes, and the readout says which one.
+          const dayGens = icState.gens.get(day);
+          const mins = t => 60 * +t.slice(0, 2) + +t.slice(2);
+          if (!dayGens.has(hhmm)) gensTime = [...dayGens.keys()].filter(t => t < hhmm && mins(hhmm) - mins(t) <= 15).sort().pop();
+          gens = frameGens(dayGens.get(gensTime));
+        } else ensureGens(day);
         ensureGens(icState.frames[Math.min(icState.frame + 288, icState.frames.length - 1)].key.split('|')[0]);
       }
       // Same definition as the Renewables KPI: output only, batteries on neither side.
@@ -1744,6 +1750,7 @@
       }
       document.getElementById('flowsNow').innerHTML = genMw
         ? `${Math.round(genMw).toLocaleString()} MW generating &middot; <b>${Math.round(100 * reMw / genMw)}%</b> renewable`
+          + (gensTime === hhmm ? '' : ` <span style="color:var(--muted);font-weight:500">(generators at ${formatTime(+gensTime)})</span>`)
         : '';
       const net = {};   // + exporting, - importing
       for (const r of rows) {
