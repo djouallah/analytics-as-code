@@ -118,6 +118,23 @@ models:
         tests:
           - not_null
 
+  # No tests on this model yet: they are for a person to write.
+  - name: fct_rooftop_pv
+    description: Rooftop solar output per region every half hour, as AEMO estimates it (ROOFTOP_PV_ACTUAL) - an estimate, not a meter reading, kept as published
+    columns:
+      - name: REGIONID
+        description: NEM region identifier; the older monthly files also carry sub-regions (QLDC, QLDN, QLDS, TASN, TASS)
+      - name: INTERVAL_DATETIME
+        description: End of the half-hour interval (timestamptz)
+      - name: POWER
+        description: Estimated rooftop generation at the end of the interval (MW); blank when AEMO had no estimate
+      - name: QI
+        description: AEMO's quality indicator for the estimate (1 = measurement, 0.6 = satellite, 0 = none)
+      - name: TYPE
+        description: How it was estimated - MEASUREMENT, SATELLITE or DAILY
+      - name: file
+        description: Source CSV filename the row was ingested from (part of the merge key)
+
   - name: fct_scada_today
     description: Intraday generation SCADA readings per unit from AEMO dispatch files
     columns:
@@ -142,6 +159,7 @@ exposures:
     type: application
     description: "Exports scada + price + dim_duid + dim_calendar into the dashboard .duckdb files (energy_dim / energy_today / energy_daily_agg / energy_data_<year>_h<n>) via scripts/cache_catalog.py"
     depends_on:
+      - ref('fct_rooftop_pv')
       - ref('fct_scada')
       - ref('fct_price')
       - ref('fct_scada_today')

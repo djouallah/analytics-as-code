@@ -143,7 +143,7 @@ page itself reads any column or table a deployed file lacks as "no data"
 (`scada_hourly`, `price_hourly`, `month_days`) that the daily-profile and price heatmap read
 for ranges over 30 days.
 
-## Models (9)
+## Models (10)
 | Model | Schema | Materialization |
 |-------|--------|-----------------|
 | stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
@@ -153,6 +153,20 @@ for ranges over 30 days.
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
 | fct_interconnector_today | landing | incremental insert-only merge (by file) — the INTERCONNECTORRES rows of the same archived DispatchIS files as fct_price_today (added 2026-10-01) **and, despite the name, the whole history**: AEMO's monthly MMSDM archive of the same record, 2018-01 → 2026-08 (source_type `interconnector_monthly`, a finite backfill added 2026-10-02; read with `strict_mode = false`, which the files from 2024-08 need). August 2026 is in both sources, so readers take `ANY_VALUE … GROUP BY`. Exported as `interconnector` in the half-year files; the Flows page plays any range ≤ 30 days |
 | fct_regionsum_today | landing | incremental insert-only merge (by file) — the REGIONSUM rows (v9) of the same files: demand, net interchange (positive = export), regional semi-scheduled UIGF/cleared MW (added 2026-10-01, filled from the archive). History's demand/net interchange come from fct_price's DREGION rows |
+| fct_rooftop_pv | landing | incremental insert-only merge (by file) — rooftop solar per region and half hour, AEMO's `ROOFTOP_PV_ACTUAL` estimate **kept as published** (added 2026-10-02): the current folder, the monthly MMSDM archive 2018-01 → 2026-08 and the weekly archives after it. The monthly files from 2024-08 swap `QI` and `LASTCHANGED`; the model reads each file's `I` row to tell |
+
+**Rooftop solar reaches the dashboard as pseudo-units, built in the export, not in Iceberg.**
+`scripts/cache_catalog.py rooftop_units` adds `QLD_PV`, `NSW_PV`, `VIC_PV`, `SA_PV`, `TAS_PV` to
+the scada exports and `export_dim_duid` adds them to the units with fuel `Rooftop solar` (no
+coordinates, no capacity), so every unit-based chart shows rooftop with no special case. The
+rules, all in that function: the `MEASUREMENT` estimate only (it starts 2018-03-06); a blank
+(`QI = 0`) is missing, not zero; a straight line between two consecutive half hours, nothing
+across a missing one; the newest half hour held for up to 55 minutes (the next estimate lands
+30–60 minutes late), never past the newest SCADA interval. On the generation chart the dashed
+Demand line is operational demand **plus** the rooftop in the stack. AEMO's data model 5.6
+report says `ROOFTOP_PV_ACTUAL` will be removed in a later release in favour of
+`ROOFTOP_PV_ACTUAL_PRED`/`_RUN` (5-minute); neither was published on 2026-10-02 — when the
+current folder stops updating, that is the replacement to move to.
 
 `dim_duid`'s insert-only merge means attribute changes (region/fuel/geo) never update in
 place. **Rebuilding a table = dispatch `process_data.yml` with `rebuild=<table>`**: it runs

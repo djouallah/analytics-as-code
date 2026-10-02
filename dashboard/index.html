@@ -334,16 +334,20 @@
       </div>
     </div>
     <p class="insights-note">
-      Utility-scale only: rooftop solar is not in AEMO's dispatch data, so renewable shares are
-      lower than figures that include it. Renewables = solar, wind, hydro and bioenergy; batteries
+      Rooftop solar is included, as one unit per region (QLD_PV, NSW_PV, VIC_PV, SA_PV, TAS_PV)
+      from 6 March 2018. It is not metered: AEMO estimates it every half hour, and the 5-minute
+      values here are a straight line between two estimates, the newest one held for up to 55
+      minutes until the next arrives. Deselect "Rooftop solar" in the fuel filter for the
+      utility-scale picture. Renewables = solar, wind, hydro and bioenergy; batteries
       ("Grid") are storage and count on neither side. Capture price = generation-weighted price the
       fuel earned in its region (5-minute prices for ranges up to 30 days, daily averages beyond).
       Capacity factor = energy / (registered capacity &times; hours), over units that generated in
       the range. Net exports = AEMO's net interconnector flow out of each region. Beyond 30 days
       the price heatmap and the average day are hourly, over the whole months the range touches.
-      The dashed Demand line on the generation chart is AEMO's operational demand (it excludes
-      rooftop solar); with a region selected, the gap between it and the stack is roughly that
-      region's net exports. Batteries: the average day of the battery fleet, output above the
+      The dashed Demand line on the generation chart is AEMO's operational demand plus the
+      rooftop solar in the stack (operational demand alone leaves out what rooftop supplies); with
+      a region selected, the gap between it and the stack is roughly that region's net exports.
+      Batteries: the average day of the battery fleet, output above the
       axis and charging below, with the price it saw; "bought" and "sold" are the prices weighted
       by the energy charged and discharged (5-minute ranges only, since a day's total nets one
       against the other). Who generated it: energy by owner and power station, coloured by fuel;
@@ -465,6 +469,7 @@
       'Coal seam methane': '#6b4c2a',
       'Wind': '#58a6ff',
       'Solar': '#f7c948',
+      'Rooftop solar': '#fff3a3',
       'Water': '#3fb950',
       'Bagasse': '#7ee787',
       'Diesel': '#ff7b72',
@@ -945,7 +950,10 @@
     // are in it without a fuel are "Unknown".
     const UNREGISTERED = 'Unregistered';
     // Renewable fuels as AEMO describes them. 'Grid' (batteries) is storage: neither side.
-    const RENEWABLE_FUELS = ['Solar', 'Wind', 'Water', 'Bagasse', 'Biogas - sludge',
+    // 'Rooftop solar' is the fuel of the rooftop pseudo-units (AEMO's regional estimate,
+    // scripts/cache_catalog.py rooftop_units).
+    const ROOFTOP = 'Rooftop solar';
+    const RENEWABLE_FUELS = ['Solar', ROOFTOP, 'Wind', 'Water', 'Bagasse', 'Biogas - sludge',
       'Landfill methane / landfill gas', 'Sewerage / waste water'];
     const renewableSql = () => RENEWABLE_FUELS.map(sqlStr).join(',');
     const FUEL = `CASE WHEN d.DUID IS NULL THEN '${UNREGISTERED}' ELSE COALESCE(d.FuelSourceDescriptor, 'Unknown') END`;
@@ -1249,14 +1257,16 @@
         data: xKeys.map(k => valueAt(k, name)),
       }));
       // Not stacked: the gap between the stack and the line is the region's net exports (or
-      // imports), plus the small non-scheduled generation AEMO's demand leaves out.
+      // imports), plus the small non-scheduled generation AEMO's demand leaves out. AEMO's
+      // operational demand doesn't count what rooftop solar supplies, so the rooftop in the
+      // stack is added to it: the line and the stack then measure the same thing.
       const demandAt = buildLookup(demandRows,
         r => intraday ? `${r.date}|${padTime(r.time)}` : r.date, r => r.demand);
       const hasDemand = demandRows.length > 0;
       if (hasDemand) series.push({
         name: DEMAND, type: 'line', symbol: 'none', z: 5, sampling: 'average',
         lineStyle: { width: 1.5, type: 'dashed', color: cssVar('--text') }, itemStyle: { color: cssVar('--text') },
-        data: xKeys.map(k => demandAt.get(k) ?? null),
+        data: xKeys.map(k => demandAt.has(k) ? demandAt.get(k) + (lookup.get(`${k}|${ROOFTOP}`) || 0) : null),
       });
 
       let hoveredSeries = '';
@@ -2354,7 +2364,7 @@
       const [gen, price] = await Promise.all([
         runQuery(`
           SELECT CAST(sc.date AS VARCHAR) AS date, ${sumIf(`${FUEL} IN (${renewableSql()})`, 're')},
-            ${sumIf(`${FUEL} <> 'Grid'`, 'total')}, ${sumIf(`${FUEL} = 'Solar'`, 'solar')}, ${sumIf(`${FUEL} = 'Wind'`, 'wind')}
+            ${sumIf(`${FUEL} <> 'Grid'`, 'total')}, ${sumIf(`${FUEL} IN ('Solar', ${sqlStr(ROOFTOP)})`, 'solar')}, ${sumIf(`${FUEL} = 'Wind'`, 'wind')}
           FROM v_scada_daily sc LEFT JOIN dim.dim_duid d ON sc.DUID = d.DUID
           WHERE sc.date ${before}${region ? ` AND d.Region = ${sqlStr(region)}` : ''}
           GROUP BY ALL ORDER BY ALL`),

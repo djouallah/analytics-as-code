@@ -85,6 +85,7 @@ def model(dbt, session):
                 raise
         z = zipfile.ZipFile(io.BytesIO(zip_bytes))
         results = []
+        nested = []
         for name in z.namelist():
             if name.upper().endswith(".CSV"):
                 # '#': the monthly archive's member names carry it since 2024-08.
@@ -94,7 +95,38 @@ def model(dbt, session):
                 with gzip.open(gz_path, "wb") as f:
                     f.write(z.read(name))
                 results.append((name, gz_name, gz_path))
+            elif name.upper().endswith(".ZIP"):
+                inner = zipfile.ZipFile(io.BytesIO(z.read(name)))
+                nested.extend(inner.read(n) for n in inner.namelist() if n.upper().endswith(".CSV"))
+        if nested:
+            # A weekly archive is a zip of several hundred one-interval zips: their CSVs are
+            # kept as one file named after the archive. Each keeps its own C and I rows,
+            # which the readers filter on anyway.
+            csv_name = url.rsplit("/", 1)[-1].rsplit(".", 1)[0] + ".CSV"
+            gz_path = os.path.join(temp_dir, csv_name + ".gz")
+            with gzip.open(gz_path, "wb") as f:
+                f.write(b"\n".join(nested))
+            results.append((csv_name, csv_name + ".gz", gz_path))
         return results
+
+    def mmsdm_url(table, year, month):
+        """A table's monthly file in AEMO's MMSDM archive. The file name changed in 2024-08."""
+        stamp = f"{year}{month:02d}010000"
+        name = (f"PUBLIC_DVD_{table}_{stamp}" if (year, month) < (2024, 8)
+                else f"PUBLIC_ARCHIVE%23{table}%23FILE01%23{stamp}")
+        return ("https://nemweb.com.au/Data_Archive/Wholesale_Electricity/MMSDM/"
+                f"{year}/MMSDM_{year}_{month:02d}/MMSDM_Historical_Data_SQLLoader/DATA/{name}.zip")
+
+    def months_to_download(table, source_type):
+        """(url, source_filename) of the months 2018-01 to 2026-08 the log doesn't have yet,
+        newest first. A finite backfill: every URL in that range was checked on 2026-10-02."""
+        archived = {row[0] for row in session.sql(f"""
+            SELECT source_filename FROM _csv_archive_log WHERE source_type = '{source_type}'
+        """).fetchall()}
+        months = sorted(((y, m) for y in range(2018, 2027) for m in range(1, 13) if (y, m) <= (2026, 8)),
+                        reverse=True)
+        return [(mmsdm_url(table, y, m), f"{table}_{y}{m:02d}010000") for y, m in months
+                if f"{table}_{y}{m:02d}010000" not in archived]
 
     def copy_to_onelake(temp_path, dest_path):
         """Copy a local file to OneLake via DuckDB COPY."""
@@ -296,36 +328,89 @@ def model(dbt, session):
 
     # The DispatchIS files above are only archived from 2026-08. AEMO's monthly MMSDM
     # archive holds the same INTERCONNECTORRES record, one zip a month: 2018-01 to 2026-08
-    # is what fct_interconnector_today needs to go back as far as the other facts. The
-    # file name changed in 2024-08; all 104 URLs this builds were checked on 2026-10-02.
+    # is what fct_interconnector_today needs to go back as far as the other facts.
     # Newest months first, and like the GitHub backfill only once the daily feed has caught
     # up. When every month is in the log there is nothing left to do here.
     if aemo_new < download_limit:
-        archived_months = {row[0] for row in session.sql("""
-            SELECT source_filename FROM _csv_archive_log
-            WHERE source_type = 'interconnector_monthly'
-        """).fetchall()}
-        months_to_download = []
-        for year, month in sorted(
-            ((y, m) for y in range(2018, 2027) for m in range(1, 13) if (y, m) <= (2026, 8)),
-            reverse=True,
-        ):
-            stamp = f"{year}{month:02d}010000"
-            source_filename = f"DISPATCHINTERCONNECTORRES_{stamp}"
-            if source_filename in archived_months:
-                continue
-            zip_name = (
-                f"PUBLIC_DVD_DISPATCHINTERCONNECTORRES_{stamp}" if (year, month) < (2024, 8)
-                else f"PUBLIC_ARCHIVE%23DISPATCHINTERCONNECTORRES%23FILE01%23{stamp}"
-            )
-            months_to_download.append((
-                "https://nemweb.com.au/Data_Archive/Wholesale_Electricity/MMSDM/"
-                f"{year}/MMSDM_{year}_{month:02d}/MMSDM_Historical_Data_SQLLoader/DATA/{zip_name}.zip",
-                source_filename,
-            ))
-        if months_to_download:
-            process_downloads(months_to_download[:download_limit],
+        interconnector_months = months_to_download('DISPATCHINTERCONNECTORRES', 'interconnector_monthly')
+        if interconnector_months:
+            process_downloads(interconnector_months[:download_limit],
                               'interconnector_monthly', 'interconnector_monthly')
+
+    # =========================================================================
+    # ROOFTOP SOLAR (AEMO's half-hourly estimate per region)
+    # =========================================================================
+
+    # Not metered: AEMO estimates each region's rooftop output every half hour and publishes
+    # it as ROOFTOP_PV_ACTUAL, one small file per interval and estimate type. MEASUREMENT
+    # (scaled up from sampled systems) is the one used; SATELLITE runs lower and is left out.
+    # The current folder holds two weeks.
+    session.sql("""
+        CREATE OR REPLACE TEMP TABLE rooftop_web AS
+        WITH
+          html_data AS (
+            SELECT content AS html
+            FROM read_text('https://nemweb.com.au/Reports/Current/ROOFTOP_PV/ACTUAL/')
+          ),
+          lines AS (
+            SELECT unnest(string_split(html, '<br>')) AS line FROM html_data
+          )
+        SELECT
+          'https://nemweb.com.au' || regexp_extract(line, 'HREF="([^"]+)"', 1) AS full_url,
+          split_part(regexp_extract(line, 'HREF="[^"]+/([^"]+\\.zip)"', 1), '.', 1) AS filename
+        FROM lines
+        WHERE line LIKE '%PUBLIC_ROOFTOP_PV_ACTUAL_MEASUREMENT_%.zip%'
+        ORDER BY full_url DESC
+        LIMIT 700
+    """)
+
+    rooftop_to_download = session.sql(f"""
+        SELECT full_url, filename FROM rooftop_web
+        WHERE 'rooftop_today::' || filename NOT IN (
+            SELECT source_type || '::' || source_filename FROM _csv_archive_log
+        )
+        LIMIT {download_limit}
+    """).fetchall()
+
+    if rooftop_to_download:
+        process_downloads(rooftop_to_download, 'rooftop_today', 'rooftop_today')
+
+    # History, once the daily feed has caught up: the monthly archive of the same table from
+    # 2018-01 to 2026-08 (every estimate type; MEASUREMENT starts 2018-03-06), then AEMO's
+    # weekly archives from the one that reaches into September 2026. The weekly files keep
+    # coming, one a week, and repeat what the current folder gave: that is what refills a
+    # stretch the pipeline missed for more than two weeks. Readers take one row per interval.
+    if aemo_new < download_limit:
+        rooftop_months = months_to_download('ROOFTOP_PV_ACTUAL', 'rooftop_monthly')
+        if rooftop_months:
+            process_downloads(rooftop_months[:download_limit], 'rooftop_monthly', 'rooftop_monthly')
+
+        rooftop_weeks = session.sql(f"""
+            WITH
+              html_data AS (
+                SELECT content AS html
+                FROM read_text('https://nemweb.com.au/Reports/Archive/ROOFTOP_PV/ACTUAL/')
+              ),
+              lines AS (
+                SELECT unnest(string_split(html, '<br>')) AS line FROM html_data
+              ),
+              weeks AS (
+                SELECT
+                  'https://nemweb.com.au' || regexp_extract(line, 'HREF="([^"]+)"', 1) AS full_url,
+                  split_part(regexp_extract(line, 'HREF="[^"]+/([^"]+\\.zip)"', 1), '.', 1) AS filename
+                FROM lines
+                WHERE line LIKE '%PUBLIC_ROOFTOP_PV_ACTUAL_MEASUREMENT_%.zip%'
+              )
+            SELECT full_url, filename FROM weeks
+            WHERE filename >= 'PUBLIC_ROOFTOP_PV_ACTUAL_MEASUREMENT_20260827'
+              AND 'rooftop_weekly::' || filename NOT IN (
+                SELECT source_type || '::' || source_filename FROM _csv_archive_log
+              )
+            ORDER BY filename DESC
+            LIMIT {download_limit}
+        """).fetchall()
+        if rooftop_weeks:
+            process_downloads(rooftop_weeks, 'rooftop_weekly', 'rooftop_weekly')
 
     # =========================================================================
     # DUID REFERENCE DATA (skip if downloaded less than 24 hours ago)

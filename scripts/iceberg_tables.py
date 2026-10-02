@@ -16,6 +16,7 @@ TABLES = [
     "landing.fct_scada_today",
     "landing.fct_interconnector_today",
     "landing.fct_regionsum_today",
+    "landing.fct_rooftop_pv",
     "mart.dim_calendar",
     "mart.dim_duid",
     "landing.stg_csv_archive_log",

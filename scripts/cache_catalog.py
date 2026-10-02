@@ -88,6 +88,65 @@ def cutoff_filter():
     return f"AND DATE >= DATE '{cutoff}'" if cutoff else ""
 
 
+ROOFTOP = "catalog.landing.fct_rooftop_pv"
+ROOFTOP_REGIONS = "('NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1')"
+
+
+def has_rooftop(con):
+    """fct_rooftop_pv was new on 2026-10-02: until the pipeline has created it, the exports
+    go out without rooftop solar."""
+    try:
+        con.execute(f"SELECT 1 FROM {ROOFTOP} LIMIT 0")
+        return True
+    except duckdb.CatalogException as e:
+        print(f"  fct_rooftop_pv not there yet ({e}); exporting without rooftop solar")
+        return False
+
+
+def rooftop_units(con, date_filter, scada_table):
+    """UNION ALL branch that adds rooftop solar to a scada export as one pseudo-unit per
+    region (QLD_PV, NSW_PV, VIC_PV, SA_PV, TAS_PV), so every chart built on units shows it.
+
+    AEMO publishes an estimate per region and half hour (MW at the end of the interval).
+    Taken here: the MEASUREMENT estimate, the latest version of it, and never a blank one
+    (QI 0 means AEMO had none - that half hour is missing, not zero). Then, to sit on the
+    5-minute grid of the units:
+      - between two consecutive half hours, a straight line;
+      - across a missing half hour, nothing: the point alone, no line through the hole;
+      - after the newest half hour, its value held for up to 55 minutes, because the next
+        estimate lands 30 to 60 minutes late and the stack would otherwise end in a cliff.
+        It never runs past the newest interval of the units themselves.
+    Returns '' while the table doesn't exist."""
+    if not has_rooftop(con):
+        return ""
+    newest = con.execute(f"""SELECT max(SETTLEMENTDATE) FROM {scada_table}
+                             WHERE DATE >= CURRENT_DATE - INTERVAL 7 DAY""").fetchone()[0]
+    cap = f"AND ts <= TIMESTAMPTZ '{newest}'" if newest else ""
+    return f"""
+        UNION ALL
+        SELECT DUID, CAST(ts AS DATE) AS date, CAST(strftime(ts, '%H%M') AS SMALLINT) AS time,
+            CAST(mw AS REAL) AS mw
+        FROM (
+            WITH half_hours AS (
+                SELECT REGIONID, INTERVAL_DATETIME AS ts, arg_max(POWER, LASTCHANGED) AS mw
+                FROM {ROOFTOP}
+                WHERE TYPE = 'MEASUREMENT' AND POWER IS NOT NULL AND QI > 0
+                    AND REGIONID IN {ROOFTOP_REGIONS} {date_filter}
+                GROUP BY ALL
+            ), spans AS (
+                SELECT *, lead(ts) OVER w AS next_ts, lead(mw) OVER w AS next_mw
+                FROM half_hours WINDOW w AS (PARTITION BY REGIONID ORDER BY ts)
+            )
+            SELECT replace(REGIONID, '1', '') || '_PV' AS DUID, ts + to_minutes(5 * step) AS ts,
+                CASE WHEN next_ts = ts + INTERVAL 30 MINUTE THEN mw + (next_mw - mw) * step / 6.0
+                     ELSE mw END AS mw
+            FROM spans, range(12) AS steps(step)
+            WHERE step = 0 OR (step < 6 AND next_ts = ts + INTERVAL 30 MINUTE) OR next_ts IS NULL
+        )
+        WHERE mw <> 0 {cap}
+    """
+
+
 def export_scada():
     con = connect_iceberg()
     con.execute(f"""
@@ -98,6 +157,7 @@ def export_scada():
             FROM catalog.landing.fct_scada
             WHERE INTERVENTION = 0 AND INITIALMW <> 0 {cutoff_filter()}
             GROUP BY DUID, CAST(SETTLEMENTDATE AS DATE), strftime(SETTLEMENTDATE, '%H%M')
+            {rooftop_units(con, cutoff_filter(), "catalog.landing.fct_scada")}
         ) TO '{DASHBOARD_DIR}/fct_scada.parquet' (FORMAT PARQUET);
     """)
     con.close()
@@ -133,6 +193,7 @@ def export_scada_today():
             WHERE DATE >= CURRENT_DATE - INTERVAL 14 DAY
                 AND INITIALMW <> 0
             GROUP BY DUID, CAST(SETTLEMENTDATE AS DATE), strftime(SETTLEMENTDATE, '%H%M')
+            {rooftop_units(con, "AND DATE >= CURRENT_DATE - INTERVAL 14 DAY", "catalog.landing.fct_scada_today")}
         ) TO '{DASHBOARD_DIR}/fct_scada_today.parquet' (FORMAT PARQUET);
     """)
     con.close()
@@ -215,12 +276,26 @@ def export_interconnector():
 
 
 def export_dim_duid():
+    """The registered units, plus the rooftop pseudo-units of rooftop_units(): one per region
+    that has an estimate, fuel 'Rooftop solar', the state name taken from the region's own
+    units. No coordinates and no capacity: neither is published with the estimate."""
     con = connect_iceberg()
+    rooftop = f"""
+        UNION ALL
+        SELECT replace(r.REGIONID, '1', '') || '_PV', r.REGIONID, 'Rooftop solar',
+            'Rooftop solar (AEMO estimate)', s.State, NULL, NULL,
+            'Rooftop solar ' || replace(r.REGIONID, '1', ''), 'Rooftop PV, estimated', NULL, NULL, NULL
+        FROM (SELECT DISTINCT REGIONID FROM {ROOFTOP}
+              WHERE TYPE = 'MEASUREMENT' AND REGIONID IN {ROOFTOP_REGIONS}) r
+        LEFT JOIN (SELECT Region, ANY_VALUE(State) AS State FROM catalog.mart.dim_duid GROUP BY Region) s
+            ON s.Region = r.REGIONID
+    """ if has_rooftop(con) else ""
     con.execute(f"""
         COPY (
             SELECT DUID, Region, FuelSourceDescriptor, Participant, State, latitude, longitude,
                 StationName, TechnologyType, RegCapMW, MaxCapMW, StorageMWh
             FROM catalog.mart.dim_duid
+            {rooftop}
         ) TO '{DASHBOARD_DIR}/dim_duid.parquet' (FORMAT PARQUET);
     """)
     con.close()

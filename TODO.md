@@ -59,10 +59,11 @@ The 5-minute DispatchIS files already archived since 2026-08 also carry `REGIONS
   factor), `DUALLOC` (DUID → unit), `DUDETAILSUMMARY` (region). Gives region/fuel to the ~10%
   "Unregistered" history and an emissions-intensity KPI and chart. DUIDs that MMSDM doesn't
   cover stay "Unregistered"; no guessed fuel, region or CO2 factor.
-- [ ] **Rooftop solar** — new feed from AEMO `ROOFTOP_PV/ACTUAL` (30-min, per region) with an
-  archive/MMSDM backfill; rooftop in the generation stack and renewable share with and without
-  it (today's share is utility-scale only). Backfill only as far as AEMO's archive goes;
-  before that the share stays utility-only and is labelled as such.
+- [x] **Rooftop solar** — AEMO's half-hourly estimate per region (`ROOFTOP_PV_ACTUAL`) in the
+  new `fct_rooftop_pv`, from 2018-03-06; in the dashboard as five pseudo-units (`QLD_PV` …)
+  interpolated to 5 minutes, so the generation stack, the renewable share and every other
+  unit-based chart include it; deselect the "Rooftop solar" fuel for the utility-only picture
+  (2026-10-02). AEMO plans to replace the record with a 5-minute one: see CLAUDE.md.
 
 ## Waiting on upstream
 
