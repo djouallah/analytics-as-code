@@ -2206,8 +2206,9 @@
           label: { fontSize: 10, formatter: '{b}' },
           upperLabel: { show: true, height: 16, fontSize: 10, fontWeight: 600, color: cssVar('--text') },
           levels: [
-            { itemStyle: { gapWidth: 3, borderWidth: 0 } },
-            { itemStyle: { borderColor: cssVar('--row-line'), borderWidth: 2, gapWidth: 1 } },
+            // The gaps between a node's children are drawn in its border colour (white by default).
+            { itemStyle: { borderColor: cssVar('--card'), gapWidth: 3, borderWidth: 0 }, upperLabel: { show: false } },
+            { itemStyle: { borderColor: cssVar('--border'), borderWidth: 2, gapWidth: 1 } },
             { itemStyle: { borderColor: cssVar('--card'), borderWidth: 0 } },
           ],
           data: [...owners.values()] }],
