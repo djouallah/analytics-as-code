@@ -124,6 +124,10 @@
     .flows-time small { display: block; font-size: 0.7rem; font-weight: 500; color: var(--muted); letter-spacing: 0; }
     .flows-now { display: block; font-size: 0.85rem; font-weight: 600; letter-spacing: 0; min-height: 1.2em; }
     .flows-now b { color: #3fb950; }
+    .flows-event { display: block; font-size: 0.85rem; font-weight: 700; letter-spacing: 0; color: #f85149; min-height: 1.2em; }
+    .ic-dead .ic-mw, .ic-dead .ic-util { color: #f85149; }
+    .ic-dead .ic-util { font-weight: 600; }
+    .ic-dead .ic-bar span { background: repeating-linear-gradient(135deg, #f85149 0 6px, transparent 6px 12px); }
     .flows-bar input[type=range] { flex: 1; min-width: 160px; accent-color: var(--accent); }
     .flows-btn { background: var(--card); border: 1px solid var(--border); border-radius: 6px; color: var(--text); cursor: pointer; font-size: 0.8rem; font-weight: 600; padding: 0.35rem 0.8rem; }
     .flows-btn:hover { border-color: var(--accent); color: var(--accent); }
@@ -254,7 +258,7 @@
 
   <div id="view-flows" role="tabpanel" aria-labelledby="tab-flows" style="display:none">
     <div class="flows-bar">
-      <div class="flows-time" id="flowsTime">--<span class="flows-now" id="flowsNow"></span><small id="flowsTimeSub">Generators, power flow between regions (MW) and spot price ($/MWh) in this 5-minute interval</small></div>
+      <div class="flows-time" id="flowsTime">--<span class="flows-now" id="flowsNow"></span><span class="flows-event" id="flowsEvent"></span><small id="flowsTimeSub">Generators, power flow between regions (MW) and spot price ($/MWh) in this 5-minute interval</small></div>
       <button type="button" class="flows-btn" id="icPlay" aria-label="Play the flows through the selected range">&#9654; Play</button>
       <label class="chart-toggle" for="icSpeed">Speed</label>
       <select id="icSpeed"><option value="0.5">0.5&times;</option><option value="1" selected>1&times;</option><option value="2">2&times;</option><option value="4">4&times;</option></select>
@@ -1572,13 +1576,24 @@
       { gte: 50, lt: 100, color: '#e0d38a', label: '$50–100' },
       { gte: 100, lt: 300, color: '#fdae61', label: '$100–300' },
       { gte: 300, lt: 1000, color: '#f46d43', label: '$300–1k' },
-      { gte: 1000, color: '#a50026', label: '≥ $1k' },
+      { gte: 1000, lt: 5000, color: '#a50026', label: '$1k–5k' },
+      { gte: 5000, color: '#ff4fd8', label: '≥ $5k' },
     ];
-    const fmtPrice = (v, dp = 0) => v == null ? '--' : `${v < 0 ? '-' : ''}$${Math.abs(v).toFixed(dp)}`;
+    // What makes a frame stand out: a region at a spike price pulses, a link carrying nothing
+    // is drawn dashed, and a jump of this size between two intervals is written under the clock.
+    const SPIKE_PRICE = 5000, SPIKE_COLOR = '#ff4fd8', OUT_COLOR = '#f85149';
+    const JUMP_MW = 300, JUMP_PRICE = 2000;
+    const fmtDuration = frames => {
+      const m = frames * 5;
+      return m < 60 ? `${m} min` : m < 1440 ? `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`
+        : `${Math.floor(m / 1440)} d ${Math.floor(m % 1440 / 60)} h`;
+    };
+    const fmtPrice = (v, dp = 0) => v == null ? '--'
+      : `${v < 0 ? '-' : ''}$${Math.abs(v).toLocaleString('en-AU', { minimumFractionDigits: dp, maximumFractionDigits: dp })}`;
     const priceColor = v => v == null ? '#888' : PRICE_BANDS.find(b => (b.gte == null || v >= b.gte) && (b.lt == null || v < b.lt)).color;
 
     const icState = { frames: [], flows: new Map(), prices: new Map(), frame: 0, timer: null, ids: [],
-      gens: new Map(), gensLoading: new Set() };
+      gens: new Map(), gensLoading: new Set(), idle: new Map(), events: [] };
 
     // Generators on the flow map. Every unit's fuel, region and position once; their output one
     // day at a time, one row per interval ("DUID:mw,DUID:mw,...").
@@ -1636,6 +1651,7 @@
         minis.innerHTML = '';
         document.getElementById('flowsTime').firstChild.textContent = '--';
         document.getElementById('flowsNow').textContent = '';
+        document.getElementById('flowsEvent').textContent = '';
         icState.frames = [];
       };
       // Always 5-minute frames, so only the ranges whose half-year files renderAll loads.
@@ -1674,10 +1690,37 @@
           if (use != null) icState.prices.set(`${k}|${code}`, use);
         }
       }
-      const swatch = (color, label) => `<span><span class="rg-swatch" style="background:${color}"></span>${label}</span>`;
+      // At every frame: how many frames each link has now carried nothing, and what jumped
+      // since the frame before (a link by JUMP_MW, a price by JUMP_PRICE).
+      icState.idle = new Map();
+      icState.events = [];
+      const idleRun = {}, prevMw = {};
+      xKeys.forEach((k, i) => {
+        const jumps = [];
+        for (const r of icState.flows.get(k) ?? []) {
+          idleRun[r.id] = Math.abs(r.mw) < 1 ? (idleRun[r.id] || 0) + 1 : 0;
+          icState.idle.set(`${k}|${r.id}`, idleRun[r.id]);
+          const was = prevMw[r.id], name = INTERCONNECTORS[r.id].name;
+          const mwText = v => Math.round(Math.abs(v)).toLocaleString();
+          // Losing a link (flow to nothing, limits closed) is news whatever it carried before.
+          if (was != null && Math.abs(was) >= 1 && idleRun[r.id] === 1 && r.export_limit - r.import_limit < 5)
+            jumps.push(`${name} ${mwText(was)} MW → no flow`);
+          else if (was != null && Math.abs(r.mw - was) >= JUMP_MW)
+            jumps.push(`${name} ${was * r.mw < 0 ? 'reversed, ' : ''}${mwText(was)} → ${mwText(r.mw)} MW`);
+          prevMw[r.id] = r.mw;
+        }
+        if (i) for (const code of Object.keys(REGION_ANCHORS)) {
+          if (region && code !== region) continue;
+          const was = icState.prices.get(`${xKeys[i - 1]}|${code}`), now = icState.prices.get(`${k}|${code}`);
+          if (was != null && now != null && Math.abs(now - was) >= JUMP_PRICE) jumps.push(`${short(code)} ${fmtPrice(was)} → ${fmtPrice(now)}`);
+        }
+        if (jumps.length) icState.events.push({ i, text: jumps.join(' · ') });
+      });
+      const swatch =(color, label) => `<span><span class="rg-swatch" style="background:${color}"></span>${label}</span>`;
       document.getElementById('priceLegend').innerHTML =
         `<div><b>Arrows</b> power flowing now (MW), thicker = more; colour = share of the link's limit ` +
-          [[0, '&lt; 70%'], [0.7, '70&ndash;90%'], [0.9, '&ge; 90%']].map(([u, l]) => swatch(utilColor(u), l)).join(' ') + '</div>' +
+          [[0, '&lt; 70%'], [0.7, '70&ndash;90%'], [0.9, '&ge; 90%']].map(([u, l]) => swatch(utilColor(u), l)).join(' ') +
+          ` ${swatch(OUT_COLOR, 'dashed &#10005; = no flow')}</div>` +
         `<div><b>Dots</b> ${swatch('#3fb950', 'net exporter')} ${swatch('#f0883e', 'net importer')}</div>` +
         `<div><b>Bubbles</b> generators, sized by output; ring = charging ` +
           GEN_LEGEND.map(f => swatch(fuelColor(f), f === 'Grid' ? 'Battery' : f)).join(' ') + '</div>' +
@@ -1768,6 +1811,11 @@
         ? `${Math.round(genMw).toLocaleString()} MW generating &middot; <b>${Math.round(100 * reMw / genMw)}%</b> renewable`
           + (gensTime === hhmm ? '' : ` <span style="color:var(--muted);font-weight:500">(generators at ${formatTime(+gensTime)})</span>`)
         : '';
+      // The two latest jumps within the last 3 hours of frames, newest first, so they stay
+      // readable while playing.
+      document.getElementById('flowsEvent').textContent = icState.events
+        .filter(e => e.i <= icState.frame && icState.frame - e.i <= 36).slice(-2).reverse()
+        .map(e => `${icState.frames[e.i].label.split(' ').pop()} ${e.text}`).join('   |   ');
       const net = {};   // + exporting, - importing
       for (const r of rows) {
         const ic = INTERCONNECTORS[r.id];
@@ -1779,11 +1827,24 @@
         const ic = INTERCONNECTORS[r.id];
         const [a, b] = r.mw >= 0 ? [ic.from, ic.to] : [ic.to, ic.from];
         const limit = r.mw >= 0 ? r.export_limit : -r.import_limit;
-        return { r, ic, a, b, util: limit > 0 ? Math.min(1.5, Math.abs(r.mw) / limit) : 0 };
+        // Out: carrying nothing, with its two limits closed on each other or for an hour already
+        // (a link can idle at zero for a few intervals without anything being wrong).
+        const idle = icState.idle.get(`${key}|${r.id}`) || 0;
+        const dead = Math.abs(r.mw) < 1 && (r.export_limit - r.import_limit < 5 || idle >= 12);
+        // A run that reaches back to the first frame started before the range did.
+        const since = `${idle > icState.frame ? 'at least ' : ''}${fmtDuration(idle)}`;
+        return { r, ic, a, b, dead, since, util: limit > 0 ? Math.min(1.5, Math.abs(r.mw) / limit) : 0 };
       }).sort((x, y) => Object.keys(INTERCONNECTORS).indexOf(x.r.id) - Object.keys(INTERCONNECTORS).indexOf(y.r.id));
+      const spikes = Object.keys(REGION_ANCHORS).filter(code => price(code) >= SPIKE_PRICE);
 
       // --- board ---
-      document.getElementById('icBoard').innerHTML = enriched.map(({ r, ic, a, b, util }) => `
+      document.getElementById('icBoard').innerHTML = enriched.map(({ r, ic, a, b, dead, since, util }) => dead ? `
+        <div class="ic-row ic-dead">
+          <div class="ic-name">${ic.name}<span>${short(ic.from)} &ndash; ${short(ic.to)}</span></div>
+          <div class="ic-mw">0 MW</div>
+          <div class="ic-bar"><span style="width:100%"></span></div>
+          <div class="ic-util">&#10005; No flow for ${since}</div>
+        </div>` : `
         <div class="ic-row">
           <div class="ic-name">${ic.name}<span>${short(a)} &rarr; ${short(b)}</span></div>
           <div class="ic-mw">${Math.round(Math.abs(r.mw)).toLocaleString()} MW</div>
@@ -1793,7 +1854,7 @@
       document.getElementById('regionBoard').innerHTML = Object.keys(REGION_ANCHORS).map(code => {
         const p = price(code), n = Math.round(net[code] || 0);
         return `<div class="rg-row"><div><span class="rg-swatch" style="background:${priceColor(p)}"></span>${regionName(code)}</div>
-          <div class="rg-price">${fmtPrice(p)}${p == null ? '' : '<small style="color:var(--muted);font-weight:400">/MWh</small>'}</div>
+          <div class="rg-price"${p >= SPIKE_PRICE ? ` style="color:${SPIKE_COLOR};font-weight:700"` : ''}>${fmtPrice(p)}${p == null ? '' : '<small style="color:var(--muted);font-weight:400">/MWh</small>'}</div>
           <div class="rg-net" style="color:${n >= 0 ? '#3fb950' : '#f0883e'}">${n >= 0 ? 'exports' : 'imports'} ${Math.abs(n).toLocaleString()} MW</div></div>`;
       }).join('');
 
@@ -1802,6 +1863,7 @@
       const light = isLight();
       getChart('chart-flowmap').setOption({
         tooltip: { trigger: 'item', formatter: p => {
+          if (p.seriesType === 'lines' && p.data.dead) return `<b>${p.data.name}</b><br>no flow for ${p.data.since}`;
           if (p.seriesType === 'lines') return `<b>${p.data.name}</b> ${p.data.dir}<br>${p.data.value.toLocaleString()} MW &middot; ${Math.round(100 * p.data.util)}% of limit`;
           if (p.seriesType === 'effectScatter') return `<b>${regionName(p.name)}</b><br>${p.value[2] >= 0 ? 'exporting' : 'importing'} ${Math.abs(p.value[2]).toLocaleString()} MW`;
           if (p.seriesType === 'scatter') return `<b>${escapeHtml(p.name)}</b><br>${escapeHtml(p.data.fuel)} &middot; ${Math.abs(p.value[2]).toLocaleString()} MW${p.value[2] < 0 ? ' charging' : ''}`;
@@ -1830,12 +1892,24 @@
             effect: { show: true, period: 2.5, trailLength: 0.2, symbol: 'arrow', symbolSize: 11, color: light ? '#1f2328' : '#ffffff' },
             label: { show: true, position: 'middle', fontSize: 11, fontWeight: 600, color: light ? '#1f2328' : '#ffffff',
               textBorderColor: light ? '#ffffff' : '#0f1117', textBorderWidth: 3, formatter: p => `${p.data.name} ${p.data.value} MW` },
-            data: enriched.map(({ r, ic, a, b, util }) => ({
+            data: enriched.filter(e => !e.dead).map(({ r, ic, a, b, util }) => ({
               name: ic.name, dir: `${short(a)}→${short(b)}`, value: Math.round(Math.abs(r.mw)), util,
               coords: [REGION_ANCHORS[a], REGION_ANCHORS[b]],
               lineStyle: { width: 2 + 9 * Math.abs(r.mw) / maxAbs, color: utilColor(util), curveness: ic.curve, opacity: 0.9 },
               label: { show: Math.abs(r.mw) >= 0.08 * maxAbs },
             })) },
+          // Links carrying nothing: dashed, no moving arrow, always named.
+          { type: 'lines', coordinateSystem: 'geo', zlevel: 2,
+            label: { show: true, position: 'middle', fontSize: 13, fontWeight: 700, color: OUT_COLOR,
+              textBorderColor: light ? '#ffffff' : '#0f1117', textBorderWidth: 3, formatter: p => `✕ ${p.data.name} no flow` },
+            data: enriched.filter(e => e.dead).map(({ ic, since }) => ({
+              name: ic.name, dead: true, since, coords: [REGION_ANCHORS[ic.from], REGION_ANCHORS[ic.to]],
+              lineStyle: { width: 3, type: 'dashed', color: OUT_COLOR, curveness: ic.curve, opacity: 0.95 },
+            })) },
+          // A region at a spike price pulses under its dot.
+          { type: 'effectScatter', coordinateSystem: 'geo', zlevel: 2, silent: true, symbolSize: 26,
+            rippleEffect: { scale: 5, period: 1.6, number: 3, brushType: 'stroke' }, itemStyle: { color: SPIKE_COLOR },
+            data: spikes.map(code => ({ name: code, value: REGION_ANCHORS[code] })) },
           { type: 'effectScatter', coordinateSystem: 'geo', zlevel: 3, rippleEffect: { scale: 3, brushType: 'stroke' },
             symbolSize: v => 9 + Math.min(14, Math.abs(v[2]) / 120),
             label: { show: true, position: 'right', fontSize: 12, fontWeight: 700, color: light ? '#1f2328' : '#ffffff',
@@ -1844,6 +1918,7 @@
             data: Object.entries(REGION_ANCHORS).map(([code, xy]) => ({
               name: code, value: [...xy, Math.round(net[code] || 0)],
               itemStyle: { color: (net[code] || 0) >= 0 ? '#3fb950' : '#f0883e', borderColor: light ? '#ffffff' : '#0f1117', borderWidth: 1.5 },
+              ...(spikes.includes(code) ? { label: { fontSize: 16, color: SPIKE_COLOR } } : {}),
             })) },
         ],
       }, true);
