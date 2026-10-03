@@ -129,7 +129,10 @@ transport fails the OneLake TLS handshake).
 ## Dashboard deploy
 The dashboard is two files. `dashboard/index.html` is the page: charts and the SQL behind them,
 written against views only (`v_scada`, `v_price`, `v_duid`, …; the list at the top of
-`data.js` is the contract) and never against an attached table. `dashboard/data.js` is how the
+`data.js` is the contract) and never against an attached table. Its measures (fuel name,
+renewable, output-only, renewable share, capacity factor) are DuckDB macros it creates itself
+at startup through `data.query` (`MACROS` in the page), so they are not part of that contract:
+a host's `data.js` needs nothing for them. `dashboard/data.js` is how the
 `.duckdb` files are fetched, cached, attached and merged into those views
 (`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `has`, `query`), and it is the only
 part that knows about `data/`, the half-year files, the `dim`/`today`/`agg` databases and

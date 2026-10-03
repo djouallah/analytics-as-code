@@ -547,6 +547,7 @@
     async function initDuckDB() {
       // enough attached for the default "Last 3 days" view
       ({ db: _db } = await data.init());
+      for (const macro of MACROS) await data.query(`CREATE OR REPLACE MACRO ${macro}`);
 
       setStatus(window._cutoffCached || "Connected", "connected");
     }
@@ -752,8 +753,22 @@
     const ROOFTOP = 'Rooftop solar';
     const RENEWABLE_FUELS = ['Solar', ROOFTOP, 'Wind', 'Water', 'Bagasse', 'Biogas - sludge',
       'Landfill methane / landfill gas', 'Sewerage / waste water'];
-    const renewableSql = () => RENEWABLE_FUELS.map(sqlStr).join(',');
-    const FUEL = `CASE WHEN d.DUID IS NULL THEN '${UNREGISTERED}' ELSE COALESCE(d.FuelSourceDescriptor, 'Unknown') END`;
+    // The page's measures, each defined once as a DuckDB macro. They are the page's own:
+    // created over the views through data.query (initDuckDB), so data.js knows nothing of
+    // them. One that holds aggregates is worked out at whatever grain the query groups by.
+    const MACROS = [
+      // The name a unit's fuel goes by on the page.
+      `fuel_name(duid, descr) AS CASE WHEN duid IS NULL THEN '${UNREGISTERED}' ELSE COALESCE(descr, 'Unknown') END`,
+      `is_renewable(fuel) AS fuel IN (${RENEWABLE_FUELS.map(sqlStr).join(',')})`,
+      // Output only: a unit that is charging (negative) generates nothing.
+      `generated(v) AS GREATEST(v, 0)`,
+      // Renewable share of the output, in %.
+      `renewable_share(v, fuel) AS 100 * SUM(CASE WHEN is_renewable(fuel) THEN generated(v) ELSE 0 END)
+        / NULLIF(SUM(CASE WHEN fuel <> 'Grid' THEN generated(v) ELSE 0 END), 0)`,
+      // Capacity factor in %: energy over what the registered capacity could make in the hours.
+      `capacity_factor(mwh, cap, hours) AS 100 * SUM(mwh) / (SUM(cap) * hours)`,
+    ];
+    const FUEL = 'fuel_name(d.DUID, d.FuelSourceDescriptor)';
 
     const sql = {
       // --- FROM clauses (views defined in data.js) ---
@@ -797,7 +812,7 @@
         const region = activeRegion(), fuel = activeFuel();
         if (region) return [`${regionCol} = ${sqlStr(region)}`];
         if (crossFilter.duids.length) return [`${regionCol} IN (SELECT Region FROM v_duid WHERE DUID IN (${duidList()}))`];
-        if (fuel && fuel !== UNREGISTERED) return [`${regionCol} IN (SELECT Region FROM v_duid WHERE COALESCE(FuelSourceDescriptor, 'Unknown') = ${sqlStr(fuel)})`];
+        if (fuel && fuel !== UNREGISTERED) return [`${regionCol} IN (SELECT Region FROM v_duid WHERE fuel_name(DUID, FuelSourceDescriptor) = ${sqlStr(fuel)})`];
         return [];
       },
 
@@ -1155,7 +1170,7 @@
       if (crossFilter.duids.length) mwFilters.push(`sc.DUID IN (${duidList()})`);
       const mwWhere = mwFilters.length ? `AND ${mwFilters.join(' AND ')}` : '';
       const latestMWResult = await runQuery(`
-        SELECT SUM(GREATEST(sc.mw, 0))::DOUBLE AS total_mw, CAST(sc.date AS VARCHAR) AS d, sc.time
+        SELECT SUM(generated(sc.mw))::DOUBLE AS total_mw, CAST(sc.date AS VARCHAR) AS d, sc.time
         FROM v_scada_today sc
         LEFT JOIN v_duid d ON sc.DUID = d.DUID
         WHERE sc.date = (SELECT MAX(date) FROM v_scada_today)
@@ -1276,29 +1291,28 @@
     //     negative prices, capacity factor)
     // =========================================================================
 
-    // Renewable share per interval (or day); the fuel filter is ignored on purpose.
-    function renewableShareSql() {
+    // Renewable share (%) per interval (or day), and of the whole range: the one measure at
+    // two grains, the range's row being the one without a date. The fuel filter is ignored on
+    // purpose.
+    async function renewableShare() {
       const intraday = isIntradayMode();
-      const v = intraday ? 'GREATEST(sc.mw, 0)' : 'GREATEST(sc.mwh, 0)';
-      return `
+      const rows = await runQuery(`
         SELECT CAST(sc.date AS VARCHAR) AS date${intraday ? ', CAST(sc.time AS INTEGER) AS time' : ''},
-          SUM(CASE WHEN ${FUEL} IN (${renewableSql()}) THEN ${v} ELSE 0 END)::DOUBLE AS re,
-          SUM(CASE WHEN ${FUEL} <> 'Grid' THEN ${v} ELSE 0 END)::DOUBLE AS total
+          renewable_share(${intraday ? 'sc.mw' : 'sc.mwh'}, ${FUEL})::DOUBLE AS share
         FROM ${sql.fromScada()}
         WHERE ${sql.whereScada({ withFuel: false })}
-        GROUP BY ALL ORDER BY ALL`;
+        GROUP BY GROUPING SETS ((sc.date${intraday ? ', sc.time' : ''}), ()) ORDER BY ALL`);
+      return { rows: rows.filter(r => r.date != null), overall: rows.find(r => r.date == null)?.share };
     }
 
     async function updateRenewablesKpi(seq) {
-      const rows = await runQuery(renewableShareSql());
+      const { rows, overall } = await renewableShare();
       if (seq !== _renderSeq) return;
-      const re = rows.reduce((s, r) => s + r.re, 0), total = rows.reduce((s, r) => s + r.total, 0);
-      setSpark('kpiRESpark', total ? rows.map(r => r.total ? r.re / r.total : null) : [], '#3fb950');
-      if (!total) return setKpi('kpiRE', '--', 'share of generation');
-      let peak = null;
-      for (const r of rows) if (r.total > 0 && (!peak || r.re / r.total > peak.share)) peak = { share: r.re / r.total, r };
-      const when = peak.r.time != null ? `${formatDate(peak.r.date).replace(/ \d{4}$/, '')} ${formatTime(peak.r.time)}` : formatDate(peak.r.date);
-      setKpiNumber('kpiRE', 100 * re / total, v => `${v.toFixed(1)}%`, `peak ${(100 * peak.share).toFixed(0)}% (${when})`);
+      setSpark('kpiRESpark', rows.map(r => r.share), '#3fb950');
+      if (overall == null) return setKpi('kpiRE', '--', 'share of generation');
+      const peak = rows.reduce((best, r) => r.share != null && (!best || r.share > best.share) ? r : best, null);
+      const when = peak.time != null ? `${formatDate(peak.date).replace(/ \d{4}$/, '')} ${formatTime(peak.time)}` : formatDate(peak.date);
+      setKpiNumber('kpiRE', overall, v => `${v.toFixed(1)}%`, `peak ${peak.share.toFixed(0)}% (${when})`);
     }
 
     // Change against the days just before the range, as many as the range has. Both sides come
@@ -1320,17 +1334,14 @@
 
       const dates = a => `${a}.date >= DATE ${sqlStr(prevFrom)} AND ${a}.date <= DATE ${sqlStr(last)}`;
       const cur = a => `CAST(${a}.date >= DATE ${sqlStr(from)} AS INTEGER) AS cur, CAST(COUNT(DISTINCT ${a}.date) AS INTEGER) AS n`;
-      const out = 'GREATEST(sc.mwh, 0)';
       const DIM = 'LEFT JOIN v_duid d ON sc.DUID = d.DUID';
       const [gen, price, re] = await Promise.all([
-        runQuery(`SELECT ${cur('sc')}, (SUM(${out}) / COUNT(DISTINCT sc.date))::DOUBLE AS v
+        runQuery(`SELECT ${cur('sc')}, (SUM(generated(sc.mwh)) / COUNT(DISTINCT sc.date))::DOUBLE AS v
           FROM v_scada_daily sc ${activeRegion() || activeFuel() ? DIM : ''}
           WHERE ${[dates('sc'), ...sql.scadaFilters('sc.DUID')].join(' AND ')} GROUP BY ALL`),
         runQuery(`SELECT ${cur('p')}, AVG(p.price)::DOUBLE AS v FROM v_price_daily p
           WHERE ${[dates('p'), ...sql.priceFilters('p.REGIONID')].join(' AND ')} GROUP BY ALL`),
-        runQuery(`SELECT ${cur('sc')},
-            (100 * SUM(CASE WHEN ${FUEL} IN (${renewableSql()}) THEN ${out} ELSE 0 END)
-              / NULLIF(SUM(CASE WHEN ${FUEL} <> 'Grid' THEN ${out} ELSE 0 END), 0))::DOUBLE AS v
+        runQuery(`SELECT ${cur('sc')}, renewable_share(sc.mwh, ${FUEL})::DOUBLE AS v
           FROM v_scada_daily sc ${DIM}
           WHERE ${[dates('sc'), ...sql.scadaFilters('sc.DUID', false)].join(' AND ')} GROUP BY ALL`),
       ]);
@@ -1414,6 +1425,7 @@
     let _genUnits = null;
     async function genUnits() {
       _genUnits ??= new Map((await runQuery(`SELECT DUID, FuelSourceDescriptor AS fuel, Region,
+        is_renewable(fuel_name(DUID, FuelSourceDescriptor)) AS renewable,
         latitude::DOUBLE AS lat, longitude::DOUBLE AS lon FROM v_duid`)).map(u => [u.DUID, u]));
       return _genUnits;
     }
@@ -1617,7 +1629,7 @@
       for (const g of gens) {
         if (g.mw <= 0 || g.unit?.fuel === 'Grid') continue;
         genMw += g.mw;
-        if (RENEWABLE_FUELS.includes(g.unit?.fuel)) reMw += g.mw;
+        if (g.unit?.renewable) reMw += g.mw;
       }
       document.getElementById('flowsNow').innerHTML = genMw
         ? `${Math.round(genMw).toLocaleString()} MW generating &middot; <b>${Math.round(100 * reMw / genMw)}%</b> renewable`
@@ -1767,12 +1779,12 @@
 
     async function renderRenewables(seq) {
       const intraday = isIntradayMode();
-      const rows = await runQuery(renewableShareSql());
+      const { rows } = await renewableShare();
       if (seq !== _renderSeq) return;
       if (!rows.length) return showEmpty('chart-re');
       const { xKeys, xLabels } = buildTimeAxis(rows, intraday);
       const lookup = buildLookup(rows, r => intraday ? `${r.date}|${padTime(r.time)}` : r.date,
-        r => r.total ? Math.round(1000 * r.re / r.total) / 10 : null);
+        r => r.share == null ? null : Math.round(10 * r.share) / 10);
       getChart('chart-re').setOption({
         tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '-' : `${v}%` },
         grid: { left: 45, right: 20, top: 15, bottom: intraday ? 60 : 25 },
@@ -1843,7 +1855,7 @@
       const months = `SELECT month, days FROM v_month_days WHERE ${monthsSql('month')}`;
       const [rows, span] = await Promise.all([runQuery(intraday ? `
         SELECT ${FUEL} AS fuel, CAST(sc.time AS INTEGER) AS time,
-          (SUM(GREATEST(sc.mw, 0)) / COUNT(DISTINCT sc.date))::DOUBLE AS mw
+          (SUM(generated(sc.mw)) / COUNT(DISTINCT sc.date))::DOUBLE AS mw
         FROM ${sql.fromScada()} WHERE ${sql.whereScada()} AND ${FUEL} <> 'Grid'
         GROUP BY ALL ORDER BY ALL` : `
         SELECT ${FUEL} AS fuel, CAST(h.hour AS INTEGER) * 100 AS time,
@@ -1877,7 +1889,7 @@
     async function renderCapture(seq) {
       const intraday = isIntradayMode();
       const pView = intraday ? 'v_price' : 'v_price_daily';
-      const v = intraday ? 'GREATEST(sc.mw, 0)' : 'GREATEST(sc.mwh, 0)';
+      const v = intraday ? 'generated(sc.mw)' : 'generated(sc.mwh)';
       const rows = await runQuery(`
         SELECT ${FUEL} AS fuel,
           (SUM(${v} * p.price) / NULLIF(SUM(${v}), 0))::DOUBLE AS capture,
@@ -1970,23 +1982,21 @@
       const hours = intraday
         ? `(SELECT COUNT(DISTINCT (p.date, p.time)) / 12.0 FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()})`
         : `(SELECT COUNT(DISTINCT p.date) * 24.0 FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()})`;
-      const energy = intraday ? 'SUM(GREATEST(sc.mw, 0)) / 12.0' : 'SUM(GREATEST(sc.mwh, 0))';
-      // One row per unit, read once: the fuels' factors and the top units both come from it.
-      const units = await runQuery(`
-        SELECT sc.DUID, ${FUEL} AS fuel, ANY_VALUE(d.StationName) AS station, ANY_VALUE(d.RegCapMW)::DOUBLE AS cap,
-          (${energy})::DOUBLE AS mwh, ${hours}::DOUBLE AS hours
-        FROM ${sql.fromScada()} WHERE ${sql.whereScada()} AND d.RegCapMW > 0 AND ${FUEL} <> 'Grid'
-        GROUP BY sc.DUID, ${FUEL}`);
+      const energy = intraday ? 'SUM(generated(sc.mw)) / 12.0' : 'SUM(generated(sc.mwh))';
+      // One row per unit, then the factor at two grains in one pass: per fuel (the rows
+      // without a DUID) and per unit. Sorted by factor, so the top units are the last ones.
+      const rows = (await runQuery(`
+        WITH u AS (
+          SELECT sc.DUID, ${FUEL} AS fuel, ANY_VALUE(d.StationName) AS station, ANY_VALUE(d.RegCapMW) AS cap,
+            ${energy} AS mwh
+          FROM ${sql.fromScada()} WHERE ${sql.whereScada()} AND d.RegCapMW > 0 AND ${FUEL} <> 'Grid'
+          GROUP BY sc.DUID, ${FUEL})
+        SELECT u.DUID, u.fuel, ANY_VALUE(u.station) AS station, SUM(u.cap)::DOUBLE AS cap,
+          capacity_factor(u.mwh, u.cap, ${hours})::DOUBLE AS cf
+        FROM u GROUP BY GROUPING SETS ((u.fuel), (u.DUID, u.fuel)) ORDER BY cf`)).filter(r => r.cf != null);
       if (seq !== _renderSeq) return;
-      const rangeHours = units[0]?.hours;
-      const withFactor = r => ({ ...r, cf: 100 * r.mwh / (r.cap * rangeHours) });
-      const fuels = new Map();
-      for (const u of rangeHours ? units : []) {
-        const f = fuels.get(u.fuel) ?? fuels.set(u.fuel, { fuel: u.fuel, mwh: 0, cap: 0 }).get(u.fuel);
-        f.mwh += u.mwh; f.cap += u.cap;
-      }
-      const byFuel = [...fuels.values()].map(withFactor).sort((a, b) => a.cf - b.cf);
-      const top = (rangeHours ? units : []).map(withFactor).sort((a, b) => b.cf - a.cf).slice(0, 15);
+      const byFuel = rows.filter(r => r.DUID == null);
+      const topAsc = rows.filter(r => r.DUID != null).slice(-15);
       const pctAxis = { type: 'value', axisLabel: { formatter: '{value}%' } };
       if (!byFuel.length) showEmpty('chart-cf');
       else getChart('chart-cf').setOption({
@@ -1998,8 +2008,7 @@
         series: [{ type: 'bar', barMaxWidth: 18,
           data: byFuel.map(r => ({ value: Math.round(r.cf * 10) / 10, itemStyle: { color: fuelColor(r.fuel) } })) }],
       }, true);
-      const topAsc = [...top].reverse();
-      if (!top.length) showEmpty('chart-cfunits');
+      if (!topAsc.length) showEmpty('chart-cfunits');
       else getChart('chart-cfunits').setOption({
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
           formatter: ps => { const r = topAsc[ps[0].dataIndex];
@@ -2084,7 +2093,7 @@
     async function renderOwners(seq) {
       if (!data.has('v_duid', 'Participant')) return showEmpty('chart-owners', 'Ownership data not deployed yet');
       const intraday = isIntradayMode();
-      const energy = intraday ? 'SUM(GREATEST(sc.mw, 0)) / 12.0' : 'SUM(GREATEST(sc.mwh, 0))';
+      const energy = intraday ? 'SUM(generated(sc.mw)) / 12.0' : 'SUM(generated(sc.mwh))';
       const rows = await runQuery(`
         SELECT COALESCE(d.Participant, 'Unknown') AS owner, COALESCE(d.StationName, sc.DUID) AS station,
           ${FUEL} AS fuel, (${energy})::DOUBLE AS mwh
@@ -2158,11 +2167,11 @@
       const region = activeRegion();
       // The newest day is still filling: its energy and its share are not a day's yet.
       const before = `< DATE ${sqlStr(document.getElementById('dateTo').max)}`;
-      const sumIf = (cond, alias) => `SUM(CASE WHEN ${cond} THEN GREATEST(sc.mwh, 0) ELSE 0 END)::DOUBLE AS ${alias}`;
+      const sumIf = (cond, alias) => `SUM(CASE WHEN ${cond} THEN generated(sc.mwh) ELSE 0 END)::DOUBLE AS ${alias}`;
       const [gen, price] = await Promise.all([
         runQuery(`
-          SELECT CAST(sc.date AS VARCHAR) AS date, ${sumIf(`${FUEL} IN (${renewableSql()})`, 're')},
-            ${sumIf(`${FUEL} <> 'Grid'`, 'total')}, ${sumIf(`${FUEL} IN ('Solar', ${sqlStr(ROOFTOP)})`, 'solar')}, ${sumIf(`${FUEL} = 'Wind'`, 'wind')}
+          SELECT CAST(sc.date AS VARCHAR) AS date, renewable_share(sc.mwh, ${FUEL})::DOUBLE AS re,
+            ${sumIf(`${FUEL} IN ('Solar', ${sqlStr(ROOFTOP)})`, 'solar')}, ${sumIf(`${FUEL} = 'Wind'`, 'wind')}
           FROM v_scada_daily sc LEFT JOIN v_duid d ON sc.DUID = d.DUID
           WHERE sc.date ${before}${region ? ` AND d.Region = ${sqlStr(region)}` : ''}
           GROUP BY ALL ORDER BY ALL`),
@@ -2175,7 +2184,7 @@
       ]);
       if (seq !== _renderSeq) return;
       const days = {
-        re: gen.filter(r => r.total > 0).map(r => [r.date, 100 * r.re / r.total]),
+        re: gen.filter(r => r.re != null).map(r => [r.date, r.re]),
         solar: gen.filter(r => r.solar > 0).map(r => [r.date, r.solar]),
         wind: gen.filter(r => r.wind > 0).map(r => [r.date, r.wind]),
         price: price.filter(r => r.price != null).map(r => [r.date, r.price]),
