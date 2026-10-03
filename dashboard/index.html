@@ -509,6 +509,11 @@
     const duidList = () => crossFilter.duids.map(sqlStr).join(',');
     let aggLoaded = false;
     let _renderSeq = 0;
+    // Nothing is drawn until init has filled the filters: a click before that would query a
+    // database that isn't there yet. Init then draws whichever tab is open.
+    let _ready = false;
+    // A render started outside renderAll (a tab, a control) reports a failure the same way.
+    const guarded = promise => promise.catch(e => { setStatus("Query error: " + e.message, "error"); console.error(e); });
 
     function updateFilterTags() {
       const el = document.getElementById("activeFilters");
@@ -546,10 +551,13 @@
       setStatus(window._cutoffCached || "Connected", "connected");
     }
 
-    async function loadDailyAggDatabase() {
-      await data.attachAgg();
-      aggLoaded = true;
-      viewsChanged();
+    // One load, shared by the background load at startup and by Analyze: a second ATTACH of
+    // agg while the first is still running would fail.
+    let _aggLoading = null;
+    function loadDailyAggDatabase() {
+      return _aggLoading ??= data.attachAgg().then(
+        () => { aggLoaded = true; viewsChanged(); },
+        e => { _aggLoading = null; throw e; });
     }
 
     // Attach the 5-minute history a date range needs, if it isn't already.
@@ -573,11 +581,20 @@
     function viewsChanged() { _viewGen++; clearQueryCache(); }
 
     let _queriesRun = 0;   // queries that reached the engine (cache misses), for the status readout
-    async function runQuery(sqlStr) {
+    // The cache holds the promise, not the rows: two charts asking for the same SQL in one
+    // render share one run. A query that fails is forgotten, so the next call tries again.
+    function runQuery(sqlStr) {
       const key = `${_viewGen}|${sqlStr}`;
       const cached = _queryCache.get(key);
       if (cached) return cached;
       _queriesRun++;
+      const rows = fetchRows(sqlStr);
+      if (_queryCache.size >= 200) _queryCache.delete(_queryCache.keys().next().value);  // oldest first
+      _queryCache.set(key, rows);
+      rows.catch(() => { if (_queryCache.get(key) === rows) _queryCache.delete(key); });
+      return rows;
+    }
+    async function fetchRows(sqlStr) {
       const result = await data.query(sqlStr);
       const numRows = Number(result.numRows);
       const fields = result.schema.fields;
@@ -602,8 +619,6 @@
         }
         rows[i] = row;
       }
-      if (_queryCache.size >= 200) _queryCache.delete(_queryCache.keys().next().value);  // oldest first
-      _queryCache.set(key, rows);
       return rows;
     }
 
@@ -776,19 +791,14 @@
       },
 
       // The region filter on a price table; a fuel or unit pick narrows it to their regions.
+      // The fuel is matched under the name the charts give it (see FUEL), whether it came from
+      // the dropdown or a click. Units missing from dim_duid have no region to narrow to.
       priceFilters(regionCol) {
-        const region = activeRegion();
-        const clauses = [];
-        if (region) clauses.push(`${regionCol} = ${sqlStr(region)}`);
-        if (!region && (crossFilter.duids.length || crossFilter.fuel)) {
-          const fuel = activeFuel();
-          if (crossFilter.duids.length) {
-            clauses.push(`${regionCol} IN (SELECT Region FROM v_duid WHERE DUID IN (${duidList()}))`);
-          } else if (fuel) {
-            clauses.push(`${regionCol} IN (SELECT DISTINCT Region FROM v_duid WHERE FuelSourceDescriptor = ${sqlStr(fuel)})`);
-          }
-        }
-        return clauses;
+        const region = activeRegion(), fuel = activeFuel();
+        if (region) return [`${regionCol} = ${sqlStr(region)}`];
+        if (crossFilter.duids.length) return [`${regionCol} IN (SELECT Region FROM v_duid WHERE DUID IN (${duidList()}))`];
+        if (fuel && fuel !== UNREGISTERED) return [`${regionCol} IN (SELECT Region FROM v_duid WHERE COALESCE(FuelSourceDescriptor, 'Unknown') = ${sqlStr(fuel)})`];
+        return [];
       },
 
       // --- Filter population ---
@@ -875,9 +885,19 @@
 
     const charts = {};
     function getChart(id) {
-      if (!charts[id]) charts[id] = echarts.init(document.getElementById(id), isLight() ? 'light-custom' : 'dark-custom');
+      if (!charts[id]) {
+        const chart = charts[id] = echarts.init(document.getElementById(id), isLight() ? 'light-custom' : 'dark-custom');
+        chart.on('georoam', () => {
+          const geo = chart.getOption().geo?.[0];
+          if (geo) _geoView.set(id, { center: geo.center, zoom: geo.zoom });
+        });
+      }
       return charts[id];
     }
+    // A map keeps the pan and zoom the user gave it: every redraw is a full setOption, which
+    // would otherwise put it back to its starting view.
+    const _geoView = new Map();
+    const geoView = (id, center, zoom) => _geoView.get(id) ?? { center, zoom };
     // Switching theme re-creates the charts in the matching ECharts theme.
     function syncThemeToggle() {
       const btn = document.getElementById('themeToggle');
@@ -1661,7 +1681,7 @@
           if (p.seriesType === 'scatter') return `<b>${escapeHtml(p.name)}</b><br>${escapeHtml(p.data.fuel)} &middot; ${Math.abs(p.value[2]).toLocaleString()} MW${p.value[2] < 0 ? ' charging' : ''}`;
           return '';
         } },
-        geo: { map: 'australia', nameProperty: 'STATE_NAME', roam: true, center: [145.4, -31.8], zoom: 1.85,
+        geo: { map: 'australia', nameProperty: 'STATE_NAME', roam: true, ...geoView('chart-flowmap', [145.4, -31.8], 1.85),
           // Land clearly lighter than the card, borders visible; WA and NT (not in the NEM) stay neutral.
           itemStyle: { areaColor: light ? '#dfe5ec' : '#2b3446', borderColor: light ? '#8c959f' : '#7d8899', borderWidth: 1 },
           emphasis: { disabled: true },
@@ -1721,7 +1741,7 @@
     }
 
     function icStop() {
-      if (icState.timer) clearInterval(icState.timer);
+      if (icState.timer) clearTimeout(icState.timer);
       icState.timer = null;
       document.getElementById('icPlay').innerHTML = '&#9654; Play';
     }
@@ -1730,15 +1750,17 @@
       if (!icState.frames.length) return;
       if (icState.frame >= icState.frames.length - 1) icShow(0);
       document.getElementById('icPlay').innerHTML = '&#10074;&#10074; Pause';
-      // At 1x a day of 5-minute intervals plays in ~15 s.
-      icState.timer = setInterval(() => {
-        const step = Math.max(1, Math.round(+document.getElementById('icSpeed').value));
+      // At 1x a day of 5-minute intervals plays in ~15 s. The next frame is scheduled once
+      // this one is drawn, so a slow frame slows the playback instead of queueing ticks
+      // behind it; the speed is read every frame.
+      const speed = () => +document.getElementById('icSpeed').value;
+      const next = () => { icState.timer = setTimeout(tick, Math.round(50 / Math.min(1, speed()))); };
+      const tick = () => {
         if (icState.frame >= icState.frames.length - 1) return icStop();
-        icShow(icState.frame + step);
-      }, Math.round(50 / Math.min(1, +document.getElementById('icSpeed').value)));
-    });
-    document.getElementById('icSpeed').addEventListener('change', () => {
-      if (icState.timer) { icStop(); document.getElementById('icPlay').click(); }
+        icShow(icState.frame + Math.max(1, Math.round(speed())));
+        next();
+      };
+      next();
     });
     document.getElementById('icFrame').addEventListener('input', e => { icStop(); icShow(+e.target.value); });
     document.getElementById('icGens').addEventListener('change', () => icShow(icState.frame));
@@ -1949,20 +1971,22 @@
         ? `(SELECT COUNT(DISTINCT (p.date, p.time)) / 12.0 FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()})`
         : `(SELECT COUNT(DISTINCT p.date) * 24.0 FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()})`;
       const energy = intraday ? 'SUM(GREATEST(sc.mw, 0)) / 12.0' : 'SUM(GREATEST(sc.mwh, 0))';
-      const units = `
-        SELECT sc.DUID, ${FUEL} AS fuel, ANY_VALUE(d.StationName) AS station, ANY_VALUE(d.RegCapMW) AS cap,
-          ${energy} AS mwh
+      // One row per unit, read once: the fuels' factors and the top units both come from it.
+      const units = await runQuery(`
+        SELECT sc.DUID, ${FUEL} AS fuel, ANY_VALUE(d.StationName) AS station, ANY_VALUE(d.RegCapMW)::DOUBLE AS cap,
+          (${energy})::DOUBLE AS mwh, ${hours}::DOUBLE AS hours
         FROM ${sql.fromScada()} WHERE ${sql.whereScada()} AND d.RegCapMW > 0 AND ${FUEL} <> 'Grid'
-        GROUP BY sc.DUID, ${FUEL}`;
-      const [byFuel, top] = await Promise.all([
-        runQuery(`WITH u AS (${units}), h AS (SELECT ${hours} AS hours)
-          SELECT fuel, (100 * SUM(mwh) / (SUM(cap) * ANY_VALUE(h.hours)))::DOUBLE AS cf, SUM(cap)::DOUBLE AS cap
-          FROM u, h GROUP BY fuel HAVING SUM(cap) > 0 ORDER BY cf`),
-        runQuery(`WITH u AS (${units}), h AS (SELECT ${hours} AS hours)
-          SELECT DUID, fuel, station, cap, (100 * mwh / (cap * h.hours))::DOUBLE AS cf
-          FROM u, h ORDER BY cf DESC LIMIT 15`),
-      ]);
+        GROUP BY sc.DUID, ${FUEL}`);
       if (seq !== _renderSeq) return;
+      const rangeHours = units[0]?.hours;
+      const withFactor = r => ({ ...r, cf: 100 * r.mwh / (r.cap * rangeHours) });
+      const fuels = new Map();
+      for (const u of rangeHours ? units : []) {
+        const f = fuels.get(u.fuel) ?? fuels.set(u.fuel, { fuel: u.fuel, mwh: 0, cap: 0 }).get(u.fuel);
+        f.mwh += u.mwh; f.cap += u.cap;
+      }
+      const byFuel = [...fuels.values()].map(withFactor).sort((a, b) => a.cf - b.cf);
+      const top = (rangeHours ? units : []).map(withFactor).sort((a, b) => b.cf - a.cf).slice(0, 15);
       const pctAxis = { type: 'value', axisLabel: { formatter: '{value}%' } };
       if (!byFuel.length) showEmpty('chart-cf');
       else getChart('chart-cf').setOption({
@@ -2210,7 +2234,7 @@
       chart.off('click');
       chart.on('click', p => { if (p.componentType === 'series') openDay(p.value[0]); });
     }
-    document.getElementById('calMetric').addEventListener('change', () => renderHistory(_renderSeq));
+    document.getElementById('calMetric').addEventListener('change', () => guarded(renderHistory(_renderSeq)));
 
     // --- Generator Map (geo scatter) ---
     let australiaMapRegistered = false;
@@ -2268,8 +2292,7 @@
           itemStyle: { areaColor: isLight() ? '#eef2f7' : '#1a1f2e', borderColor: cssVar('--border'), borderWidth: 1 },
           emphasis: { disabled: true },
           label: { show: false },
-          zoom: 1.1,
-          center: [134, -28],
+          ...geoView('chart-map', [134, -28], 1.1),
         },
         tooltip: { trigger: 'item', formatter: p => {
           if (!p.data?.duid) return '';
@@ -2383,10 +2406,12 @@
         for (const t of ['dashboard', 'flows', 'insights', 'history', 'analyze']) {
           document.getElementById(`view-${t}`).style.display = tab === t ? '' : 'none';
         }
-        if (tab === 'insights') renderInsights(_renderSeq);
-        if (tab === 'history') renderHistory(_renderSeq);
-        if (tab === 'flows') renderFlows(_renderSeq);
-        else icStop();
+        if (tab !== 'flows') icStop();
+        if (_ready) {
+          if (tab === 'insights') guarded(renderInsights(_renderSeq));
+          if (tab === 'history') guarded(renderHistory(_renderSeq));
+          if (tab === 'flows') guarded(renderFlows(_renderSeq));
+        }
         // Populate the SQL box the first time Analyze is opened; don't clobber manual edits after.
         if (tab === 'analyze' && !document.getElementById('analyzeSql').value.trim()) syncAnalyzeSql();
         // Charts drawn while hidden have zero size; resize once visible again.
@@ -2447,6 +2472,7 @@
       const hasGen = measures.generation;
       const hasPrice = measures.price;
       const raw = dimensions.time; // time dimension = 5-min raw, else daily
+      if (hasGen && hasPrice) return buildGenPriceSQL(dimensions, raw);
 
       // For price-only mode, use p. alias
       const selDate = hasGen ? 'CAST(sc.date AS VARCHAR) AS date' : 'CAST(p.date AS VARCHAR) AS date';
@@ -2481,15 +2507,7 @@
 
       // FROM clause
       let from;
-      if (hasGen && hasPrice) {
-        const scView = raw ? 'v_scada' : 'v_scada_daily';
-        const prView = raw ? 'v_price' : 'v_price_daily';
-        const timeJoin = raw ? 'AND sc.time = p.time' : '';
-        from = `${scView} sc
-          JOIN v_calendar c ON c.date = sc.date
-          LEFT JOIN v_duid d ON sc.DUID = d.DUID
-          LEFT JOIN ${prView} p ON sc.date = p.date ${timeJoin} AND d.Region = p.REGIONID`;
-      } else if (hasGen) {
+      if (hasGen) {
         const scView = raw ? 'v_scada' : 'v_scada_daily';
         from = `${scView} sc
           JOIN v_calendar c ON c.date = sc.date
@@ -2506,6 +2524,32 @@
       return `SELECT ${sel.join(', ')}\nFROM ${from}\nWHERE ${where}\nGROUP BY ${grp.join(', ')}\nORDER BY ${ord.join(', ')}`;
     }
 
+    // Generation and price together. A price is one value per region and interval (day), so
+    // generation is summed to that grain first and a row's price is then the plain average of
+    // its regions' prices. Averaging over the unit rows instead would weight each region by
+    // how many units it has.
+    function buildGenPriceSQL(dimensions, raw) {
+      const val = raw ? 'mw' : 'mwh';
+      const inner = ['CAST(sc.date AS VARCHAR) AS date'], outer = ['date'];
+      if (raw) { inner.push(`lpad(CAST(sc.time AS VARCHAR), 4, '0') AS time`); outer.push('time'); }
+      if (dimensions.duid) { inner.push('sc.DUID'); outer.push('DUID'); }
+      if (dimensions.fuel) { inner.push(`${FUEL} AS fuel`); outer.push('fuel'); }
+      inner.push('d.Region AS region');
+      if (dimensions.region) outer.push('region');
+      return `SELECT ${outer.join(', ')}, ROUND(SUM(${val}), 2) AS ${val}, ROUND(AVG(price), 2) AS price
+FROM (
+  SELECT ${inner.join(', ')}, SUM(sc.${val})::DOUBLE AS ${val}, AVG(p.price)::DOUBLE AS price
+  FROM ${raw ? 'v_scada' : 'v_scada_daily'} sc
+  JOIN v_calendar c ON c.date = sc.date
+  LEFT JOIN v_duid d ON sc.DUID = d.DUID
+  LEFT JOIN ${raw ? 'v_price' : 'v_price_daily'} p ON sc.date = p.date${raw ? ' AND sc.time = p.time' : ''} AND d.Region = p.REGIONID
+  WHERE ${sql.whereScada()}
+  GROUP BY ALL
+)
+GROUP BY ALL
+ORDER BY ALL`;
+    }
+
     // The Analyze SQL textarea is the source of truth for Preview/Plan/Download — it shows the
     // tool-generated query and the user can edit it freely. It's regenerated whenever the
     // builder inputs (measures / dimensions / filters) change, or via "Reset to generated".
@@ -2518,14 +2562,14 @@
     }
 
     // --- Analyze: ensure data loaded ---
-    async function ensureAnalyzeData() {
-      const { dimensions } = getAnalyzeOptions();
-      if (dimensions.time) {
+    // Read from the query itself, which may have been edited by hand: a 5-minute view needs
+    // the half-years of the header's date range, a daily or hourly one needs agg.
+    async function ensureAnalyzeData(query) {
+      if (/\bv_(scada|price|interconnector)\b/i.test(query)) {
         const { from, to } = getDateRange();
         await ensureHistory(from, to, "Downloading detailed data for export...");
-      } else {
-        if (!aggLoaded) await loadDailyAggDatabase();
       }
+      if (/\bv_(scada|price)_(daily|hourly)\b|\bv_month_days\b/i.test(query)) await loadDailyAggDatabase();
     }
 
     // --- Analyze: preview ---
@@ -2545,9 +2589,11 @@
       info.textContent = '';
 
       try {
-        await ensureAnalyzeData();
+        await ensureAnalyzeData(base);
         setStatus("Previewing...", "loading");
-        const previewSql = `SELECT * FROM (\n${base}\n) LIMIT 500`;
+        // Every column as DuckDB prints it: a DATE, TIMESTAMP or DECIMAL read through Arrow
+        // would show as its raw number.
+        const previewSql = `SELECT COLUMNS(*)::VARCHAR FROM (\n${base}\n) LIMIT 500`;
         const rows = await runQuery(previewSql);
 
         if (!rows.length) {
@@ -2600,7 +2646,7 @@
       info.textContent = '';
 
       try {
-        await ensureAnalyzeData();
+        await ensureAnalyzeData(base);
         setStatus("Explaining...", "loading");
         const rows = await runQuery(`EXPLAIN ${base}`);
         const plan = rows.map(r => r.explain_value ?? Object.values(r).join('  ')).join('\n');
@@ -2631,10 +2677,12 @@
       btn.textContent = 'Loading...';
 
       try {
-        await ensureAnalyzeData();
+        await ensureAnalyzeData(base);
         btn.textContent = 'Exporting...';
         setStatus("Exporting CSV...", "loading");
-        const exportSql = `SELECT * FROM (\n${base}\n) LIMIT 1000000`;
+        // Cast like the preview, so the file holds what the preview shows (a DECIMAL would
+        // otherwise be written without its decimal point).
+        const exportSql = `SELECT COLUMNS(*)::VARCHAR FROM (\n${base}\n) LIMIT 1000000`;
         const { from, to } = getDateRange();
         const filename = `energy_export_${from}_${to}.csv`;
         const rowCount = await downloadCSVDirect(exportSql, filename);
@@ -2755,14 +2803,17 @@
     // --- Render all ---
     let _renderNote = '';   // " · N queries, S s" of the last render, shown after the data's cutoff
     async function renderAll() {
+      if (!_ready) return;
       const seq = ++_renderSeq;
       const started = performance.now(), ranBefore = _queriesRun;
+      // The charts are dimmed while a render runs, on every tab.
+      const dim = on => document.querySelectorAll('.charts').forEach(el => el.classList.toggle('loading', on));
       if (!window._cutoffCached) setStatus("Querying...", "loading");
-      document.querySelectorAll('.charts').forEach(el => el.classList.add('loading'));
+      dim(true);
       updateFilterTags();
       const range = getDateRange();
       if (range.from && range.to && range.from > range.to) {
-        document.querySelector('.charts').classList.remove('loading');
+        dim(false);
         setStatus("'From' date is after 'To' date", "error");
         return;
       }
@@ -2780,7 +2831,7 @@
           runQuery(sql.generatorCount()).then(r => { if (seq === _renderSeq && r.length) setKpiNumber('kpiGens', r[0].cnt, v => Math.round(v).toLocaleString()); })
         ]);
         if (seq !== _renderSeq) return;
-        document.querySelectorAll('.charts').forEach(el => el.classList.remove('loading'));
+        dim(false);
         if (!window._cutoffCached) {
           const cutoffResult = await runQuery(sql.cutoff);
           if (seq !== _renderSeq) return;
@@ -2796,8 +2847,10 @@
         _renderNote = ` · ${ran} ${ran === 1 ? 'query' : 'queries'}, ${((performance.now() - started) / 1000).toFixed(2)} s`;
         setStatus((window._cutoffCached || "Connected") + _renderNote, "connected");
       } catch (e) {
-        setStatus("Query error: " + e.message, "error");
         console.error(e);
+        if (seq !== _renderSeq) return;   // a newer render owns the page now
+        dim(false);
+        setStatus("Query error: " + e.message, "error");
       }
     }
 
@@ -2805,6 +2858,7 @@
     try {
       await initDuckDB();
       await populateFilters();
+      _ready = true;
       await renderAll();
       // Load year databases in background, then silently refresh
       // agg only feeds the daily-grain views (ranges over 30 days); don't redraw an intraday view.
@@ -2813,7 +2867,7 @@
         setStatus((window._cutoffCached || "Connected") + _renderNote, "connected");   // clear "Downloading..."
         // The daily history is what a comparison with earlier days, and the History page, read.
         updateKpiDeltas(_renderSeq).catch(e => console.warn('[KPI] deltas unavailable:', e));
-        if (document.getElementById('view-history').style.display !== 'none') renderHistory(_renderSeq);
+        if (document.getElementById('view-history').style.display !== 'none') guarded(renderHistory(_renderSeq));
       })
         .catch(e => console.warn('[OPFS] Agg load failed:', e));
     } catch (e) {
