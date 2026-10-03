@@ -14,7 +14,7 @@ only: a finished item is removed, not ticked.
 
 - [ ] **DuckDB 2.0.0 stable** (due 2026-10-21) — replace `2.0.0.dev2609250715` in
   `requirements.txt`, `table_maintenance.yml` (compaction) and `import_data.yml` (read venv);
-  check Process Data, maintenance and import; update CLAUDE.md's version policy.
+  check Process Data, maintenance and import; update AGENTS.md's version policy.
 - [ ] **Capability probe** (separate repo, manual) — re-run against the 2.0 pin.
 - [ ] **A browser can keep a stale history file** — `cacheInOPFS` (`dashboard/data.js`) checks
   the ETag with a `no-store` HEAD but downloads with a plain `fetch`, which the HTTP cache can
@@ -61,4 +61,4 @@ only: a finished item is removed, not ticked.
 - [ ] duckdb-iceberg#1341 (snapshot expiry) merged → replace pyiceberg in
   `scripts/expire_snapshots.py`.
 - [ ] AEMO publishes `ROOFTOP_PV_ACTUAL_PRED`/`_RUN` (5-minute rooftop estimate) → move
-  `fct_rooftop_pv` to it; the half-hourly record it replaces is to be removed (see CLAUDE.md).
+  `fct_rooftop_pv` to it; the half-hourly record it replaces is to be removed (see AGENTS.md).

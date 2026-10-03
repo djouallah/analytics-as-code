@@ -1,4 +1,4 @@
-# CLAUDE.md — iceberg_as_code
+# AGENTS.md — iceberg_as_code
 
 ## Quick Reference
 - **Stack:** dbt-duckdb, **OneLake Iceberg REST catalog** (Microsoft Fabric workspace `power`,

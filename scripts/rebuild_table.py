@@ -1,7 +1,7 @@
 """Drop one catalog table so the next dbt run recreates it from the CSV archive.
 
 This is the only way to get rid of bad rows on this catalog: every write is an append
-and DELETE is off the table (see CLAUDE.md). Don't reach for `dbt run --full-refresh`
+and DELETE is off the table (see AGENTS.md). Don't reach for `dbt run --full-refresh`
 instead — dbt-duckdb's full-refresh path builds `<table>__dbt_tmp` and then RENAMEs it
 into place, and RENAME has never been probed against this catalog. Dropping the table and
 letting the next incremental run find no existing relation takes the plain CTAS path,

@@ -1,7 +1,7 @@
 # dbt + duckdb for build.yml, process_data.yml and table_maintenance.yml (dbt_test).
 # Exact pins: the insert-only merge_clauses and macros/iceberg_adapter_overrides.sql lean on
 # dbt-duckdb internals, so the adapter must not float. Versions taken from the last green
-# process_data run (2026-10-01). duckdb policy: see CLAUDE.md "DuckDB version policy".
+# process_data run (2026-10-01). duckdb policy: see AGENTS.md "DuckDB version policy".
 dbt-core==1.12.5
 dbt-duckdb==1.11.0
 duckdb==2.0.0.dev2609250715
