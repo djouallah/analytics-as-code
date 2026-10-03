@@ -61,7 +61,7 @@ jobs:
         run: |
           mkdir -p deploy
           cp dashboard/index.html deploy/
-          cp dashboard/coi-serviceworker.js deploy/
+          cp dashboard/data.js deploy/
           cp -r dashboard/dag deploy/
       - name: Deploy to nemtracker
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'

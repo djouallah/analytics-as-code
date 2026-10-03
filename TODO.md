@@ -16,7 +16,7 @@ only: a finished item is removed, not ticked.
   `requirements.txt`, `table_maintenance.yml` (compaction) and `import_data.yml` (read venv);
   check Process Data, maintenance and import; update CLAUDE.md's version policy.
 - [ ] **Capability probe** (separate repo, manual) — re-run against the 2.0 pin.
-- [ ] **A browser can keep a stale history file** — `cacheInOPFS` (`dashboard/index.html`) checks
+- [ ] **A browser can keep a stale history file** — `cacheInOPFS` (`dashboard/data.js`) checks
   the ETag with a `no-store` HEAD but downloads with a plain `fetch`, which the HTTP cache can
   answer with the previous body for up to 10 minutes (GitHub Pages sends `max-age=600`): the
   old file is then stored under the new ETag and stays until the file changes again. Likely

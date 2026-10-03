@@ -127,7 +127,14 @@ transport fails the OneLake TLS handshake).
 `NEMTRACKER_TOKEN` (gh-pages deploy) is the one remaining true secret.
 
 ## Dashboard deploy
-`build.yml` (index.html, dbt docs) and `import_data.yml` (the .duckdb files) publish into
+The dashboard is two files. `dashboard/index.html` is the page: charts, SQL and the views they
+read. `dashboard/data.js` is how the `.duckdb` files are fetched, cached and attached
+(`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `history()`, `recentCut`, `query`),
+and it is the only part that knows about `data/`, the half-year files and OPFS. A host that
+stores the files differently (the Fabric app) keeps the page and ships its own `data.js` with
+the same members.
+
+`build.yml` (index.html, data.js, dbt docs) and `import_data.yml` (the .duckdb files) publish into
 `NemTracker/nemtracker.github.io` with `scripts/deploy_pages.sh`: a blobless depth-1 clone, the
 published paths added with `-f`, push retried on a race. It replaced peaceiris/actions-gh-pages,
 whose full-history clone (~900 MB, ~2.5 min) made concurrent deploys collide, and whose
@@ -245,7 +252,7 @@ Everything is pinned — no workflow floats on "latest".
 - **The dashboard pins `@duckdb/duckdb-wasm@1.33.1-dev65.0`** (DuckDB 1.5.x line), a dev build
   because nothing stable has shipped since 1.33.0 (Dec 2025). Don't take npm's `latest` tag:
   it points at `1.33.1-dev57.0`, which the DuckDB blog says breaks OPFS. The dev build lets
-  `attachCached` read the OPFS-cached files in place (`registerFileHandle` + `BROWSER_FSACCESS`)
+  `attachCached` (`dashboard/data.js`) read the OPFS-cached files in place (`registerFileHandle` + `BROWSER_FSACCESS`)
   instead of copying each one into the WASM heap. Register the plain filename, not `opfs://`:
   an `opfs://` ATTACH also opens `<file>.wal`, which is never registered, so the ATTACH fails.
   The handle is exclusive, so a second tab falls back to in-memory. Checked 2026-09-29 in
@@ -253,5 +260,7 @@ Everything is pinned — no workflow floats on "latest".
   It runs **single-threaded on purpose**. The `coi` (threads) build loads, but it can't load
   ICU (`SET TimeZone` fails with a shared-memory LinkError), it can't pass the OPFS handle to
   its pthreads, and it only gained ~1.4x on 4 threads (2026-09-30). The page is therefore not
-  cross-origin isolated, and `dashboard/coi-serviceworker.js` is now a self-unregistering kill
-  switch for browsers that installed the old one.
+  cross-origin isolated. The `coi-serviceworker.js` still deployed on the site is a
+  self-unregistering kill switch for browsers that installed the old one; it left this repo on
+  2026-10-03 and stays published because deploys only add files. Don't delete it from the
+  deploy repo: a browser that still has the old worker would keep it.
