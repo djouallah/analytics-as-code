@@ -417,11 +417,14 @@ def model(dbt, session):
     # =========================================================================
 
     duid_sources = [
+        # The units in the data that AEMO's registration list (below) doesn't have: closed
+        # plant, DUIDs replaced by new ones, non-scheduled units. Generated from AEMO's MMSDM
+        # registration history; its commits in aemo_data say how.
         (
-            "duid_data",
-            "duid_data",
-            "https://raw.githubusercontent.com/djouallah/aemo_data/refs/heads/main/duid_data.csv",
-            "duid_data.csv",
+            "duid_unregistered",
+            "duid_unregistered",
+            "https://raw.githubusercontent.com/djouallah/aemo_data/refs/heads/main/duid_unregistered.csv",
+            "duid_unregistered.csv",
         ),
         (
             "duid_facilities",
@@ -449,14 +452,16 @@ def model(dbt, session):
         WHERE source_type LIKE 'duid_%'
     """).fetchone()[0]
 
-    # Also refresh at once if the log has never seen the registration list (it was added
-    # 2026-10-01): dim_duid reads it whenever it is there.
-    has_registration_log = session.sql(
-        "SELECT count(*) FROM _csv_archive_log WHERE source_type = 'duid_registration'"
-    ).fetchone()[0] > 0
+    # Also refresh at once if the log lacks one of the two files dim_duid reads its NEM
+    # units from: the registration list (a failed download leaves it out of the log, so
+    # the next run tries again) or duid_unregistered.csv (added 2026-10-03).
+    has_nem_units_log = session.sql("""
+        SELECT count(DISTINCT source_type) FROM _csv_archive_log
+        WHERE source_type IN ('duid_registration', 'duid_unregistered')
+    """).fetchone()[0] == 2
     skip_duid = (
         last_duid_download is not None
-        and has_registration_log
+        and has_nem_units_log
         and (datetime.now(last_duid_download.tzinfo) - last_duid_download).total_seconds() < 86400
     )
 
@@ -478,10 +483,8 @@ def model(dbt, session):
 
         # AEMO's NEM Registration and Exemption List, as archived weekly by
         # djouallah/aemo_data (data/duid/registration/<name>_<YYYYMMDD>.xls, really an
-        # .xlsx). duid_data.csv above is a one-off conversion of it from 2026-07-27 that
-        # nothing refreshes, so every unit registered since was missing from dim_duid (55
-        # generating on 2026-10-01). Its generator sheet is saved as registration.csv; when
-        # this fails, dim_duid carries on with duid_data.csv alone.
+        # .xlsx): the newest one's generator sheet is saved as registration.csv, which
+        # dim_duid reads. When this fails the previous registration.csv stays in place.
         try:
             import json
             api = "https://api.github.com/repos/djouallah/aemo_data/contents/data/duid/registration"
@@ -510,7 +513,7 @@ def model(dbt, session):
                                  latest["download_url"], "registration.csv"))
             print(f"  DUID registration list: {latest['name']}")
         except Exception as e:
-            print(f"  WARN: AEMO registration list unavailable, dim_duid keeps duid_data.csv only: {e}")
+            print(f"  WARN: AEMO registration list unavailable, keeping the previous registration.csv: {e}")
 
         # Delete old DUID log entries and re-insert
         session.sql("DELETE FROM _csv_archive_log WHERE source_type LIKE 'duid_%'")

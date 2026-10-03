@@ -39,6 +39,9 @@ jobs:
       - name: Build, test and publish docs
         env:
           DBT_DUCKDB_PATH: ci.duckdb
+          # dim_duid needs the registration list, which the download finds through the
+          # GitHub API: anonymous calls from shared runners get rate-limited.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           dbt build --target ci --profiles-dir .
           dbt docs generate --target ci --profiles-dir . --empty-catalog

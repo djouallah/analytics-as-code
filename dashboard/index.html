@@ -947,10 +947,10 @@
     // 5. SQL QUERY BUILDERS
     // =========================================================================
 
-    // dim_duid only holds units on the registration list it is built from: retired ones (~10%
-    // of daily rows) and any the list hasn't caught up with yet are missing. Facts are LEFT
-    // JOINed to it so those still count toward totals, grouped as "Unregistered"; units that
-    // are in it without a fuel are "Unknown".
+    // dim_duid holds the units on AEMO's registration list plus the ones in the data that are
+    // not on it (retired plant, replaced DUIDs). A unit in neither, e.g. one the list hasn't
+    // caught up with yet, is missing: facts are LEFT JOINed to it so those still count toward
+    // totals, grouped as "Unregistered"; units that are in it without a fuel are "Unknown".
     const UNREGISTERED = 'Unregistered';
     // Renewable fuels as AEMO describes them. 'Grid' (batteries) is storage: neither side.
     // 'Rooftop solar' is the fuel of the rooftop pseudo-units (AEMO's regional estimate,

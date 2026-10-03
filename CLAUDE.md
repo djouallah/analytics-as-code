@@ -26,9 +26,9 @@ by idea, not by file (`macros/new_source_files.sql` there is the counterpart of
   Iceberg table — which would remove the log table this repo had to rebuild on 2026-09-18.
 - `ORDER BY archive_path DESC` before `LIMIT process_limit` (ported here 2026-10-01).
 Three deliberate local differences, all of which must survive a port:
-- No `relationships → dim_duid` tests on `fct_scada`/`fct_scada_today` — `dim_duid` holds only
-  currently-registered DUIDs while the facts go back to 2018 and are full of retired ones, so
-  the test could never be 0. `tests/assert_recent_scada_duids_registered.sql` is the meaningful
+- No `relationships → dim_duid` tests on `fct_scada`/`fct_scada_today` — `dim_duid` holds the
+  registered DUIDs plus the unlisted ones that generated, while the facts go back to 2018 and
+  also carry units only ever dispatched at 0 MW, so the test could never be 0. `tests/assert_recent_scada_duids_registered.sql` is the meaningful
   version and is this repo's own.
 - `tests/assert_all_*_files_processed_*.sql` use `NOT EXISTS` and are untagged; the sibling's
   use `NOT IN` (a single NULL `file` makes them permanently green) and are tagged `heavy`.
@@ -50,8 +50,16 @@ Three deliberate local differences, all of which must survive a port:
    returned fewer than `download_limit` new files. There is no `daily_refresh` env var.
    The DUID refresh also saves the generator sheet of AEMO's **NEM Registration and Exemption
    List** (the newest copy archived weekly in `djouallah/aemo_data/data/duid/registration/`) as
-   `Files/csv/duid/registration.csv`; `dim_duid` prefers it over `duid_data.csv`, a 2026-07
-   snapshot nothing refreshes (by 2026-10-01, 55 generating DUIDs were missing from it).
+   `Files/csv/duid/registration.csv`. `dim_duid` takes its NEM units from two files only: that
+   list, and `duid_unregistered.csv` (`djouallah/aemo_data`), the units in the data that the
+   list doesn't have (closed plant, replaced DUIDs, non-scheduled units; 99 on 2026-10-03).
+   That file is generated, not typed, from AEMO's MMSDM registration history
+   (`DUDETAILSUMMARY`, `DUALLOC`, `GENUNITS`, `STATION`, `PARTICIPANT`); its commits say how,
+   and 36 small loads AEMO gives no energy source for have a region and no fuel. It is a
+   snapshot: a unit that leaves the list later stays in `dim_duid` (insert-only), but a
+   `rebuild=dim_duid` would lose it until the file is regenerated. **Missing units are fixed
+   in that file, never in dbt** — `dim_duid` has no fallback: `duid_data.csv`, a 2026-07 CSV
+   copy of the list, is no longer read here (the sibling still reads it).
 3. Work is discovered from the **log table**, not a filesystem glob: each fact model's pre-hook
    (`macros/pending_archive_files.sql`) builds its path list from
    `SELECT DISTINCT stg_csv_archive_log.archive_path` filtered by `NOT EXISTS` against
@@ -148,7 +156,7 @@ for ranges over 30 days.
 |-------|--------|-----------------|
 | stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
 | dim_calendar | mart | incremental append (the NOT-IN filter keeps existing dates out; runs 2 years ahead) |
-| dim_duid | mart | incremental insert-only merge on DUID; carries registered capacity (RegCapMW etc.) since 2026-10-01 |
+| dim_duid | mart | incremental insert-only merge on DUID; NEM units from the registration list, then `duid_unregistered.csv`; carries registered capacity (RegCapMW etc.) since 2026-10-01 |
 | fct_scada, fct_price | landing | incremental insert-only merge (by file) |
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
 | fct_interconnector_today | landing | incremental insert-only merge (by file) — the INTERCONNECTORRES rows of the same archived DispatchIS files as fct_price_today (added 2026-10-01) **and, despite the name, the whole history**: AEMO's monthly MMSDM archive of the same record, 2018-01 → 2026-08 (source_type `interconnector_monthly`, a finite backfill added 2026-10-02; read with `strict_mode = false`, which the files from 2024-08 need). August 2026 is in both sources, so readers take `ANY_VALUE … GROUP BY`. Exported as `interconnector` in the half-year files; the Flows page plays any range ≤ 30 days |

@@ -2,7 +2,7 @@ version: 2
 
 models:
   - name: dim_duid
-    description: Dimension table for DUID (Dispatchable Unit Identifier), covering NEM units plus WA facilities
+    description: Dimension table for DUID (Dispatchable Unit Identifier), covering NEM units plus WA facilities. NEM units come from AEMO's current registration list and, for the units in the data that are not on it (retired plant, replaced DUIDs), from duid_unregistered.csv
     columns:
       - name: DUID
         description: Unique identifier for dispatchable unit
@@ -14,7 +14,7 @@ models:
       - name: State
         description: State name derived from the region
       - name: FuelSourceDescriptor
-        description: Fuel/technology of the unit (e.g. Solar, Wind, Coal), title-cased
+        description: Fuel/technology of the unit (e.g. Solar, Wind, Coal), title-cased; null for the unlisted loads AEMO gives no energy source for
       - name: Participant
         description: Registered market participant that operates the unit
       - name: latitude
@@ -24,7 +24,7 @@ models:
       - name: StationName
         description: Power station the unit belongs to (AEMO registration list; null for WA)
       - name: TechnologyType
-        description: AEMO technology descriptor, e.g. "Battery and Inverter", "Steam Sub-Critical"
+        description: AEMO technology descriptor, e.g. "Battery and Inverter", "Steam Sub-Critical"; null for WA and for units not on the registration list
       - name: RegCapMW
         description: Registered generating capacity (MW); the capacity-factor denominator
       - name: MaxCapMW

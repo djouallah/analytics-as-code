@@ -14,7 +14,7 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values: ['daily', 'scada_today', 'price_today', 'interconnector_monthly', 'rooftop_today', 'rooftop_weekly', 'rooftop_monthly', 'duid_data', 'duid_facilities', 'duid_wa_energy', 'duid_geo_data', 'duid_registration']
+                values: ['daily', 'scada_today', 'price_today', 'interconnector_monthly', 'rooftop_today', 'rooftop_weekly', 'rooftop_monthly', 'duid_data', 'duid_facilities', 'duid_wa_energy', 'duid_geo_data', 'duid_registration', 'duid_unregistered']
       - name: csv_filename
         description: Actual CSV filename (without extension) extracted from ZIP
         tests:

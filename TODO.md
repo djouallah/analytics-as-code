@@ -46,13 +46,13 @@ only: a finished item is removed, not ticked.
 
   Two things to settle first: the deployed data files are already 973 MB against GitHub
   Pages' 1 GB soft limit, and seven more half-year files add roughly 250 MB; and plants
-  closed before today (Hazelwood, Northern) will show as "Unregistered" until the retired
-  units item below is done. MMSDM months before 2015 sit in a different folder layout, not
+  closed before 2018 (Hazelwood, Northern) will show as "Unregistered" until
+  `duid_unregistered.csv` (aemo_data) is regenerated over the longer history, from the same
+  MMSDM tables. MMSDM months before 2015 sit in a different folder layout, not
   looked at. Rooftop solar has no usable estimate before 2018-03-06.
-- [ ] **Retired units + emissions** — AEMO MMSDM monthly archive: `GENUNITS` (fuel, CO2
-  factor), `DUALLOC` (DUID → unit), `DUDETAILSUMMARY` (region). Gives region/fuel to the ~10%
-  "Unregistered" history and an emissions-intensity KPI and chart. DUIDs that MMSDM doesn't
-  cover stay "Unregistered"; no guessed fuel, region or CO2 factor.
+- [ ] **Emissions** — AEMO MMSDM `GENUNITS` has a CO2 factor per genset (`DUALLOC` maps it to
+  a DUID): an emissions-intensity KPI and chart. A unit without a factor stays out; no
+  guessed factor.
 
 ## Waiting on upstream
 
