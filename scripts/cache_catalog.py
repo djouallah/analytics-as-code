@@ -119,9 +119,13 @@ def rooftop_units(con, date_filter, scada_table):
     Returns '' while the table doesn't exist."""
     if not has_rooftop(con):
         return ""
-    # The newest interval of the units, left in SQL: fetching a TIMESTAMPTZ into Python needs
-    # pytz, which the import job's venv doesn't have (that broke the import on 2026-10-02).
-    cap = f"""AND ts <= COALESCE((SELECT max(SETTLEMENTDATE) FROM {scada_table}
+    # Bounded by the units on both sides, in SQL (fetching a TIMESTAMPTZ into Python needs
+    # pytz, which the import job's venv doesn't have; that broke the import on 2026-10-02):
+    # not before the calendar's first day, which is where the units' history starts (AEMO's
+    # estimate starts 2018-03-06 and alone made March 2018 a "100% renewable" month on the
+    # History page), and not past the units' newest interval.
+    cap = f"""AND ts >= (SELECT CAST(min(date) AS TIMESTAMPTZ) FROM catalog.mart.dim_calendar)
+              AND ts <= COALESCE((SELECT max(SETTLEMENTDATE) FROM {scada_table}
                                   WHERE DATE >= CURRENT_DATE - INTERVAL 7 DAY), 'infinity'::TIMESTAMPTZ)"""
     return f"""
         UNION ALL
