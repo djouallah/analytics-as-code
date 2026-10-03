@@ -127,12 +127,14 @@ transport fails the OneLake TLS handshake).
 `NEMTRACKER_TOKEN` (gh-pages deploy) is the one remaining true secret.
 
 ## Dashboard deploy
-The dashboard is two files. `dashboard/index.html` is the page: charts, SQL and the views they
-read. `dashboard/data.js` is how the `.duckdb` files are fetched, cached and attached
-(`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `history()`, `recentCut`, `query`),
-and it is the only part that knows about `data/`, the half-year files and OPFS. A host that
-stores the files differently (the Fabric app) keeps the page and ships its own `data.js` with
-the same members.
+The dashboard is two files. `dashboard/index.html` is the page: charts and the SQL behind them,
+written against views only (`v_scada`, `v_price`, `v_duid`, …; the list at the top of
+`data.js` is the contract) and never against an attached table. `dashboard/data.js` is how the
+`.duckdb` files are fetched, cached, attached and merged into those views
+(`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `has`, `query`), and it is the only
+part that knows about `data/`, the half-year files, the `dim`/`today`/`agg` databases and
+OPFS. A host that stores the files differently (the Fabric app) keeps the page and ships its
+own `data.js` with the same members and the same views.
 
 `build.yml` (index.html, data.js, dbt docs) and `import_data.yml` (the .duckdb files) publish into
 `NemTracker/nemtracker.github.io` with `scripts/deploy_pages.sh`: a blobless depth-1 clone, the
@@ -153,7 +155,8 @@ its own schedule.
 A daily run refuses to splice when the deployed aggregate's tables or columns differ from what
 `build_daily_agg` now builds, so a change to them needs one `all_periods=true` dispatch. The
 page itself reads any column or table a deployed file lacks as "no data"
-(`index.html` `loadColumns`/`colOrNull`), so a new page can go out before the data does.
+(`data.js` `loadColumns`/`colOrNull`, and `data.has` in the page), so a new page can go out
+before the data does.
 `energy_daily_agg.duckdb` holds, besides the per-day tables, hour-of-day × month tables
 (`scada_hourly`, `price_hourly`, `month_days`) that the daily-profile and price heatmap read
 for ranges over 30 days.

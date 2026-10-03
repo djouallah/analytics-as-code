@@ -8,9 +8,22 @@
 //   energy_daily_agg.duckdb         as `agg`          daily and hour-of-day rollups: attachAgg(), after first paint
 //   energy_data_<YYYY>_h<N>.duckdb  as `p<YYYY>_h<N>` scada, price, interconnector: ensureHistory(), only the
 //                                                     half-years a 5-minute range needs
-// index.html knows none of this: it calls the members createDataSource returns and builds its
-// views from history() and recentCut. A host that stores the files differently (the Fabric app
-// reads one history file over HTTP) swaps this file for its own with the same members.
+// index.html knows none of this: it calls the members createDataSource returns and reads the
+// views built here (refreshViews), never an attached table. A host that stores the files
+// differently (the Fabric app reads one history file over HTTP) swaps this file for its own
+// with the same members and the same views:
+//   v_scada           DUID, date, time, mw                                        5-minute
+//   v_price           REGIONID, date, time, price, demand, net_interchange        5-minute
+//   v_scada_daily     DUID, date, mwh
+//   v_price_daily     REGIONID, date, price, demand, net_interchange, demand_mwh
+//   v_interconnector  interconnector, date, time, mw, export_limit, import_limit  5-minute
+//   v_scada_today     DUID, date, time, mw             the newest days, for "latest interval"
+//   v_price_today     REGIONID, date, time, price
+//   v_duid            dim_duid                         has(view, column) says whether a
+//   v_calendar        dim_calendar                     deployed file carries a newer column
+//   v_scada_hourly, v_price_hourly, v_month_days       agg's hour-of-day x month tables;
+//                                                      absent (has(view) false) until agg is
+//                                                      attached and deployed with them
 //
 // DOM-free: progress is reported through the injected `onStatus` callback.
 // =============================================================================
@@ -148,11 +161,17 @@ export function createDataSource({ onStatus = () => {} } = {}) {
 
     onStatus("Loading today's data...");
     await Promise.all([loadDb('energy_dim.duckdb', 'dim'), loadDb('energy_today.duckdb', 'today')]);
-    return { db: _db, conn };
+    await conn.query("SET TimeZone = 'Australia/Brisbane';");
+    await conn.query("SET preserve_insertion_order = false;");
+    await refreshViews();
+    return { db: _db };
   }
 
+  let _aggLoaded = false;
   async function attachAgg() {
     await loadDb('energy_daily_agg.duckdb', 'agg');
+    _aggLoaded = true;
+    await refreshViews();
   }
 
   let _manifest = null;
@@ -185,7 +204,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   }
 
   // Attach the half-year periods of a date range that exist and aren't attached yet.
-  // True if there were any: the caller's views must then be rebuilt.
+  // True if there were any: the views were rebuilt, so results the caller cached are stale.
   async function ensureHistory(from, to, msg) {
     _manifest ??= await (await fetch(`${_baseUrl}/data/daily_manifest.json`)).json();
     const needed = periodsForRange(from, to)
@@ -193,15 +212,94 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     if (!needed.length) return false;
     onStatus(msg);
     await Promise.all(needed.map(attachPeriod));
+    await refreshViews();
     return true;
+  }
+
+  // Aliases of the attached databases that hold the 5-minute history.
+  const history = () => [..._attachedPeriods].map(p => `p${p}`);
+  // SQL date: rows from this day on are read from `today`, older ones from history / agg.
+  const RECENT_CUT = 'CURRENT_DATE - INTERVAL 5 DAY';
+
+  // Columns of each attached table (`<db>.<table>`) and of each view (plain name), read at
+  // both ends of refreshViews. Files deployed before 2026-10-02 have no demand/net_interchange
+  // (and agg no hourly tables); a column a file lacks reads as NULL, which the charts show as
+  // "no data", never as a number.
+  let _columns = new Map();
+  async function loadColumns() {
+    const r = await conn.query(`SELECT CASE WHEN table_catalog = current_database() THEN table_name
+        ELSE table_catalog || '.' || table_name END AS t, column_name AS c
+      FROM information_schema.columns`);
+    _columns = new Map();
+    for (const { t, c } of r.toArray()) {
+      if (!_columns.has(t)) _columns.set(t, new Set());
+      _columns.get(t).add(c);
+    }
+  }
+  const hasTable = t => _columns.has(t);
+  const colOrNull = (t, c, expr = c, alias = c) => _columns.get(t)?.has(c) ? `${expr} AS ${alias}` : `NULL::REAL AS ${alias}`;
+
+  // The views every query reads. The days from RECENT_CUT on come from `today` (refreshed
+  // intraday), everything older from the attached history databases (5-min) or agg (daily).
+  // Until agg is attached, the daily views only cover `today`.
+  async function refreshViews() {
+    await loadColumns();
+    const OLD = `date < ${RECENT_CUT}`, RECENT = `date >= ${RECENT_CUT}`;
+    const raw = (cols, table, extra = []) => [
+      ...history().map(db => [db, table]), ['today', `${table}_today`],
+    ].map(([db, t]) => `SELECT ${[cols, ...extra.map(c => colOrNull(`${db}.${t}`, c))].join(', ')}
+        FROM ${db}.${t} WHERE ${db === 'today' ? RECENT : OLD}`).join(' UNION ALL ');
+    const daily = (aggSql, todaySql) => _aggLoaded
+      ? `${aggSql} WHERE ${OLD} UNION ALL ${todaySql} WHERE ${RECENT} GROUP BY ALL`
+      : `${todaySql} GROUP BY ALL`;
+    const DEMAND_COLS = ['demand', 'net_interchange'];
+
+    await conn.query(`CREATE OR REPLACE VIEW v_scada AS ${raw('DUID, date, time, mw', 'scada')}`);
+    await conn.query(`CREATE OR REPLACE VIEW v_price AS ${raw('REGIONID, date, time, price', 'price', DEMAND_COLS)}`);
+    await conn.query(`CREATE OR REPLACE VIEW v_scada_daily AS ${daily(
+      'SELECT DUID, date, mwh FROM agg.scada_daily',
+      'SELECT DUID, date, CAST(SUM(mw) / 12.0 AS REAL) AS mwh FROM today.scada_today')}`);
+    // Daily demand/net_interchange are average MW; demand_mwh is the day's energy (a whole
+    // day in agg, the intervals so far today, like v_scada_daily.mwh). A day from `today`
+    // with any interval missing demand (fct_regionsum_today still filling) stays NULL.
+    const complete = (c, agg) => `CASE WHEN COUNT(${c}) = COUNT(*) THEN ${agg} END`;
+    await conn.query(`CREATE OR REPLACE VIEW v_price_daily AS ${daily(
+      `SELECT REGIONID, date, price, ${DEMAND_COLS.map(c => colOrNull('agg.price_daily', c)).join(', ')},
+        ${colOrNull('agg.price_daily', 'demand', 'demand * 24', 'demand_mwh')}
+        FROM agg.price_daily`,
+      `SELECT REGIONID, date, CAST(AVG(price) AS REAL) AS price,
+        ${DEMAND_COLS.map(c => colOrNull('today.price_today', c, `CAST(${complete(c, `AVG(${c})`)} AS REAL)`)).join(', ')},
+        ${colOrNull('today.price_today', 'demand', complete('demand', 'SUM(demand) / 12.0'), 'demand_mwh')}
+        FROM today.price_today`)}`);
+    // Link flows: the half-year files carry them back to 2018 (files built before
+    // 2026-10-03 have no such table), `today` the last 14 days. `today` supplies whatever
+    // is newer than the attached files hold, so a file without the table, or a daily
+    // import that is behind, leaves no hole in the last 14 days.
+    const FLOW_COLS = 'interconnector, date, time, mw, export_limit, import_limit';
+    const flowPeriods = history().filter(db => hasTable(`${db}.interconnector`))
+      .map(db => `SELECT ${FLOW_COLS} FROM ${db}.interconnector WHERE ${OLD}`).join(' UNION ALL ');
+    const flowToday = hasTable('today.interconnector_today')
+      ? `SELECT ${FLOW_COLS} FROM today.interconnector_today`
+      : `SELECT NULL::VARCHAR AS interconnector, NULL::DATE AS date, NULL::SMALLINT AS time,
+          NULL::REAL AS mw, NULL::REAL AS export_limit, NULL::REAL AS import_limit WHERE false`;
+    await conn.query(`CREATE OR REPLACE VIEW v_interconnector AS ${flowPeriods
+      ? `${flowPeriods} UNION ALL SELECT * FROM (${flowToday})
+          WHERE date > (SELECT COALESCE(MAX(date), DATE '1900-01-01') FROM (${flowPeriods}))`
+      : flowToday}`);
+    // The tables the page reads as they are. A table a deployed file lacks gets no view.
+    for (const [view, table] of [
+      ['v_duid', 'dim.dim_duid'], ['v_calendar', 'dim.dim_calendar'],
+      ['v_scada_today', 'today.scada_today'], ['v_price_today', 'today.price_today'],
+      ['v_scada_hourly', 'agg.scada_hourly'], ['v_price_hourly', 'agg.price_hourly'],
+      ['v_month_days', 'agg.month_days'],
+    ]) if (hasTable(table)) await conn.query(`CREATE OR REPLACE VIEW ${view} AS SELECT * FROM ${table}`);
+    await loadColumns();
   }
 
   return {
     init, attachAgg, ensureHistory,
-    // Aliases of the attached databases that hold the 5-minute history.
-    history: () => [..._attachedPeriods].map(p => `p${p}`),
-    // SQL date: rows from this day on are read from `today`, older ones from history / agg.
-    recentCut: 'CURRENT_DATE - INTERVAL 5 DAY',
+    // Whether a view exists and, given a column, whether it has it.
+    has: (view, column) => column ? !!_columns.get(view)?.has(column) : _columns.has(view),
     query: sql => conn.query(sql),
   };
 }
