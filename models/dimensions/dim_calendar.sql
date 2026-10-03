@@ -1,6 +1,8 @@
 -- Append-only: the NOT IN filter below already keeps existing dates out, so there is
 -- nothing to delete (and this catalog rejects commits that mix deletes with inserts).
 -- The series runs two years ahead of today; assert_calendar_covers_future guards it.
+-- It starts on 2018-03-06, the first day AEMO has a rooftop solar estimate: the units'
+-- history is loaded from that day too, so every series on the dashboard starts together.
 {{ config(
     materialized='incremental',
     incremental_strategy='append'
@@ -12,7 +14,7 @@ SELECT
   CAST(EXTRACT(month FROM date) AS INT) as month
 FROM (
   SELECT unnest(generate_series(
-    CAST('2018-04-01' AS DATE),
+    CAST('2018-03-06' AS DATE),
     CAST(current_date + INTERVAL 2 YEAR AS DATE),
     INTERVAL 1 DAY
   )) as date

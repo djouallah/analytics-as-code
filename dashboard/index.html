@@ -582,7 +582,10 @@
       const reason = cachedTag ? 'file changed on server' : 'first download';
       console.log(`[OPFS] Fetching ${filename} (${reason})`);
       setStatus("Downloading database...");
-      const resp = await fetch(url);
+      // no-store like the HEAD above: the HTTP cache may still hold the previous body (GitHub
+      // Pages sends max-age=600), and storing that under the new ETag would keep a stale file
+      // until the next change on the server.
+      const resp = await fetch(url, { cache: 'no-store' });
       if (!resp.ok) throw new Error(`Failed to fetch ${filename}: HTTP ${resp.status}`);
       const buffer = new Uint8Array(await resp.arrayBuffer());
       if (buffer.byteLength < 100) throw new Error(`${filename} is too small (${buffer.byteLength} bytes), likely not a valid database`);
