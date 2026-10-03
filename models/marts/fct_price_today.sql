@@ -71,7 +71,7 @@
 WITH price_staging AS (
   SELECT *
   FROM read_csv(
-    getvariable('price_today_paths'),
+    {{ source('aemo', 'dispatchis_price') }},
     skip = 1,
     header = 0,
     all_varchar = 1,

@@ -67,7 +67,7 @@
 WITH price_staging AS (
   SELECT *
   FROM read_csv(
-    getvariable('price_daily_paths'),
+    {{ source('aemo', 'daily_dregion') }},
     skip = 1,
     header = 0,
     all_varchar = 1,

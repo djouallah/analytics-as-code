@@ -48,7 +48,7 @@
 WITH scada_staging AS (
   SELECT *
   FROM read_csv(
-    getvariable('scada_daily_paths'),
+    {{ source('aemo', 'daily_dunit') }},
     skip = 1,
     header = 0,
     all_varchar = 1,

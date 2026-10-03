@@ -1,0 +1,85 @@
+version: 2
+
+# The files the models read, declared so that the lineage graph shows them. None of them is
+# a table: `{{ source(...) }}` compiles to the text given as external_location (dbt-duckdb).
+
+sources:
+  - name: aemo
+    description: >
+      AEMO's public NEM report files, archived by stg_csv_archive_log as gzipped CSV under
+      Files/csv/. Each table below is the set of archived files one fact model has still to
+      load. The model's pre-hook puts their paths in a DuckDB variable
+      (macros/pending_archive_files.sql) and the source compiles to that variable, so
+      read_csv opens exactly those files and lists no folder. The variable only exists inside
+      that model, so these sources can't carry tests or freshness checks.
+    tables:
+      - name: daily_dunit
+        description: >
+          PUBLIC_DAILY next-day reports (nemweb Reports/Current/Daily_Reports, history from
+          djouallah/aemo_data/data/archive), read by fct_scada for their DUNIT rows.
+        config:
+          meta:
+            external_location: "getvariable('scada_daily_paths')"
+      - name: daily_dregion
+        description: The same PUBLIC_DAILY files, read by fct_price for their DREGION rows.
+        config:
+          meta:
+            external_location: "getvariable('price_daily_paths')"
+      - name: dispatch_scada
+        description: >
+          PUBLIC_DISPATCHSCADA 5-minute files (nemweb Reports/Current/Dispatch_SCADA), read by
+          fct_scada_today.
+        config:
+          meta:
+            external_location: "getvariable('scada_today_paths')"
+      - name: dispatchis_price
+        description: >
+          PUBLIC_DISPATCHIS 5-minute files (nemweb Reports/Current/DispatchIS_Reports), read by
+          fct_price_today for their PRICE rows.
+        config:
+          meta:
+            external_location: "getvariable('price_today_paths')"
+      - name: dispatchis_regionsum
+        description: The same PUBLIC_DISPATCHIS files, read by fct_regionsum_today for their REGIONSUM rows.
+        config:
+          meta:
+            external_location: "getvariable('regionsum_today_paths')"
+      - name: dispatchis_interconnectorres
+        description: >
+          The same PUBLIC_DISPATCHIS files, read by fct_interconnector_today for their
+          INTERCONNECTORRES rows, plus AEMO's monthly MMSDM archive of that record
+          (DISPATCHINTERCONNECTORRES, 2018-01 to 2026-08).
+        config:
+          meta:
+            external_location: "getvariable('interconnector_today_paths')"
+      - name: rooftop_pv_actual
+        description: >
+          ROOFTOP_PV_ACTUAL half-hourly files, read by fct_rooftop_pv. Three feeds: the current
+          folder (nemweb Reports/Current/ROOFTOP_PV/ACTUAL), the weekly archives, and the
+          monthly MMSDM archive 2018-01 to 2026-08.
+        config:
+          meta:
+            external_location: "getvariable('rooftop_pv_paths')"
+
+  - name: duid_reference
+    description: >
+      The unit reference files dim_duid is built from, written to Files/csv/duid/ by
+      stg_csv_archive_log's daily DUID refresh. Each source compiles to the file's path.
+    config:
+      meta:
+        external_location: "{{ env_var('FILES_PATH', '/tmp') | trim }}/csv/duid/{name}.csv"
+    tables:
+      - name: registration
+        description: >
+          Generator sheet (PU and Scheduled Loads) of AEMO's NEM Registration and Exemption
+          List, from the newest weekly copy in djouallah/aemo_data/data/duid/registration.
+      - name: duid_unregistered
+        description: >
+          The units in the data that the registration list doesn't have, generated from AEMO's
+          MMSDM registration history (djouallah/aemo_data/duid_unregistered.csv).
+      - name: facilities
+        description: WA facilities, from AEMO WA (data.wa.aemo.com.au/datafiles/post-facilities/facilities.csv).
+      - name: WA_ENERGY
+        description: Fuel and technology of the WA facilities (djouallah/aemo_data/WA_ENERGY.csv).
+      - name: geo_data
+        description: Latitude and longitude per DUID (djouallah/aemo_data/geo_data.csv).

@@ -41,7 +41,7 @@
 WITH rooftop_staging AS (
   SELECT *
   FROM read_csv(
-    getvariable('rooftop_pv_paths'),
+    {{ source('aemo', 'rooftop_pv_actual') }},
     skip = 1,
     header = 0,
     all_varchar = 1,

@@ -1,18 +1,16 @@
-{% set csv_archive_path = get_csv_archive_path() %}
 {#- The NEM units come from two files, both written by stg_csv_archive_log:
     registration.csv, the generator sheet of AEMO's current NEM Registration and Exemption
-    List, and duid_unregistered.csv, the units in the data that the list doesn't have. -#}
-{% set registration_csv = csv_archive_path ~ '/duid/registration.csv' %}
-{% set unregistered_csv = csv_archive_path ~ '/duid/duid_unregistered.csv' %}
+    List, and duid_unregistered.csv, the units in the data that the list doesn't have.
+    Every file read here is declared in models/sources.yml (source duid_reference). -#}
 
 {# Check if there are new DUIDs not in the existing table #}
 {%- set check_new_duids_query -%}
   SELECT count(*) as cnt FROM (
-    SELECT DUID FROM read_csv('{{ registration_csv }}', all_varchar = true) WHERE length(DUID) > 2
+    SELECT DUID FROM read_csv({{ source('duid_reference', 'registration') }}, all_varchar = true) WHERE length(DUID) > 2
     UNION
-    SELECT DUID FROM read_csv('{{ unregistered_csv }}', all_varchar = true) WHERE length(DUID) > 2
+    SELECT DUID FROM read_csv({{ source('duid_reference', 'duid_unregistered') }}, all_varchar = true) WHERE length(DUID) > 2
     UNION
-    SELECT "Facility Code" AS DUID FROM read_csv_auto('{{ csv_archive_path }}/duid/facilities.csv')
+    SELECT "Facility Code" AS DUID FROM read_csv_auto({{ source('duid_reference', 'facilities') }})
   ) source_duids
   WHERE DUID NOT IN (SELECT DUID FROM {{ this }})
 {%- endset -%}
@@ -67,7 +65,7 @@ WITH
            TRY_CAST("Max Cap generation (MW)" AS DOUBLE) AS MaxCapMW,
            TRY_CAST("Maximum storage capacity" AS DOUBLE) AS StorageMWh,
            CASE WHEN "Dispatch Type" ILIKE '%load%' THEN 1 ELSE 0 END AS priority
-    FROM read_csv('{{ registration_csv }}', all_varchar = true)
+    FROM read_csv({{ source('duid_reference', 'registration') }}, all_varchar = true)
     WHERE length(DUID) > 2
     UNION ALL
     SELECT DUID, Region, "Fuel Source - Descriptor", Participant,
@@ -77,7 +75,7 @@ WITH
            TRY_CAST("Max Cap generation (MW)" AS DOUBLE) AS MaxCapMW,
            TRY_CAST("Maximum storage capacity" AS DOUBLE) AS StorageMWh,
            2
-    FROM read_csv('{{ unregistered_csv }}', all_varchar = true)
+    FROM read_csv({{ source('duid_reference', 'duid_unregistered') }}, all_varchar = true)
     WHERE length(DUID) > 2
   ),
 
@@ -102,12 +100,12 @@ WITH
       "Facility Code" AS DUID,
       "Participant Name" AS Participant
     FROM
-      read_csv_auto('{{ csv_archive_path }}/duid/facilities.csv')
+      read_csv_auto({{ source('duid_reference', 'facilities') }})
   ),
 
   wa_energy AS (
     SELECT *
-    FROM read_csv_auto('{{ csv_archive_path }}/duid/WA_ENERGY.csv', header = 1)
+    FROM read_csv_auto({{ source('duid_reference', 'WA_ENERGY') }}, header = 1)
   ),
 
   duid_wa AS (
@@ -136,7 +134,7 @@ WITH
       duid,
       max(latitude) as latitude,
       max(longitude) as longitude
-    FROM read_csv('{{ csv_archive_path }}/duid/geo_data.csv')
+    FROM read_csv({{ source('duid_reference', 'geo_data') }})
     WHERE latitude IS NOT NULL
     GROUP BY duid
   )

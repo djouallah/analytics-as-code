@@ -202,6 +202,14 @@ RENAMEs it into place, and RENAME has never been probed against this catalog.
   bug. `fct_scada_today` has no `INTERVENTION` column, so its export can't filter on it.
   Unifying them would mean rebuilding a fact; not worth it.
 - Pre-hooks set DuckDB VARIABLEs with the file paths to process, read from the log table
+- **Every file a model reads is a dbt source** (`models/sources.yml`, dbt-duckdb
+  `external_location`), so the lineage graph shows it. `aemo.*` compiles to the fact model's
+  `getvariable('…_paths')`, `duid_reference.*` to the file's path under `Files/csv/duid/`: the
+  compiled SQL is the same as before the sources existed (2026-10-03). They are not tables —
+  the variable only exists inside its model, so no tests or freshness on them. The variable
+  is there because DuckDB has no manifest: `read_csv` takes a constant list or a glob, not a
+  subquery, and a glob lists the whole folder whatever the `filename` filter (measured on the
+  2.0 pin). Asked upstream in duckdb/duckdb-aws-glue#37 (`hive_scan` over a symlink manifest)
 - CSVs read from gzipped archives in OneLake Files via `read_csv()` with `ignore_errors=true`
 - CI target uses plain DuckDB (no Iceberg) for SQL validation; `FILES_PATH` is unset there so
   the archive falls back to `/tmp`

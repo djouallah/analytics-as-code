@@ -76,7 +76,7 @@
 WITH regionsum_staging AS (
   SELECT *
   FROM read_csv(
-    getvariable('regionsum_today_paths'),
+    {{ source('aemo', 'dispatchis_regionsum') }},
     skip = 1,
     header = 0,
     all_varchar = 1,

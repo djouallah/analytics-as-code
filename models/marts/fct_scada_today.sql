@@ -30,7 +30,7 @@
 WITH scada_staging AS (
   SELECT *
   FROM read_csv(
-    getvariable('scada_today_paths'),
+    {{ source('aemo', 'dispatch_scada') }},
     skip = 1,
     header = 0,
     all_varchar = 1,

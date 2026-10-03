@@ -50,7 +50,7 @@
 WITH interconnector_staging AS (
   SELECT *
   FROM read_csv(
-    getvariable('interconnector_today_paths'),
+    {{ source('aemo', 'dispatchis_interconnectorres') }},
     skip = 1,
     header = 0,
     all_varchar = 1,
