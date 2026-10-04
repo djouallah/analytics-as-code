@@ -416,6 +416,10 @@ def build_daily_agg():
     scada = f"'{DASHBOARD_DIR}/fct_scada.parquet'"
     price = f"'{DASHBOARD_DIR}/fct_price.parquet'"
     curtailment = f"'{DASHBOARD_DIR}/fct_curtailment.parquet'"
+    # The newest date of the scada export is never a whole day: a next-day file runs 04:05 to
+    # 04:00, so that date only has its first four hours until the next file lands. Counted in
+    # month_days, it would divide hours 4-23 of the current month by one day too many.
+    whole_days = f"date < (SELECT max(date) FROM {scada})"
     # Each table: (date column, its query over the parquet exports).
     # - scada_daily / price_daily: one row per unit (region) and day, for ranges over 30 days.
     # - curtailment_daily: one row per semi-scheduled unit and day (export_curtailment).
@@ -435,7 +439,7 @@ def build_daily_agg():
         "scada_hourly": ("month", f"""
             SELECT DUID, CAST(date_trunc('month', date) AS DATE) AS month,
                 CAST(time // 100 AS TINYINT) AS hour, CAST(SUM(mw) / 12.0 AS REAL) AS mwh
-            FROM {scada} WHERE mw > 0 GROUP BY ALL ORDER BY DUID, month, hour"""),
+            FROM {scada} WHERE mw > 0 AND {whole_days} GROUP BY ALL ORDER BY DUID, month, hour"""),
         "price_hourly": ("month", f"""
             SELECT REGIONID, CAST(date_trunc('month', date) AS DATE) AS month,
                 CAST(time // 100 AS TINYINT) AS hour, CAST(AVG(price) AS REAL) AS price,
@@ -444,7 +448,7 @@ def build_daily_agg():
         "month_days": ("month", f"""
             SELECT CAST(date_trunc('month', date) AS DATE) AS month,
                 CAST(COUNT(DISTINCT date) AS SMALLINT) AS days
-            FROM {scada} GROUP BY ALL ORDER BY month"""),
+            FROM {scada} WHERE {whole_days} GROUP BY ALL ORDER BY month"""),
         "curtailment_daily": ("date", f"""
             SELECT DUID, date, curtailed_mwh, available_mwh
             FROM {curtailment} ORDER BY DUID, date"""),
