@@ -73,14 +73,23 @@ jobs:
           RAYFIN_WORKSPACE_ID: ${{ vars.FABRIC_APP_WORKSPACE_ID }}
         run: npx rayfin up --item-name nemtracker --workspace-id "$RAYFIN_WORKSPACE_ID" --yes --output json ${{ inputs.dry_run && '-n' || '' }}
 
-      - name: Set the function's secret
+      - name: Set the function's secret, on a new item
         # Where getDataSas signs: the Files folder of the lakehouse import_onelake.yml fills.
-        # A public identifier, kept as a repo variable; Rayfin stores it on the item.
+        # A public identifier, kept as a repo variable; Rayfin stores it on the item. Only an
+        # item that lacks it gets it, followed by the function once more: the first deploy
+        # went out before the secret existed, and the app that works was deployed in this
+        # order (deploy, secret, deploy).
         if: ${{ !inputs.dry_run }}
         working-directory: fabric
         env:
           ONELAKE_FILES_URL: ${{ vars.ONELAKE_FILES_URL }}
-        run: echo "$ONELAKE_FILES_URL" | npx rayfin secret set ONELAKE_FILES_URL --stdin
+        run: |
+          if npx rayfin secret list | grep -q ONELAKE_FILES_URL; then
+            echo "The secret is already on the item."
+          else
+            echo "$ONELAKE_FILES_URL" | npx rayfin secret set ONELAKE_FILES_URL --stdin
+            npx rayfin up functions deploy
+          fi
 
       # getDataSas runs as the item's owner, which is this login. What it does first is ask
       # OneLake for a user delegation key; ask for one here, so a deploy says so when OneLake
