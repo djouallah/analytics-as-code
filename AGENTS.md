@@ -205,10 +205,11 @@ another order in 53 snapshots (its query has no ORDER BY). Timed old against new
 alternately in one page, 1,297 queries: 7.5% less in total, none slower by more than 10% and
 10 ms; a query over the model's views plans ~0.5 ms longer (more view to expand), which shows
 only on the sub-10 ms ones. Data-ready to first render: 787 ms against 823 ms. A change to
-`model.js` deserves two checks: the page's query results old against new, and `EXPLAIN` for
-a join that was not there. Timings are only worth a look for something grossly slower (a
-query several times its old time), taken alternately in the same page since two separate
-sessions differ by more than a change does; a few milliseconds either way is noise.
+`model.js` deserves the same checks: the page's query results old against new, `EXPLAIN` for
+a join that was not there, and old against new timings taken alternately in the same page
+(two separate sessions differ by more than the change does). Speed is tracked every time:
+the total, and any query clearly slower. A difference of some 10 ms on one query is not
+worth chasing: on a second run as many go the other way.
 
 `build.yml` (index.html, data.js, model.js, dbt docs) and `import_data.yml` (the .duckdb files) publish into
 `NemTracker/nemtracker.github.io` with `scripts/deploy_pages.sh`: a blobless depth-1 clone, the
