@@ -1,5 +1,5 @@
 {#-- The archived files a fact model still has to read, from the log table. One definition
-     for the four fact models' pre-hooks and their "anything to do?" check.
+     for every fact model's pre-hook and its "anything to do?" check.
 
      - NOT EXISTS, not NOT IN: a single NULL `file` in the target turns `NOT IN` into "never
        true", which silently stops every load (the same trap the assert_all_* tests avoid).
@@ -7,7 +7,12 @@
        and MERGE dedupes against the target, never within a batch.
      - ORDER BY archive_path DESC before LIMIT (ported from the sibling's new_source_files):
        a backlog or a rebuild=<table> refill takes the newest files first, deterministically,
-       instead of an arbitrary process_limit subset.
+       instead of an arbitrary process_limit subset. It is the path that is ordered: newest
+       first within a source folder, and one folder after the other for a model that reads
+       several (rooftop_weekly, then rooftop_today, then rooftop_monthly).
+     - A file is done once the target holds a row of it. One that yields no row (an empty
+       file, a record version the model doesn't select) stays pending and is read again
+       every run.
      - source_type is one type or a list of them (fct_interconnector_today reads the
        DispatchIS files and the monthly archive). --#}
 

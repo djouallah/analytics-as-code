@@ -33,10 +33,14 @@ models:
         description: Maximum storage capacity (MWh) for batteries; null otherwise
 
   - name: dim_calendar
-    description: Calendar dimension with date attributes
+    description: One row per day from 2018-03-06 (where the history starts) to two years ahead
     columns:
       - name: date
         description: Calendar date
         tests:
           - unique
           - not_null
+      - name: year
+        description: Calendar year of the date
+      - name: month
+        description: Month of the date, 1-12

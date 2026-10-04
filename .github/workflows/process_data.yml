@@ -1,11 +1,12 @@
 name: Process Data
 
-# Every 30 minutes. There is no daily/intraday split any more: the staging model does all
-# three feeds (daily archive, intraday SCADA, intraday price) plus the DUID reference on
-# every pass, and self-gates the slow parts on data rather than on a schedule —
-#   * the DUID download is skipped while the last one is < 24h old
-#   * the GitHub historical backfill listing only runs when AEMO returned fewer than
-#     download_limit new files
+# Every 30 minutes. There is no daily/intraday split any more: the staging model does every
+# feed (daily archive, intraday SCADA, intraday DispatchIS, rooftop, the monthly archives)
+# plus the DUID reference on every pass, and self-gates the slow parts on data rather than on
+# a schedule —
+#   * a DUID reference file is downloaded when its last download is 24h old
+#   * the backfills (GitHub historical listing, monthly and weekly archives) only run when
+#     AEMO returned fewer than download_limit new daily files
 # so a 30-minute cadence costs nothing extra over an hourly one.
 on:
   schedule:
@@ -51,8 +52,8 @@ jobs:
       # Authenticated GitHub API calls for the staging model's backfill listing —
       # anonymous calls share the runner IP's 60 req/h quota and get rate-limited.
       GITHUB_TOKEN: ${{ github.token }}
-      # A single shared cap across all three feeds (daily, scada_today, price_today), and a
-      # CAP rather than a workload: a 30-minute slot only publishes ~6 intraday files per
+      # The same cap for every feed, applied to each on its own (daily, scada_today,
+      # price_today, rooftop, the monthly archives), and a CAP rather than a workload: a 30-minute slot only publishes ~6 intraday files per
       # feed and at most one daily file, so in steady state this never binds — it only sets
       # how fast the historical backfill drains.
       #

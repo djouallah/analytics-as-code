@@ -11,8 +11,7 @@ pre-release duckdb==2.0.0.dev2609250715, and the iceberg extension binary is key
 build, so pinning duckdb pins the extension too.
 
 This is the OneLake edition of the R2 original (both live in this repo's git history; the
-sibling copy is dbt_fabric_python_iceberg/.github/scripts/compact_iceberg.py). Two things
-differ from the R2 era:
+copy the old sibling repo had went with that repo). Two things differ from the R2 era:
   - Credentials. The old catalog vended storage credentials (CREATE SECRET TYPE ICEBERG).
     OneLake is attached with access_delegation_mode 'none', so the client brings its own
     Azure token — the same azure secret + attach options profiles.yml uses.

@@ -4,8 +4,12 @@
 - **Stack:** dbt-duckdb, **OneLake Iceberg REST catalog** (Microsoft Fabric workspace `power`,
   lakehouse `nem` — its own lakehouse, deliberately separate from the sibling repo's
   `data`, because both repos write identically-named tables in `landing`/`mart`)
-- **Run:** `dbt build --target ci --profiles-dir .` (test, in-memory)
-- **Run:** `dbt build --target dev --profiles-dir .` (writes to Iceberg; needs the OneLake env vars below)
+- **Run:** `dbt build --target ci --profiles-dir .` (test, plain DuckDB, no Iceberg; it
+  downloads two files per feed from nemweb and GitHub, so it needs both to be up)
+- **Run:** `dbt build --target dev --profiles-dir .` (writes to Iceberg; needs the OneLake env
+  vars below). **`dev` is `prod`**: same catalog, same `landing`/`mart` tables, there is no
+  separate dev schema. It refuses to run without `FILES_PATH` (`dbt_project.yml`
+  `on-run-start`): the archive would go to the local `/tmp` and its paths into the shared log.
 - **Schemas:** `mart` (dim_calendar, dim_duid) / `landing` (facts, staging)
 - **Writes are insert-only merges** (`WHEN MATCHED DO NOTHING`): the OneLake catalog accepts
   one add-snapshot per commit and rejects commits mixing delete files + data files
@@ -20,7 +24,7 @@ engines. As of 2026-10-01 it has only `models/aemo/dwh/` (Fabric Warehouse) and
 by idea, not by file (`macros/new_source_files.sql` there is the counterpart of
 `macros/pending_archive_files.sql` here). This repo was copied from the old sibling minus `fct_summary`
 (the dashboard joins facts to `dim_duid`/prices client-side in DuckDB-WASM;
-`scripts/cache_catalog.py` only exports and pre-aggregates).
+`scripts/cache_catalog.py` exports, pre-aggregates and adds the rooftop pseudo-units).
 **Look there first for fixes, and port them rather than diverging.** Ideas worth knowing:
 - There, downloading lives outside dbt and the log is read straight from parquet, not from an
   Iceberg table — which would remove the log table this repo had to rebuild on 2026-09-18.
@@ -32,7 +36,8 @@ Three deliberate local differences, all of which must survive a port:
   version and is this repo's own.
 - `tests/assert_all_*_files_processed_*.sql` use `NOT EXISTS` and are untagged; the sibling's
   use `NOT IN` (a single NULL `file` makes them permanently green) and are tagged `heavy`.
-- `profiles.yml` keeps a `ci` target (in-memory, no Iceberg) for `build.yml`, and
+- `profiles.yml` keeps a `ci` target (plain DuckDB, no Iceberg; `build.yml` gives it a file,
+  `ci.duckdb`) for `build.yml`, and
   `dbt_project.yml`'s `on-run-start` hooks are guarded with `target.name != 'ci'` — the
   sibling's are unconditional and would break that target.
 
@@ -44,10 +49,19 @@ Three deliberate local differences, all of which must survive a port:
    pile of reconciliation machinery that existed to paper over that (`confirm_log_entries`,
    `heal_orphaned_daily_files`, `report_unprocessed_files`, `force_download.txt`,
    `pending_log_entries.csv`) is **deleted** — a durable archive needs none of it.
-2. **No daily/intraday split.** Every 30-minute pass does all three feeds plus the DUID
-   reference, self-gated on data rather than on a schedule: the DUID download is skipped while
-   the last one is < 24h old, and the GitHub historical backfill listing only runs when AEMO
-   returned fewer than `download_limit` new files. There is no `daily_refresh` env var.
+2. **No daily/intraday split.** Every 30-minute pass does every feed (the daily files,
+   intraday SCADA, intraday DispatchIS, the monthly interconnector archive, rooftop current /
+   weekly / monthly) plus the DUID reference, self-gated on data rather than on a schedule:
+   each DUID reference file is downloaded when its log row is 24h old, and the backfills (the
+   GitHub historical listing, the monthly archives, the weekly rooftop archives) only run when
+   AEMO returned fewer than `download_limit` new daily files. `download_limit` is per feed.
+   There is no `daily_refresh` env var.
+   **A source that fails skips itself, not the run** (since 2026-10-04): a nemweb folder that
+   can't be listed, or a reference file that can't be fetched, prints a `::warning::` and that
+   feed downloads nothing this pass; the previous reference file and its log row stay. The
+   model must not raise for it: every fact `ref`s this model, so one unreachable site (the WA
+   one, or `ROOFTOP_PV/ACTUAL` once AEMO removes it) would skip all seven facts. A failed
+   write to OneLake still raises.
    The DUID refresh also saves the generator sheet of AEMO's **NEM Registration and Exemption
    List** (the newest copy archived weekly in `djouallah/aemo_data/data/duid/registration/`) as
    `Files/csv/duid/registration.csv`. `dim_duid` takes its NEM units from two files only: that
@@ -64,7 +78,10 @@ Three deliberate local differences, all of which must survive a port:
    (`macros/pending_archive_files.sql`) builds its path list from
    `SELECT DISTINCT stg_csv_archive_log.archive_path` filtered by `NOT EXISTS` against
    `{{ this }}.file` (not `NOT IN`: one NULL `file` would stop every load), newest first
-   (`ORDER BY archive_path DESC LIMIT process_limit`). The DISTINCT is load-bearing: the
+   (`ORDER BY archive_path DESC LIMIT process_limit`; that is path order, so newest first
+   within a source folder, and for a model that reads several folders one folder after the
+   other). A file counts as loaded once the fact holds a row of it: one that yields no row
+   stays pending and is read again every run. The DISTINCT is load-bearing: the
    log table is append-only and can hold a file more than once (until 2026-09-18 the staging
    model re-appended the *whole* log every run, so a file that waited K runs had K rows), and
    MERGE only dedupes against the target, never within a batch. Without it a single
@@ -92,8 +109,9 @@ Three deliberate local differences, all of which must survive a port:
    already trimming them; treat this step as a bounded safety net, and if a table is ever seen
    above ~48 snapshots that assumption has changed. The job takes a job-level `process-data` concurrency group — both operations
    commit optimistically, so an overlap with a load could fail one side. It is
-   `continue-on-error` and both scripts always exit 0: maintenance must never fail the pipeline
-   or block `import_data.yml`'s `workflow_run` gate. Both scripts read their table list from
+   `continue-on-error` and both scripts always exit 0: maintenance must never fail its
+   workflow (a red run there means a dbt test failed). The price of that is that a compaction
+   that has stopped working only shows in the job's log. Both scripts read their table list from
    `scripts/iceberg_tables.py`; a new model gets added there once.
 
 ## Don't design anything that needs DELETE
@@ -131,7 +149,9 @@ The dashboard is three files, one job each (since 2026-10-04; before, the page h
 and the macros).
 - `dashboard/index.html` is the page: charts, and SQL that only picks columns from views,
   filters and groups them. **It joins nothing** and knows no `dim_duid` column, no fuel
-  naming rule, no list of renewable fuels. A new chart that needs a join or a rule gets a
+  naming rule, no list of renewable fuels, no region names (they are `v_unit.state`). It
+  names a fuel only to colour it, to label `Grid` "Battery" in a legend, and to pick the
+  solar and wind records of the History page. A new chart that needs a join or a rule gets a
   view or a macro in `model.js`, not SQL in the page.
 - `dashboard/model.js` is the semantic layer (`createModel(dataSource)`: the same members as
   the data source, plus `needs`). Over `data.js`'s views it builds the ones the page reads —
@@ -150,7 +170,11 @@ and the macros).
   the list at its top is its contract with `model.js`), and it is the only part that knows
   about `data/`, the half-year files, the `dim`/`today`/`agg` databases and OPFS. A host that
   stores the files differently (the Fabric app) keeps the page and `model.js` and ships its
-  own `data.js` with the same members and the same views.
+  own `data.js` with the same members and the same views. `ensureHistory` attaches nothing
+  for a range that starts inside the last 5 days: `today` covers it, so the default view
+  downloads no half-year file (it did until 2026-10-04, 44 MB before first paint). It sets
+  the session to Brisbane time, on purpose: the files carry `date` and `time`, no
+  TIMESTAMPTZ, and the only thing the zone decides is that `CURRENT_DATE` is the NEM's day.
 
 Four things in that design are there for speed and must survive an edit. The last two were
 measured regressions in the first cut (2026-10-04), found by reading `EXPLAIN` and by timing
@@ -179,9 +203,10 @@ another order in 53 snapshots (its query has no ORDER BY). Timed old against new
 alternately in one page, 1,297 queries: 7.5% less in total, none slower by more than 10% and
 10 ms; a query over the model's views plans ~0.5 ms longer (more view to expand), which shows
 only on the sub-10 ms ones. Data-ready to first render: 787 ms against 823 ms. A change to
-`model.js` deserves the same two checks: `EXPLAIN` for a join that was not there, and old
-against new timings taken alternately in the same page (two separate sessions differ by more
-than the change does).
+`model.js` deserves two checks: the page's query results old against new, and `EXPLAIN` for
+a join that was not there. Timings are only worth a look for something grossly slower (a
+query several times its old time), taken alternately in the same page since two separate
+sessions differ by more than a change does; a few milliseconds either way is noise.
 
 `build.yml` (index.html, data.js, model.js, dbt docs) and `import_data.yml` (the .duckdb files) publish into
 `NemTracker/nemtracker.github.io` with `scripts/deploy_pages.sh`: a blobless depth-1 clone, the
@@ -241,23 +266,40 @@ files per run. It also works on a table the catalog can no longer serve (the pre
 is best-effort). Do not use `dbt run --full-refresh`: dbt-duckdb builds `<table>__dbt_tmp` and
 RENAMEs it into place, and RENAME has never been probed against this catalog.
 
-## Profiles: ci (in-memory, no Iceberg), dev/prod (OneLake Iceberg REST catalog)
+## Profiles: ci (plain DuckDB, no Iceberg), dev/prod (OneLake Iceberg REST catalog, the same one)
 
 ## Key Patterns
 - **SETTLEMENTDATE is AEST wall clock stored as TIMESTAMPTZ labelled UTC.** The models cast
-  the CSV string straight to TIMESTAMPTZ and the dbt session on the runners is UTC, so the
-  instant in the column is 10h early; the `DATE`/`YEAR` columns next to it are cast from the
-  string and are right. Every reader must therefore run with `TimeZone = 'UTC'` (as
-  `scripts/cache_catalog.py` does) — a Brisbane session shifts every date and time by +10h,
-  which is what the dashboard showed from the 2026-08-25 refactor until 2026-09-25. Fixing
-  it at the writer would change the column's values and mean rebuilding all four facts.
+  the CSV string to TIMESTAMPTZ in a session whose zone is UTC, so the instant in the column
+  is 10h early; the `DATE`/`YEAR` columns next to it are cast from the string and are right.
+  `profiles.yml` sets `TimeZone: UTC` on every target (since 2026-10-04; before, it was UTC
+  only because the runners are, and a run from a laptop in Brisbane would have written other
+  instants into the same tables). Every reader of the Iceberg tables must run with
+  `TimeZone = 'UTC'` too (as `scripts/cache_catalog.py` does) — a Brisbane session shifts
+  every date and time by +10h, which is what the dashboard showed from the 2026-08-25
+  refactor until 2026-09-25. The browser is not such a reader: the exported files hold
+  `date` and `time`, and `data.js` runs in Brisbane time for `CURRENT_DATE` alone. Fixing it
+  at the writer would change the column's values and mean rebuilding all seven facts.
 - **The dashboard's MW changes source at the 5-day mark.** History (`fct_scada`) is
   `INITIALMW` from the `DUNIT` rows of AEMO's next-day `PUBLIC_DAILY` files; the last 5 days
-  (`fct_scada_today`) are `SCADAVALUE` from the intraday `Dispatch_SCADA` files, renamed to
+  are `SCADAVALUE` from the intraday `Dispatch_SCADA` files (`fct_scada_today`), renamed to
   `INITIALMW` in the model so the exports treat both alike. They are different AEMO columns
   from different reports, so a small step where the two meet in a chart is expected, not a
   bug. `fct_scada_today` has no `INTERVENTION` column, so its export can't filter on it.
-  Unifying them would mean rebuilding a fact; not worth it.
+  Unifying them would mean rebuilding a fact; not worth it. Three numbers are involved, in
+  three places: the `_today` tables keep every row they ever loaded (insert-only, never
+  trimmed), the export takes their last 14 days, and `data.js` reads the last 5 from them
+  (`RECENT_CUT`) and the rest from history. And one asymmetry: `fct_scada_today` drops the
+  0 MW rows at load, `fct_scada` keeps them and the export drops them.
+- **What the export applies, which a reader of the Iceberg tables has to redo**
+  (`scripts/cache_catalog.py`): `INTERVENTION = 0` only (the pricing run); 0 MW rows left
+  out; one row per key with `ANY_VALUE … GROUP BY`, because `file` is part of every merge key
+  and an interval can be there from two files; interconnector `mw` is the dispatch target
+  `MWFLOW`, not `METEREDMWFLOW`; energy is `SUM(mw) / 12`; `date` is the calendar date of the
+  interval's end and `time` its HHMM; daily price and demand are plain averages of the
+  intervals; rooftop as described under Models. A table the catalog doesn't have fails the
+  export (since 2026-10-04): the three "not there yet" fallbacks would have deployed files
+  without rooftop, demand or flows over good ones.
 - Pre-hooks set DuckDB VARIABLEs with the file paths to process, read from the log table
 - **Every file a model reads is a dbt source** (`models/sources.yml`, dbt-duckdb
   `external_location`), so the lineage graph shows it. `aemo.*` compiles to the fact model's
@@ -269,11 +311,13 @@ RENAMEs it into place, and RENAME has never been probed against this catalog.
   2.0 pin). Asked upstream in duckdb/duckdb-aws-glue#37 (`hive_scan` over a symlink manifest)
 - CSVs read from gzipped archives in OneLake Files via `read_csv()` with `ignore_errors=true`
 - CI target uses plain DuckDB (no Iceberg) for SQL validation; `FILES_PATH` is unset there so
-  the archive falls back to `/tmp`
+  the archive falls back to `/tmp`. It runs the download for real (two files per feed)
 - Dev/prod targets attach the OneLake Iceberg REST catalog via `database: iceberg_catalog`
 
 ## DuckDB version policy
-Everything is pinned — no workflow floats on "latest".
+Every duckdb, dbt, pyiceberg and duckdb-wasm version is pinned exactly — none floats on
+"latest". Not pinned: the GitHub actions (by major tag), the runner image, and the packages
+those pins pull in.
 - **`process_data.yml`, `build.yml`, `table_maintenance.yml` and `import_data.yml`'s read venv
   pin `duckdb==2.0.0.dev2609250715`** (dbt via `requirements.txt`, which also pins `dbt-core`/`dbt-duckdb`
   exactly — the insert-only merges lean on adapter internals). 1.6.0 never shipped as stable:

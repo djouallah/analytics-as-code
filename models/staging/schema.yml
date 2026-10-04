@@ -2,8 +2,10 @@ version: 2
 
 models:
   - name: stg_csv_archive_log
-    description: Log of all downloaded CSV files
+    description: One row per archived CSV - what the fact models' pre-hooks read to find the files they still have to load. A materialization of Files/csv_archive_log.parquet, the durable log; each run appends the rows the table is missing
     columns:
+      - name: archive_path
+        description: Path of the gzipped CSV under Files/csv (/<folder>/<file>.gz); what the pre-hooks pass to read_csv
       - name: source_filename
         description: Name of the downloaded file
         tests:

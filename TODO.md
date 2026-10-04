@@ -16,12 +16,11 @@ only: a finished item is removed, not ticked.
   `requirements.txt`, `table_maintenance.yml` (compaction) and `import_data.yml` (read venv);
   check Process Data, maintenance and import; update AGENTS.md's version policy.
 - [ ] **Capability probe** (separate repo, manual) — re-run against the 2.0 pin.
-- [ ] **A browser can keep a stale history file** — `cacheInOPFS` (`dashboard/data.js`) checks
-  the ETag with a `no-store` HEAD but downloads with a plain `fetch`, which the HTTP cache can
-  answer with the previous body for up to 10 minutes (GitHub Pages sends `max-age=600`): the
-  old file is then stored under the new ETag and stays until the file changes again. Likely
-  why rooftop showed for the last days only in one browser on 2026-10-02 while a fresh browser
-  had every day; not confirmed on that machine. Fix: `fetch(url, { cache: 'no-store' })`.
+- [ ] **The hour-of-day profile reads low for the current month** (not confirmed on the data) —
+  `month_days` (`scripts/cache_catalog.py build_daily_agg`) counts every date in the scada
+  export, and the newest one only holds 00:05 → 04:00 (a daily file's trading day ends at
+  04:00). Hours 4-23 of the current month are then divided by one day too many. Check with
+  the intervals of the newest date in a half-year file before changing anything.
 
 ## Bigger
 
@@ -50,6 +49,10 @@ only: a finished item is removed, not ticked.
   `duid_unregistered.csv` (aemo_data) is regenerated over the longer history, from the same
   MMSDM tables. MMSDM months before 2015 sit in a different folder layout, not
   looked at. Rooftop solar has no usable estimate before 2018-03-06.
+- [ ] **Interconnectors from the data** — the Flows page types each link's two regions and
+  its name (`INTERCONNECTORS` in `dashboard/index.html`); the facts carry only the id. AEMO's
+  MMSDM `INTERCONNECTOR` table should have them (`REGIONFROM`, `REGIONTO`, a description;
+  not checked against the archive): a small `dim_interconnector`, exported with the dims.
 - [ ] **Emissions** — AEMO MMSDM `GENUNITS` has a CO2 factor per genset (`DUALLOC` maps it to
   a DUID): an emissions-intensity KPI and chart. A unit without a factor stays out; no
   guessed factor.

@@ -28,10 +28,10 @@ The entire analytics stack — ingestion, transformation, storage, and visualiza
 
 ## Grain Reduction
 
-Source data arrives at 5-minute resolution. The Iceberg tables store everything at this uniform grain — no data is lost. Aggregation only happens downstream for the dashboard. To give a sense of scale: ~1 billion raw records, ~300 million rows in the largest Iceberg table, ~13 million rows in the dashboard DuckDB files.
+Source data arrives at 5-minute resolution (rooftop solar every half hour). The Iceberg tables store everything at the grain it arrives in — no data is lost. Aggregation only happens downstream for the dashboard. To give a sense of scale: ~1 billion raw records, ~300 million rows in the largest Iceberg table, ~13 million 5-minute rows in one half-year dashboard file.
 
-- **At import time:** When importing from Iceberg to the dashboard, the script aggregates 5-minute data to hourly for the daily file (SUM for volumes, AVG for prices), while the intraday file keeps native 5-minute grain. Types are compressed too — `REAL` instead of `DECIMAL`, `SMALLINT` for time keys — to minimize file size under the 100 MB GitHub Pages limit.
-- **At query time:** The dashboard adapts granularity based on the selected date range: 5-minute resolution for <=7 days (from the intraday file), hourly for 8-30 days (from the daily file), and daily aggregates for >30 days. This keeps queries fast in single-threaded DuckDB-WASM.
+- **At import time:** The script writes the 5-minute history as one DuckDB file per half-year (each under GitHub's 100 MB per-file limit), the last 14 days as a small file refreshed every 30 minutes, and one aggregate file: per unit and day, plus hour-of-day × month (SUM for energy, AVG for prices). Rows at 0 MW are left out, and types are compressed — `REAL` instead of `DOUBLE`, `SMALLINT` for time keys.
+- **At query time:** The dashboard adapts granularity to the selected date range: 5-minute resolution up to 30 days (downloading only the half-years the range touches, and none for the default last 3 days), daily and hour-of-day aggregates beyond. This keeps queries fast in single-threaded DuckDB-WASM.
 - **Dashboard CSV download uses one consistent grain** — when users export data from the dashboard, it always uses a single time resolution, no mixing.
 
 ## How It Works
@@ -49,7 +49,7 @@ Source data arrives at 5-minute resolution. The Iceberg tables store everything 
 │   ├── dimensions/       # Dimension tables (calendar, reference data)
 │   └── marts/            # Incremental fact tables
 ├── macros/               # Iceberg compatibility overrides, helpers
-├── scripts/              # Iceberg → DuckDB import
+├── scripts/              # Iceberg → DuckDB import, table maintenance, deploy
 ├── dashboard/            # Static HTML dashboard (DuckDB-WASM)
 ├── tests/                # dbt data tests
 ├── .github/workflows/    # CI/CD pipelines
@@ -59,7 +59,8 @@ Source data arrives at 5-minute resolution. The Iceberg tables store everything 
 
 ## Limitations
 
-- **GitHub Pages file size limit: 100 MB.** The DuckDB files served via GitHub Pages must stay under this limit, which constrains how much historical data the dashboard can hold.
+- **GitHub Pages limits: 100 MB per file, about 1 GB per site.** The first is why the history is split into half-year files; the second is the one that binds now (the data files are close to it) and constrains how much more history the dashboard can hold.
+- **The deployed files are state too.** A daily import rebuilds only the latest two half-years; older half-year files, and the aggregate's rows before the cutoff, are kept as deployed. A change to older data needs an import of every period (`all_periods=true`).
 - **DuckDB-WASM runs single-threaded.** Its multi-threaded build can't load extensions such as ICU yet and can't share OPFS file handles with its threads, and it only gained ~1.4x on 4 threads when tried (2026-09-30). We use the native DuckDB file format (not Parquet) because DuckDB-WASM can query its own format efficiently even under this constraint — range requests, predicate pushdown, and columnar reads all work without needing to load the entire file into memory.
 
 ## Setup
@@ -76,20 +77,32 @@ federated `azure/login`:
 | `ONELAKE_ENDPOINT` | `https://onelake.table.fabric.microsoft.com/iceberg` |
 | `WAREHOUSE_PATH` | `{workspace_id}/{lakehouse_id}` |
 | `ONELAKE_TOKEN` | Short-lived Azure storage token (minted per run, never stored) |
+| `FILES_PATH` | `abfss://{workspace_id}@onelake.dfs.fabric.microsoft.com/{lakehouse_id}/Files` — where the CSV archive and its log live. Required off the `ci` target |
+| `download_limit` | Files fetched per feed per run (default 2; the workflow uses 200) |
+| `process_limit` | Files loaded per fact model per run (default 1000; the workflow uses 300) |
+| `AZURE_TRANSPORT_OPTION_TYPE`, `CURL_CA_INFO` | `curl` and the CA bundle, on GitHub runners only |
+| `GITHUB_TOKEN` | Optional: authenticated GitHub API calls for the backfill listings |
+| `NEMTRACKER_TOKEN` | The one secret: pushes the dashboard to its GitHub Pages repo |
 
 ### Local Development
 
 ```bash
 pip install -r requirements.txt
 
-# Validate SQL in-memory (no catalog needed)
+# Validate the models on plain DuckDB (no catalog needed). It runs the download
+# for real: two files per feed, archived under /tmp.
 dbt build --target ci --profiles-dir .
+```
 
-# Write to the OneLake Iceberg catalog (az login with an identity that can
-# access the Fabric workspace)
+The `dev` target is not a sandbox: it attaches the same catalog as `prod` and writes the
+same `landing` and `mart` tables. To use it against a lakehouse of your own (`az login` with
+an identity that can access the Fabric workspace):
+
+```bash
 az login
 export ONELAKE_ENDPOINT=https://onelake.table.fabric.microsoft.com/iceberg
 export WAREHOUSE_PATH=<workspace-guid>/<lakehouse-guid>
+export FILES_PATH=abfss://<workspace-guid>@onelake.dfs.fabric.microsoft.com/<lakehouse-guid>/Files
 export ONELAKE_TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
 dbt build --target dev --profiles-dir .
 ```

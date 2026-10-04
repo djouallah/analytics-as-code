@@ -2,33 +2,40 @@ version: 2
 
 models:
   - name: fct_price
-    description: Regional spot prices from daily AEMO dispatch files (5-minute intervals)
+    description: Regional spot prices, demand and supply every 5 minutes, from the DREGION rows of AEMO's next-day PUBLIC_DAILY files (history back to 2018)
     columns:
       - name: REGIONID
-        description: NEM region (plus WA1 for the WA market)
+        description: NEM region (QLD1, NSW1, VIC1, SA1, TAS1); the files carry no WA prices
         tests:
           - not_null
           - accepted_values:
               values: ['QLD1', 'NSW1', 'VIC1', 'SA1', 'TAS1', 'WA1']
       - name: SETTLEMENTDATE
-        description: 5-minute dispatch interval timestamp (timestamptz)
+        description: End of the 5-minute dispatch interval - AEST wall clock stored as timestamptz labelled UTC, so read it in a UTC session
         tests:
           - not_null
       - name: RRP
         description: Regional Reference Price ($/MWh) for the interval
+      - name: TOTALDEMAND
+        description: Operational demand (MW); rooftop solar is not in it. The dashboard's demand for history
+      - name: NETINTERCHANGE
+        description: Net interconnector flow out of the region (MW); positive = export
       - name: INTERVENTION
-        description: AEMO intervention flag (0 = normal dispatch run)
+        description: AEMO intervention flag (0 = the pricing run, which every reader filters on); part of the merge key
+      - name: DATE
+        description: Calendar date of SETTLEMENTDATE, cast from the file's string (right in any session zone)
       - name: file
         description: Source CSV filename the row was ingested from (part of the merge key)
         tests:
           - not_null
 
   - name: fct_scada
-    description: Generation SCADA readings per unit from daily AEMO dispatch files
+    description: Output and dispatch per unit every 5 minutes, from the DUNIT rows of AEMO's next-day PUBLIC_DAILY files (history back to 2018)
     columns:
-      # No relationships test to dim_duid here: dim_duid holds only *currently registered*
-      # DUIDs while fct_scada goes back to 2018 and is full of retired ones, so the test
-      # could never be 0 (it warned on 82,304,828 rows). The meaningful version --
+      # No relationships test to dim_duid here: dim_duid holds the registered DUIDs plus the
+      # unlisted ones that generated, while fct_scada goes back to 2018 and also carries units
+      # only ever dispatched at 0 MW, so the test could never be 0 (it warned on 82,304,828
+      # rows when dim_duid held the registered ones alone). The meaningful version --
       # do DUIDs generating *right now* exist in dim_duid -- lives in
       # tests/assert_recent_scada_duids_registered.sql.
       - name: DUID
@@ -36,21 +43,29 @@ models:
         tests:
           - not_null
       - name: SETTLEMENTDATE
-        description: 5-minute dispatch interval timestamp (timestamptz)
+        description: End of the 5-minute dispatch interval - AEST wall clock stored as timestamptz labelled UTC, so read it in a UTC session
         tests:
           - not_null
       - name: INITIALMW
-        description: Metered output of the unit at the start of the interval (MW)
+        description: Metered output of the unit at the start of the interval (MW); negative when a battery charges. Rows at 0 MW are kept here and left out by the export
+      - name: TOTALCLEARED
+        description: Dispatch target for the end of the interval (MW)
+      - name: AVAILABILITY
+        description: What the unit offered as available (MW); with TOTALCLEARED, what a curtailment measure would read
+      - name: INTERVENTION
+        description: AEMO intervention flag (0 = the pricing run, which every reader filters on); part of the merge key
+      - name: DATE
+        description: Calendar date of SETTLEMENTDATE, cast from the file's string (right in any session zone)
       - name: file
         description: Source CSV filename the row was ingested from (part of the merge key)
         tests:
           - not_null
 
   - name: fct_price_today
-    description: Intraday regional spot prices from AEMO 5-minute dispatch files
+    description: Regional spot prices from the PRICE rows of AEMO's 5-minute DispatchIS files, minutes after each interval. Never trimmed - it holds every file loaded since 2026-08; the export takes the last 14 days
     columns:
       - name: REGIONID
-        description: NEM region (plus WA1 for the WA market)
+        description: NEM region (QLD1, NSW1, VIC1, SA1, TAS1); the files carry no WA prices
         tests:
           - not_null
           - accepted_values:
@@ -83,7 +98,11 @@ models:
         tests:
           - not_null
       - name: MWFLOW
-        description: Dispatch target flow (MW)
+        description: Dispatch target flow (MW); the flow the dashboard shows
+      - name: METEREDMWFLOW
+        description: Metered flow at the start of the interval (MW); not exported
+      - name: INTERVENTION
+        description: AEMO intervention flag (0 = the pricing run, which every reader filters on); part of the merge key
       - name: EXPORTLIMIT
         description: Flow limit in the positive direction (MW)
       - name: IMPORTLIMIT
@@ -136,7 +155,7 @@ models:
         description: Source CSV filename the row was ingested from (part of the merge key)
 
   - name: fct_scada_today
-    description: Intraday generation SCADA readings per unit from AEMO dispatch files
+    description: SCADA reading per unit from AEMO's 5-minute Dispatch_SCADA files, minutes after each interval. Never trimmed - it holds every file loaded; the export takes the last 14 days. Rows at 0 MW are not loaded, and there is no INTERVENTION column
     columns:
       # Same reasoning as fct_scada above -- no relationships test to dim_duid.
       - name: DUID
@@ -144,11 +163,11 @@ models:
         tests:
           - not_null
       - name: SETTLEMENTDATE
-        description: 5-minute dispatch interval timestamp (timestamptz)
+        description: End of the 5-minute dispatch interval - AEST wall clock stored as timestamptz labelled UTC, so read it in a UTC session
         tests:
           - not_null
       - name: INITIALMW
-        description: Metered output of the unit at the start of the interval (MW)
+        description: The file's SCADAVALUE (MW), under fct_scada's column name so the exports read both alike. Not the same AEMO column as fct_scada.INITIALMW - a small step where the two meet is expected
       - name: file
         description: Source CSV filename the row was ingested from (part of the merge key)
         tests:
@@ -157,7 +176,7 @@ models:
 exposures:
   - name: dashboard_summary
     type: application
-    description: "Exports scada + price + dim_duid + dim_calendar into the dashboard .duckdb files (energy_dim / energy_today / energy_daily_agg / energy_data_<year>_h<n>) via scripts/cache_catalog.py"
+    description: "The NemTracker dashboard. scripts/cache_catalog.py exports every fact and both dimensions into its .duckdb files (energy_dim / energy_today / energy_daily_agg / energy_data_<year>_h<n>): generation, prices and demand, interconnector flows, and rooftop solar as one pseudo-unit per region"
     depends_on:
       - ref('fct_rooftop_pv')
       - ref('fct_scada')

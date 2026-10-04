@@ -2,11 +2,11 @@ name: Import Data
 
 on:
   schedule:
-    - cron: '0 20 * * *'  # 6am AEST (UTC+10) — daily full refresh
+    - cron: '0 20 * * *'  # 6am AEST (UTC+10) — daily: dims, the latest two half-years, the aggregate
   workflow_run:
     workflows: ["Process Data"]
     types: [completed]
-  workflow_dispatch:  # manual = daily (full refresh)
+  workflow_dispatch:  # manual = daily; everything with all_periods
     inputs:
       all_periods:
         description: 'Export, rebuild and redeploy ALL history, not just the latest two half-years (after a backfill of old data)'
@@ -143,7 +143,7 @@ jobs:
           NEMTRACKER_TOKEN: ${{ secrets.NEMTRACKER_TOKEN }}
         run: bash scripts/deploy_pages.sh ./deploy_data "deploy from ${{ github.repository }}@${{ github.sha }}"
 
-      # --- Phase 2: Daily full refresh (slow) ---
+      # --- Phase 2: Daily only (slow): history since the cutoff, or all of it with all_periods ---
       - name: Export fct_scada
         if: steps.mode.outputs.is_daily == 'true'
         run: .venv-read/bin/python scripts/cache_catalog.py export_scada
