@@ -141,8 +141,8 @@ transport fails the OneLake TLS handshake).
 `NEMTRACKER_TOKEN` (gh-pages deploy) is the one true secret.
 
 ## Dashboard
-The dashboard is four files, one job each, plus the Logs panel, and it has two hosts: GitHub
-Pages and a Fabric app. `index.html`, `model.js`, `views.js` and the Logs panel are the same
+The dashboard is four files, one job each, plus the Logs tab, and it has two hosts: GitHub
+Pages and a Fabric app. `index.html`, `model.js`, `views.js` and the Logs tab are the same
 files on both; only `data.js` differs.
 - `dashboard/index.html` is the page: charts, and SQL that only picks columns from views,
   filters and groups them. **It joins nothing** and knows no `dim_duid` column, no fuel
@@ -183,12 +183,12 @@ files on both; only `data.js` differs.
   `today` covers it, so the default view fetches no history. Both set the session to
   Brisbane time, on purpose: the files carry `date` and `time`, no TIMESTAMPTZ, and the
   only thing the zone decides is that `CURRENT_DATE` is the NEM's day.
-- `dashboard/perflog.js` and `dashboard/logs.js` are the Logs panel, on both hosts: a
-  "Logs" button, bottom right, over a table of what this session fetched, attached and
-  ran, with timings, and the build stamp. This session only: it lives in the page's memory,
-  nothing is stored, written to a file or uploaded, and the Copy button is the one way out.
-  A host's `data.js` does the logging (`perf.log`, `perf.time`, and `perf.query` around
-  every query); the page's whole part in it is `import "./logs.js"`.
+- `dashboard/perflog.js` and `dashboard/logs.js` are the Logs tab, on both hosts: a table
+  of what this session fetched, attached and ran, with timings, and the build stamp. This
+  session only: it lives in the page's memory, nothing is stored, written to a file or
+  uploaded, and the Copy button is the one way out. A host's `data.js` does the logging
+  (`perf.log`, `perf.time`, and `perf.query` around every query); the page has the tab and
+  its panel, and `logs.js` fills it.
 
 Four things in that design are there for speed and must survive an edit:
 - A query that needs nothing about the unit (previous-period generation with no filter, the
@@ -292,7 +292,7 @@ Rules of the Fabric host that are easy to break:
   the item's owner must be able to read the lakehouse.
 - Single-threaded here for one more reason than on Pages: cross-origin isolation breaks the
   Fabric sign-in popup.
-To check a deploy, open the Logs panel: the build stamp, each fetch, attach and query, and
+To check a deploy, open the Logs tab: the build stamp, each fetch, attach and query, and
 the worker's Range reads.
 
 A daily run refuses to splice when the deployed aggregate's tables or columns differ from what

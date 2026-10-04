@@ -225,6 +225,7 @@
     <button class="tab-btn" data-tab="insights" role="tab" id="tab-insights" aria-selected="false" aria-controls="view-insights" tabindex="-1">Insights</button>
     <button class="tab-btn" data-tab="history" role="tab" id="tab-history" aria-selected="false" aria-controls="view-history" tabindex="-1">History</button>
     <button class="tab-btn" data-tab="analyze" role="tab" id="tab-analyze" aria-selected="false" aria-controls="view-analyze" tabindex="-1">Analyze</button>
+    <button class="tab-btn" data-tab="logs" role="tab" id="tab-logs" aria-selected="false" aria-controls="view-logs" tabindex="-1">Logs</button>
   </div>
 
   <div id="view-dashboard" role="tabpanel" aria-labelledby="tab-dashboard">
@@ -430,10 +431,26 @@
     </div>
   </div>
 
+  <!-- What this session fetched, attached and ran, with timings (logs.js fills it). -->
+  <div id="view-logs" role="tabpanel" aria-labelledby="tab-logs" style="display:none">
+    <div class="analyze-controls">
+      <button class="btn-analyze" id="logsCopy" type="button">Copy</button>
+      <button class="btn-analyze" id="logsClear" type="button">Clear</button>
+      <span class="analyze-info" style="padding:0">This session only — kept in memory, nothing is stored. "http" rows are the DuckDB worker's own requests (Range = a seek in a remote file).</span>
+    </div>
+    <div class="analyze-info" id="logsSummary" style="white-space:pre;font-family:ui-monospace,Consolas,monospace"></div>
+    <div class="analyze-table-wrap">
+      <table class="analyze-table" id="logsTable">
+        <thead><tr><th>t (s)</th><th>Type</th><th>What</th><th>Range</th><th>Status</th><th>KB</th><th>ms</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
   <script type="module">
     import { createDataSource } from "./data.js";
     import { createModel, UNREGISTERED, ROOFTOP } from "./model.js";
-    import "./logs.js";   // the Logs button and its panel: this session's timings
+    import { renderLogs } from "./logs.js";
 
     // =========================================================================
     // 1. CONSTANTS & THEME
@@ -2475,10 +2492,11 @@
           b.tabIndex = on ? 0 : -1;
         }
         const tab = btn.dataset.tab;
-        for (const t of ['dashboard', 'flows', 'insights', 'history', 'analyze']) {
+        for (const t of ['dashboard', 'flows', 'insights', 'history', 'analyze', 'logs']) {
           document.getElementById(`view-${t}`).style.display = tab === t ? '' : 'none';
         }
         if (tab !== 'flows') icStop();
+        if (tab === 'logs') renderLogs();
         if (_ready) {
           if (tab === 'insights') guarded(renderInsights(_renderSeq));
           if (tab === 'history') guarded(renderHistory(_renderSeq));

@@ -27,7 +27,7 @@
 // (query).
 //
 // Progress is reported through the injected `onStatus` callback, and what is fetched,
-// attached and run is timed in perflog.js, for the Logs panel. The sign-in gate (auth.js)
+// attached and run is timed in perflog.js, for the Logs tab. The sign-in gate (auth.js)
 // is this host's own: the page has none.
 // =============================================================================
 
@@ -261,7 +261,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
     const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
     const workerUrl = URL.createObjectURL(
-      // sasShim signs every data request; HTTP_TRACE_SHIM (on top) times them for the Logs panel.
+      // sasShim signs every data request; HTTP_TRACE_SHIM (on top) times them for the Logs tab.
       new Blob([sasShim(dir, access.sas), '\n', HTTP_TRACE_SHIM, `\nimportScripts("${bundle.mainWorker}");`], { type: "text/javascript" })
     );
     const worker = new Worker(workerUrl);

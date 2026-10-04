@@ -1,5 +1,5 @@
 // =============================================================================
-// perflog.js — in-memory timing log for the Logs panel (debugging only)
+// perflog.js — in-memory timing log for the Logs tab (debugging only)
 // =============================================================================
 // The same file on every host. This session only: nothing is stored, written to a file or
 // uploaded; events live in this page's memory and vanish on reload.
@@ -13,7 +13,7 @@
 // =============================================================================
 
 // Stamped at deploy (build.yml: the git sha; fabric/build.mjs: sha + build time). Shown in the
-// Logs panel so a cached bundle is obvious.
+// Logs tab so a cached bundle is obvious.
 export const BUILD = '__BUILD__';
 
 const CHANNEL = 'perflog-http';

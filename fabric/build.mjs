@@ -2,7 +2,7 @@
 // model.js, views.js, perflog.js, logs.js, the dbt docs in dag/) + this target's host files
 // (site/: data.js, auth.js). ../dashboard/data.js, the GitHub Pages host, is the one file
 // left out.
-// No bundler. Two stamps, so a browser never mixes files of two deploys and the Logs panel
+// No bundler. Two stamps, so a browser never mixes files of two deploys and the Logs tab
 // can tell a fresh deploy from a cached one: __BUILD__ (git sha + time), and ?v=<build> on
 // every relative import.
 import { rm, cp, mkdir, readdir, readFile, writeFile } from "node:fs/promises";

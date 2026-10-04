@@ -1,10 +1,10 @@
 // =============================================================================
-// logs.js — the Logs panel: in-memory timings (perflog.js), newest first
+// logs.js — the Logs tab: in-memory timings (perflog.js), newest first
 // =============================================================================
-// The same file on every host. index.html imports it and knows nothing else of it: the
-// import adds a "Logs" button (bottom right) and the panel it opens. This session only
-// (perflog.js); the one way out is the Copy button. Re-rendered on new events while the
-// panel is open (throttled to one render per animation frame). The classes are the page's.
+// The same file on every host. This session only (perflog.js); the one way out is the Copy
+// button. index.html has the tab and its panel and calls renderLogs() when the tab is opened;
+// after that it is re-rendered on new events while the tab is visible (throttled to one
+// render per animation frame).
 // =============================================================================
 
 import { perf, BUILD } from './perflog.js';
@@ -12,39 +12,9 @@ import { perf, BUILD } from './perflog.js';
 const _pageStart = performance.timeOrigin;
 let _logsFrame = 0;
 
-const panel = document.createElement('div');
-panel.id = 'view-logs';
-panel.style.cssText = 'display:none;position:fixed;inset:0;z-index:9000;overflow:auto;padding:1rem 1.5rem 3.5rem;background:var(--bg, #0d1117);color:var(--text, #e6edf3)';
-panel.innerHTML = `
-  <div class="analyze-controls">
-    <button class="btn-analyze" id="logsCopy" type="button">Copy</button>
-    <button class="btn-analyze" id="logsClear" type="button">Clear</button>
-    <span class="analyze-info" style="padding:0">This session only — kept in memory, nothing is stored. "http" rows are the DuckDB worker's own requests (Range = a seek in a remote file).</span>
-  </div>
-  <div class="analyze-info" id="logsSummary" style="white-space:pre;font-family:ui-monospace,Consolas,monospace"></div>
-  <div class="analyze-table-wrap">
-    <table class="analyze-table" id="logsTable">
-      <thead><tr><th>t (s)</th><th>Type</th><th>What</th><th>Range</th><th>Status</th><th>KB</th><th>ms</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>`;
-const toggle = document.createElement('button');
-toggle.type = 'button';
-toggle.className = 'btn-analyze';
-toggle.textContent = 'Logs';
-toggle.title = "Timings of this page's reads and queries";
-toggle.style.cssText = 'position:fixed;right:0.75rem;bottom:0.75rem;z-index:9001;opacity:0.75';
-toggle.onclick = () => {
-  const open = panel.style.display === 'none';
-  panel.style.display = open ? 'block' : 'none';
-  toggle.textContent = open ? 'Close logs' : 'Logs';
-  if (open) renderLogs();
-};
-document.body.append(panel, toggle);
-
-function renderLogs() {
+export function renderLogs() {
   _logsFrame = 0;
-  if (panel.style.display === 'none') return;
+  if (document.getElementById('view-logs').style.display === 'none') return;
   const ev = perf.events;
   const sum = (k) => ev.filter(e => e.kind === k);
   const http = sum('http'), reads = http.filter(e => e.range);

@@ -15,7 +15,7 @@
 // members, over the same views.js.
 //
 // DOM-free: progress is reported through the injected `onStatus` callback, and what is
-// fetched, attached and run is timed in perflog.js, for the Logs panel.
+// fetched, attached and run is timed in perflog.js, for the Logs tab.
 // =============================================================================
 
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev65.0/+esm";
@@ -146,7 +146,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
     const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
     const workerUrl = URL.createObjectURL(
-      // HTTP_TRACE_SHIM times the worker's own requests for the Logs panel.
+      // HTTP_TRACE_SHIM times the worker's own requests for the Logs tab.
       new Blob([HTTP_TRACE_SHIM, `\nimportScripts("${bundle.mainWorker}");`], { type: "text/javascript" })
     );
     const worker = new Worker(workerUrl);
