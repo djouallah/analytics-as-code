@@ -42,7 +42,7 @@
 
 {% if has_new_duids %}
 WITH
-  -- Deliberately an inline CTE, not a seed: 7 static rows aren't worth a
+  -- Deliberately an inline CTE, not a seed: 6 static rows aren't worth a
   -- materialized Iceberg table + a `dbt seed` step in every runner.
   states AS (
     SELECT 'WA1' AS RegionID, 'Western Australia' AS State
@@ -51,6 +51,15 @@ WITH
     UNION ALL SELECT 'TAS1', 'Tasmania'
     UNION ALL SELECT 'SA1', 'South Australia'
     UNION ALL SELECT 'VIC1', 'Victoria'
+  ),
+
+  -- The fuels that count as renewable, by the names AEMO's list gives them. This is the one
+  -- place the rule lives: the dashboard reads the Renewable column. Batteries ("Grid") are
+  -- storage, not on the list. Inline for the same reason as states; a change to the list
+  -- reaches the rows already in the table with a rebuild=dim_duid.
+  renewable_fuels AS (
+    SELECT unnest(['Solar', 'Wind', 'Water', 'Bagasse', 'Biogas - sludge',
+                   'Landfill methane / landfill gas', 'Sewerage / waste water']) AS fuel
   ),
 
   -- One row per DUID. The registration list wins over duid_unregistered.csv (a unit can
@@ -153,10 +162,14 @@ SELECT
   first(a.TechnologyType) AS TechnologyType,
   first(a.RegCapMW) AS RegCapMW,
   first(a.MaxCapMW) AS MaxCapMW,
-  first(a.StorageMWh) AS StorageMWh
+  first(a.StorageMWh) AS StorageMWh,
+  -- Whether the unit's fuel is on renewable_fuels (added 2026-10-04); a unit with no fuel
+  -- is not. Compared in lower case, so it doesn't depend on the casing applied above.
+  first(renewable_fuels.fuel IS NOT NULL) AS Renewable
 FROM duid_all a
 JOIN states ON a.Region = states.RegionID
 LEFT JOIN geo ON a.duid = geo.duid
+LEFT JOIN renewable_fuels ON lower(renewable_fuels.fuel) = lower(trim(a.FuelSourceDescriptor))
 GROUP BY a.DUID
 {% else %}
 -- No new DUIDs found, return empty result to keep existing data

@@ -11,6 +11,7 @@ Usage:
     python cache_catalog.py export_dim_calendar
     python cache_catalog.py build_dim
     python cache_catalog.py build_daily
+    python cache_catalog.py build_daily_agg
     python cache_catalog.py build_today
 """
 
@@ -91,19 +92,12 @@ def cutoff_filter():
 ROOFTOP = "catalog.landing.fct_rooftop_pv"
 ROOFTOP_REGIONS = "('NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1')"
 
-
-def has_rooftop(con):
-    """fct_rooftop_pv was new on 2026-10-02: until the pipeline has created it, the exports
-    go out without rooftop solar."""
-    try:
-        con.execute(f"SELECT 1 FROM {ROOFTOP} LIMIT 0")
-        return True
-    except duckdb.CatalogException as e:
-        print(f"  fct_rooftop_pv not there yet ({e}); exporting without rooftop solar")
-        return False
+# A table the catalog doesn't have fails the export, on purpose: the files built from an
+# export that went out without it (no rooftop, no demand, no flows) would be deployed over
+# good ones. That can only happen between the DROP and the CREATE of a rebuild=<table> run.
 
 
-def rooftop_units(con, date_filter, scada_table):
+def rooftop_units(date_filter, scada_table):
     """UNION ALL branch that adds rooftop solar to a scada export as one pseudo-unit per
     region (QLD_PV, NSW_PV, VIC_PV, SA_PV, TAS_PV), so every chart built on units shows it.
 
@@ -115,10 +109,7 @@ def rooftop_units(con, date_filter, scada_table):
       - across a missing half hour, nothing: the point alone, no line through the hole;
       - after the newest half hour, its value held for up to 55 minutes, because the next
         estimate lands 30 to 60 minutes late and the stack would otherwise end in a cliff.
-        It never runs past the newest interval of the units themselves.
-    Returns '' while the table doesn't exist."""
-    if not has_rooftop(con):
-        return ""
+        It never runs past the newest interval of the units themselves."""
     # Bounded by the units on both sides, in SQL (fetching a TIMESTAMPTZ into Python needs
     # pytz, which the import job's venv doesn't have; that broke the import on 2026-10-02):
     # not before the calendar's first day, which is where the units' history starts (AEMO's
@@ -162,7 +153,7 @@ def export_scada():
             FROM catalog.landing.fct_scada
             WHERE INTERVENTION = 0 AND INITIALMW <> 0 {cutoff_filter()}
             GROUP BY DUID, CAST(SETTLEMENTDATE AS DATE), strftime(SETTLEMENTDATE, '%H%M')
-            {rooftop_units(con, cutoff_filter(), "catalog.landing.fct_scada")}
+            {rooftop_units(cutoff_filter(), "catalog.landing.fct_scada")}
         ) TO '{DASHBOARD_DIR}/fct_scada.parquet' (FORMAT PARQUET);
     """)
     con.close()
@@ -198,7 +189,7 @@ def export_scada_today():
             WHERE DATE >= CURRENT_DATE - INTERVAL 14 DAY
                 AND INITIALMW <> 0
             GROUP BY DUID, CAST(SETTLEMENTDATE AS DATE), strftime(SETTLEMENTDATE, '%H%M')
-            {rooftop_units(con, "AND DATE >= CURRENT_DATE - INTERVAL 14 DAY", "catalog.landing.fct_scada_today")}
+            {rooftop_units("AND DATE >= CURRENT_DATE - INTERVAL 14 DAY", "catalog.landing.fct_scada_today")}
         ) TO '{DASHBOARD_DIR}/fct_scada_today.parquet' (FORMAT PARQUET);
     """)
     con.close()
@@ -206,65 +197,49 @@ def export_scada_today():
 
 def export_price_today():
     """Price from the PRICE rows, demand and net interchange from the REGIONSUM rows of the
-    same DispatchIS files (fct_regionsum_today), last 14 days. fct_regionsum_today is new
-    (2026-10-01) and fills from the archive newest first: intervals it doesn't have yet keep
-    a NULL demand, and until the pipeline has created it the columns are all NULL."""
+    same DispatchIS files (fct_regionsum_today), last 14 days. An interval fct_regionsum_today
+    doesn't have keeps a NULL demand."""
     con = connect_iceberg()
-    price = """
-        SELECT REGIONID, SETTLEMENTDATE, CAST(ANY_VALUE(RRP) AS REAL) AS price
-        FROM catalog.landing.fct_price_today
-        WHERE DATE >= CURRENT_DATE - INTERVAL 14 DAY AND INTERVENTION = 0
-        GROUP BY ALL
-    """
-    regionsum = """
-        SELECT REGIONID, SETTLEMENTDATE,
-            CAST(ANY_VALUE(TOTALDEMAND) AS REAL) AS demand,
-            CAST(ANY_VALUE(NETINTERCHANGE) AS REAL) AS net_interchange
-        FROM catalog.landing.fct_regionsum_today
-        WHERE DATE >= CURRENT_DATE - INTERVAL 14 DAY AND INTERVENTION = 0
-        GROUP BY ALL
-    """
-    query = f"""
-        WITH p AS ({price}), r AS ({{regionsum}})
-        SELECT p.REGIONID, CAST(p.SETTLEMENTDATE AS DATE) AS date,
-            CAST(strftime(p.SETTLEMENTDATE, '%H%M') AS SMALLINT) AS time,
-            p.price, r.demand, r.net_interchange
-        FROM p LEFT JOIN r ON r.REGIONID = p.REGIONID AND r.SETTLEMENTDATE = p.SETTLEMENTDATE
-    """
-    target = f"'{DASHBOARD_DIR}/fct_price_today.parquet' (FORMAT PARQUET)"
-    try:
-        con.execute(f"COPY ({query.format(regionsum=regionsum)}) TO {target}")
-    except duckdb.CatalogException as e:
-        print(f"  fct_regionsum_today not there yet ({e}); exporting price with NULL demand")
-        empty = ("SELECT NULL::VARCHAR AS REGIONID, NULL::TIMESTAMPTZ AS SETTLEMENTDATE, "
-                 "NULL::REAL AS demand, NULL::REAL AS net_interchange LIMIT 0")
-        con.execute(f"COPY ({query.format(regionsum=empty)}) TO {target}")
+    con.execute(f"""
+        COPY (
+            WITH p AS (
+                SELECT REGIONID, SETTLEMENTDATE, CAST(ANY_VALUE(RRP) AS REAL) AS price
+                FROM catalog.landing.fct_price_today
+                WHERE DATE >= CURRENT_DATE - INTERVAL 14 DAY AND INTERVENTION = 0
+                GROUP BY ALL
+            ), r AS (
+                SELECT REGIONID, SETTLEMENTDATE,
+                    CAST(ANY_VALUE(TOTALDEMAND) AS REAL) AS demand,
+                    CAST(ANY_VALUE(NETINTERCHANGE) AS REAL) AS net_interchange
+                FROM catalog.landing.fct_regionsum_today
+                WHERE DATE >= CURRENT_DATE - INTERVAL 14 DAY AND INTERVENTION = 0
+                GROUP BY ALL
+            )
+            SELECT p.REGIONID, CAST(p.SETTLEMENTDATE AS DATE) AS date,
+                CAST(strftime(p.SETTLEMENTDATE, '%H%M') AS SMALLINT) AS time,
+                p.price, r.demand, r.net_interchange
+            FROM p LEFT JOIN r ON r.REGIONID = p.REGIONID AND r.SETTLEMENTDATE = p.SETTLEMENTDATE
+        ) TO '{DASHBOARD_DIR}/fct_price_today.parquet' (FORMAT PARQUET);
+    """)
     con.close()
 
 
 def _export_interconnector(date_filter, parquet):
     """Interconnector flows (MW, positive from the first region in the ID to the second) and
-    limits. The table was new on 2026-10-01: until the pipeline has created it, an empty
-    file with the same columns keeps the builds and the dashboard working. ANY_VALUE also
-    settles August 2026, which the table holds from two sources."""
+    limits. ANY_VALUE also settles August 2026, which the table holds from two sources."""
     con = connect_iceberg()
-    query = f"""
-        SELECT INTERCONNECTORID AS interconnector, CAST(SETTLEMENTDATE AS DATE) AS date,
-            CAST(strftime(SETTLEMENTDATE, '%H%M') AS SMALLINT) AS time,
-            CAST(ANY_VALUE(MWFLOW) AS REAL) AS mw,
-            CAST(ANY_VALUE(EXPORTLIMIT) AS REAL) AS export_limit,
-            CAST(ANY_VALUE(IMPORTLIMIT) AS REAL) AS import_limit
-        FROM catalog.landing.fct_interconnector_today
-        WHERE INTERVENTION = 0 {date_filter}
-        GROUP BY ALL
-    """
-    try:
-        con.execute(f"COPY ({query}) TO '{DASHBOARD_DIR}/{parquet}' (FORMAT PARQUET)")
-    except duckdb.CatalogException as e:
-        print(f"  fct_interconnector_today not there yet ({e}); exporting an empty table")
-        con.execute(f"""COPY (SELECT ''::VARCHAR AS interconnector, NULL::DATE AS date, 0::SMALLINT AS time,
-            0::REAL AS mw, 0::REAL AS export_limit, 0::REAL AS import_limit LIMIT 0)
-            TO '{DASHBOARD_DIR}/{parquet}' (FORMAT PARQUET)""")
+    con.execute(f"""
+        COPY (
+            SELECT INTERCONNECTORID AS interconnector, CAST(SETTLEMENTDATE AS DATE) AS date,
+                CAST(strftime(SETTLEMENTDATE, '%H%M') AS SMALLINT) AS time,
+                CAST(ANY_VALUE(MWFLOW) AS REAL) AS mw,
+                CAST(ANY_VALUE(EXPORTLIMIT) AS REAL) AS export_limit,
+                CAST(ANY_VALUE(IMPORTLIMIT) AS REAL) AS import_limit
+            FROM catalog.landing.fct_interconnector_today
+            WHERE INTERVENTION = 0 {date_filter}
+            GROUP BY ALL
+        ) TO '{DASHBOARD_DIR}/{parquet}' (FORMAT PARQUET);
+    """)
     con.close()
 
 
@@ -282,25 +257,25 @@ def export_interconnector():
 
 def export_dim_duid():
     """The registered units, plus the rooftop pseudo-units of rooftop_units(): one per region
-    that has an estimate, fuel 'Rooftop solar', the state name taken from the region's own
-    units. No coordinates and no capacity: neither is published with the estimate."""
+    that has an estimate, fuel 'Rooftop solar', renewable, the state name taken from the
+    region's own units. No coordinates and no capacity: neither is published with the
+    estimate, so those columns are left out below and BY NAME fills them with NULL."""
     con = connect_iceberg()
-    rooftop = f"""
-        UNION ALL
-        SELECT replace(r.REGIONID, '1', '') || '_PV', r.REGIONID, 'Rooftop solar',
-            'Rooftop solar (AEMO estimate)', s.State, NULL, NULL,
-            'Rooftop solar ' || replace(r.REGIONID, '1', ''), 'Rooftop PV, estimated', NULL, NULL, NULL
-        FROM (SELECT DISTINCT REGIONID FROM {ROOFTOP}
-              WHERE TYPE = 'MEASUREMENT' AND REGIONID IN {ROOFTOP_REGIONS}) r
-        LEFT JOIN (SELECT Region, ANY_VALUE(State) AS State FROM catalog.mart.dim_duid GROUP BY Region) s
-            ON s.Region = r.REGIONID
-    """ if has_rooftop(con) else ""
     con.execute(f"""
         COPY (
             SELECT DUID, Region, FuelSourceDescriptor, Participant, State, latitude, longitude,
-                StationName, TechnologyType, RegCapMW, MaxCapMW, StorageMWh
+                StationName, TechnologyType, RegCapMW, MaxCapMW, StorageMWh, Renewable
             FROM catalog.mart.dim_duid
-            {rooftop}
+            UNION ALL BY NAME
+            SELECT replace(r.REGIONID, '1', '') || '_PV' AS DUID, r.REGIONID AS Region,
+                'Rooftop solar' AS FuelSourceDescriptor,
+                'Rooftop solar (AEMO estimate)' AS Participant, s.State,
+                'Rooftop solar ' || replace(r.REGIONID, '1', '') AS StationName,
+                'Rooftop PV, estimated' AS TechnologyType, true AS Renewable
+            FROM (SELECT DISTINCT REGIONID FROM {ROOFTOP}
+                  WHERE TYPE = 'MEASUREMENT' AND REGIONID IN {ROOFTOP_REGIONS}) r
+            LEFT JOIN (SELECT Region, ANY_VALUE(State) AS State FROM catalog.mart.dim_duid GROUP BY Region) s
+                ON s.Region = r.REGIONID
         ) TO '{DASHBOARD_DIR}/dim_duid.parquet' (FORMAT PARQUET);
     """)
     con.close()
