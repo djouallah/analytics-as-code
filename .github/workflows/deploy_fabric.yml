@@ -4,10 +4,10 @@ name: Deploy Fabric
 # the same page as a Fabric app (fabric/, Rayfin: static hosting, Fabric sign-in, and the
 # function that signs the read-only SAS for the data). fabric/build.mjs puts the shared page
 # files and the Fabric host's own (fabric/site/) into fabric/dist.
+# On dispatch only, and parked (2026-10-04): the app is deployed from the owner's laptop for
+# now (cd fabric && npx rayfin up), and only an item's owner can deploy to it, so a run here
+# would create a second item of its own.
 on:
-  push:
-    branches: [main]
-    paths: ['dashboard/**', 'fabric/**', '.github/workflows/deploy_fabric.yml']
   workflow_dispatch:
     inputs:
       dry_run:
