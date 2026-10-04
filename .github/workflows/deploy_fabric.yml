@@ -81,3 +81,23 @@ jobs:
         env:
           ONELAKE_FILES_URL: ${{ vars.ONELAKE_FILES_URL }}
         run: echo "$ONELAKE_FILES_URL" | npx rayfin secret set ONELAKE_FILES_URL --stdin
+
+      # getDataSas runs as the item's owner, which is this login. What it does first is ask
+      # OneLake for a user delegation key; ask for one here, so a deploy says so when OneLake
+      # refuses this identity, instead of the app answering 500 to every visitor.
+      - name: Check the app's identity can sign a SAS
+        if: ${{ !inputs.dry_run }}
+        run: |
+          TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
+          echo "::add-mask::$TOKEN"
+          START=$(date -u -d '-5 min' +%Y-%m-%dT%H:%M:%SZ)
+          EXPIRY=$(date -u -d '+30 min' +%Y-%m-%dT%H:%M:%SZ)
+          CODE=$(curl -s -o key.xml -w '%{http_code}' -X POST             'https://onelake.blob.fabric.microsoft.com/?restype=service&comp=userdelegationkey'             -H "Authorization: Bearer $TOKEN" -H 'x-ms-version: 2022-11-02' -H 'Content-Type: application/xml'             -d "<?xml version=\"1.0\" encoding=\"utf-8\"?><KeyInfo><Start>$START</Start><Expiry>$EXPIRY</Expiry></KeyInfo>")
+          if [ "$CODE" != "200" ]; then
+            # An error body carries no key.
+            echo "::error::OneLake refused a user delegation key to the app's identity (HTTP $CODE)"
+            head -c 800 key.xml; echo
+            exit 1
+          fi
+          rm key.xml
+          echo "OneLake issued a user delegation key (HTTP 200)."
