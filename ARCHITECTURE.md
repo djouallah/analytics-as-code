@@ -176,6 +176,7 @@ Then run the **Import OneLake** workflow to fill the lakehouse (`LAKE_TENANT_ID`
 `LAKE_CLIENT_ID`: an Entra app with a federated credential for this repo and write access to
 the workspace), and open the app in the Fabric portal or in its own tab.
 
-`deploy_fabric.yml` can run the same deploy from CI with that Entra app, no secret; it is
-parked for now, because only an item's owner can deploy to it and the app is deployed from
-a laptop.
+`deploy_fabric.yml` runs the same deploy from CI with that Entra app, no secret, into an item
+of its own, because only an item's owner can deploy to it. It is parked: functions do not
+run yet on an item owned by a service principal (microsoft/rayfin#89), so the app is
+deployed from a laptop.

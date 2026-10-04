@@ -6,8 +6,9 @@ name: Deploy Fabric
 # files and the Fabric host's own (fabric/site/) into fabric/dist.
 # On dispatch only. Only an item's owner can deploy to it (the page alone included: 403), so
 # CI deploys into an item of its own, `nemtracker`, next to the one deployed from the owner's
-# laptop (`wasm`). Open: on the CI-owned item getDataSas answers 500; the last step calls it
-# and prints the answer.
+# laptop (`wasm`). The deploy works; the app it makes does not yet: Fabric answers 500 to
+# every function call on an item owned by a service principal (microsoft/rayfin#89, open).
+# Until that is fixed the app people use is `wasm`.
 on:
   workflow_dispatch:
     inputs:
@@ -111,61 +112,3 @@ jobs:
           fi
           rm key.xml
           echo "OneLake issued a user delegation key (HTTP 200)."
-
-      # A visitor's 500 says nothing, and CI cannot sign in to the app as a visitor does. So it
-      # calls the function where it can, with the owner's own token: Fabric's public invoke on
-      # the User Data Functions item behind the app, with the two headers the app's backend
-      # adds on the way (x-ms-rayfin-info, x-ms-rayfin-secrets), and the app's own invoke
-      # route. Each answer is printed whole, except a SAS. Never fails the run: it is there
-      # to be read.
-      - name: Call getDataSas
-        if: ${{ !inputs.dry_run }}
-        working-directory: fabric
-        env:
-          ONELAKE_FILES_URL: ${{ vars.ONELAKE_FILES_URL }}
-        run: |
-          set +e
-          FABRIC=https://api.fabric.microsoft.com/v1
-          APP=$(jq -r '.deployments[.active].fabricApiUrl' rayfin/.deployments.json)
-          WS=$(jq -r '.deployments[.active].fabricWorkspaceId' rayfin/.deployments.json)
-          KEY=$(jq -r '.deployments[.active].publishableKey' rayfin/.deployments.json)
-          # The User Data Functions item behind the app: the CLI names it in its diagnostic
-          # log, or else in the verbose output of a functions deploy (JSON output refuses
-          # --verbose, so the deploy above cannot say it).
-          udf_id() { grep -rhoiE 'userDataFunctions/[0-9a-f-]{36}|UDF item ID: *[0-9a-f-]{36}' "$@" 2>/dev/null | grep -oE '[0-9a-f-]{36}' | head -1; }
-          UDF=$(udf_id ~/.rayfin/logs)
-          if [ -z "$UDF" ]; then
-            npx rayfin up functions deploy --verbose > functions.log 2>&1
-            UDF=$(udf_id functions.log)
-          fi
-          echo "app: $APP"
-          echo "User Data Functions item: ${UDF:-not found}"
-
-          call() {  # label, url, then any curl arguments
-            echo "::group::$1"
-            URL=$2; shift 2
-            CODE=$(curl -s -o body.txt -D headers.txt -w '%{http_code}' -X POST "$URL" \
-              -H "Authorization: Bearer $RAYFIN_TOKEN" -H 'Content-Type: application/json' -d '{}' "$@")
-            echo "POST $URL"
-            echo "HTTP $CODE"
-            grep -iE '^(requestid|x-ms-root-activity-id|x-ms-public-api-error-code):' headers.txt
-            if grep -q 'sig=' body.txt; then
-              echo "The function returned a SAS (not printed)."
-            else
-              head -c 4000 body.txt; echo
-            fi
-            echo "::endgroup::"
-          }
-
-          INFO=$(jq -cn --arg e "$APP" --arg k "$KEY" '{rayfinToken: "", publishableKey: $k, rayFinEndpoint: $e}')
-          SECRETS=$(jq -cn --arg u "$ONELAKE_FILES_URL" '{ONELAKE_FILES_URL: $u}')
-          if [ -n "$UDF" ]; then
-            # api.fabric.microsoft.com drops the two headers on the way; the functions item's
-            # own host (udfPublicInvokeUri in its metadata) is the other public door.
-            DIRECT=$(curl -s "$FABRIC/workspaces/$WS/userDataFunctions/$UDF/__private/functions/metadata" -H "Authorization: Bearer $RAYFIN_TOKEN" \
-              | jq -r '.functions[] | select(.name == "getDataSas") | .udfPublicInvokeUri')
-            call "public invoke, the functions item's own host" "$DIRECT" \
-              -H "x-ms-rayfin-info: $INFO" -H "x-ms-rayfin-secrets: $SECRETS"
-          fi
-          call "the app's invoke route" "${APP%/}/functions/getDataSas/invoke" -H "X-Publishable-Key: $KEY"
-          exit 0

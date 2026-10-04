@@ -275,18 +275,21 @@ it; the owner is also the identity `getDataSas` reads the lakehouse as. That is 
 laptop and CI cannot share an item: a deploy to someone else's fails with
 `403 Only AppBackend artifact owner can perform this operation`.
 
-**`deploy_fabric.yml` is parked** (dispatch only). It ran the same `rayfin up` with a Fabric
-API token from the OIDC login, no secret, into an item of its own (`nemtracker`, since
-deleted), and the deploy itself worked. What it took, should it come back:
+**`deploy_fabric.yml` is parked** (dispatch only), waiting for a fix upstream. It runs the
+same `rayfin up` with a Fabric API token from the OIDC login, no secret, into an item of its
+own (`nemtracker`), and the deploy works. The app it makes does not: Fabric answers 500
+("An internal error occurred.") to every function call on an item owned by a service
+principal, before the function runs. That is microsoft/rayfin#89, open, with this repo's
+case in its comments (2026-10-04). It is not the federated login, which works, and not
+permissions: OneLake issues the CI identity a delegation key (the workflow's last step
+checks it). The page-only deploy into the owner's item (`rayfin up staticapp deploy`) is no
+way round it: owner-only too, the same 403. When #89 is fixed: dispatch the workflow, open
+`nemtracker`, read its Logs tab. Keep that item until then: the comment on #89 says it is
+there for re-testing. What the workflow took:
 - `fabric/rayfin/functions/host.json` is committed: the deploy refuses without it, and the
   Rayfin scaffold's `.gitignore` leaves it out.
 - The lock files resolve from `registry.npmjs.org`: generated on a laptop they name a
   private feed the runner cannot read.
-- Open: on the CI-owned item `getDataSas` answered 500 on its one load. That deploy
-  predated the function's secret and the item was deleted before a second try. OneLake does
-  issue the CI identity a delegation key (the workflow's last step checks it), so the
-  remaining suspect is the platform handing no storage token (`ctx.Tokens.Storage`) to a
-  function whose owner is a service principal.
 
 Rules of the Fabric host that are easy to break:
 - The browser never receives a storage token, only the SAS from `getDataSas` (read-only, one
