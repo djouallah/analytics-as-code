@@ -8,19 +8,20 @@
 //   energy_daily_agg.duckdb         as `agg`          daily and hour-of-day rollups: attachAgg(), after first paint
 //   energy_data_<YYYY>_h<N>.duckdb  as `p<YYYY>_h<N>` scada, price, interconnector: ensureHistory(), only the
 //                                                     half-years a 5-minute range needs
-// index.html knows none of this: it calls the members createDataSource returns and reads the
-// views built here (refreshViews), never an attached table. A host that stores the files
-// differently (the Fabric app reads one history file over HTTP) swaps this file for its own
-// with the same members and the same views:
+// model.js and index.html know none of this: model.js wraps the members createDataSource
+// returns and reads the views built here (refreshViews), never an attached table. A host
+// that stores the files differently (the Fabric app reads one history file over HTTP) swaps
+// this file for its own with the same members and the same views:
 //   v_scada           DUID, date, time, mw                                        5-minute
 //   v_price           REGIONID, date, time, price, demand, net_interchange        5-minute
 //   v_scada_daily     DUID, date, mwh
 //   v_price_daily     REGIONID, date, price, demand, net_interchange, demand_mwh
 //   v_interconnector  interconnector, date, time, mw, export_limit, import_limit  5-minute
 //   v_scada_today     DUID, date, time, mw             the newest days, for "latest interval"
-//   v_price_today     REGIONID, date, time, price
-//   v_duid            dim_duid                         has(view, column) says whether a
-//   v_calendar        dim_calendar                     deployed file carries a newer column
+//   v_price_today     REGIONID, date, time, price, demand, net_interchange
+//   v_duid            dim_duid, under the names the    has(view, column) says whether a
+//                     export gives its columns         deployed file carries a newer column
+//   v_calendar        dim_calendar: date, year, month
 //   v_scada_hourly, v_price_hourly, v_month_days       agg's hour-of-day x month tables;
 //                                                      absent (has(view) false) until agg is
 //                                                      attached and deployed with them
@@ -176,16 +177,24 @@ export function createDataSource({ onStatus = () => {} } = {}) {
 
   let _manifest = null;
   const _attachedPeriods = new Set();
+  // Periods that failed to attach, and when: left alone for a minute, so a file that is
+  // missing is not fetched again by every render.
+  const _failedPeriods = new Map();
+  const RETRY_MS = 60000;
 
-  // Attach one half-year period. A period the manifest advertises but whose .duckdb
-  // didn't deploy is skipped instead of breaking the whole query: recent days still
-  // come from `today` and the other periods still load.
+  // Attach one half-year period; true if it is attached now. A period the manifest
+  // advertises but whose .duckdb didn't deploy is skipped instead of breaking the whole
+  // query: recent days still come from `today` and the other periods still load.
   async function attachPeriod(p) {
     try {
       await loadDb(`energy_data_${p}.duckdb`, `p${p}`);
       _attachedPeriods.add(p);
+      _failedPeriods.delete(p);
+      return true;
     } catch (e) {
       console.warn(`[OPFS] skipping period ${p}: ${e}`);
+      _failedPeriods.set(p, Date.now());
+      return false;
     }
   }
 
@@ -203,23 +212,36 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     return periods;
   }
 
+  // SQL date: rows from this day on are read from `today`, older ones from history / agg.
+  // CURRENT_DATE is the NEM's day: init() sets the session to Brisbane time for it.
+  const RECENT_CUT = 'CURRENT_DATE - INTERVAL 5 DAY';
+
   // Attach the half-year periods of a date range that exist and aren't attached yet.
-  // True if there were any: the views were rebuilt, so results the caller cached are stale.
+  // True if any was attached: the views were rebuilt, so results the caller cached are stale.
   async function ensureHistory(from, to, msg) {
-    _manifest ??= await (await fetch(`${_baseUrl}/data/daily_manifest.json`)).json();
-    const needed = periodsForRange(from, to)
-      .filter(p => _manifest.periods.includes(p) && !_attachedPeriods.has(p));
+    // A range that starts on or after the cut is read from `today` alone (refreshViews): no
+    // half-year file has a row it would show, so none is downloaded. That is the default
+    // "Last 3 days" view.
+    const cut = (await conn.query(`SELECT CAST(CAST(${RECENT_CUT} AS DATE) AS VARCHAR) AS d`)).toArray()[0].d;
+    if (from >= cut) return false;
+    if (!_manifest) {
+      // no-store: a manifest from the HTTP cache can predate a half-year rollover.
+      const resp = await fetch(`${_baseUrl}/data/daily_manifest.json`, { cache: 'no-store' });
+      if (!resp.ok) throw new Error(`Failed to fetch daily_manifest.json: HTTP ${resp.status}`);
+      _manifest = await resp.json();
+    }
+    const needed = periodsForRange(from, to).filter(p => _manifest.periods.includes(p)
+      && !_attachedPeriods.has(p) && !(Date.now() - _failedPeriods.get(p) < RETRY_MS));
     if (!needed.length) return false;
     onStatus(msg);
-    await Promise.all(needed.map(attachPeriod));
+    const attached = await Promise.all(needed.map(attachPeriod));
+    if (!attached.includes(true)) return false;
     await refreshViews();
     return true;
   }
 
   // Aliases of the attached databases that hold the 5-minute history.
   const history = () => [..._attachedPeriods].map(p => `p${p}`);
-  // SQL date: rows from this day on are read from `today`, older ones from history / agg.
-  const RECENT_CUT = 'CURRENT_DATE - INTERVAL 5 DAY';
 
   // Columns of each attached table (`<db>.<table>`) and of each view (plain name), read at
   // both ends of refreshViews. Files deployed before 2026-10-02 have no demand/net_interchange

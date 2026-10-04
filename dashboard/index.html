@@ -500,9 +500,10 @@
     const crossFilter = { fuel: null, region: null, duids: [] };
     // The header dropdowns win over a chart click-filter (updateFilterTags says so).
     const activeRegion = () => document.getElementById("regionFilter").value || crossFilter.region;
-    // Display names for the AEMO region codes (#1). Display only: filters, SQL and joins keep
-    // using the codes, and every UI element maps back to them.
-    const REGION_NAMES = { NSW1: 'New South Wales', QLD1: 'Queensland', SA1: 'South Australia', TAS1: 'Tasmania', VIC1: 'Victoria', WA1: 'Western Australia' };
+    // Display names for the AEMO region codes (#1), read from the units' `state` at startup
+    // (populateFilters); a code without one shows as the code. Display only: filters, SQL and
+    // joins keep using the codes, and every UI element maps back to them.
+    const REGION_NAMES = {};
     const regionName = code => REGION_NAMES[code] ?? code;
     const regionCode = name => Object.keys(REGION_NAMES).find(c => REGION_NAMES[c] === name) ?? name;
     const activeFuel = () => document.getElementById("fuelFilter").value || crossFilter.fuel;
@@ -784,8 +785,9 @@
 
       // --- Filter population ---
       regions: "SELECT region AS Region FROM v_region ORDER BY region",
+      regionNames: "SELECT region, ANY_VALUE(state) AS state FROM v_unit WHERE region IS NOT NULL AND state IS NOT NULL GROUP BY region",
       fuels: "SELECT DISTINCT fuel_source AS fuel FROM v_unit WHERE fuel_source IS NOT NULL ORDER BY fuel",
-      allDuids: "SELECT DUID, region AS Region, fuel_source AS fuel FROM v_unit WHERE DUID IS NOT NULL ORDER BY DUID",
+      allDuids: "SELECT DUID, region AS Region, fuel FROM v_unit WHERE DUID IS NOT NULL ORDER BY DUID",
 
       // --- Generation chart ---
       // Rows with negative output (charging) form their own "<series> (charging)" series, so
@@ -1379,8 +1381,8 @@
     const GEN_LEGEND = ['Black coal', 'Brown coal', 'Natural gas', 'Water', 'Wind', 'Solar', 'Grid'];
     let _genUnits = null;
     async function genUnits() {
-      _genUnits ??= new Map((await runQuery(`SELECT DUID, fuel_source AS fuel, region AS Region,
-        renewable, lat, lon FROM v_unit`)).map(u => [u.DUID, u]));
+      _genUnits ??= new Map((await runQuery(`SELECT DUID, fuel, region AS Region,
+        renewable, generator, lat, lon FROM v_unit`)).map(u => [u.DUID, u]));
       return _genUnits;
     }
     async function ensureGens(date) {
@@ -1581,7 +1583,7 @@
       // Same definition as the Renewables KPI: output only, batteries on neither side.
       let genMw = 0, reMw = 0;
       for (const g of gens) {
-        if (g.mw <= 0 || g.unit?.fuel === 'Grid') continue;
+        if (g.mw <= 0 || g.unit?.generator === false) continue;
         genMw += g.mw;
         if (g.unit?.renewable) reMw += g.mw;
       }
@@ -1631,7 +1633,7 @@
         </div>`).join('');
       document.getElementById('regionBoard').innerHTML = Object.keys(REGION_ANCHORS).map(code => {
         const p = price(code), n = Math.round(net[code] || 0);
-        return `<div class="rg-row"><div><span class="rg-swatch" style="background:${priceColor(p)}"></span>${regionName(code)}</div>
+        return `<div class="rg-row"><div><span class="rg-swatch" style="background:${priceColor(p)}"></span>${escapeHtml(regionName(code))}</div>
           <div class="rg-price"${p >= SPIKE_PRICE ? ` style="color:${SPIKE_COLOR};font-weight:700"` : ''}>${fmtPrice(p)}${p == null ? '' : '<small style="color:var(--muted);font-weight:400">/MWh</small>'}</div>
           <div class="rg-net" style="color:${n >= 0 ? '#3fb950' : '#f0883e'}">${n >= 0 ? 'exports' : 'imports'} ${Math.abs(n).toLocaleString()} MW</div></div>`;
       }).join('');
@@ -1643,7 +1645,7 @@
         tooltip: { trigger: 'item', formatter: p => {
           if (p.seriesType === 'lines' && p.data.dead) return `<b>${p.data.name}</b><br>no flow for ${p.data.since}`;
           if (p.seriesType === 'lines') return `<b>${p.data.name}</b> ${p.data.dir}<br>${p.data.value.toLocaleString()} MW &middot; ${Math.round(100 * p.data.util)}% of limit`;
-          if (p.seriesType === 'effectScatter') return `<b>${regionName(p.name)}</b><br>${p.value[2] >= 0 ? 'exporting' : 'importing'} ${Math.abs(p.value[2]).toLocaleString()} MW`;
+          if (p.seriesType === 'effectScatter') return `<b>${escapeHtml(regionName(p.name))}</b><br>${p.value[2] >= 0 ? 'exporting' : 'importing'} ${Math.abs(p.value[2]).toLocaleString()} MW`;
           if (p.seriesType === 'scatter') return `<b>${escapeHtml(p.name)}</b><br>${escapeHtml(p.data.fuel)} &middot; ${Math.abs(p.value[2]).toLocaleString()} MW${p.value[2] < 0 ? ' charging' : ''}`;
           return '';
         } },
@@ -1653,7 +1655,7 @@
           emphasis: { disabled: true },
           tooltip: { show: true, formatter: p => {
             const code = STATE_REGION[p.name], v = code ? price(code) : null;
-            return code ? `<b>${p.name}</b> (${code})<br>${v == null ? 'no price' : fmtPrice(v, 2) + '/MWh'}` : `${p.name}<br>not in the NEM`;
+            return code ? `<b>${escapeHtml(p.name)}</b> (${code})<br>${v == null ? 'no price' : fmtPrice(v, 2) + '/MWh'}` : `${escapeHtml(p.name)}<br>not in the NEM`;
           } },
           // NEM states shaded by their region's price in this interval.
           regions: Object.entries(STATE_REGION).map(([state, code]) => ({
@@ -1662,7 +1664,7 @@
           { type: 'scatter', coordinateSystem: 'geo', zlevel: 1, animation: false,
             symbolSize: v => 3 + 20 * Math.sqrt(Math.min(1, Math.abs(v[2]) / GEN_FULL_MW)),
             data: gens.filter(g => g.unit?.lat != null && g.unit.lon != null).map(g => {
-              const fuel = g.unit.fuel ?? 'Unknown', color = fuelColor(fuel);
+              const fuel = g.unit.fuel, color = fuelColor(fuel);
               return { name: g.duid, fuel, value: [g.unit.lon, g.unit.lat, g.mw],
                 itemStyle: g.mw < 0 ? { color: 'transparent', borderColor: color, borderWidth: 1.5 } : { color, opacity: 0.8 } };
             }) },
@@ -1884,7 +1886,7 @@
       if (!rows.length) return showEmpty('chart-neg');
       getChart('chart-neg').setOption({
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
-          formatter: ps => `${ps[0].name}<br><b>${ps[0].value.toFixed(1)}%</b> negative<br>lowest $${rows[ps[0].dataIndex].lowest.toFixed(0)}` },
+          formatter: ps => `${escapeHtml(ps[0].name)}<br><b>${ps[0].value.toFixed(1)}%</b> negative<br>lowest $${rows[ps[0].dataIndex].lowest.toFixed(0)}` },
         grid: { left: 110, right: 30, top: 10, bottom: 25 },
         xAxis: { type: 'value', axisLabel: { formatter: '{value}%' } },
         yAxis: { type: 'category', data: rows.map(r => regionName(r.region)), axisLabel: { fontSize: 11 } },
@@ -1955,7 +1957,7 @@
       if (!byFuel.length) showEmpty('chart-cf');
       else getChart('chart-cf').setOption({
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
-          formatter: ps => `${ps[0].name}<br><b>${ps[0].value.toFixed(1)}%</b> of ${Math.round(byFuel[ps[0].dataIndex].cap).toLocaleString()} MW registered` },
+          formatter: ps => `${escapeHtml(ps[0].name)}<br><b>${ps[0].value.toFixed(1)}%</b> of ${Math.round(byFuel[ps[0].dataIndex].cap).toLocaleString()} MW registered` },
         grid: { left: 150, right: 30, top: 10, bottom: 25 },
         xAxis: pctAxis,
         yAxis: { type: 'category', data: byFuel.map(r => r.fuel), axisLabel: { fontSize: 11 } },
@@ -2305,7 +2307,7 @@
           updateDuidTrigger();
           renderAll();
         });
-        label.append(cb, ` ${d.DUID} (${regionName(d.Region)}, ${d.fuel ?? 'Unknown'})`);
+        label.append(cb, ` ${d.DUID} (${regionName(d.Region)}, ${d.fuel})`);
         list.append(label);
       }
     }
@@ -2657,6 +2659,7 @@ ORDER BY ALL`;
 
     // --- Filter population ---
     async function populateFilters() {
+      for (const r of await runQuery(sql.regionNames)) REGION_NAMES[r.region] = r.state;
       const regions = await runQuery(sql.regions);
       const fuels = await runQuery(sql.fuels);
       const regionSelect = document.getElementById("regionFilter");

@@ -5,11 +5,11 @@
 // source (same members, plus `needs`) and builds, on top of the source's views, the views
 // and macros index.html reads. The page joins nothing: it picks columns from these views,
 // filters and groups them.
-//   v_unit            DUID, fuel_source, region, station, owner, cap_mw, storage_mwh, lat, lon,
-//                     fuel, renewable, storage, generator      one row per unit (dim_duid)
+//   v_unit            DUID, fuel_source, region, state, station, owner, cap_mw, storage_mwh,
+//                     lat, lon, fuel, renewable, storage, generator   one row per unit (dim_duid)
 //                     (fuel: the name the charts use; fuel_source: as registered, may be NULL;
-//                     storage: a battery; generator: anything else; cap_mw: registered
-//                     capacity; storage_mwh: a battery's storage)
+//                     state: the region's name; storage: a battery; generator: anything
+//                     else; cap_mw: registered capacity; storage_mwh: a battery's storage)
 //   v_gen             v_scada         + the unit's columns     per unit and 5 minutes
 //   v_gen_daily       v_scada_daily   + the unit's columns     per unit and day
 //   v_gen_hourly      v_scada_hourly  + the unit's columns     per unit, month and hour of day;
@@ -24,17 +24,19 @@
 // said where it is defined below):
 //   generated(v), renewable_share(v, fuel), capture_price(v, price),
 //   capacity_factor(mwh, cap, hours)
+//   (fuel_name and is_renewable are this file's own: they make the `fuel` and `renewable`
+//   columns.)
 // The fact views of data.js stay readable as they are: a query that needs nothing about the
 // unit reads them and pays for no join.
 //   v_scada, v_scada_today   DUID, date, time, mw
 //   v_scada_daily            DUID, date, mwh
 //   v_scada_hourly           DUID, month, hour, mwh
-//   v_price                  REGIONID, date, time, price, demand, net_interchange
-//   v_price_today            REGIONID, date, time, price
+//   v_price, v_price_today   REGIONID, date, time, price, demand, net_interchange
 //   v_price_daily            REGIONID, date, price, demand, net_interchange, demand_mwh
 //   v_price_hourly           REGIONID, month, hour, price, n (the intervals averaged)
 //   v_month_days             month, days (the days of the month that have data)
 //   v_interconnector         interconnector, date, time, mw, export_limit, import_limit
+//   v_calendar               date, year, month (its first date is where the history starts)
 //
 // What the columns hold, in every view that has them:
 //   date, time       NEM time (AEST all year). time is HHMM as a number: 1435 is 14:35, and
@@ -103,14 +105,16 @@ const MACROS = [
   // Capacity factor in %: energy over what the registered capacity could make in the hours.
   // Takes one row per unit (its energy in the range, its cap_mw once) and the hours of the
   // range; a unit without a capacity (cap_mw NULL or 0, the rooftop ones) is filtered out
-  // first, or its energy counts against no capacity.
-  `capacity_factor(mwh, cap, hours) AS 100 * SUM(mwh) / (SUM(cap) * hours)`,
+  // first, or its energy counts against no capacity. NULL when the range has no hours.
+  `capacity_factor(mwh, cap, hours) AS 100 * SUM(mwh) / NULLIF(SUM(cap) * hours, 0)`,
 ];
 
-// dim_duid columns that files deployed before 2026-10-01 lack: [column, name here, type].
+// dim_duid columns that a deployed file can lack (the capacity ones came on 2026-10-01):
+// [column, name here, type].
 const OPTIONAL_UNIT_COLS = [
-  ['StationName', 'station', 'VARCHAR'], ['Participant', 'owner', 'VARCHAR'],
-  ['RegCapMW', 'cap_mw', 'REAL'], ['StorageMWh', 'storage_mwh', 'REAL'],
+  ['State', 'state', 'VARCHAR'], ['StationName', 'station', 'VARCHAR'],
+  ['Participant', 'owner', 'VARCHAR'], ['RegCapMW', 'cap_mw', 'REAL'],
+  ['StorageMWh', 'storage_mwh', 'REAL'],
 ];
 
 export function createModel(data) {
