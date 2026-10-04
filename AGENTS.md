@@ -124,8 +124,14 @@ The ids live in repository **variables** (public identifiers, not secrets):
   directly from them. **No workflow creates or looks up a lakehouse** — that is infrastructure,
   created once by hand (schema-enabled, since the models write to `landing`/`mart`). If it is
   ever recreated, update `LH_ID`; CI is deliberately not in the provisioning business.
+- `LAKE_TENANT_ID`, `LAKE_CLIENT_ID` — the Fabric app's tenant and an Entra app there
+  (`fabric-github-deploy`) that can write to its lakehouse; `scripts/deploy_onelake.py` only.
+  It is a second tenant, so not the workflow's `azure/login`: the script exchanges the job's
+  GitHub OIDC token itself. The app's federated credential for this repo has the subject
+  `repo:djouallah/analytics-as-code:ref:refs/heads/main`.
 Env contract consumed by profiles.yml, the models and the scripts: `ONELAKE_ENDPOINT`,
-`ONELAKE_TOKEN`, `WAREHOUSE_PATH`, `FILES_PATH`, `download_limit`, `process_limit`, plus
+`ONELAKE_TOKEN`, `WAREHOUSE_PATH`, `FILES_PATH`, `download_limit`, `process_limit`,
+`MAX_FILE_MB` (the two import workflows), plus
 `AZURE_TRANSPORT_OPTION_TYPE=curl` + `CURL_CA_INFO` on runners (the azure extension's default
 transport fails the OneLake TLS handshake).
 `NEMTRACKER_TOKEN` (gh-pages deploy) is the one true secret.
@@ -203,6 +209,21 @@ also dispatchable) replaces the deploy repo's history with one commit of its cur
 (`scripts/squash_deploy_repo.sh`, force-with-lease): `energy_today.duckdb` is redeployed every
 30 min, and the kept copies would otherwise grow the repo by gigabytes a week. The site is
 unchanged; GitHub reclaims the space on its own schedule.
+
+**The same files also go to OneLake**, for the Fabric app (`djouallah/fabric-energy-app`: a
+copy of the page, hosted in Fabric, reading a lakehouse in another tenant — workspace `app`,
+lakehouse `data`). `import_onelake.yml` (daily, 22:30 UTC) runs the same `cache_catalog.py`
+steps and publishes with `scripts/deploy_onelake.py`. There is one export logic, this repo's;
+the app has no import of its own. `MAX_FILE_MB` is the only difference in what is built:
+- `100` (GitHub's limit for a file; `import_data.yml`): the half-year files, and
+  `build_daily` fails if one outgrows the limit.
+- `unlimited` (`import_onelake.yml`): one `energy_data.duckdb`, and all the history exported
+  every run, with no splice. It is sorted by date, not by unit, because the app does not
+  download it: it reads it in place over HTTP, and a date range is then a few Range reads.
+  Sorted that way it compresses less (2026: 176 MB against 115 MB as half-year files).
+On OneLake the files are `dim_`/`today_`/`agg_`/`data_<ts>.duckdb`; `latest.txt`, written
+last, names the current `data_` file, and two versions are kept so that an open page keeps
+reading the one it attached.
 
 A daily run refuses to splice when the deployed aggregate's tables or columns differ from what
 `build_daily_agg` now builds, so a change to them needs one `all_periods=true` dispatch. The
@@ -310,7 +331,8 @@ that has never been probed either.
 ## DuckDB version policy
 Every duckdb, dbt, pyiceberg and duckdb-wasm version is pinned exactly — none floats on
 "latest". Not pinned: the GitHub actions (by major tag), the runner image, and the packages
-those pins pull in.
+those pins pull in. `import_onelake.yml` has the same two venvs as `import_data.yml`, with
+the same pins, and pins the two Azure SDK packages its upload uses.
 - **`process_data.yml`, `build.yml`, `table_maintenance.yml` and `import_data.yml`'s read venv
   pin `duckdb==2.0.0.dev2609250715`** (dbt via `requirements.txt`, which also pins
   `dbt-core`/`dbt-duckdb` exactly — the insert-only merges lean on adapter internals). The

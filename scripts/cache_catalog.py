@@ -14,6 +14,9 @@ Usage:
     python cache_catalog.py build_daily
     python cache_catalog.py build_daily_agg
     python cache_catalog.py build_today
+
+MAX_FILE_MB (env, default 100) is the largest file the host takes: 100 for GitHub Pages,
+"unlimited" for OneLake.
 """
 
 import json
@@ -36,6 +39,12 @@ DASHBOARD_DIR = os.path.join(os.path.dirname(__file__), "..", "dashboard")
 DB_DIM_PATH = os.path.join(DASHBOARD_DIR, "energy_dim.duckdb")
 DB_TODAY_PATH = os.path.join(DASHBOARD_DIR, "energy_today.duckdb")
 os.makedirs(DASHBOARD_DIR, exist_ok=True)
+
+# The largest file the host takes, in MB. GitHub refuses a file over 100 MB, hence the
+# half-year files of the 5-minute history (import_data.yml). "unlimited" is OneLake
+# (import_onelake.yml): the history is one file, and every run exports all of it.
+MAX_FILE_MB = os.environ.get("MAX_FILE_MB", "100")
+MAX_FILE_MB = None if MAX_FILE_MB == "unlimited" else int(MAX_FILE_MB)
 
 
 def connect_iceberg():
@@ -73,8 +82,9 @@ def export_cutoff():
     already deployed -- its energy_data_<half>.duckdb files and its rows in
     energy_daily_agg.duckdb -- so the daily run neither re-exports it from Iceberg nor
     rebuilds or redeploys it. ALL_PERIODS=true exports and rebuilds everything, e.g. after
-    a rebuild=<fact> backfill of old data."""
-    if os.environ.get("ALL_PERIODS", "").lower() == "true":
+    a rebuild=<fact> backfill of old data. So does MAX_FILE_MB=unlimited: one history file
+    has no older files to leave alone."""
+    if MAX_FILE_MB is None or os.environ.get("ALL_PERIODS", "").lower() == "true":
         return None
     today = datetime.now(timezone.utc).date()
     current_half = date(today.year, 1 if today.month <= 6 else 7, 1)
@@ -342,11 +352,34 @@ def export_dim_calendar():
     con.close()
 
 
+def build_history_file(path, where, order):
+    """One .duckdb of the 5-minute history (scada, price, interconnector); its size in MB.
+    `order` is the sort, with {key} for the table's unit, region or interconnector column."""
+    ycon = duckdb.connect(path)
+    for table, key in (("scada", "DUID"), ("price", "REGIONID"), ("interconnector", "interconnector")):
+        ycon.execute(f"""
+            CREATE TABLE {table} AS
+            SELECT * FROM '{DASHBOARD_DIR}/fct_{table}.parquet'
+            {where}
+            ORDER BY {order.format(key=key)}
+        """)
+    ycon.close()
+    size_mb = os.path.getsize(path) / 1024 / 1024
+    print(f"Built {path} ({size_mb:.1f} MB)")
+    return size_mb
+
+
 def build_daily():
     # Clean old files
     for f in os.listdir(DASHBOARD_DIR):
-        if f.startswith("energy_data_") or f == "energy_daily.duckdb":
+        if f.startswith("energy_data") or f == "energy_daily.duckdb":
             os.remove(os.path.join(DASHBOARD_DIR, f))
+
+    if MAX_FILE_MB is None:
+        # No limit: one file. It is not downloaded: the page reads it in place over HTTP, so
+        # it is sorted by date first, which makes a date range a few Range reads.
+        build_history_file(os.path.join(DASHBOARD_DIR, "energy_data.duckdb"), "", "date, {key}, time")
+        return
 
     con = duckdb.connect(":memory:")
 
@@ -368,31 +401,14 @@ def build_daily():
         month_lo = 1 if half == 1 else 7
         month_hi = 6 if half == 1 else 12
         path = os.path.join(DASHBOARD_DIR, f"energy_data_{tag}.duckdb")
-        ycon = duckdb.connect(path)
-        ycon.execute(f"""
-            CREATE TABLE scada AS
-            SELECT * FROM '{DASHBOARD_DIR}/fct_scada.parquet'
-            WHERE EXTRACT(YEAR FROM date) = {year}
-              AND EXTRACT(MONTH FROM date) BETWEEN {month_lo} AND {month_hi}
-            ORDER BY DUID, date, time
-        """)
-        ycon.execute(f"""
-            CREATE TABLE price AS
-            SELECT * FROM '{DASHBOARD_DIR}/fct_price.parquet'
-            WHERE EXTRACT(YEAR FROM date) = {year}
-              AND EXTRACT(MONTH FROM date) BETWEEN {month_lo} AND {month_hi}
-            ORDER BY REGIONID, date, time
-        """)
-        ycon.execute(f"""
-            CREATE TABLE interconnector AS
-            SELECT * FROM '{DASHBOARD_DIR}/fct_interconnector.parquet'
-            WHERE EXTRACT(YEAR FROM date) = {year}
-              AND EXTRACT(MONTH FROM date) BETWEEN {month_lo} AND {month_hi}
-            ORDER BY interconnector, date, time
-        """)
-        ycon.close()
-        size_mb = os.path.getsize(path) / 1024 / 1024
-        print(f"Built {path} ({size_mb:.1f} MB)")
+        size_mb = build_history_file(
+            path,
+            f"""WHERE EXTRACT(YEAR FROM date) = {year}
+              AND EXTRACT(MONTH FROM date) BETWEEN {month_lo} AND {month_hi}""",
+            "{key}, date, time")
+        if size_mb > MAX_FILE_MB:
+            raise SystemExit(f"{path} is {size_mb:.1f} MB, over the {MAX_FILE_MB} MB the host "
+                             f"takes; the history needs a finer split than half-years.")
 
     # Write manifest (local/dev parity only). The DEPLOYED manifest is rebuilt in
     # import_data.yml from the period files actually committed to the deploy repo,

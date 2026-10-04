@@ -13,7 +13,8 @@ only: a finished item is removed, not ticked.
 ## Small
 
 - [ ] **DuckDB 2.0.0 stable** (due 2026-10-21) — replace `2.0.0.dev2609250715` in
-  `requirements.txt`, `table_maintenance.yml` (compaction) and `import_data.yml` (read venv);
+  `requirements.txt`, `table_maintenance.yml` (compaction), `import_data.yml` and
+  `import_onelake.yml` (read venv);
   check Process Data, maintenance and import; update AGENTS.md's version policy.
 - [ ] **Capability probe** (separate repo, manual) — re-run against the 2.0 pin.
 
