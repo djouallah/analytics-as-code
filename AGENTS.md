@@ -126,11 +126,13 @@ The ids live in repository **variables** (public identifiers, not secrets):
   ever recreated, update `LH_ID`; CI is deliberately not in the provisioning business.
 - `LAKE_TENANT_ID`, `LAKE_CLIENT_ID` — the Fabric app's tenant and an Entra app there
   (`fabric-github-deploy`), a member of the app's workspace: it uploads the data
-  (`scripts/deploy_onelake.py`).
+  (`scripts/deploy_onelake.py`); the parked `deploy_fabric.yml` deployed the app with it.
   It is a second tenant: `deploy_onelake.py` exchanges the job's GitHub OIDC token itself,
   next to the workflow's catalog login. The app's
   federated credential for this repo has the subject
   `repo:djouallah/analytics-as-code:ref:refs/heads/main`.
+- `FABRIC_APP_WORKSPACE_ID` (workspace `app`), `ONELAKE_FILES_URL` (the lakehouse's Files
+  folder, where the app's function signs its SAS) — `deploy_fabric.yml`.
 Env contract consumed by profiles.yml, the models and the scripts: `ONELAKE_ENDPOINT`,
 `ONELAKE_TOKEN`, `WAREHOUSE_PATH`, `FILES_PATH`, `download_limit`, `process_limit`,
 `ALL_PERIODS` (the two import workflows), plus
@@ -273,22 +275,18 @@ it; the owner is also the identity `getDataSas` reads the lakehouse as. That is 
 laptop and CI cannot share an item: a deploy to someone else's fails with
 `403 Only AppBackend artifact owner can perform this operation`.
 
-**CI cannot deploy the app**, and there is no workflow for it. The federated login is not
-the obstacle: it worked, and so did the Fabric API token it minted. Both routes were tried on
-2026-10-04, with `rayfin up` and that token, no secret:
-- Into the owner's item, the page only (`rayfin up staticapp deploy`): the same 403. The
-  page-only deploy is owner-only too.
-- Into an item CI owns: the deploy worked, and `getDataSas` answered 500 before the function
-  ran (it names the step that fails, and named none), with its secret set. OneLake does issue
-  the CI identity a delegation key, so what is missing is the platform's storage token
-  (`ctx.Tokens.Storage`) for a function whose owner is a service principal.
-A third route, CI signing in as the owner, would need a stored user token, and this repo has
-no such secret. It comes back when Rayfin hands a service principal's function that token.
-Two things in the repo date from those tries and stay:
+**`deploy_fabric.yml` is parked** (dispatch only). It ran the same `rayfin up` with a Fabric
+API token from the OIDC login, no secret, into an item of its own (`nemtracker`, since
+deleted), and the deploy itself worked. What it took, should it come back:
 - `fabric/rayfin/functions/host.json` is committed: the deploy refuses without it, and the
   Rayfin scaffold's `.gitignore` leaves it out.
 - The lock files resolve from `registry.npmjs.org`: generated on a laptop they name a
-  private feed a runner cannot read.
+  private feed the runner cannot read.
+- Open: on the CI-owned item `getDataSas` answered 500 on its one load. That deploy
+  predated the function's secret and the item was deleted before a second try. OneLake does
+  issue the CI identity a delegation key (the workflow's last step checks it), so the
+  remaining suspect is the platform handing no storage token (`ctx.Tokens.Storage`) to a
+  function whose owner is a service principal.
 
 Rules of the Fabric host that are easy to break:
 - The browser never receives a storage token, only the SAS from `getDataSas` (read-only, one

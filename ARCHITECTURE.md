@@ -176,6 +176,6 @@ Then run the **Import OneLake** workflow to fill the lakehouse (`LAKE_TENANT_ID`
 `LAKE_CLIENT_ID`: an Entra app with a federated credential for this repo and write access to
 the workspace), and open the app in the Fabric portal or in its own tab.
 
-CI does not deploy the app. Only an item's owner can deploy to it, the page alone included,
-and an item that CI owns cannot serve the data: with a service principal as owner the
-platform answers 500 to `getDataSas`.
+`deploy_fabric.yml` can run the same deploy from CI with that Entra app, no secret; it is
+parked for now, because only an item's owner can deploy to it and the app is deployed from
+a laptop.
