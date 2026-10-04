@@ -11,8 +11,8 @@
 // model.js and index.html know none of this: model.js wraps the members createDataSource
 // returns and reads the views of views.js (built here over the attached files, refreshViews),
 // never an attached table. A host that stores the files differently (the Fabric app,
-// fabric/site/data.js, reads one history file over HTTP) has its own data.js with the same
-// members, over the same views.js.
+// fabric/site/data.js: a lakehouse behind a Fabric sign-in) has its own data.js with the same
+// members, over the same views.js and history.js.
 //
 // DOM-free: progress is reported through the injected `onStatus` callback, and what is
 // fetched, attached and run is timed in perflog.js, for the Logs tab.
@@ -20,6 +20,7 @@
 
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev65.0/+esm";
 import { createViews, RECENT_CUT } from "./views.js";
+import { periodsForRange, attachCached } from "./history.js";
 import { perf, HTTP_TRACE_SHIM } from "./perflog.js";
 
 export function createDataSource({ onStatus = () => {} } = {}) {
@@ -99,32 +100,6 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     return { source, buffer: null, bytes: buffer.byteLength };
   }
 
-  // ATTACH a cached file READ_ONLY. Preferred: DuckDB reads it in place from OPFS, pulling
-  // only the pages a query touches, instead of the whole file being copied into the WASM heap.
-  // That needs an exclusive sync access handle, which a second tab on the same origin can't
-  // get, so fall back to copying the file into memory. `buffer` is set when cacheInOPFS
-  // couldn't write the file to OPFS.
-  async function attachCached(db, filename, alias, buffer) {
-    if (!buffer) {
-      const root = await navigator.storage.getDirectory();
-      const handle = await root.getFileHandle(filename);
-      try {
-        // Registered under the plain name, not opfs://: an opfs:// ATTACH also opens
-        // opfs://<file>.wal, which is never registered, and the ATTACH fails.
-        await db.registerFileHandle(filename, handle, duckdb.DuckDBDataProtocol.BROWSER_FSACCESS, true);
-        await conn.query(`ATTACH '${filename}' AS ${alias} (READ_ONLY);`);
-        return 'in place';
-      } catch (e) {
-        console.log(`[OPFS] In-place read failed for ${filename} (${e}), loading into memory`);
-        try { await db.dropFile(filename); } catch (_) {}
-        buffer = new Uint8Array(await (await handle.getFile()).arrayBuffer());
-      }
-    }
-    await db.registerFileBuffer(filename, buffer);
-    await conn.query(`ATTACH '${filename}' AS ${alias} (READ_ONLY);`);
-    return 'in memory';
-  }
-
   // Download (or reuse from OPFS) data/<file> and ATTACH it as <alias>.
   const SOURCE_LABEL = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded', 'opfs-refresh': 'refreshed', 'no-opfs': 'downloaded, not cached' };
   async function loadDb(file, alias) {
@@ -132,7 +107,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     const res = await cacheInOPFS(`${_baseUrl}/data/${file}`, file);
     perf.log('fetch', file, { ms: performance.now() - t, status: SOURCE_LABEL[res.source], bytes: res.bytes });
     t = performance.now();
-    const mode = await attachCached(_db, file, alias, res.buffer);
+    const mode = await attachCached(_db, conn, file, alias, res.buffer);
     perf.log('attach', `ATTACH ${file} AS ${alias}`, { ms: performance.now() - t, status: mode });
     console.log(`[OPFS] ${alias}: ${SOURCE_LABEL[res.source]} (${mode})`);
   }
@@ -194,20 +169,6 @@ export function createDataSource({ onStatus = () => {} } = {}) {
       _failedPeriods.set(p, Date.now());
       return false;
     }
-  }
-
-  function periodsForRange(from, to) {
-    const periods = [];
-    let d = new Date(from);
-    const end = new Date(to);
-    while (d <= end) {
-      const y = d.getUTCFullYear();
-      const h = d.getUTCMonth() < 6 ? 1 : 2;
-      const tag = `${y}_h${h}`;
-      if (!periods.includes(tag)) periods.push(tag);
-      d = new Date(h === 1 ? `${y}-07-01` : `${y + 1}-01-01`);
-    }
-    return periods;
   }
 
   // Attach the half-year periods of a date range that exist and aren't attached yet.

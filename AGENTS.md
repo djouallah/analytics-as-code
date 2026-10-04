@@ -135,15 +135,15 @@ The ids live in repository **variables** (public identifiers, not secrets):
   folder, where the app's function signs its SAS) — `deploy_fabric.yml`.
 Env contract consumed by profiles.yml, the models and the scripts: `ONELAKE_ENDPOINT`,
 `ONELAKE_TOKEN`, `WAREHOUSE_PATH`, `FILES_PATH`, `download_limit`, `process_limit`,
-`MAX_FILE_MB` (the two import workflows), plus
+`ALL_PERIODS` (the two import workflows), plus
 `AZURE_TRANSPORT_OPTION_TYPE=curl` + `CURL_CA_INFO` on runners (the azure extension's default
 transport fails the OneLake TLS handshake).
 `NEMTRACKER_TOKEN` (gh-pages deploy) is the one true secret.
 
 ## Dashboard
 The dashboard is four files, one job each, plus the Logs tab, and it has two hosts: GitHub
-Pages and a Fabric app. `index.html`, `model.js`, `views.js` and the Logs tab are the same
-files on both; only `data.js` differs.
+Pages and a Fabric app. `index.html`, `model.js`, `views.js`, `history.js` and the Logs tab
+are the same files on both; only `data.js` differs.
 - `dashboard/index.html` is the page: charts, and SQL that only picks columns from views,
   filters and groups them. **It joins nothing** and knows no `dim_duid` column, no fuel
   naming rule, no region names (they are `v_unit.state`). Which fuels are renewable is not in
@@ -169,16 +169,23 @@ files on both; only `data.js` differs.
   `refresh({ history, agg })`, `has`; the list at its top is its contract with `model.js`):
   the last 5 days from `today` (`RECENT_CUT`), older days from the history databases or
   `agg`, and a column a deployed file lacks read as NULL. The view SQL exists once, here.
+- `dashboard/history.js` is what both `data.js` share about the half-year history files:
+  `periodsForRange` (which ones a date range needs) and `attachCached` (ATTACH from OPFS in
+  place, into memory if a second tab holds the file).
 - `data.js` is the host: how the `.duckdb` files are fetched, cached and attached
   (`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `has`, `query`). It attaches
   `dim`, `today`, `agg` and the 5-minute history, and tells `views.js` which history
-  databases are attached. There are two, with the same members:
-  - `dashboard/data.js`, GitHub Pages: the files sit in `data/`, are downloaded whole into
-    OPFS, and the history is the half-year files (`p2026_h1`, ...), the ones a range needs.
+  databases are attached. On both the files are downloaded whole into OPFS, and the history
+  is the half-year files (`p2026_h1`, ...), the ones a range needs. There are two, with the
+  same members:
+  - `dashboard/data.js`, GitHub Pages: the files sit in `data/`, with
+    `daily_manifest.json` listing the half-years.
   - `fabric/site/data.js`, the Fabric app: the files are in a lakehouse behind a Fabric
-    sign-in, read with a short-lived read-only SAS; the history is one file attached in
-    place over HTTP (`history`), read by Range requests. Its own, and unknown to the page:
-    the sign-in gate (`auth.js`) and the retry after an expired SAS (inside its `query`).
+    sign-in, read with a short-lived read-only SAS, and downloaded as 2 MB Range requests,
+    6 at a time. Its own, and unknown to the page: the sign-in gate (`auth.js`).
+  The history is never read in place over HTTP: duckdb-wasm reads a remote file one block
+  at a time, three round trips each, and OneLake answers one in ~700 ms whatever its size
+  (one 2024 day took 38 s that way, 2026-10-04).
   On both, `ensureHistory` attaches nothing for a range that starts inside the last 5 days:
   `today` covers it, so the default view fetches no history. Both set the session to
   Brisbane time, on purpose: the files carry `date` and `time`, no TIMESTAMPTZ, and the
@@ -215,7 +222,7 @@ difference of some 10 ms on one query is not worth chasing: on a second run as m
 other way.
 
 ## Dashboard deploy
-`build.yml` (index.html, data.js, views.js, model.js, perflog.js, logs.js, dbt docs) and
+`build.yml` (index.html, data.js, views.js, history.js, model.js, perflog.js, logs.js, dbt docs) and
 `import_data.yml` (the .duckdb files)
 publish into `NemTracker/nemtracker.github.io` with `scripts/deploy_pages.sh`: a blobless
 depth-1 clone, the published paths added with `-f` (so the deploy repo's `.gitignore` can't
@@ -234,16 +241,15 @@ unchanged; GitHub reclaims the space on its own schedule.
 **The same files also go to OneLake**, for the Fabric app (the same page, hosted in Fabric,
 reading a lakehouse in another tenant — workspace `app`, lakehouse `data`).
 `import_onelake.yml` (daily, 22:30 UTC) runs the same `cache_catalog.py` steps and publishes
-with `scripts/deploy_onelake.py`. `MAX_FILE_MB` is the only difference in what is built:
-- `100` (GitHub's limit for a file; `import_data.yml`): the half-year files, and
-  `build_daily` fails if one outgrows the limit.
-- `unlimited` (`import_onelake.yml`): one `energy_data.duckdb`, and all the history exported
-  every run, with no splice. It is sorted by date, not by unit, because the app does not
-  download it: it reads it in place over HTTP, and a date range is then a few Range reads.
-  Sorted that way it compresses less (2026: 176 MB against 115 MB as half-year files).
-On OneLake the files are `dim_`/`today_`/`agg_`/`data_<ts>.duckdb`; `latest.txt`, written
-last, names the current `data_` file, and two versions are kept so that an open page keeps
-reading the one it attached.
+with `scripts/deploy_onelake.py`. It builds the same files, with one difference: it sets
+`ALL_PERIODS=true`, so every run exports and rebuilds all the history, with no splice (OneLake
+has no deployed copy to splice onto). `build_daily` fails on both if a half-year file
+outgrows 100 MB, GitHub's limit for a file.
+On OneLake the files are `dim_`/`today_`/`agg_<ts>.duckdb` and `<YYYY>_h<N>_<ts>.duckdb`;
+`latest.json` (`{"ts", "periods"}`), written last, names the current import, and the files
+of two imports are kept so that an open page keeps reading the one it attached. The page's
+OPFS cache keeps one import, so each daily import downloads a half-year again the first time
+it is viewed.
 
 **The Fabric app is `fabric/`**, a Rayfin project: static hosting, Fabric sign-in, and one
 function, `getDataSas` (`fabric/rayfin/functions`), which signs a read-only SAS on the data
@@ -285,15 +291,11 @@ deleted), and the deploy itself worked. What it took, should it come back:
 Rules of the Fabric host that are easy to break:
 - The browser never receives a storage token, only the SAS from `getDataSas` (read-only, one
   folder, about 55 minutes). New data access means extending that function.
-- The history file is attached by a URL without the SAS; a shim in the DuckDB worker appends
-  the current one to each request. A SAS in the attached URL would expire under the attach.
-- No DuckDB attach alias named `full`: it is a SQL keyword. The history alias is `history`.
 - The workspace setting "Authenticate with OneLake user-delegated SAS tokens" must be on, and
   the item's owner must be able to read the lakehouse.
 - Single-threaded here for one more reason than on Pages: cross-origin isolation breaks the
   Fabric sign-in popup.
-To check a deploy, open the Logs tab: the build stamp, each fetch, attach and query, and
-the worker's Range reads.
+To check a deploy, open the Logs tab: the build stamp, each fetch, attach and query.
 
 A daily run refuses to splice when the deployed aggregate's tables or columns differ from what
 `build_daily_agg` now builds, so a change to them needs one `all_periods=true` dispatch. The

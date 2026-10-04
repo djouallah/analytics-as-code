@@ -1,8 +1,8 @@
 name: Import OneLake
 
 # The same .duckdb files import_data.yml builds for GitHub Pages, published to the lakehouse
-# the Fabric app reads (djouallah/fabric-energy-app). OneLake has no file-size limit, so
-# MAX_FILE_MB is unlimited: the 5-minute history is one file, and every run exports all of it.
+# the Fabric app (fabric/) reads. Every run exports all of the history (ALL_PERIODS): there is
+# no deployed copy on OneLake to splice the older half-years from.
 on:
   schedule:
     - cron: '30 22 * * *'  # 8:30am AEST, after the daily refresh and maintenance
@@ -29,7 +29,7 @@ jobs:
       WAREHOUSE_PATH: ${{ vars.WS_ID }}/${{ vars.LH_ID }}
       AZURE_TRANSPORT_OPTION_TYPE: curl
       CURL_CA_INFO: /etc/ssl/certs/ca-certificates.crt
-      MAX_FILE_MB: unlimited
+      ALL_PERIODS: 'true'
     steps:
       - uses: actions/checkout@v4
 

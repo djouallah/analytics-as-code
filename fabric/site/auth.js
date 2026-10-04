@@ -68,7 +68,7 @@ function createRayfinAuth() {
       return r;
     });
     _data = signed;
-    // How long the new SAS lives (the function signs ~55 min; data.js renews ~10 min before expiry).
+    // How long the new SAS lives (the function signs ~55 min; a stale one is re-signed on the next call).
     perf.log('info', `SAS valid ${((Date.parse(_data.expiresOn) - Date.now()) / 60000).toFixed(1)} min (expires ${_data.expiresOn})`);
     save(_data);
     return _data;

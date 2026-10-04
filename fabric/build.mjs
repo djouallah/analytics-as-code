@@ -1,5 +1,5 @@
 // Static "build" of the Fabric target: dist/ = the shared page (../dashboard: index.html,
-// model.js, views.js, perflog.js, logs.js, the dbt docs in dag/) + this target's host files
+// model.js, views.js, history.js, perflog.js, logs.js, the dbt docs in dag/) + this target's host files
 // (site/: data.js, auth.js). ../dashboard/data.js, the GitHub Pages host, is the one file
 // left out.
 // No bundler. Two stamps, so a browser never mixes files of two deploys and the Logs tab
@@ -22,7 +22,7 @@ const BUILD = `${sha}${dirty}.${new Date().toISOString().replace(/[-:]/g, "").re
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist);
-for (const f of ["index.html", "model.js", "views.js", "perflog.js", "logs.js"]) await cp(page + f, dist + f);
+for (const f of ["index.html", "model.js", "views.js", "history.js", "perflog.js", "logs.js"]) await cp(page + f, dist + f);
 await cp(here("./site/"), dist, { recursive: true });
 for (const f of await readdir(dist)) {
   if (!/\.(html|js)$/.test(f)) continue;

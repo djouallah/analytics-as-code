@@ -45,9 +45,6 @@ jobs:
       # deployed history (scripts/cache_catalog.py export_cutoff, #2). Dispatch with
       # all_periods=true to export and rebuild everything.
       ALL_PERIODS: ${{ inputs.all_periods && 'true' || 'false' }}
-      # GitHub refuses a file over 100 MB: the 5-minute history goes out as half-year files.
-      # import_onelake.yml builds the same files with no limit.
-      MAX_FILE_MB: 100
     steps:
       - uses: actions/checkout@v4
 

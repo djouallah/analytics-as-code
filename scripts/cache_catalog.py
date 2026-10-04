@@ -14,9 +14,6 @@ Usage:
     python cache_catalog.py build_daily
     python cache_catalog.py build_daily_agg
     python cache_catalog.py build_today
-
-MAX_FILE_MB (env, default 100) is the largest file the host takes: 100 for GitHub Pages,
-"unlimited" for OneLake.
 """
 
 import json
@@ -40,11 +37,10 @@ DB_DIM_PATH = os.path.join(DASHBOARD_DIR, "energy_dim.duckdb")
 DB_TODAY_PATH = os.path.join(DASHBOARD_DIR, "energy_today.duckdb")
 os.makedirs(DASHBOARD_DIR, exist_ok=True)
 
-# The largest file the host takes, in MB. GitHub refuses a file over 100 MB, hence the
-# half-year files of the 5-minute history (import_data.yml). "unlimited" is OneLake
-# (import_onelake.yml): the history is one file, and every run exports all of it.
-MAX_FILE_MB = os.environ.get("MAX_FILE_MB", "100")
-MAX_FILE_MB = None if MAX_FILE_MB == "unlimited" else int(MAX_FILE_MB)
+# The largest history file, in MB. GitHub refuses a file over 100 MB, hence the half-year
+# files of the 5-minute history. OneLake takes the same files: the Fabric app downloads them
+# whole too, because reading one big file in place costs a ~700 ms round trip per block.
+MAX_FILE_MB = 100
 
 
 def connect_iceberg():
@@ -82,9 +78,9 @@ def export_cutoff():
     already deployed -- its energy_data_<half>.duckdb files and its rows in
     energy_daily_agg.duckdb -- so the daily run neither re-exports it from Iceberg nor
     rebuilds or redeploys it. ALL_PERIODS=true exports and rebuilds everything, e.g. after
-    a rebuild=<fact> backfill of old data. So does MAX_FILE_MB=unlimited: one history file
-    has no older files to leave alone."""
-    if MAX_FILE_MB is None or os.environ.get("ALL_PERIODS", "").lower() == "true":
+    a rebuild=<fact> backfill of old data; import_onelake.yml always sets it, as OneLake has
+    no deployed copy to splice onto."""
+    if os.environ.get("ALL_PERIODS", "").lower() == "true":
         return None
     today = datetime.now(timezone.utc).date()
     current_half = date(today.year, 1 if today.month <= 6 else 7, 1)
@@ -352,16 +348,15 @@ def export_dim_calendar():
     con.close()
 
 
-def build_history_file(path, where, order):
-    """One .duckdb of the 5-minute history (scada, price, interconnector); its size in MB.
-    `order` is the sort, with {key} for the table's unit, region or interconnector column."""
+def build_history_file(path, where):
+    """One .duckdb of the 5-minute history (scada, price, interconnector); its size in MB."""
     ycon = duckdb.connect(path)
     for table, key in (("scada", "DUID"), ("price", "REGIONID"), ("interconnector", "interconnector")):
         ycon.execute(f"""
             CREATE TABLE {table} AS
             SELECT * FROM '{DASHBOARD_DIR}/fct_{table}.parquet'
             {where}
-            ORDER BY {order.format(key=key)}
+            ORDER BY {key}, date, time
         """)
     ycon.close()
     size_mb = os.path.getsize(path) / 1024 / 1024
@@ -374,12 +369,6 @@ def build_daily():
     for f in os.listdir(DASHBOARD_DIR):
         if f.startswith("energy_data") or f == "energy_daily.duckdb":
             os.remove(os.path.join(DASHBOARD_DIR, f))
-
-    if MAX_FILE_MB is None:
-        # No limit: one file. It is not downloaded: the page reads it in place over HTTP, so
-        # it is sorted by date first, which makes a date range a few Range reads.
-        build_history_file(os.path.join(DASHBOARD_DIR, "energy_data.duckdb"), "", "date, {key}, time")
-        return
 
     con = duckdb.connect(":memory:")
 
@@ -404,15 +393,15 @@ def build_daily():
         size_mb = build_history_file(
             path,
             f"""WHERE EXTRACT(YEAR FROM date) = {year}
-              AND EXTRACT(MONTH FROM date) BETWEEN {month_lo} AND {month_hi}""",
-            "{key}, date, time")
+              AND EXTRACT(MONTH FROM date) BETWEEN {month_lo} AND {month_hi}""")
         if size_mb > MAX_FILE_MB:
             raise SystemExit(f"{path} is {size_mb:.1f} MB, over the {MAX_FILE_MB} MB the host "
                              f"takes; the history needs a finer split than half-years.")
 
-    # Write manifest (local/dev parity only). The DEPLOYED manifest is rebuilt in
-    # import_data.yml from the period files actually committed to the deploy repo,
-    # so it can never advertise a .duckdb that failed to land in the gh-pages push.
+    # Write manifest (local/dev parity only). The DEPLOYED manifests are rebuilt from the
+    # period files actually published: import_data.yml from the deploy repo, so it can never
+    # advertise a .duckdb that failed to land in the gh-pages push, deploy_onelake.py from
+    # the files it uploaded.
     tags = [f"{y}_h{h}" for y, h in periods]
     with open(os.path.join(DASHBOARD_DIR, "daily_manifest.json"), "w") as f:
         json.dump({"periods": tags}, f)

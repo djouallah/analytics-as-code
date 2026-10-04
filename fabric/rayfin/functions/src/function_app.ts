@@ -13,7 +13,7 @@ const udf = new UserDataFunctions();
 /*
  * The browser never receives the app identity's storage token (that token carries the owner's
  * full OneLake access). getDataSas uses it server-side and hands back a OneLake user-delegation
- * SAS that is read-only on the data/ folder (latest.txt + the .duckdb files). Long-ish lifetime so
+ * SAS that is read-only on the data/ folder (latest.json + the .duckdb files). Long-ish lifetime so
  * browsers can cache it and call this function about once an hour, not per request.
  *
  * ONELAKE_FILES_URL (rayfin secret): https://onelake.dfs.fabric.microsoft.com/<ws>/<lh>.Lakehouse/Files
@@ -91,7 +91,7 @@ function signFolderSas(base: URL, relPath: string, permissions: string, key: Del
 }
 
 /**
- * Read-only SAS for the data/ folder: the browser reads data/latest.txt and the .duckdb with it.
+ * Read-only SAS for the data/ folder: the browser reads data/latest.json and the .duckdb files with it.
  * A failure is returned as { error }, naming the step: thrown, it reaches the browser as a bare
  * 500 that says nothing. The message never holds a token or a key.
  */

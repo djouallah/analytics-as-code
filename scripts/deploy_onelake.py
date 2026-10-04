@@ -2,23 +2,24 @@
 
     python deploy_onelake.py
 
-The counterpart of deploy_pages.sh for the Fabric app (djouallah/fabric-energy-app), which
-reads the same files from OneLake instead of GitHub Pages. Run after cache_catalog.py's
-build_* steps with MAX_FILE_MB=unlimited, so the 5-minute history is one file: the app reads
-it in place over HTTP.
+The counterpart of deploy_pages.sh for the Fabric app (fabric/), which reads the same files
+from OneLake instead of GitHub Pages. Run after cache_catalog.py's build_* steps with
+ALL_PERIODS=true.
 
-    energy_dim.duckdb        ->  dim_<ts>.duckdb
-    energy_today.duckdb      ->  today_<ts>.duckdb
-    energy_daily_agg.duckdb  ->  agg_<ts>.duckdb
-    energy_data.duckdb       ->  data_<ts>.duckdb
-    latest.txt                   the current data_<ts>.duckdb; the other names follow from its <ts>
+    energy_dim.duckdb                ->  dim_<ts>.duckdb
+    energy_today.duckdb              ->  today_<ts>.duckdb
+    energy_daily_agg.duckdb          ->  agg_<ts>.duckdb
+    energy_data_<YYYY>_h<N>.duckdb   ->  <YYYY>_h<N>_<ts>.duckdb
+    latest.json                          {"ts": "<ts>", "periods": ["<YYYY>_h<N>", ...]}
 
-The files are immutable and named by timestamp, and two versions of each are kept: a page
-opened before this run still reads the previous one.
+The files are immutable and named by timestamp, and two versions are kept: a page opened
+before this run still reads the previous one.
 """
 
+import glob
 import json
 import os
+import re
 import urllib.request
 from datetime import datetime, timezone
 
@@ -33,7 +34,6 @@ FILES = {
     "dim": "energy_dim.duckdb",
     "today": "energy_today.duckdb",
     "agg": "energy_daily_agg.duckdb",
-    "data": "energy_data.duckdb",
 }
 
 
@@ -58,8 +58,15 @@ def publish():
     def lake_file(name):
         return lake.get_file_client(f"{FOLDER}/{name}")
 
+    # The half-year files of the 5-minute history, as built.
+    periods = sorted(re.fullmatch(r"energy_data_(\d{4}_h[12])\.duckdb", os.path.basename(p)).group(1)
+                     for p in glob.glob(os.path.join(DASHBOARD_DIR, "energy_data_*_h*.duckdb")))
+    if not periods:
+        raise SystemExit("no energy_data_<YYYY>_h<N>.duckdb to publish")
+    files = {**FILES, **{p: f"energy_data_{p}.duckdb" for p in periods}}
+
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
-    for prefix, local in FILES.items():
+    for prefix, local in files.items():
         path = os.path.join(DASHBOARD_DIR, local)
         name = f"{prefix}_{ts}.duckdb"
         with open(path, "rb") as f:
@@ -67,16 +74,18 @@ def publish():
         print(f"uploaded {name} ({os.path.getsize(path) / 1e6:.0f} MB)", flush=True)
 
     # Last, once every file it leads to is there.
-    lake_file("latest.txt").upload_data(f"data_{ts}.duckdb".encode(), overwrite=True)
-    print(f"latest.txt -> data_{ts}.duckdb")
+    lake_file("latest.json").upload_data(json.dumps({"ts": ts, "periods": periods}).encode(),
+                                         overwrite=True)
+    print(f"latest.json -> {ts}, {len(periods)} periods")
 
-    # Keep the new files + 1 previous version; delete older ones. Names carry the timestamp,
-    # so sorted order is chronological.
-    names = sorted(p.name.rsplit("/", 1)[-1] for p in lake.get_paths(FOLDER, recursive=False))
-    for prefix in FILES:
-        for name in [n for n in names if n.startswith(f"{prefix}_") and n.endswith(".duckdb")][:-2]:
-            lake_file(name).delete_file()
-            print(f"removed {name}")
+    # Keep the files of this run + the previous one; delete older ones. Every name ends in
+    # its run's timestamp. latest.txt was the pointer before latest.json.
+    names = [p.name.rsplit("/", 1)[-1] for p in lake.get_paths(FOLDER, recursive=False)]
+    stamp = {n: m.group(1) for n in names if (m := re.search(r"_(\d{8}_\d{4})\.duckdb$", n))}
+    keep = sorted(set(stamp.values()))[-2:]
+    for name in [n for n, s in stamp.items() if s not in keep] + [n for n in names if n == "latest.txt"]:
+        lake_file(name).delete_file()
+        print(f"removed {name}")
 
 
 if __name__ == "__main__":
