@@ -14,7 +14,8 @@ const page = here("../dashboard/");
 
 const git = (cmd) => { try { return execSync(`git ${cmd}`, { encoding: "utf8", cwd: here("./") }).trim(); } catch { return ""; } };
 const sha = git("rev-parse --short HEAD") || "unknown";
-const dirty = git("status --porcelain -- . ../dashboard") ? "-dirty" : "";
+// Only what goes into dist/: a deploy regenerates files under rayfin/ before this runs.
+const dirty = git("status --porcelain -- site build.mjs ../dashboard") ? "-dirty" : "";
 // URL-safe (it is the ?v= cache-buster): <sha>.<yyyymmdd-hhmm UTC>
 const BUILD = `${sha}${dirty}.${new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 13)}`;
 

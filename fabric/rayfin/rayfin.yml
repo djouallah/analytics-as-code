@@ -9,7 +9,7 @@ services:
     allowedRedirectUris:
       - http://localhost:5173
       - http://127.0.0.1:5173
-      - https://savvy-jade-69ff04fc1f-westeurope.webapp.fabricapps.net
+      - https://exact-cave-6cca64deaf-westeurope.webapp.fabricapps.net
   data:
     enabled: false
   staticHosting:

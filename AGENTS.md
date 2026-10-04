@@ -125,10 +125,14 @@ The ids live in repository **variables** (public identifiers, not secrets):
   created once by hand (schema-enabled, since the models write to `landing`/`mart`). If it is
   ever recreated, update `LH_ID`; CI is deliberately not in the provisioning business.
 - `LAKE_TENANT_ID`, `LAKE_CLIENT_ID` — the Fabric app's tenant and an Entra app there
-  (`fabric-github-deploy`) that can write to its lakehouse; `scripts/deploy_onelake.py` only.
-  It is a second tenant, so not the workflow's `azure/login`: the script exchanges the job's
-  GitHub OIDC token itself. The app's federated credential for this repo has the subject
+  (`fabric-github-deploy`), a member of the app's workspace: it uploads the data
+  (`scripts/deploy_onelake.py`) and deploys the app (`deploy_fabric.yml`). It is a second
+  tenant: `deploy_onelake.py` exchanges the job's GitHub OIDC token itself, next to the
+  workflow's catalog login; `deploy_fabric.yml` logs in to it with `azure/login`. The app's
+  federated credential for this repo has the subject
   `repo:djouallah/analytics-as-code:ref:refs/heads/main`.
+- `FABRIC_APP_WORKSPACE_ID` (workspace `app`), `ONELAKE_FILES_URL` (the lakehouse's Files
+  folder, where the app's function signs its SAS) — `deploy_fabric.yml`.
 Env contract consumed by profiles.yml, the models and the scripts: `ONELAKE_ENDPOINT`,
 `ONELAKE_TOKEN`, `WAREHOUSE_PATH`, `FILES_PATH`, `download_limit`, `process_limit`,
 `MAX_FILE_MB` (the two import workflows), plus
@@ -137,7 +141,9 @@ transport fails the OneLake TLS handshake).
 `NEMTRACKER_TOKEN` (gh-pages deploy) is the one true secret.
 
 ## Dashboard
-The dashboard is three files, one job each.
+The dashboard is four files, one job each, and it has two hosts: GitHub Pages and a Fabric
+app. `index.html`, `model.js` and `views.js` are the same files on both; only `data.js`
+differs.
 - `dashboard/index.html` is the page: charts, and SQL that only picks columns from views,
   filters and groups them. **It joins nothing** and knows no `dim_duid` column, no fuel
   naming rule, no region names (they are `v_unit.state`). Which fuels are renewable is not in
@@ -147,28 +153,37 @@ The dashboard is three files, one job each.
   solar. A new chart that needs a join or a rule gets a view or a macro in `model.js`, not
   SQL in the page.
 - `dashboard/model.js` is the semantic layer (`createModel(dataSource)`: the same members as
-  the data source, plus `needs`). Over `data.js`'s views it builds the ones the page reads —
+  the data source, plus `needs`). Over `views.js`'s views it builds the ones the page reads —
   `v_unit` (a unit's attributes under the page's names), `v_gen`/`v_gen_daily`/`v_gen_hourly`/
   `v_gen_today` (generation with the unit's attributes on every row), `v_gen_price*` (plus the
   price of the unit's region), `v_gen_latest`/`v_price_latest`, `v_region`, `v_curtailment`/
   `v_curtailment_recent` —
   and the measures as DuckDB macros (`generated`, `renewable_share`, `capture_price`,
-  `capacity_factor`). The list at its top is the page's contract. It reads only `data.js`'s
+  `capacity_factor`). The list at its top is the page's contract. It reads only `views.js`'s
   views, so it is the same file for every host. Its views are created once, in one query:
-  DuckDB binds a view again on every read, so they follow `data.js` rebuilding the views under
+  DuckDB binds a view again on every read, so they follow `views.js` rebuilding the views under
   them; only `v_gen_hourly` and the curtailment views wait for agg. Creating them costs ~30 ms at
   startup and ~50 ms with history attached (each is bound at creation), which is why they are
   not rebuilt after every attach.
-- `dashboard/data.js` is how the `.duckdb` files are fetched, cached, attached and merged into
-  the base views (`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `has`, `query`;
-  the list at its top is its contract with `model.js`), and it is the only part that knows
-  about `data/`, the half-year files, the `dim`/`today`/`agg` databases and OPFS. A host that
-  stores the files differently (the Fabric app) keeps the page and `model.js` and ships its
-  own `data.js` with the same members and the same views. `ensureHistory` attaches nothing
-  for a range that starts inside the last 5 days: `today` covers it, so the default view
-  downloads no half-year file. It sets the session to Brisbane time, on purpose: the files
-  carry `date` and `time`, no TIMESTAMPTZ, and the only thing the zone decides is that
-  `CURRENT_DATE` is the NEM's day.
+- `dashboard/views.js` is the base views over the attached databases (`createViews(query)`:
+  `refresh({ history, agg })`, `has`; the list at its top is its contract with `model.js`):
+  the last 5 days from `today` (`RECENT_CUT`), older days from the history databases or
+  `agg`, and a column a deployed file lacks read as NULL. The view SQL exists once, here.
+- `data.js` is the host: how the `.duckdb` files are fetched, cached and attached
+  (`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `has`, `query`). It attaches
+  `dim`, `today`, `agg` and the 5-minute history, and tells `views.js` which history
+  databases are attached. There are two, with the same members:
+  - `dashboard/data.js`, GitHub Pages: the files sit in `data/`, are downloaded whole into
+    OPFS, and the history is the half-year files (`p2026_h1`, ...), the ones a range needs.
+  - `fabric/site/data.js`, the Fabric app: the files are in a lakehouse behind a Fabric
+    sign-in, read with a short-lived read-only SAS; the history is one file attached in
+    place over HTTP (`history`), read by Range requests. Its own, and unknown to the page:
+    the sign-in gate (`auth.js`), the Logs panel (`logs.js`, timings of every read and
+    query), and the retry after an expired SAS (inside its `query`).
+  On both, `ensureHistory` attaches nothing for a range that starts inside the last 5 days:
+  `today` covers it, so the default view fetches no history. Both set the session to
+  Brisbane time, on purpose: the files carry `date` and `time`, no TIMESTAMPTZ, and the
+  only thing the zone decides is that `CURRENT_DATE` is the NEM's day.
 
 Four things in that design are there for speed and must survive an edit:
 - A query that needs nothing about the unit (previous-period generation with no filter, the
@@ -186,7 +201,7 @@ Four things in that design are there for speed and must survive an edit:
 `v_gen_price*` is a LEFT join: capture price and the battery chart add `price IS NOT NULL`,
 Analyze's generation + price keeps the rows without a price.
 
-**Checking a change to `model.js` or the page:** in headless Chrome, the page before against
+**Checking a change to `model.js`, `views.js`, a `data.js` or the page:** in headless Chrome, the page before against
 the page after on one copy of the deployed files, through the same page states; compare the
 query results (same SQL, same rows), read `EXPLAIN` for a join that was not there, and time
 old against new alternately in the same page (two separate sessions differ by more than the
@@ -195,7 +210,7 @@ difference of some 10 ms on one query is not worth chasing: on a second run as m
 other way.
 
 ## Dashboard deploy
-`build.yml` (index.html, data.js, model.js, dbt docs) and `import_data.yml` (the .duckdb files)
+`build.yml` (index.html, data.js, views.js, model.js, dbt docs) and `import_data.yml` (the .duckdb files)
 publish into `NemTracker/nemtracker.github.io` with `scripts/deploy_pages.sh`: a blobless
 depth-1 clone, the published paths added with `-f` (so the deploy repo's `.gitignore` can't
 skip a file), push retried on a race. The daily run exports from Iceberg, rebuilds and
@@ -210,11 +225,10 @@ also dispatchable) replaces the deploy repo's history with one commit of its cur
 30 min, and the kept copies would otherwise grow the repo by gigabytes a week. The site is
 unchanged; GitHub reclaims the space on its own schedule.
 
-**The same files also go to OneLake**, for the Fabric app (`djouallah/fabric-energy-app`: a
-copy of the page, hosted in Fabric, reading a lakehouse in another tenant — workspace `app`,
-lakehouse `data`). `import_onelake.yml` (daily, 22:30 UTC) runs the same `cache_catalog.py`
-steps and publishes with `scripts/deploy_onelake.py`. There is one export logic, this repo's;
-the app has no import of its own. `MAX_FILE_MB` is the only difference in what is built:
+**The same files also go to OneLake**, for the Fabric app (the same page, hosted in Fabric,
+reading a lakehouse in another tenant — workspace `app`, lakehouse `data`).
+`import_onelake.yml` (daily, 22:30 UTC) runs the same `cache_catalog.py` steps and publishes
+with `scripts/deploy_onelake.py`. `MAX_FILE_MB` is the only difference in what is built:
 - `100` (GitHub's limit for a file; `import_data.yml`): the half-year files, and
   `build_daily` fails if one outgrows the limit.
 - `unlimited` (`import_onelake.yml`): one `energy_data.duckdb`, and all the history exported
@@ -225,10 +239,31 @@ On OneLake the files are `dim_`/`today_`/`agg_`/`data_<ts>.duckdb`; `latest.txt`
 last, names the current `data_` file, and two versions are kept so that an open page keeps
 reading the one it attached.
 
+**The Fabric app is `fabric/`**, a Rayfin project: static hosting, Fabric sign-in, and one
+function, `getDataSas` (`fabric/rayfin/functions`), which signs a read-only SAS on the data
+folder so that the browser never holds a storage token. `fabric/build.mjs` assembles
+`fabric/dist`: the shared page files and `dag/` from `dashboard/`, plus `fabric/site/`
+(its `data.js`, `auth.js`, `perflog.js`, `logs.js`), with `?v=<build>` added to every
+relative import. `deploy_fabric.yml` deploys it on a push that touches `dashboard/**` or
+`fabric/**`: `rayfin up` under a Fabric API token from the OIDC login (`RAYFIN_TOKEN`), no
+secret. Three things it took to work, all of which must survive an edit:
+- **The item is CI's own** (`--item-name nemtracker`). Rayfin lets only the owner of an app
+  item deploy to it, and the owner is whoever created it: a deploy to an item made from a
+  laptop fails with `403 Only AppBackend artifact owner can perform this operation`. For
+  the same reason `rayfin up` from a laptop cannot deploy to `nemtracker`. The owner is
+  also the identity `getDataSas` reads the lakehouse as.
+- `fabric/rayfin/functions/host.json` is committed: the deploy refuses without it, and the
+  Rayfin scaffold's `.gitignore` leaves it out.
+- The lock files resolve from `registry.npmjs.org`: generated on a laptop they name a
+  private feed the runner cannot read.
+The app's URL is the `hostingUrl` the deploy step prints (it is also in
+`fabric/rayfin/rayfin.yml`, `allowedRedirectUris`). A change to the function or to
+`rayfin.yml` goes out the same way; there is no separate step.
+
 A daily run refuses to splice when the deployed aggregate's tables or columns differ from what
 `build_daily_agg` now builds, so a change to them needs one `all_periods=true` dispatch. The
 page itself reads any column or table a deployed file lacks as "no data"
-(`data.js` `loadColumns`/`colOrNull`, the NULL columns of `model.js`'s `v_unit`, and `data.has`
+(`views.js` `loadColumns`/`colOrNull`, the NULL columns of `model.js`'s `v_unit`, and `data.has`
 in the page), so a new page can go out before the data does.
 `energy_daily_agg.duckdb` holds, besides the per-day tables, hour-of-day × month tables
 (`scada_hourly`, `price_hourly`, `month_days`) that the daily-profile and price heatmap read
@@ -303,7 +338,7 @@ that has never been probed either.
   bug. `fct_scada_today` has no `INTERVENTION` column, so its export can't filter on it.
   Unifying them would mean rebuilding a fact; not worth it. Three numbers are involved, in
   three places: the `_today` tables keep every row they ever loaded (insert-only, never
-  trimmed), the export takes their last 14 days, and `data.js` reads the last 5 from them
+  trimmed), the export takes their last 14 days, and `views.js` reads the last 5 from them
   (`RECENT_CUT`) and the rest from history. And one asymmetry: `fct_scada_today` drops the
   0 MW rows at load, `fct_scada` keeps them and the export drops them.
 - **What the export applies, which a reader of the Iceberg tables has to redo**

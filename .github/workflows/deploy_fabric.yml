@@ -5,6 +5,9 @@ name: Deploy Fabric
 # function that signs the read-only SAS for the data). fabric/build.mjs puts the shared page
 # files and the Fabric host's own (fabric/site/) into fabric/dist.
 on:
+  push:
+    branches: [main]
+    paths: ['dashboard/**', 'fabric/**', '.github/workflows/deploy_fabric.yml']
   workflow_dispatch:
     inputs:
       dry_run:
