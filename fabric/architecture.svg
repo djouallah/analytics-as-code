@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 600" width="1360" height="600" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="The Fabric app: architecture">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8b949e"/></marker></defs>
+<rect width="1360" height="600" fill="#0d1117"/>
+<text x="40" y="48" font-size="26" font-weight="600" fill="#e6edf3">The Fabric app: architecture</text>
+<text x="40" y="78" font-size="15" fill="#8b949e">Data is built once on a schedule; the browser does all the querying.</text>
+<line x1="320" y1="185" x2="520" y2="185" stroke="#8b949e" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="420" y="172" font-size="13" fill="#8b949e" text-anchor="middle">read</text>
+<line x1="820" y1="185" x2="1020" y2="185" stroke="#8b949e" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="920" y="172" font-size="13" fill="#8b949e" text-anchor="middle">upload</text>
+<line x1="320" y1="485" x2="520" y2="485" stroke="#8b949e" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="420" y="472" font-size="13" fill="#8b949e" text-anchor="middle">sign in</text>
+<line x1="820" y1="460" x2="1020" y2="460" stroke="#8b949e" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="920" y="448" font-size="13" fill="#8b949e" text-anchor="middle">page</text>
+<line x1="820" y1="510" x2="1020" y2="510" stroke="#8b949e" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="920" y="532" font-size="13" fill="#8b949e" text-anchor="middle">read-only SAS (55 min)</text>
+<line x1="1230" y1="420" x2="1230" y2="250" stroke="#8b949e" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="1290" y="328" font-size="13" fill="#8b949e" text-anchor="middle">HTTPS reads</text>
+<text x="1290" y="346" font-size="13" fill="#8b949e" text-anchor="middle">with the SAS</text>
+<line x1="700" y1="420" x2="1060" y2="252" stroke="#8b949e" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#head)"/>
+<text x="690" y="302" font-size="13" fill="#8b949e" text-anchor="middle">asks OneLake for a</text>
+<text x="690" y="320" font-size="13" fill="#8b949e" text-anchor="middle">delegation key,</text>
+<text x="690" y="338" font-size="13" fill="#8b949e" text-anchor="middle">signs the SAS</text>
+<rect x="40" y="120" width="280" height="130" rx="10" fill="#0c2540" stroke="#58a6ff" stroke-width="1.6"/>
+<text x="180.0" y="170.0" font-size="16" font-weight="600" fill="#58a6ff" text-anchor="middle">Apache Iceberg catalog</text>
+<text x="180.0" y="194.0" font-size="14" fill="#e6edf3" text-anchor="middle">OneLake, source tenant</text>
+<text x="180.0" y="214.0" font-size="14" fill="#e6edf3" text-anchor="middle">scada, price, dims</text>
+<rect x="520" y="120" width="300" height="130" rx="10" fill="#2d2208" stroke="#d29922" stroke-width="1.6"/>
+<text x="670.0" y="160.0" font-size="16" font-weight="600" fill="#d29922" text-anchor="middle">GitHub Actions (daily)</text>
+<text x="670.0" y="184.0" font-size="14" fill="#e6edf3" text-anchor="middle">import_onelake.yml</text>
+<text x="670.0" y="204.0" font-size="14" fill="#e6edf3" text-anchor="middle">DuckDB builds 4 .duckdb files</text>
+<text x="670.0" y="224.0" font-size="14" fill="#e6edf3" text-anchor="middle">OIDC to both tenants, no secrets</text>
+<rect x="1020" y="120" width="300" height="130" rx="10" fill="#0f2a17" stroke="#3fb950" stroke-width="1.6"/>
+<text x="1170.0" y="160.0" font-size="16" font-weight="600" fill="#3fb950" text-anchor="middle">OneLake lakehouse</text>
+<text x="1170.0" y="184.0" font-size="14" fill="#e6edf3" text-anchor="middle">Fabric tenant, Files/data</text>
+<text x="1170.0" y="204.0" font-size="14" fill="#e6edf3" text-anchor="middle">dim / today / agg: small files</text>
+<text x="1170.0" y="224.0" font-size="14" fill="#e6edf3" text-anchor="middle">data: all 5-min history, 1.5 GB</text>
+<rect x="40" y="420" width="280" height="130" rx="10" fill="#161b22" stroke="#8b949e" stroke-width="1.6"/>
+<text x="180.0" y="470.0" font-size="16" font-weight="600" fill="#8b949e" text-anchor="middle">User</text>
+<text x="180.0" y="494.0" font-size="14" fill="#e6edf3" text-anchor="middle">opens the app in Fabric</text>
+<text x="180.0" y="514.0" font-size="14" fill="#e6edf3" text-anchor="middle">or in its own tab</text>
+<rect x="520" y="420" width="300" height="130" rx="10" fill="#231a3a" stroke="#bc8cff" stroke-width="1.6"/>
+<text x="670.0" y="460.0" font-size="16" font-weight="600" fill="#bc8cff" text-anchor="middle">Fabric app (Rayfin)</text>
+<text x="670.0" y="484.0" font-size="14" fill="#e6edf3" text-anchor="middle">static hosting + Fabric sign-in</text>
+<text x="670.0" y="504.0" font-size="14" fill="#e6edf3" text-anchor="middle">function getDataSas</text>
+<text x="670.0" y="524.0" font-size="14" fill="#e6edf3" text-anchor="middle">storage token stays server-side</text>
+<rect x="1020" y="420" width="300" height="130" rx="10" fill="#161b22" stroke="#8b949e" stroke-width="1.6"/>
+<text x="1170.0" y="460.0" font-size="16" font-weight="600" fill="#8b949e" text-anchor="middle">Browser</text>
+<text x="1170.0" y="484.0" font-size="14" fill="#e6edf3" text-anchor="middle">dashboard: DuckDB-WASM + ECharts</text>
+<text x="1170.0" y="504.0" font-size="14" fill="#e6edf3" text-anchor="middle">small files downloaded whole</text>
+<text x="1170.0" y="524.0" font-size="14" fill="#e6edf3" text-anchor="middle">history read by HTTP Range</text>
+</svg>

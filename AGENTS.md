@@ -260,6 +260,29 @@ The app's URL is the `hostingUrl` the deploy step prints (it is also in
 `fabric/rayfin/rayfin.yml`, `allowedRedirectUris`). A change to the function or to
 `rayfin.yml` goes out the same way; there is no separate step.
 
+**Two app items exist** in workspace `app`: `nemtracker`, created and deployed by CI, and
+`wasm`, created from the owner's laptop, where `fabric/rayfin/.deployments.json` (untracked)
+records it. From a laptop: `cd fabric`, `npm ci`, `npm ci --prefix rayfin/functions`,
+`npx rayfin up`. **Open, 2026-10-04:** on `nemtracker`, `getDataSas` answered 500 on its
+first load. That deploy predated the function's secret, and the app has not been loaded
+again since the redeploys. OneLake does issue the CI identity a delegation key (the deploy's
+last step checks it), so if it still fails the suspect is the platform handing no storage
+token (`ctx.Tokens.Storage`) to a function whose owner is a service principal. `wasm` is the
+app that is known to work.
+
+Rules of the Fabric host that are easy to break:
+- The browser never receives a storage token, only the SAS from `getDataSas` (read-only, one
+  folder, about 55 minutes). New data access means extending that function.
+- The history file is attached by a URL without the SAS; a shim in the DuckDB worker appends
+  the current one to each request. A SAS in the attached URL would expire under the attach.
+- No DuckDB attach alias named `full`: it is a SQL keyword. The history alias is `history`.
+- The workspace setting "Authenticate with OneLake user-delegated SAS tokens" must be on, and
+  the item's owner must be able to read the lakehouse.
+- Single-threaded here for one more reason than on Pages: cross-origin isolation breaks the
+  Fabric sign-in popup.
+To check a deploy, open the Logs panel: the build stamp, each fetch, attach and query, and
+the worker's Range reads.
+
 A daily run refuses to splice when the deployed aggregate's tables or columns differ from what
 `build_daily_agg` now builds, so a change to them needs one `all_periods=true` dispatch. The
 page itself reads any column or table a deployed file lacks as "no data"

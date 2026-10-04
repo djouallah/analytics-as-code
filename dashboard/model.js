@@ -1,7 +1,8 @@
 // =============================================================================
-// model.js — the dashboard's semantic layer: dimensions and measures over data.js's views
+// model.js — the dashboard's semantic layer: dimensions and measures over views.js's views
 // =============================================================================
-// data.js says where the files are; this file says what the data means. It wraps a data
+// data.js says where the files are, views.js merges them into the base views; this file
+// says what the data means. It wraps a data
 // source (same members, plus `needs`) and builds, on top of the source's views, the views
 // and macros index.html reads. The page joins nothing: it picks columns from these views,
 // filters and groups them.
@@ -31,7 +32,7 @@
 //   generated(v), renewable_share(v, renewable, generator), capture_price(v, price),
 //   capacity_factor(mwh, cap, hours)
 //   (fuel_name(duid, descr) is this file's own: it names the `fuel` column.)
-// The fact views of data.js stay readable as they are: a query that needs nothing about the
+// The fact views of views.js stay readable as they are: a query that needs nothing about the
 // unit reads them and pays for no join.
 //   v_scada, v_scada_today   DUID, date, time, mw
 //   v_scada_daily            DUID, date, mwh
@@ -74,7 +75,7 @@
 // range; the daily views hold the last 14 days, and the hourly ones do not exist, until
 // attachAgg().
 //
-// Host-independent: it only reads the views listed at the top of data.js, so a host that
+// Host-independent: it only reads the views listed at the top of views.js, so a host that
 // ships its own data.js keeps this file as it is.
 // =============================================================================
 
@@ -135,7 +136,7 @@ export function createModel(data) {
 
   // Creates the views that can exist by now and don't yet, after `first` (the macros), as
   // one query. Each is created once: a view is bound again every time it is read, so it
-  // follows data.js rebuilding the views under it. Only one over a table that was not
+  // follows views.js rebuilding the views under it. Only one over a table that was not
   // attached yet (v_gen_hourly) has to wait for a later call.
   async function refresh(first = []) {
     const lacks = ([c]) => !data.has('v_duid', c);

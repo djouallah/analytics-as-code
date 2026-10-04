@@ -14,6 +14,7 @@ The entire analytics stack — ingestion, transformation, storage, and visualiza
 - **Iceberg REST catalog** — the single persistent layer. All warehouse state lives here as Iceberg tables, and the gzipped source CSVs are archived next to them in object storage, so nothing depends on the ephemeral CI runner's disk.
 - **GitHub Actions** — orchestrates everything. Scheduled workflows replace traditional schedulers (Airflow, Dagster, etc.).
 - **DuckDB-WASM dashboard** — a static HTML page that loads compact DuckDB files in the browser and queries them client-side. No backend API.
+- **Two hosts, one dashboard** — the same page is deployed to GitHub Pages (public) and as a Microsoft Fabric app (sign-in, data in a lakehouse). See [Two Deploy Targets](#two-deploy-targets).
 
 ## Design Principles
 
@@ -30,7 +31,7 @@ The entire analytics stack — ingestion, transformation, storage, and visualiza
 
 Source data arrives at 5-minute resolution (rooftop solar every half hour). The Iceberg tables store everything at the grain it arrives in — no data is lost. Aggregation only happens downstream for the dashboard. To give a sense of scale: ~1 billion raw records, ~300 million rows in the largest Iceberg table, ~13 million 5-minute rows in one half-year dashboard file.
 
-- **At import time:** The script writes the 5-minute history as one DuckDB file per half-year (each under GitHub's 100 MB per-file limit), the last 14 days as a small file refreshed every 30 minutes, and one aggregate file: per unit and day, plus hour-of-day × month (SUM for energy, AVG for prices). Rows at 0 MW are left out, and types are compressed — `REAL` instead of `DOUBLE`, `SMALLINT` for time keys.
+- **At import time:** The script writes the 5-minute history as one DuckDB file per half-year (each under GitHub's 100 MB per-file limit; for the Fabric app, where there is no limit, as one file), the last 14 days as a small file refreshed every 30 minutes, and one aggregate file: per unit and day, plus hour-of-day × month (SUM for energy, AVG for prices). Rows at 0 MW are left out, and types are compressed — `REAL` instead of `DOUBLE`, `SMALLINT` for time keys.
 - **At query time:** The dashboard adapts granularity to the selected date range: 5-minute resolution up to 30 days (downloading only the half-years the range touches, and none for the default last 3 days), daily and hour-of-day aggregates beyond. This keeps queries fast in single-threaded DuckDB-WASM.
 - **Dashboard CSV download uses one consistent grain** — when users export data from the dashboard, it always uses a single time resolution, no mixing.
 
@@ -41,6 +42,40 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 3. **Import to dashboard** — A script reads from the Iceberg catalog and builds compact DuckDB files optimized for the browser
 4. **Visualize** — The dashboard loads DuckDB-WASM, fetches the exported files, and joins/aggregates at query time in the browser
 
+## Two Deploy Targets
+
+The dashboard is one page (`dashboard/index.html`), one semantic layer (`model.js`) and one
+set of base views (`views.js`). A target only decides where the data files live and how the
+browser gets them (`data.js`), so a chart or a measure is written once and reaches both.
+
+| | GitHub Pages | Microsoft Fabric app |
+|---|---|---|
+| Live at | [nemtracker.github.io](https://nemtracker.github.io/) | inside a Fabric workspace |
+| Who can open it | anyone | people the app is shared with, after Fabric sign-in |
+| Data files | next to the page | a lakehouse, under `Files/data` |
+| 5-minute history | one file per half-year (GitHub's 100 MB limit), downloaded | one 1.5 GB file, read in place by HTTP range requests |
+| Host code | `dashboard/data.js` | `fabric/` |
+| Deployed by | `build.yml` (page), `import_data.yml` (data) | `deploy_fabric.yml` (page), `import_onelake.yml` (data) |
+
+### The Fabric app
+
+Built with [Rayfin](https://www.npmjs.com/package/@microsoft/rayfin-cli). Fabric hosts the
+page and signs you in, and the page reads its data directly from OneLake: no backend to run,
+no query service.
+
+![The dashboard as a Fabric app](fabric/screenshots.png)
+
+![Architecture of the Fabric app](fabric/architecture.svg)
+
+- **Hosting:** `rayfin up` deploys the page to Fabric static hosting.
+- **Sign-in:** Fabric single sign-on. Inside the Fabric portal there is no extra login; in
+  its own tab it is one click.
+- **Data:** the browser reads the files from OneLake itself, with read-only access to that
+  one folder for about an hour at a time. A small server function signs that access; the
+  storage token never reaches the browser.
+- **Refresh:** `import_onelake.yml` rebuilds the files from the Iceberg catalog daily and
+  uploads them to the lakehouse.
+
 ## Project Structure
 
 ```
@@ -50,7 +85,8 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 │   └── marts/            # Incremental fact tables
 ├── macros/               # Iceberg compatibility overrides, helpers
 ├── scripts/              # Iceberg → DuckDB import, table maintenance, deploy
-├── dashboard/            # Static HTML dashboard (DuckDB-WASM)
+├── dashboard/            # The dashboard page, shared by both targets, and the GitHub Pages host
+├── fabric/               # The Fabric app: its host code, sign-in, and the Rayfin project
 ├── tests/                # dbt data tests
 ├── .github/workflows/    # CI/CD pipelines
 ├── dbt_project.yml
@@ -62,6 +98,13 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 - **GitHub Pages limits: 100 MB per file, about 1 GB per site.** The first is why the history is split into half-year files; the second is the one that binds now (the data files are close to it) and constrains how much more history the dashboard can hold.
 - **The deployed files are state too.** A daily import rebuilds only the latest two half-years; older half-year files, and the aggregate's rows before the cutoff, are kept as deployed. A change to older data needs an import of every period (`all_periods=true`).
 - **DuckDB-WASM runs single-threaded.** Its multi-threaded build can't load extensions such as ICU yet and can't share OPFS file handles with its threads, and it only gained ~1.4x on 4 threads when tried (2026-09-30). We use the native DuckDB file format (not Parquet) because DuckDB-WASM can query its own format efficiently even under this constraint — range requests, predicate pushdown, and columnar reads all work without needing to load the entire file into memory.
+- **Limited by the browser.** A tab gets about 4 GB of memory; a query that needs more fails. Phones and old laptops will struggle.
+
+The Fabric app is an experiment, with limits of its own:
+
+- **Security is per table, not per row.** Only people the app is shared with in Fabric can sign in and read the data. For them there is no row-level or column-level security: if different users must see different rows or columns, use something else.
+- **No public access.** Every visitor signs in with a Fabric account the app is shared with. As far as I can tell, it cannot be opened anonymously.
+- **Only the item's owner can deploy to it.** An app deployed from a laptop cannot then be deployed from CI, or the reverse: each identity deploys the item it created.
 
 ## Setup
 
@@ -106,3 +149,33 @@ export FILES_PATH=abfss://<workspace-guid>@onelake.dfs.fabric.microsoft.com/<lak
 export ONELAKE_TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
 dbt build --target dev --profiles-dir .
 ```
+
+### The Fabric App
+
+You need a Fabric workspace with a lakehouse:
+
+- Workspace settings → OneLake → turn on **Authenticate with OneLake user-delegated SAS tokens**
+  (off by default; the tenant setting *Use short-lived user-delegated SAS tokens* is on by default).
+- The owner of the Fabric app item must be able to read the lakehouse.
+
+Everything else is Rayfin — see the
+[Rayfin documentation](https://learn.microsoft.com/fabric/embedded/rayfin/overview):
+
+```bash
+cd fabric
+npm ci && npm ci --prefix rayfin/functions
+npx rayfin login      # sign in to Fabric
+npx rayfin up         # build + deploy to Fabric static hosting; prints the hosting URL
+
+# once, after the first deploy: where the app's function signs read access
+echo https://onelake.dfs.fabric.microsoft.com/<workspace>/<lakehouse>.Lakehouse/Files \
+  | npx rayfin secret set ONELAKE_FILES_URL --stdin
+```
+
+Then run the **Import OneLake** workflow to fill the lakehouse (`LAKE_TENANT_ID`,
+`LAKE_CLIENT_ID`: an Entra app with a federated credential for this repo and write access to
+the workspace), and open the app in the Fabric portal or in its own tab.
+
+`deploy_fabric.yml` runs the same deploy from CI with that Entra app, no secret
+(`FABRIC_APP_WORKSPACE_ID`, `ONELAKE_FILES_URL`). It deploys an item of its own, because
+only an item's owner can deploy to it.
