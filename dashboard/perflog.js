@@ -1,16 +1,19 @@
 // =============================================================================
 // perflog.js — in-memory timing log for the Logs panel (debugging only)
 // =============================================================================
-// Nothing is stored or uploaded: events live in this page's memory and vanish on reload.
+// The same file on every host. This session only: nothing is stored, written to a file or
+// uploaded; events live in this page's memory and vanish on reload.
 //
 // Sources:
-//   - main thread: perf.log(kind, what, { ms, status, bytes })   (SAS calls, latest.txt, ATTACH, queries)
+//   - main thread: a host's data.js logs what it fetches, attaches and runs
+//     (perf.log / perf.time / perf.query; on Fabric also the SAS calls)
 //   - DuckDB worker: every HTTP request DuckDB makes (seeks = Range reads) arrives over a
 //     BroadcastChannel from the trace shim that data.js prepends to the worker (HTTP_TRACE_SHIM).
 // Timestamps are absolute (performance.timeOrigin + now) so worker and page events line up.
 // =============================================================================
 
-// Stamped by build.mjs (git sha + build time). Shown in the Logs panel so a cached bundle is obvious.
+// Stamped at deploy (build.yml: the git sha; fabric/build.mjs: sha + build time). Shown in the
+// Logs panel so a cached bundle is obvious.
 export const BUILD = '__BUILD__';
 
 const CHANNEL = 'perflog-http';
@@ -37,6 +40,19 @@ export const perf = {
       return r;
     } catch (e) {
       perf.log(kind, what, { ms: performance.now() - t, status: 'error: ' + (e?.message || e) });
+      throw e;
+    }
+  },
+  // Time a query: perf.query(sql, () => conn.query(sql)). A failure is logged and rethrown.
+  async query(sql, run) {
+    const what = sql.replace(/\s+/g, ' ').trim();
+    const t = performance.now();
+    try {
+      const result = await run();
+      perf.log('query', what, { ms: performance.now() - t, status: `${result.numRows} rows` });
+      return result;
+    } catch (e) {
+      perf.log('error', what, { ms: performance.now() - t, status: String(e?.message || e) });
       throw e;
     }
   },

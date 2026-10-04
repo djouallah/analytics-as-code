@@ -63,6 +63,9 @@ jobs:
           cp dashboard/index.html deploy/
           cp dashboard/data.js deploy/
           cp dashboard/views.js deploy/
+          cp dashboard/logs.js deploy/
+          # perflog.js carries the build stamp the Logs panel shows.
+          sed "s/__BUILD__/${GITHUB_SHA::7}/" dashboard/perflog.js > deploy/perflog.js
           cp dashboard/model.js deploy/
           cp -r dashboard/dag deploy/
       - name: Deploy to nemtracker

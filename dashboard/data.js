@@ -14,11 +14,13 @@
 // fabric/site/data.js, reads one history file over HTTP) has its own data.js with the same
 // members, over the same views.js.
 //
-// DOM-free: progress is reported through the injected `onStatus` callback.
+// DOM-free: progress is reported through the injected `onStatus` callback, and what is
+// fetched, attached and run is timed in perflog.js, for the Logs panel.
 // =============================================================================
 
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev65.0/+esm";
 import { createViews, RECENT_CUT } from "./views.js";
+import { perf, HTTP_TRACE_SHIM } from "./perflog.js";
 
 export function createDataSource({ onStatus = () => {} } = {}) {
   let conn;
@@ -36,7 +38,8 @@ export function createDataSource({ onStatus = () => {} } = {}) {
       onStatus("Downloading database...");
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(`Failed to fetch ${filename}: HTTP ${resp.status}`);
-      return { source: 'no-opfs', buffer: new Uint8Array(await resp.arrayBuffer()) };
+      const buffer = new Uint8Array(await resp.arrayBuffer());
+      return { source: 'no-opfs', buffer, bytes: buffer.byteLength };
     }
     const cacheKey = `opfs_etag_${filename}`;
     const cachedTag = localStorage.getItem(cacheKey);
@@ -61,7 +64,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
         const file = await handle.getFile();
         const sizeMB = (file.size / 1024 / 1024).toFixed(1);
         console.log(`[OPFS] Cache hit for ${filename} (${sizeMB} MB)`);
-        return { source: 'opfs-hit', buffer: null };
+        return { source: 'opfs-hit', buffer: null, bytes: file.size };
       } catch (e) {
         console.log(`[OPFS] Cache entry missing from OPFS despite etag, will re-fetch`);
       }
@@ -89,11 +92,11 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     } catch (e) {
       // Another tab reading the file in place holds its exclusive handle.
       console.log(`[OPFS] Could not write ${filename} (${e}), using the download in memory`);
-      return { source, buffer };
+      return { source, buffer, bytes: buffer.byteLength };
     }
     if (remoteTag) localStorage.setItem(cacheKey, remoteTag);
     console.log(`[OPFS] Cached ${filename} (${sizeMB} MB) in OPFS`);
-    return { source, buffer: null };
+    return { source, buffer: null, bytes: buffer.byteLength };
   }
 
   // ATTACH a cached file READ_ONLY. Preferred: DuckDB reads it in place from OPFS, pulling
@@ -125,8 +128,12 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   // Download (or reuse from OPFS) data/<file> and ATTACH it as <alias>.
   const SOURCE_LABEL = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded', 'opfs-refresh': 'refreshed', 'no-opfs': 'downloaded, not cached' };
   async function loadDb(file, alias) {
+    let t = performance.now();
     const res = await cacheInOPFS(`${_baseUrl}/data/${file}`, file);
+    perf.log('fetch', file, { ms: performance.now() - t, status: SOURCE_LABEL[res.source], bytes: res.bytes });
+    t = performance.now();
     const mode = await attachCached(_db, file, alias, res.buffer);
+    perf.log('attach', `ATTACH ${file} AS ${alias}`, { ms: performance.now() - t, status: mode });
     console.log(`[OPFS] ${alias}: ${SOURCE_LABEL[res.source]} (${mode})`);
   }
 
@@ -139,7 +146,8 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
     const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
     const workerUrl = URL.createObjectURL(
-      new Blob([`importScripts("${bundle.mainWorker}");`], { type: "text/javascript" })
+      // HTTP_TRACE_SHIM times the worker's own requests for the Logs panel.
+      new Blob([HTTP_TRACE_SHIM, `\nimportScripts("${bundle.mainWorker}");`], { type: "text/javascript" })
     );
     const worker = new Worker(workerUrl);
     const logger = new duckdb.ConsoleLogger();
@@ -235,6 +243,6 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   return {
     init, attachAgg, ensureHistory,
     has: views.has,
-    query: sql => conn.query(sql),
+    query: sql => perf.query(sql, () => conn.query(sql)),
   };
 }

@@ -141,9 +141,9 @@ transport fails the OneLake TLS handshake).
 `NEMTRACKER_TOKEN` (gh-pages deploy) is the one true secret.
 
 ## Dashboard
-The dashboard is four files, one job each, and it has two hosts: GitHub Pages and a Fabric
-app. `index.html`, `model.js` and `views.js` are the same files on both; only `data.js`
-differs.
+The dashboard is four files, one job each, plus the Logs panel, and it has two hosts: GitHub
+Pages and a Fabric app. `index.html`, `model.js`, `views.js` and the Logs panel are the same
+files on both; only `data.js` differs.
 - `dashboard/index.html` is the page: charts, and SQL that only picks columns from views,
   filters and groups them. **It joins nothing** and knows no `dim_duid` column, no fuel
   naming rule, no region names (they are `v_unit.state`). Which fuels are renewable is not in
@@ -178,12 +178,17 @@ differs.
   - `fabric/site/data.js`, the Fabric app: the files are in a lakehouse behind a Fabric
     sign-in, read with a short-lived read-only SAS; the history is one file attached in
     place over HTTP (`history`), read by Range requests. Its own, and unknown to the page:
-    the sign-in gate (`auth.js`), the Logs panel (`logs.js`, timings of every read and
-    query), and the retry after an expired SAS (inside its `query`).
+    the sign-in gate (`auth.js`) and the retry after an expired SAS (inside its `query`).
   On both, `ensureHistory` attaches nothing for a range that starts inside the last 5 days:
   `today` covers it, so the default view fetches no history. Both set the session to
   Brisbane time, on purpose: the files carry `date` and `time`, no TIMESTAMPTZ, and the
   only thing the zone decides is that `CURRENT_DATE` is the NEM's day.
+- `dashboard/perflog.js` and `dashboard/logs.js` are the Logs panel, on both hosts: a
+  "Logs" button, bottom right, over a table of what this session fetched, attached and
+  ran, with timings, and the build stamp. This session only: it lives in the page's memory,
+  nothing is stored, written to a file or uploaded, and the Copy button is the one way out.
+  A host's `data.js` does the logging (`perf.log`, `perf.time`, and `perf.query` around
+  every query); the page's whole part in it is `import "./logs.js"`.
 
 Four things in that design are there for speed and must survive an edit:
 - A query that needs nothing about the unit (previous-period generation with no filter, the
@@ -210,7 +215,8 @@ difference of some 10 ms on one query is not worth chasing: on a second run as m
 other way.
 
 ## Dashboard deploy
-`build.yml` (index.html, data.js, views.js, model.js, dbt docs) and `import_data.yml` (the .duckdb files)
+`build.yml` (index.html, data.js, views.js, model.js, perflog.js, logs.js, dbt docs) and
+`import_data.yml` (the .duckdb files)
 publish into `NemTracker/nemtracker.github.io` with `scripts/deploy_pages.sh`: a blobless
 depth-1 clone, the published paths added with `-f` (so the deploy repo's `.gitignore` can't
 skip a file), push retried on a race. The daily run exports from Iceberg, rebuilds and
@@ -242,9 +248,8 @@ reading the one it attached.
 **The Fabric app is `fabric/`**, a Rayfin project: static hosting, Fabric sign-in, and one
 function, `getDataSas` (`fabric/rayfin/functions`), which signs a read-only SAS on the data
 folder so that the browser never holds a storage token. `fabric/build.mjs` assembles
-`fabric/dist`: the shared page files and `dag/` from `dashboard/`, plus `fabric/site/`
-(its `data.js`, `auth.js`, `perflog.js`, `logs.js`), with `?v=<build>` added to every
-relative import.
+`fabric/dist`: the shared files and `dag/` from `dashboard/`, plus `fabric/site/` (its
+`data.js` and `auth.js`), with `?v=<build>` added to every relative import.
 
 **It is deployed from the owner's laptop**, under their own login:
 ```

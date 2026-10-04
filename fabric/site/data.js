@@ -26,15 +26,15 @@
 // read-ahead cache) is recovered by one DETACH/ATTACH under a new file name, then retried
 // (query).
 //
-// Progress is reported through the injected `onStatus` callback. The sign-in gate (auth.js)
-// and the Logs panel (logs.js) are this host's own: the page has neither.
+// Progress is reported through the injected `onStatus` callback, and what is fetched,
+// attached and run is timed in perflog.js, for the Logs panel. The sign-in gate (auth.js)
+// is this host's own: the page has none.
 // =============================================================================
 
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev65.0/+esm";
 import { createViews, RECENT_CUT } from "./views.js";
 import { createAuth } from "./auth.js";
 import { perf, HTTP_TRACE_SHIM } from "./perflog.js";
-import "./logs.js";
 
 const SAS_CHANNEL = 'duckdb-sas';
 const RENEW_AHEAD_MS = 10 * 60 * 1000;   // renew this long before the SAS expires (covers background-tab timer throttling)
@@ -233,22 +233,17 @@ export function createDataSource({ onStatus = () => {} } = {}) {
 
   // `history` is read over HTTP. A failed read (HTTP 403 = SAS no longer valid) or the
   // "Corrupt database file ... stored checksum 0" it leaves in duckdb-wasm's read-ahead cache
-  // for the queries queued behind it is recovered once and retried. Queries and failures are
-  // timed for the Logs panel.
-  async function query(sql) {
-    const what = sql.replace(/\s+/g, ' ').trim();
-    const t0 = performance.now();
-    let result;
-    try { result = await conn.query(sql); }
+  // for the queries queued behind it is recovered once and retried. The first failure is
+  // logged here; the query's time, the retry included, by perf.query.
+  const query = sql => perf.query(sql, async () => {
+    try { return await conn.query(sql); }
     catch (e) {
-      perf.log('error', what, { status: String(e?.message || e) });
       if (!/\b403\b|HTTP|Corrupt database file/i.test(String(e?.message))) throw e;
+      perf.log('error', sql.replace(/\s+/g, ' ').trim(), { status: String(e?.message || e) });
       await recover();
-      result = await conn.query(sql);
+      return conn.query(sql);
     }
-    perf.log('query', what, { ms: performance.now() - t0, status: `${result.numRows} rows` });
-    return result;
-  }
+  });
 
   // Signed in, DuckDB-WASM up, `dim` + `today` attached: enough for the default "Last 3 days" view.
   async function init() {

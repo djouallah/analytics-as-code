@@ -1,9 +1,10 @@
 // =============================================================================
 // logs.js — the Logs panel: in-memory timings (perflog.js), newest first
 // =============================================================================
-// Fabric host only, and the page knows nothing of it: importing this file adds a "Logs"
-// button (bottom right) and the panel it opens. Re-rendered on new events while the panel is
-// open (throttled to one render per animation frame). The classes are the page's.
+// The same file on every host. index.html imports it and knows nothing else of it: the
+// import adds a "Logs" button (bottom right) and the panel it opens. This session only
+// (perflog.js); the one way out is the Copy button. Re-rendered on new events while the
+// panel is open (throttled to one render per animation frame). The classes are the page's.
 // =============================================================================
 
 import { perf, BUILD } from './perflog.js';
@@ -18,7 +19,7 @@ panel.innerHTML = `
   <div class="analyze-controls">
     <button class="btn-analyze" id="logsCopy" type="button">Copy</button>
     <button class="btn-analyze" id="logsClear" type="button">Clear</button>
-    <span class="analyze-info" style="padding:0">Timings for this page only — kept in memory, nothing is stored. "http" rows are DuckDB's reads of the OneLake file (Range = seek).</span>
+    <span class="analyze-info" style="padding:0">This session only — kept in memory, nothing is stored. "http" rows are the DuckDB worker's own requests (Range = a seek in a remote file).</span>
   </div>
   <div class="analyze-info" id="logsSummary" style="white-space:pre;font-family:ui-monospace,Consolas,monospace"></div>
   <div class="analyze-table-wrap">
@@ -50,11 +51,18 @@ function renderLogs() {
   const ms = (a) => a.reduce((s, e) => s + (e.ms || 0), 0);
   const kb = (a) => a.reduce((s, e) => s + (e.bytes || 0), 0) / 1024;
   const pct = (a, p) => { const v = a.map(e => e.ms).sort((x, y) => x - y); return v.length ? v[Math.min(v.length - 1, Math.floor(p * v.length))] : 0; };
+  const fetches = sum('fetch'), sas = sum('sas');
+  // The seek and SAS lines only where there are any: a host that downloads its files whole
+  // seeks nothing, and only the Fabric host signs.
   document.getElementById('logsSummary').textContent = [
-    `build         : ${BUILD}`,
-    `HTTP requests : ${http.length}  (Range reads/seeks: ${reads.length})   ${(kb(http) / 1024).toFixed(1)} MB`,
-    `seek latency  : avg ${(ms(reads) / (reads.length || 1)).toFixed(0)} ms   p50 ${pct(reads, 0.5).toFixed(0)} ms   p95 ${pct(reads, 0.95).toFixed(0)} ms   max ${pct(reads, 1).toFixed(0)} ms   sum ${(ms(reads) / 1000).toFixed(1)} s`,
-    `SAS calls     : ${sum('sas').length}  (${ms(sum('sas')).toFixed(0)} ms)    ATTACH: ${ms(sum('attach')).toFixed(0)} ms    queries: ${sum('query').length}  (${(ms(sum('query')) / 1000).toFixed(1)} s)`,
+    `build         : ${BUILD.startsWith('__') ? 'not stamped (a local copy)' : BUILD}`,
+    `files         : ${fetches.length} fetched  (${(ms(fetches) / 1000).toFixed(1)} s)    ATTACH: ${ms(sum('attach')).toFixed(0)} ms`,
+    // Summed, not elapsed: a render sends its queries together and they queue in one thread,
+    // so each one's time includes its wait.
+    `queries       : ${sum('query').length}  (${(ms(sum('query')) / 1000).toFixed(1)} s summed, waits included)    errors: ${sum('error').length}`,
+    `worker HTTP   : ${http.length}  (Range reads/seeks: ${reads.length})   ${(kb(http) / 1024).toFixed(1)} MB`,
+    ...(reads.length ? [`seek latency  : avg ${(ms(reads) / reads.length).toFixed(0)} ms   p50 ${pct(reads, 0.5).toFixed(0)} ms   p95 ${pct(reads, 0.95).toFixed(0)} ms   max ${pct(reads, 1).toFixed(0)} ms   sum ${(ms(reads) / 1000).toFixed(1)} s`] : []),
+    ...(sas.length ? [`SAS calls     : ${sas.length}  (${ms(sas).toFixed(0)} ms)`] : []),
   ].join('\n');
   const esc = (t) => String(t).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
   document.querySelector('#logsTable tbody').innerHTML = ev.slice().reverse().map(e =>
