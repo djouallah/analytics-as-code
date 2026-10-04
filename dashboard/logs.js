@@ -1,5 +1,6 @@
 // =============================================================================
-// logs.js — the Logs tab: in-memory timings (perflog.js), newest first
+// logs.js — the Logs tab: in-memory timings (perflog.js), newest first; a click on a column
+// header sorts by it (numbers largest first, text A-Z), a second click reverses
 // =============================================================================
 // The same file on every host. This session only (perflog.js); the one way out is the Copy
 // button. index.html has the tab and its panel and calls renderLogs() when the tab is opened;
@@ -11,6 +12,9 @@ import { perf, BUILD } from './perflog.js';
 
 const _pageStart = performance.timeOrigin;
 let _logsFrame = 0;
+// The table's columns, in header order: the event field each one sorts on.
+const COLS = ['at', 'kind', 'what', 'range', 'status', 'bytes', 'ms'];
+let _sort = { col: 'at', desc: true };
 
 export function renderLogs() {
   _logsFrame = 0;
@@ -35,7 +39,19 @@ export function renderLogs() {
     ...(sas.length ? [`SAS calls     : ${sas.length}  (${ms(sas).toFixed(0)} ms)`] : []),
   ].join('\n');
   const esc = (t) => String(t).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
-  document.querySelector('#logsTable tbody').innerHTML = ev.slice().reverse().map(e =>
+  const { col, desc } = _sort;
+  // Empty cells last, whichever the direction.
+  const rows = ev.filter(e => e[col] != null && e[col] !== '').sort((a, b) => {
+    const x = a[col], y = b[col];
+    const c = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true });
+    return desc ? -c : c;
+  }).concat(ev.filter(e => e[col] == null || e[col] === ''));
+  document.querySelectorAll('#logsTable thead th').forEach((th, i) => {
+    th.dataset.label ??= th.textContent;
+    th.style.cursor = 'pointer';
+    th.textContent = th.dataset.label + (COLS[i] === col ? (desc ? ' ▼' : ' ▲') : '');
+  });
+  document.querySelector('#logsTable tbody').innerHTML = rows.map(e =>
     `<tr><td>${((e.at - _pageStart) / 1000).toFixed(2)}</td><td>${e.kind}</td><td>${esc(e.what)}</td>` +
     `<td>${esc(e.range || '')}</td><td>${esc(e.status ?? '')}</td>` +
     `<td>${e.bytes == null ? '' : (e.bytes / 1024).toFixed(0)}</td><td>${e.ms == null ? '' : e.ms.toFixed(0)}</td></tr>`).join('');
@@ -44,6 +60,13 @@ export function renderLogs() {
 perf.log('info', `build ${BUILD}`);
 perf.onChange(() => { _logsFrame ||= requestAnimationFrame(renderLogs); });
 document.getElementById('logsClear').onclick = () => perf.clear();
+document.querySelector('#logsTable thead').onclick = (e) => {
+  const col = COLS[e.target.closest('th')?.cellIndex];
+  if (!col) return;
+  // A new column starts largest first for numbers (time, KB, ms), A-Z for text.
+  _sort = col === _sort.col ? { col, desc: !_sort.desc } : { col, desc: ['at', 'bytes', 'ms'].includes(col) };
+  renderLogs();
+};
 // Copy: summary + table as TSV (pastes cleanly into chat or a spreadsheet).
 document.getElementById('logsCopy').onclick = async (e) => {
   const rows = [...document.querySelectorAll('#logsTable tr')].map(tr => [...tr.cells].map(c => c.textContent).join('\t'));
