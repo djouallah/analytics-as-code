@@ -62,6 +62,7 @@ jobs:
           mkdir -p deploy
           cp dashboard/index.html deploy/
           cp dashboard/data.js deploy/
+          cp dashboard/views.js deploy/
           cp dashboard/model.js deploy/
           cp -r dashboard/dag deploy/
       - name: Deploy to nemtracker

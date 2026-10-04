@@ -1,0 +1,68 @@
+name: Deploy Fabric
+
+# The dashboard's second target. build.yml publishes the page to GitHub Pages; this deploys
+# the same page as a Fabric app (fabric/, Rayfin: static hosting, Fabric sign-in, and the
+# function that signs the read-only SAS for the data). fabric/build.mjs puts the shared page
+# files and the Fabric host's own (fabric/site/) into fabric/dist.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Preview only (rayfin up -n): resolve the target and plan, deploy nothing'
+        type: boolean
+        default: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: deploy-fabric
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write   # OIDC federated login to the app's tenant; no secret
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            fabric/package-lock.json
+            fabric/rayfin/functions/package-lock.json
+
+      # The app's tenant, not the catalog's: the Entra app that import_onelake.yml uploads the
+      # data with (LAKE_*). It is a member of the app's workspace.
+      - name: Azure federated login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.LAKE_CLIENT_ID }}
+          tenant-id: ${{ vars.LAKE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Mint Fabric token
+        # RAYFIN_TOKEN: the CLI takes a ready Bearer token instead of an interactive login.
+        run: |
+          TOKEN=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv)
+          echo "::add-mask::$TOKEN"
+          echo "RAYFIN_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+
+      - name: Install
+        working-directory: fabric
+        run: |
+          npm ci
+          npm ci --prefix rayfin/functions
+
+      - name: Deploy
+        working-directory: fabric
+        env:
+          # The workspace of the app item (`wasm`). --yes: reuse that item, never ask.
+          RAYFIN_WORKSPACE_ID: ${{ vars.FABRIC_APP_WORKSPACE_ID }}
+        run: npx rayfin up --workspace-id "$RAYFIN_WORKSPACE_ID" --yes --output json ${{ inputs.dry_run && '-n' || '' }}

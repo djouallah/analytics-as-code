@@ -1,0 +1,30 @@
+id: wasm
+name: wasm
+version: 1.0.0
+services:
+  auth:
+    enabled: true
+    fabric:
+      enabled: true
+    allowedRedirectUris:
+      - http://localhost:5173
+      - http://127.0.0.1:5173
+      - https://savvy-jade-69ff04fc1f-westeurope.webapp.fabricapps.net
+  data:
+    enabled: false
+  staticHosting:
+    enabled: true
+    folder: dist
+    buildCommand: npm run build:fabric
+    indexDocument: index.html
+    assetAccess: public
+  storage:
+    enabled: false
+  functions:
+    enabled: true
+    buildCommand: npm run build
+    auth:
+      type: application
+secrets:
+  - name: ONELAKE_FILES_URL
+    description: OneLake Files base URL (https://onelake.dfs.fabric.microsoft.com/<ws>/<lh>.Lakehouse/Files) the data functions sign SAS URLs under

@@ -1,0 +1,38 @@
+{
+  "cliVersion": "1.36.1",
+  "items": {
+    "mcp:rayfin": {
+      "sha256": "57eaf1771e2104e6bc301cc98320df3a9eeed56094818bad44fc8492a389bda7",
+      "source": {
+        "id": "@microsoft/rayfin-cli",
+        "kind": "cli",
+        "versionOrSha": "1.33.1"
+      }
+    },
+    "skill:rayfin": {
+      "sha256": "e6f817971ab3bb9bae3adadd893e1bfff3d7a41f16aaa6c66e18ddaf11ff87ac",
+      "source": {
+        "id": "@microsoft/rayfin-cli",
+        "kind": "cli",
+        "versionOrSha": "1.36.1"
+      }
+    },
+    "skill:rayfin-connectors": {
+      "sha256": "58333b4bdbbf2cb63e0b42f605c99678fcb5964d56b379f6f99933f0e9929eac",
+      "source": {
+        "id": "@microsoft/rayfin-cli",
+        "kind": "cli",
+        "versionOrSha": "1.36.1"
+      }
+    },
+    "skill:rayfin-functions": {
+      "sha256": "9bb9ec82a34c6a6056b3adf8f07e13926ab261a0bb8c7c46bb47e57719b772e0",
+      "source": {
+        "id": "@microsoft/rayfin-cli",
+        "kind": "cli",
+        "versionOrSha": "1.36.1"
+      }
+    }
+  },
+  "version": 1
+}
