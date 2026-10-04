@@ -149,7 +149,8 @@ The dashboard is three files, one job each (since 2026-10-04; before, the page h
 and the macros).
 - `dashboard/index.html` is the page: charts, and SQL that only picks columns from views,
   filters and groups them. **It joins nothing** and knows no `dim_duid` column, no fuel
-  naming rule, no list of renewable fuels, no region names (they are `v_unit.state`). It
+  naming rule, no region names (they are `v_unit.state`). Which fuels are renewable is not in
+  the dashboard at all: `dim_duid.Renewable` says, and `v_unit.renewable` passes it on. It
   names a fuel only to colour it, to label `Grid` "Battery" in a legend, and to pick the
   solar and wind records of the History page. A new chart that needs a join or a rule gets a
   view or a macro in `model.js`, not SQL in the page.
@@ -182,13 +183,14 @@ every query of the page old against new:
 - A query that needs nothing about the unit (previous-period generation with no filter, the
   Flows generators, the cutoff) reads the plain fact view, not `v_gen*`: no join to pay for.
 - `v_gen_latest` takes its newest interval from `v_scada_today`, not from the joined view.
-- `renewable` is `list_contains([...], fuel)`, not `is_renewable(fuel)`: an IN list becomes a
-  hash join, and a join in a view runs for every query whether it reads the column or not.
-  `is_renewable` stays inside `renewable_share`, where it always was.
+- A rule about the fuel is never an IN list inside a view: an IN list becomes a hash join,
+  and a join in a view runs for every query whether it reads the column or not. (`renewable`
+  was one, then a `list_contains`; it is now a column of `dim_duid`, read off the unit.)
 - The charts that leave storage out filter on `generator` (`fuel <> 'Grid'`), never on
   `NOT storage`: with the fuel filter on Grid the optimizer then sees
   `fuel = 'Grid' AND fuel <> 'Grid'` and reads nothing (18 ms); through
-  `NOT (fuel = 'Grid')` it does not (65 ms).
+  `NOT (fuel = 'Grid')` it does not (65 ms). This is why "storage" stays a rule on the fuel
+  in `model.js` and did not become a column like `Renewable`.
 
 `v_gen_price*` is a LEFT join: capture price and the battery chart add `price IS NOT NULL`
 (the INNER join they had), Analyze's generation + price keeps the rows without a price.

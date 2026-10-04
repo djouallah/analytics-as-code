@@ -1255,7 +1255,7 @@
       const { gen, val } = grain();
       const rows = await runQuery(`
         SELECT CAST(g.date AS VARCHAR) AS date${intraday ? ', CAST(g.time AS INTEGER) AS time' : ''},
-          renewable_share(${val}, g.fuel)::DOUBLE AS share
+          renewable_share(${val}, g.renewable, g.generator)::DOUBLE AS share
         FROM ${gen} g
         WHERE ${sql.whereGen({ withFuel: false })}
         GROUP BY GROUPING SETS ((g.date${intraday ? ', g.time' : ''}), ()) ORDER BY ALL`);
@@ -1298,7 +1298,7 @@
           WHERE ${[dates('g'), ...sql.unitFilters('g')].join(' AND ')} GROUP BY ALL`),
         runQuery(`SELECT ${cur('p')}, AVG(p.price)::DOUBLE AS v FROM v_price_daily p
           WHERE ${[dates('p'), ...sql.priceFilters('p.REGIONID')].join(' AND ')} GROUP BY ALL`),
-        runQuery(`SELECT ${cur('g')}, renewable_share(g.mwh, g.fuel)::DOUBLE AS v
+        runQuery(`SELECT ${cur('g')}, renewable_share(g.mwh, g.renewable, g.generator)::DOUBLE AS v
           FROM v_gen_daily g
           WHERE ${[dates('g'), ...sql.unitFilters('g', false)].join(' AND ')} GROUP BY ALL`),
       ]);
@@ -1580,16 +1580,18 @@
         } else ensureGens(day);
         ensureGens(icState.frames[Math.min(icState.frame + 288, icState.frames.length - 1)].key.split('|')[0]);
       }
-      // Same definition as the Renewables KPI: output only, batteries on neither side.
+      // Same definition as the Renewables KPI: output only, batteries on neither side. No
+      // share when the deployed dim_duid doesn't say what is renewable.
       let genMw = 0, reMw = 0;
       for (const g of gens) {
         if (g.mw <= 0 || g.unit?.generator === false) continue;
         genMw += g.mw;
         if (g.unit?.renewable) reMw += g.mw;
       }
+      const share = data.has('v_unit', 'renewable') ? ` &middot; <b>${Math.round(100 * reMw / genMw)}%</b> renewable` : '';
       document.getElementById('flowsNow').innerHTML = genMw
-        ? `${Math.round(genMw).toLocaleString()} MW generating &middot; <b>${Math.round(100 * reMw / genMw)}%</b> renewable`
-          + (gensTime === hhmm ? '' : ` <span style="color:var(--muted);font-weight:500">(generators at ${formatTime(+gensTime)})</span>`)
+        ? `${Math.round(genMw).toLocaleString()} MW generating${share}`
+          + (gensTime === hhmm ? '' :` <span style="color:var(--muted);font-weight:500">(generators at ${formatTime(+gensTime)})</span>`)
         : '';
       // The two latest jumps within the last 3 hours of frames, newest first, so they stay
       // readable while playing.
@@ -2122,7 +2124,7 @@
       const sumIf = (cond, alias) => `SUM(CASE WHEN ${cond} THEN generated(g.mwh) ELSE 0 END)::DOUBLE AS ${alias}`;
       const [gen, price] = await Promise.all([
         runQuery(`
-          SELECT CAST(g.date AS VARCHAR) AS date, renewable_share(g.mwh, g.fuel)::DOUBLE AS re,
+          SELECT CAST(g.date AS VARCHAR) AS date, renewable_share(g.mwh, g.renewable, g.generator)::DOUBLE AS re,
             ${sumIf(`g.fuel IN ('Solar', ${sqlStr(ROOFTOP)})`, 'solar')}, ${sumIf(`g.fuel = 'Wind'`, 'wind')}
           FROM v_gen_daily g
           WHERE g.date ${before}${region ? ` AND g.region = ${sqlStr(region)}` : ''}

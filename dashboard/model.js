@@ -6,10 +6,11 @@
 // and macros index.html reads. The page joins nothing: it picks columns from these views,
 // filters and groups them.
 //   v_unit            DUID, fuel_source, region, state, station, owner, cap_mw, storage_mwh,
-//                     lat, lon, fuel, renewable, storage, generator   one row per unit (dim_duid)
+//                     renewable, lat, lon, fuel, storage, generator   one row per unit (dim_duid)
 //                     (fuel: the name the charts use; fuel_source: as registered, may be NULL;
-//                     state: the region's name; storage: a battery; generator: anything
-//                     else; cap_mw: registered capacity; storage_mwh: a battery's storage)
+//                     state: the region's name; renewable: as dim_duid says, the rule is in
+//                     the dbt model; storage: a battery; generator: anything else; cap_mw:
+//                     registered capacity; storage_mwh: a battery's storage)
 //   v_gen             v_scada         + the unit's columns     per unit and 5 minutes
 //   v_gen_daily       v_scada_daily   + the unit's columns     per unit and day
 //   v_gen_hourly      v_scada_hourly  + the unit's columns     per unit, month and hour of day;
@@ -22,10 +23,9 @@
 //   v_region          region                                   the NEM regions
 // Measures (macros, worked out at whatever grain the query groups by; how to call each is
 // said where it is defined below):
-//   generated(v), renewable_share(v, fuel), capture_price(v, price),
+//   generated(v), renewable_share(v, renewable, generator), capture_price(v, price),
 //   capacity_factor(mwh, cap, hours)
-//   (fuel_name and is_renewable are this file's own: they make the `fuel` and `renewable`
-//   columns.)
+//   (fuel_name(duid, descr) is this file's own: it names the `fuel` column.)
 // The fact views of data.js stay readable as they are: a query that needs nothing about the
 // unit reads them and pays for no join.
 //   v_scada, v_scada_today   DUID, date, time, mw
@@ -36,7 +36,7 @@
 //   v_price_hourly           REGIONID, month, hour, price, n (the intervals averaged)
 //   v_month_days             month, days (the days of the month that have data)
 //   v_interconnector         interconnector, date, time, mw, export_limit, import_limit
-//   v_calendar               date, year, month (its first date is where the history starts)
+//   v_calendar               date, year, month (the first date is where the history starts)
 //
 // What the columns hold, in every view that has them:
 //   date, time       NEM time (AEST all year). time is HHMM as a number: 1435 is 14:35, and
@@ -80,9 +80,9 @@ export const UNREGISTERED = 'Unregistered';
 // region, with no capacity and no coordinates. The estimate is half-hourly, drawn as a
 // straight line onto the 5-minute intervals.
 export const ROOFTOP = 'Rooftop solar';
-// Renewable fuels as AEMO describes them. 'Grid' (batteries) is storage: neither side.
-const RENEWABLE_FUELS = ['Solar', ROOFTOP, 'Wind', 'Water', 'Bagasse', 'Biogas - sludge',
-  'Landfill methane / landfill gas', 'Sewerage / waste water'];
+// Which fuels are renewable is not said here: dim_duid carries a Renewable column (the list
+// is in the dbt model, the rooftop units get it in the export). 'Grid' (batteries) is
+// storage, on neither side of the renewable share.
 const STORAGE_FUEL = 'Grid';
 
 const sqlStr = v => `'${String(v).replace(/'/g, "''")}'`;
@@ -90,14 +90,16 @@ const sqlStr = v => `'${String(v).replace(/'/g, "''")}'`;
 const MACROS = [
   // The name a unit's fuel goes by on the page.
   `fuel_name(duid, descr) AS CASE WHEN duid IS NULL THEN ${sqlStr(UNREGISTERED)} ELSE COALESCE(descr, 'Unknown') END`,
-  `is_renewable(fuel) AS fuel IN (${RENEWABLE_FUELS.map(sqlStr).join(',')})`,
   // Output only: a unit that is charging (negative) generates nothing. Given a daily mwh it
   // clips the day's net: a battery counts for its output less its charging, never below 0.
   `generated(v) AS GREATEST(v, 0)`,
-  // Renewable share of the output, in %. Takes the raw mw or mwh and the `fuel` column;
-  // batteries are in neither the renewables nor the total.
-  `renewable_share(v, fuel) AS 100 * SUM(CASE WHEN is_renewable(fuel) THEN generated(v) ELSE 0 END)
-    / NULLIF(SUM(CASE WHEN fuel <> ${sqlStr(STORAGE_FUEL)} THEN generated(v) ELSE 0 END), 0)`,
+  // Renewable share of the output, in %. Takes the raw mw or mwh and the `renewable` and
+  // `generator` columns; batteries are in neither the renewables nor the total. A unit
+  // missing from dim_duid (renewable NULL) is in the total only. NULL, not 0, when nothing
+  // says what is renewable: a dim_duid deployed before the column existed.
+  `renewable_share(v, renewable, generator) AS
+    100 * SUM(CASE WHEN renewable THEN generated(v) WHEN NOT renewable THEN 0 END)
+    / NULLIF(SUM(CASE WHEN generator THEN generated(v) ELSE 0 END), 0)`,
   // The price a volume earned: the prices weighted by it. Takes generated(mw) or
   // generated(mwh), over v_gen_price* with `price IS NOT NULL`: the join there is LEFT, and
   // a volume without a price would count below the line only.
@@ -109,12 +111,12 @@ const MACROS = [
   `capacity_factor(mwh, cap, hours) AS 100 * SUM(mwh) / NULLIF(SUM(cap) * hours, 0)`,
 ];
 
-// dim_duid columns that a deployed file can lack (the capacity ones came on 2026-10-01):
-// [column, name here, type].
+// dim_duid columns that an older deployed file can lack: [column, name here, type].
+// The capacity ones came on 2026-10-01, Renewable on 2026-10-04.
 const OPTIONAL_UNIT_COLS = [
   ['State', 'state', 'VARCHAR'], ['StationName', 'station', 'VARCHAR'],
   ['Participant', 'owner', 'VARCHAR'], ['RegCapMW', 'cap_mw', 'REAL'],
-  ['StorageMWh', 'storage_mwh', 'REAL'],
+  ['StorageMWh', 'storage_mwh', 'REAL'], ['Renewable', 'renewable', 'BOOLEAN'],
 ];
 
 export function createModel(data) {
@@ -129,17 +131,15 @@ export function createModel(data) {
   // attached yet (v_gen_hourly) has to wait for a later call.
   async function refresh(first = []) {
     const lacks = ([c]) => !data.has('v_duid', c);
-    // Two things here are for speed, both seen in EXPLAIN on 2026-10-04:
-    // - `renewable` is list_contains(), not is_renewable(): an IN list runs as a hash join,
-    //   which a query pays for whether it reads the column or not; a function call is dropped
-    //   when the column is not read.
-    // - `generator` (not storage) is its own column, `fuel <> 'Grid'`, and the charts that
-    //   leave storage out filter on it, not on `NOT storage`: with the fuel filter on Grid
-    //   the optimizer then sees `fuel = 'Grid' AND fuel <> 'Grid'`, selects nothing and
-    //   reads nothing. It does not see through `NOT (fuel = 'Grid')`.
+    // For speed, seen in EXPLAIN on 2026-10-04: `generator` (not storage) is its own column,
+    // `fuel <> 'Grid'`, and the charts that leave storage out filter on it, not on
+    // `NOT storage`: with the fuel filter on Grid the optimizer then sees
+    // `fuel = 'Grid' AND fuel <> 'Grid'`, selects nothing and reads nothing. It does not see
+    // through `NOT (fuel = 'Grid')`. That is why storage is still a rule on the fuel here
+    // and not a column of dim_duid like `renewable`, which is read off the unit as it is: a
+    // rule written as an IN list in a view runs as a hash join in every query, read or not.
     const cols = (duid, source) => `
       fuel_name(${duid}, ${source}) AS fuel,
-      list_contains([${RENEWABLE_FUELS.map(sqlStr).join(',')}], fuel_name(${duid}, ${source})) AS renewable,
       fuel_name(${duid}, ${source}) = ${sqlStr(STORAGE_FUEL)} AS storage,
       fuel_name(${duid}, ${source}) <> ${sqlStr(STORAGE_FUEL)} AS generator`;
     const unit = `SELECT d.DUID, d.FuelSourceDescriptor AS fuel_source, d.Region AS region,
