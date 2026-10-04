@@ -72,11 +72,7 @@ jobs:
         working-directory: fabric
         env:
           RAYFIN_WORKSPACE_ID: ${{ vars.FABRIC_APP_WORKSPACE_ID }}
-        # --verbose, kept in deploy.log: it names the User Data Functions item behind the app,
-        # which the last step calls.
-        run: |
-          set -o pipefail
-          npx rayfin up --item-name nemtracker --workspace-id "$RAYFIN_WORKSPACE_ID" --yes --verbose --output json ${{ inputs.dry_run && '-n' || '' }} | tee deploy.log
+        run: npx rayfin up --item-name nemtracker --workspace-id "$RAYFIN_WORKSPACE_ID" --yes --output json ${{ inputs.dry_run && '-n' || '' }}
 
       - name: Set the function's secret, on a new item
         # Where getDataSas signs: the Files folder of the lakehouse import_onelake.yml fills.
@@ -128,11 +124,19 @@ jobs:
           FABRIC=https://api.fabric.microsoft.com/v1
           APP=$(jq -r '.deployments[.active].fabricApiUrl' rayfin/.deployments.json)
           WS=$(jq -r '.deployments[.active].fabricWorkspaceId' rayfin/.deployments.json)
-          UDF=$(grep -oiE 'userDataFunctions/[0-9a-f-]{36}|UDF item ID: *[0-9a-f-]{36}' deploy.log | grep -oE '[0-9a-f-]{36}' | head -1)
+          # The User Data Functions item behind the app: the CLI names it in its diagnostic
+          # log, or else in the verbose output of a functions deploy (JSON output refuses
+          # --verbose, so the deploy above cannot say it).
+          udf_id() { grep -rhoiE 'userDataFunctions/[0-9a-f-]{36}|UDF item ID: *[0-9a-f-]{36}' "$@" 2>/dev/null | grep -oE '[0-9a-f-]{36}' | head -1; }
+          UDF=$(udf_id ~/.rayfin/logs)
+          if [ -z "$UDF" ]; then
+            npx rayfin up functions deploy --verbose > functions.log 2>&1
+            UDF=$(udf_id functions.log)
+          fi
           PBI_TOKEN=$(az account get-access-token --resource https://analysis.windows.net/powerbi/api --query accessToken -o tsv)
           echo "::add-mask::$PBI_TOKEN"
           echo "app: $APP"
-          echo "User Data Functions item: ${UDF:-not found in deploy.log}"
+          echo "User Data Functions item: ${UDF:-not found}"
 
           call() {  # label, method, url, token
             echo "::group::$1"
