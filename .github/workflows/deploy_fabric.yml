@@ -60,9 +60,21 @@ jobs:
           npm ci
           npm ci --prefix rayfin/functions
 
+      # The item is CI's own: Rayfin lets only the owner of an app item deploy to it, and the
+      # owner is whoever created it. This login created `nemtracker`, so it can deploy to it;
+      # an item made from a laptop (`rayfin up` under a user login) refuses it with 403.
+      # --yes: reuse that item on every later run, never ask.
       - name: Deploy
         working-directory: fabric
         env:
-          # The workspace of the app item (`wasm`). --yes: reuse that item, never ask.
           RAYFIN_WORKSPACE_ID: ${{ vars.FABRIC_APP_WORKSPACE_ID }}
-        run: npx rayfin up --workspace-id "$RAYFIN_WORKSPACE_ID" --yes --output json ${{ inputs.dry_run && '-n' || '' }}
+        run: npx rayfin up --item-name nemtracker --workspace-id "$RAYFIN_WORKSPACE_ID" --yes --output json ${{ inputs.dry_run && '-n' || '' }}
+
+      - name: Set the function's secret
+        # Where getDataSas signs: the Files folder of the lakehouse import_onelake.yml fills.
+        # A public identifier, kept as a repo variable; Rayfin stores it on the item.
+        if: ${{ !inputs.dry_run }}
+        working-directory: fabric
+        env:
+          ONELAKE_FILES_URL: ${{ vars.ONELAKE_FILES_URL }}
+        run: echo "$ONELAKE_FILES_URL" | npx rayfin secret set ONELAKE_FILES_URL --stdin
