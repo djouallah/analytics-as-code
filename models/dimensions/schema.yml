@@ -11,6 +11,11 @@ models:
           - not_null
       - name: Region
         description: NEM region the unit dispatches into (WA1 for WA facilities)
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['QLD1', 'NSW1', 'VIC1', 'SA1', 'TAS1', 'WA1']
       - name: State
         description: State name derived from the region
       - name: FuelSourceDescriptor
@@ -33,8 +38,14 @@ models:
         description: Maximum storage capacity (MWh) for batteries; null otherwise
       - name: Renewable
         description: True when the unit's fuel is renewable (solar, wind, water, bagasse, biogas, landfill gas, sewerage gas - the list is in dim_duid.sql); false otherwise, batteries and units with no fuel included
+        tests:
+          - not_null
       - name: Classification
         description: How AEMO dispatches the unit, from the registration list - Scheduled, Semi-Scheduled (wind and solar farms that can be capped; curtailment is measured on these) or Non-Scheduled; null for WA and for units not on the list
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['Scheduled', 'Semi-Scheduled', 'Non-Scheduled']
 
   - name: dim_calendar
     description: One row per day from 2018-03-06 (where the history starts) to two years ahead

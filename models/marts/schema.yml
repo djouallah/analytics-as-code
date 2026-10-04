@@ -22,6 +22,8 @@ models:
         description: Net interconnector flow out of the region (MW); positive = export
       - name: INTERVENTION
         description: AEMO intervention flag (0 = the pricing run, which every reader filters on); part of the merge key
+        tests:
+          - not_null
       - name: DATE
         description: Calendar date of SETTLEMENTDATE, cast from the file's string (right in any session zone)
       - name: file
@@ -54,6 +56,8 @@ models:
         description: What the unit offered as available (MW); with TOTALCLEARED, what a curtailment measure would read
       - name: INTERVENTION
         description: AEMO intervention flag (0 = the pricing run, which every reader filters on); part of the merge key
+        tests:
+          - not_null
       - name: DATE
         description: Calendar date of SETTLEMENTDATE, cast from the file's string (right in any session zone)
       - name: file
@@ -76,6 +80,10 @@ models:
           - not_null
       - name: RRP
         description: Regional Reference Price ($/MWh) for the interval
+      - name: INTERVENTION
+        description: AEMO intervention flag (0 = the pricing run, which every reader filters on); part of the merge key
+        tests:
+          - not_null
       - name: file
         description: Source CSV filename the row was ingested from (part of the merge key)
         tests:
@@ -103,6 +111,8 @@ models:
         description: Metered flow at the start of the interval (MW); not exported
       - name: INTERVENTION
         description: AEMO intervention flag (0 = the pricing run, which every reader filters on); part of the merge key
+        tests:
+          - not_null
       - name: EXPORTLIMIT
         description: Flow limit in the positive direction (MW)
       - name: IMPORTLIMIT
@@ -132,27 +142,48 @@ models:
         description: Operational demand (MW); rooftop solar is not in it
       - name: NETINTERCHANGE
         description: Net interconnector flow out of the region (MW); positive = export
+      - name: INTERVENTION
+        description: AEMO intervention flag (0 = the pricing run, which every reader filters on); part of the merge key
+        tests:
+          - not_null
       - name: file
         description: Source CSV filename the row was ingested from (part of the merge key)
         tests:
           - not_null
 
-  # No tests on this model yet: they are for a person to write.
   - name: fct_rooftop_pv
     description: Rooftop solar output per region every half hour, as AEMO estimates it (ROOFTOP_PV_ACTUAL) - an estimate, not a meter reading, kept as published
     columns:
       - name: REGIONID
         description: NEM region identifier; the older monthly files also carry sub-regions (QLDC, QLDN, QLDS, TASN, TASS)
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['QLD1', 'NSW1', 'VIC1', 'SA1', 'TAS1', 'QLDC', 'QLDN', 'QLDS', 'TASN', 'TASS']
+              config:
+                severity: warn
       - name: INTERVAL_DATETIME
-        description: End of the half-hour interval (timestamptz)
+        description: End of the half-hour interval - AEST wall clock stored as timestamptz labelled UTC
+        tests:
+          - not_null
       - name: POWER
         description: Estimated rooftop generation at the end of the interval (MW); blank when AEMO had no estimate
       - name: QI
         description: AEMO's quality indicator for the estimate (1 = measurement, 0.6 = satellite, 0 = none)
       - name: TYPE
         description: How it was estimated - MEASUREMENT, SATELLITE or DAILY
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['MEASUREMENT', 'SATELLITE', 'DAILY']
+              config:
+                severity: warn
       - name: file
         description: Source CSV filename the row was ingested from (part of the merge key)
+        tests:
+          - not_null
 
   - name: fct_scada_today
     description: SCADA reading per unit from AEMO's 5-minute Dispatch_SCADA files, minutes after each interval. Never trimmed - it holds every file loaded; the export takes the last 14 days. Rows at 0 MW are not loaded, and there is no INTERVENTION column
