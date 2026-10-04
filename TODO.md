@@ -16,18 +16,9 @@ only: a finished item is removed, not ticked.
   `requirements.txt`, `table_maintenance.yml` (compaction) and `import_data.yml` (read venv);
   check Process Data, maintenance and import; update AGENTS.md's version policy.
 - [ ] **Capability probe** (separate repo, manual) — re-run against the 2.0 pin.
-- [ ] **The hour-of-day profile reads low for the current month** (not confirmed on the data) —
-  `month_days` (`scripts/cache_catalog.py build_daily_agg`) counts every date in the scada
-  export, and the newest one only holds 00:05 → 04:00 (a daily file's trading day ends at
-  04:00). Hours 4-23 of the current month are then divided by one day too many. Check with
-  the intervals of the newest date in a half-year file before changing anything.
 
 ## Bigger
 
-- [ ] **Curtailment right up to now, per region** — the Insights chart ends with the newest
-  next-day file. `fct_regionsum_today` carries regional `SS_SOLAR_AVAILABILITY`/`SS_WIND_AVAILABILITY`
-  against `SS_*_CLEAREDMW` every 5 minutes, and it matches the per-unit sum: a per-region line
-  for the last days can be real. Per-unit stays next-day only.
 - [ ] **Two units with a wrong fuel in `duid_unregistered.csv`** (aemo_data) — TORRB1 is
   "Natural gas" (the list had "Natural gas / fuel oil"), ADPBA1L, the load side of the
   Adelaide Desalination battery, has no fuel, so its charging shows as "Unknown". Fix in the
@@ -45,7 +36,7 @@ only: a finished item is removed, not ticked.
   - `dim_calendar.sql`: start at 2015-01-01 instead of 2018-03-06;
   - load (`download_limit` raised once), then `import_data.yml` with `all_periods=true`.
 
-  Two things to settle first: the deployed data files are about 973 MB against GitHub
+  Two things to settle first: the deployed data files are about 984 MB against GitHub
   Pages' 1 GB soft limit, and seven more half-year files add roughly 250 MB; and plants
   closed before 2018 (Hazelwood, Northern) will show as "Unregistered" until
   `duid_unregistered.csv` (aemo_data) is regenerated over the longer history, from the same
@@ -55,9 +46,14 @@ only: a finished item is removed, not ticked.
   its name (`INTERCONNECTORS` in `dashboard/index.html`); the facts carry only the id. AEMO's
   MMSDM `INTERCONNECTOR` table should have them (`REGIONFROM`, `REGIONTO`, a description;
   not checked against the archive): a small `dim_interconnector`, exported with the dims.
-- [ ] **Site size** — the deployed data files are close to GitHub Pages' 1 GB limit, and the
-  current half-year file grows to ~75 MB by its end. Measure what takes the space in a
-  half-year file before anything else is added.
+- [ ] **Site size** — the deployed data files total about 984 MB against GitHub Pages' 1 GB
+  limit, and grow by about 140 MB a year (a half-year file is 65-75 MB). Measured on the
+  2026 H1 file (13.0M scada rows): `mw` is 38.5 MB, `time` 26.8 MB, `DUID` 5.5 MB, `date`
+  0.8 MB. Storing `time` as hour and minute (two UTINYINT, `data.js` rebuilding HHMM) saves
+  13% losslessly; rounding `mw` to 0.1 MW saves a further ~25% but changes the data. Neither
+  is enough against the growth: the real choice is where the 5-minute history lives (another
+  host for the half-year files, or only recent years at 5 minutes and the rest from the
+  daily aggregate). A decision for the owner, not a code change.
 - [ ] **Emissions** — AEMO MMSDM `GENUNITS` has a CO2 factor per genset (`DUALLOC` maps it to
   a DUID): an emissions-intensity KPI and chart. A unit without a factor stays out; no
   guessed factor.

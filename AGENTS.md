@@ -144,12 +144,13 @@ The dashboard is three files, one job each.
   the data source, plus `needs`). Over `data.js`'s views it builds the ones the page reads —
   `v_unit` (a unit's attributes under the page's names), `v_gen`/`v_gen_daily`/`v_gen_hourly`/
   `v_gen_today` (generation with the unit's attributes on every row), `v_gen_price*` (plus the
-  price of the unit's region), `v_gen_latest`/`v_price_latest`, `v_region`, `v_curtailment` —
+  price of the unit's region), `v_gen_latest`/`v_price_latest`, `v_region`, `v_curtailment`/
+  `v_curtailment_recent` —
   and the measures as DuckDB macros (`generated`, `renewable_share`, `capture_price`,
   `capacity_factor`). The list at its top is the page's contract. It reads only `data.js`'s
   views, so it is the same file for every host. Its views are created once, in one query:
   DuckDB binds a view again on every read, so they follow `data.js` rebuilding the views under
-  them; only `v_gen_hourly` and `v_curtailment` wait for agg. Creating them costs ~30 ms at
+  them; only `v_gen_hourly` and the curtailment views wait for agg. Creating them costs ~30 ms at
   startup and ~50 ms with history attached (each is bound at creation), which is why they are
   not rebuilt after every attach.
 - `dashboard/data.js` is how the `.duckdb` files are fetched, cached, attached and merged into
@@ -210,15 +211,20 @@ page itself reads any column or table a deployed file lacks as "no data"
 in the page), so a new page can go out before the data does.
 `energy_daily_agg.duckdb` holds, besides the per-day tables, hour-of-day × month tables
 (`scada_hourly`, `price_hourly`, `month_days`) that the daily-profile and price heatmap read
-for ranges over 30 days, and `curtailment_daily`: per semi-scheduled unit and day,
+for ranges over 30 days — `scada_hourly` and `month_days` leave out the newest date of the
+export, which only has 00:05–04:00 until the next file lands — and `curtailment_daily`: per semi-scheduled unit and day,
 `curtailed_mwh` = Σ max(AVAILABILITY − TOTALCLEARED, 0) / 12 and `available_mwh`, from
 `fct_scada` (`cache_catalog.export_curtailment`). It is built in the export because a fully
 curtailed unit sits at 0 MW and the scada export drops 0 MW rows. The units add up to AEMO's
 REGIONSUM `SS_WIND`/`SS_SOLAR` availability less cleared MW. It ends with the newest complete
 next-day file (the export leaves out the newest date, which only has 00:05–04:00); the
-intraday files carry no availability, so there is no "today" part. Only units on the current
+intraday files carry no per-unit availability. The days after it come from AEMO's regional
+figures: `energy_today.duckdb`'s `price_today` carries `wind_available`, `wind_curtailed`,
+`solar_available`, `solar_curtailed` (MW, the region's semi-scheduled, from
+`fct_regionsum_today`), which `model.js` turns into `v_curtailment_recent`; the chart draws
+those days lighter and leaves them out when units are picked. Only units on the current
 registration list have a classification, so semi-scheduled farms that have left the list are
-not counted. The Insights page reads it for any range (`v_curtailment` in `model.js`).
+not counted. The Insights page reads both for any range.
 
 ## Models (10)
 | Model | Schema | Materialization |
