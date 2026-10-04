@@ -65,7 +65,9 @@ WITH
   -- One row per DUID. The registration list wins over duid_unregistered.csv (a unit can
   -- come back onto the list); within the list a unit's generating registration wins over
   -- its load registration (e.g. LIMOSF11 is listed as both). duid_unregistered.csv has no
-  -- technology column, and no fuel for the loads AEMO gives no energy source for.
+  -- technology and no classification column, and no fuel for the loads AEMO gives no energy
+  -- source for. Classification is the list's own (Scheduled, Semi-Scheduled, Non-Scheduled),
+  -- without the footnote stars some rows carry.
   duid_aemo_ranked AS (
     SELECT DUID, Region, "Fuel Source - Descriptor" AS fuel, Participant,
            "Station Name" AS StationName,
@@ -73,6 +75,7 @@ WITH
            TRY_CAST("Reg Cap generation (MW)" AS DOUBLE) AS RegCapMW,
            TRY_CAST("Max Cap generation (MW)" AS DOUBLE) AS MaxCapMW,
            TRY_CAST("Maximum storage capacity" AS DOUBLE) AS StorageMWh,
+           trim(replace(Classification, '*', '')) AS Classification,
            CASE WHEN "Dispatch Type" ILIKE '%load%' THEN 1 ELSE 0 END AS priority
     FROM read_csv({{ source('duid_reference', 'registration') }}, all_varchar = true)
     WHERE length(DUID) > 2
@@ -83,6 +86,7 @@ WITH
            TRY_CAST("Reg Cap generation (MW)" AS DOUBLE) AS RegCapMW,
            TRY_CAST("Max Cap generation (MW)" AS DOUBLE) AS MaxCapMW,
            TRY_CAST("Maximum storage capacity" AS DOUBLE) AS StorageMWh,
+           NULL AS Classification,
            2
     FROM read_csv({{ source('duid_reference', 'duid_unregistered') }}, all_varchar = true)
     WHERE length(DUID) > 2
@@ -98,7 +102,8 @@ WITH
       arg_min(TechnologyType, priority) AS TechnologyType,
       arg_min(RegCapMW, priority) AS RegCapMW,
       arg_min(MaxCapMW, priority) AS MaxCapMW,
-      arg_min(StorageMWh, priority) AS StorageMWh
+      arg_min(StorageMWh, priority) AS StorageMWh,
+      arg_min(Classification, priority) AS Classification
     FROM duid_aemo_ranked
     GROUP BY DUID
   ),
@@ -127,7 +132,8 @@ WITH
       NULL::VARCHAR AS TechnologyType,
       NULL::DOUBLE AS RegCapMW,
       NULL::DOUBLE AS MaxCapMW,
-      NULL::DOUBLE AS StorageMWh
+      NULL::DOUBLE AS StorageMWh,
+      NULL::VARCHAR AS Classification
     FROM wa_facilities
     LEFT JOIN wa_energy ON wa_facilities.DUID = wa_energy.DUID
   ),
@@ -165,7 +171,12 @@ SELECT
   first(a.StorageMWh) AS StorageMWh,
   -- Whether the unit's fuel is on renewable_fuels (added 2026-10-04); a unit with no fuel
   -- is not. Compared in lower case, so it doesn't depend on the casing applied above.
-  first(renewable_fuels.fuel IS NOT NULL) AS Renewable
+  first(renewable_fuels.fuel IS NOT NULL) AS Renewable,
+  -- How AEMO dispatches the unit (added 2026-10-04): Semi-Scheduled is a wind or solar farm
+  -- that can be capped, which is what curtailment is measured on. Not the fuel: Hornsdale
+  -- Power Reserve, a battery, is registered with the fuel "Wind". NULL for the units that
+  -- are not on the registration list and for WA.
+  first(a.Classification) AS Classification
 FROM duid_all a
 JOIN states ON a.Region = states.RegionID
 LEFT JOIN geo ON a.duid = geo.duid

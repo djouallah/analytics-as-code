@@ -156,6 +156,10 @@ jobs:
         if: steps.mode.outputs.is_daily == 'true'
         run: .venv-read/bin/python scripts/cache_catalog.py export_interconnector
 
+      - name: Export curtailment
+        if: steps.mode.outputs.is_daily == 'true'
+        run: .venv-read/bin/python scripts/cache_catalog.py export_curtailment
+
       - name: Build daily databases
         # Only the half-years export_scada exported; older files stay as deployed.
         if: steps.mode.outputs.is_daily == 'true'

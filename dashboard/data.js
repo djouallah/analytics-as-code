@@ -25,6 +25,8 @@
 //   v_scada_hourly, v_price_hourly, v_month_days       agg's hour-of-day x month tables;
 //                                                      absent (has(view) false) until agg is
 //                                                      attached and deployed with them
+//   v_curtailment_daily  DUID, date, curtailed_mwh, available_mwh   agg's, the same way:
+//                     semi-scheduled units, per day, up to the newest complete next-day file
 //
 // DOM-free: progress is reported through the injected `onStatus` callback.
 // =============================================================================
@@ -313,7 +315,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
       ['v_duid', 'dim.dim_duid'], ['v_calendar', 'dim.dim_calendar'],
       ['v_scada_today', 'today.scada_today'], ['v_price_today', 'today.price_today'],
       ['v_scada_hourly', 'agg.scada_hourly'], ['v_price_hourly', 'agg.price_hourly'],
-      ['v_month_days', 'agg.month_days'],
+      ['v_month_days', 'agg.month_days'], ['v_curtailment_daily', 'agg.curtailment_daily'],
     ]) if (hasTable(table)) await conn.query(`CREATE OR REPLACE VIEW ${view} AS SELECT * FROM ${table}`);
     await loadColumns();
   }

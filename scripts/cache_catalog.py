@@ -7,6 +7,7 @@ Usage:
     python cache_catalog.py export_price_today
     python cache_catalog.py export_interconnector_today
     python cache_catalog.py export_interconnector
+    python cache_catalog.py export_curtailment
     python cache_catalog.py export_dim_duid
     python cache_catalog.py export_dim_calendar
     python cache_catalog.py build_dim
@@ -178,6 +179,44 @@ def export_price():
     con.close()
 
 
+def export_curtailment():
+    """Curtailed energy per unit and day: what a wind or solar farm could have made and was
+    not dispatched for. Per 5 minutes it is AVAILABILITY - TOTALCLEARED (the unit's available
+    MW against its dispatch target), never below 0, over the units AEMO classes as
+    Semi-Scheduled (dim_duid.Classification): those are the ones a target caps. For any other
+    unit the same subtraction is just headroom. Checked on 2026-10-03 against AEMO's own
+    regional figures (the REGIONSUM record's SS_WIND/SS_SOLAR availability less cleared MW):
+    the units add up to them at every interval tried.
+
+    It has to be worked out here, from the catalog: a fully curtailed unit is at 0 MW, and
+    the scada export leaves the 0 MW rows out. From the next-day files only, so it ends
+    yesterday: the intraday files carry no availability. The newest date is left out: a daily
+    file runs 04:05 to 04:00, so that date only has its first four hours until the next file
+    lands. available_mwh is the denominator of a curtailment rate. A unit that is no longer
+    on the registration list has no classification and is left out."""
+    con = connect_iceberg()
+    con.execute(f"""
+        COPY (
+            SELECT DUID, date,
+                CAST(SUM(GREATEST(available - target, 0)) / 12.0 AS REAL) AS curtailed_mwh,
+                CAST(SUM(available) / 12.0 AS REAL) AS available_mwh
+            FROM (
+                SELECT DUID, CAST(SETTLEMENTDATE AS DATE) AS date,
+                    ANY_VALUE(AVAILABILITY) AS available, ANY_VALUE(TOTALCLEARED) AS target
+                FROM catalog.landing.fct_scada
+                WHERE INTERVENTION = 0 {cutoff_filter()}
+                    AND DUID IN (SELECT DUID FROM catalog.mart.dim_duid
+                                 WHERE Classification = 'Semi-Scheduled')
+                GROUP BY DUID, SETTLEMENTDATE
+            )
+            WHERE date < (SELECT max(DATE) FROM catalog.landing.fct_scada)
+            GROUP BY ALL
+            HAVING SUM(available) > 0
+        ) TO '{DASHBOARD_DIR}/fct_curtailment.parquet' (FORMAT PARQUET);
+    """)
+    con.close()
+
+
 def export_scada_today():
     con = connect_iceberg()
     con.execute(f"""
@@ -264,7 +303,8 @@ def export_dim_duid():
     con.execute(f"""
         COPY (
             SELECT DUID, Region, FuelSourceDescriptor, Participant, State, latitude, longitude,
-                StationName, TechnologyType, RegCapMW, MaxCapMW, StorageMWh, Renewable
+                StationName, TechnologyType, RegCapMW, MaxCapMW, StorageMWh, Renewable,
+                Classification
             FROM catalog.mart.dim_duid
             UNION ALL BY NAME
             SELECT replace(r.REGIONID, '1', '') || '_PV' AS DUID, r.REGIONID AS Region,
@@ -365,8 +405,10 @@ def build_daily_agg():
 
     scada = f"'{DASHBOARD_DIR}/fct_scada.parquet'"
     price = f"'{DASHBOARD_DIR}/fct_price.parquet'"
+    curtailment = f"'{DASHBOARD_DIR}/fct_curtailment.parquet'"
     # Each table: (date column, its query over the parquet exports).
     # - scada_daily / price_daily: one row per unit (region) and day, for ranges over 30 days.
+    # - curtailment_daily: one row per semi-scheduled unit and day (export_curtailment).
     # - scada_hourly / price_hourly / month_days: hour of day x month, so the daily-profile and
     #   price-by-hour charts work on long ranges. scada_hourly keeps the positive output only
     #   (the profile leaves charging out); a range's average MW at hour h is SUM(mwh) over its
@@ -393,6 +435,9 @@ def build_daily_agg():
             SELECT CAST(date_trunc('month', date) AS DATE) AS month,
                 CAST(COUNT(DISTINCT date) AS SMALLINT) AS days
             FROM {scada} GROUP BY ALL ORDER BY month"""),
+        "curtailment_daily": ("date", f"""
+            SELECT DUID, date, curtailed_mwh, available_mwh
+            FROM {curtailment} ORDER BY DUID, date"""),
     }
 
     # With a cutoff the parquet exports only start there, so the rows before it come from
@@ -436,7 +481,8 @@ def build_daily_agg():
     print(f"Daily aggregate (kept deployed rows before {cutoff or 'nothing'}): {rows}")
 
     # Clean up parquet intermediates (shared with build_daily)
-    for f in ["fct_scada.parquet", "fct_price.parquet", "fct_interconnector.parquet"]:
+    for f in ["fct_scada.parquet", "fct_price.parquet", "fct_interconnector.parquet",
+              "fct_curtailment.parquet"]:
         path = os.path.join(DASHBOARD_DIR, f)
         if os.path.exists(path):
             os.remove(path)
@@ -491,6 +537,7 @@ COMMANDS = {
     "export_price_today": export_price_today,
     "export_interconnector_today": export_interconnector_today,
     "export_interconnector": export_interconnector,
+    "export_curtailment": export_curtailment,
     "export_dim_duid": export_dim_duid,
     "export_dim_calendar": export_dim_calendar,
     "build_dim": build_dim,

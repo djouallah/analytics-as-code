@@ -324,6 +324,14 @@
         <div class="chart-header"><h2 id="title-cfunits">Capacity factor, top units (%)</h2></div>
         <div class="chart-container" id="chart-cfunits" style="height:320px;"></div>
       </div>
+      <div class="chart-card full-width">
+        <div class="chart-header"><h2 id="title-curtail">Wind and solar curtailment (MWh)</h2></div>
+        <div class="chart-container" id="chart-curtail" style="height:280px;"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header"><h2 id="title-curtailunits">Most curtailed farms (MWh)</h2></div>
+        <div class="chart-container" id="chart-curtailunits" style="height:320px;"></div>
+      </div>
       <div class="chart-card">
         <div class="chart-header"><h2 id="title-battery">Batteries: average day (MW) and price</h2></div>
         <div class="chart-container" id="chart-battery" style="height:320px;"></div>
@@ -351,7 +359,11 @@
       axis and charging below, with the price it saw; "bought" and "sold" are the prices weighted
       by the energy charged and discharged (5-minute ranges only, since a day's total nets one
       against the other). Who generated it: energy by owner and power station, coloured by fuel;
-      click an owner to zoom in. All charts follow the header filters.
+      click an owner to zoom in. Curtailment: what the wind and solar farms AEMO dispatches as
+      semi-scheduled could have made and were not dispatched for (available MW less the dispatch
+      target, each 5 minutes), whether for network limits or economic spill at low prices. It
+      comes from the next-day files, so it ends a day or two ago, and it leaves out rooftop
+      solar and the small non-scheduled farms. All charts follow the header filters.
     </p>
   </div>
 
@@ -1325,7 +1337,7 @@
     async function renderInsights(seq) {
       await Promise.all([renderRenewables(seq), renderHeatmap(seq),
         renderProfile(seq), renderCapture(seq), renderNegative(seq), renderNetExports(seq), renderCapacityFactor(seq),
-        renderBattery(seq), renderOwners(seq)]);
+        renderCurtailment(seq), renderBattery(seq), renderOwners(seq)]);
     }
 
     // =========================================================================
@@ -1982,6 +1994,92 @@
       chart.off('click');
       chart.on('click', params => {
         const duid = topAsc[params.dataIndex]?.DUID;
+        if (!duid) return;
+        if (!crossFilter.duids.includes(duid)) crossFilter.duids.push(duid);
+        updateDuidTrigger();
+        renderAll();
+      });
+    }
+
+    // Curtailment of the semi-scheduled wind and solar farms (v_curtailment, from agg): energy
+    // they could have made and were not dispatched for, per day (per month beyond 120 days),
+    // and the farms that lost the most. The rate (of what they could have made) is in the
+    // titles and tooltips, not on a second axis. Whatever the range's grain elsewhere, this
+    // reads the daily table, which ends with the newest complete next-day file.
+    const CURTAIL_FUELS = ['Wind', 'Solar'];
+    const pct = (part, whole) => whole ? `${(100 * part / whole).toFixed(1)}%` : '--';
+    const fmtMwh = v => v >= 10000 ? fmtGwh(v) : `${Math.round(v).toLocaleString()} MWh`;
+    async function renderCurtailment(seq) {
+      const ids = ['chart-curtail', 'chart-curtailunits'];
+      const titles = { curtail: document.getElementById('title-curtail'), units: document.getElementById('title-curtailunits') };
+      titles.curtail.textContent = 'Wind and solar curtailment (MWh)';
+      titles.units.textContent = 'Most curtailed farms (MWh)';
+      if (!data.has('v_curtailment')) return ids.forEach(id => showEmpty(id, aggLoaded ? 'Curtailment not deployed yet' : 'Loading history...'));
+      const fuel = activeFuel();
+      if (fuel && !CURTAIL_FUELS.includes(fuel)) return ids.forEach(id => showEmpty(id, 'Curtailment is measured on wind and solar farms'));
+      const { from, to } = getDateRange();
+      const where = [`c.date >= ${sqlStr(from)} AND c.date <= ${sqlStr(to)}`, ...sql.unitFilters('c')].join(' AND ');
+      const byMonth = rangeDays() > 120;
+      const period = byMonth ? `CAST(date_trunc('month', c.date) AS DATE)` : 'c.date';
+      const [rows, units, last] = await Promise.all([
+        runQuery(`SELECT CAST(${period} AS VARCHAR) AS period, c.fuel,
+            SUM(c.curtailed_mwh)::DOUBLE AS cur, SUM(c.available_mwh)::DOUBLE AS avail
+          FROM v_curtailment c WHERE ${where} GROUP BY ALL ORDER BY ALL`),
+        runQuery(`SELECT c.DUID, ANY_VALUE(c.station) AS station, c.fuel,
+            SUM(c.curtailed_mwh)::DOUBLE AS cur, SUM(c.available_mwh)::DOUBLE AS avail
+          FROM v_curtailment c WHERE ${where} GROUP BY c.DUID, c.fuel
+          HAVING SUM(c.curtailed_mwh) > 0 ORDER BY cur DESC LIMIT 15`),
+        runQuery(`SELECT CAST(MAX(date) AS VARCHAR) AS d FROM v_curtailment_daily`),
+      ]);
+      if (seq !== _renderSeq) return;
+      const lastDay = last[0]?.d;
+      const note = lastDay ? ` <span class="chart-note">next-day data, to ${formatDate(lastDay)}</span>` : '';
+      if (!rows.length) {
+        titles.curtail.innerHTML = 'Wind and solar curtailment' + note;
+        return ids.forEach(id => showEmpty(id, lastDay && from > lastDay ? `No next-day data yet: it ends ${formatDate(lastDay)}` : undefined));
+      }
+      const total = { cur: 0, avail: 0 };
+      for (const r of rows) { total.cur += r.cur; total.avail += r.avail; }
+      titles.curtail.innerHTML = `Wind and solar curtailment: ${fmtMwh(total.cur)}, ${pct(total.cur, total.avail)} of what the farms could have made` + note;
+
+      const periods = [...new Set(rows.map(r => r.period))];
+      const at = new Map(rows.map(r => [`${r.period}|${r.fuel}`, r]));
+      const fuels = CURTAIL_FUELS.filter(f => rows.some(r => r.fuel === f));
+      const label = p => byMonth ? formatMonth(p) : formatDate(p);
+      getChart('chart-curtail').setOption({
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => {
+          const p = periods[ps[0].dataIndex];
+          const lines = fuels.map(f => at.get(`${p}|${f}`)).filter(Boolean)
+            .map(r => `${escapeHtml(r.fuel)}: <b>${fmtMwh(r.cur)}</b> (${pct(r.cur, r.avail)})`);
+          return `${label(p)}<br>${lines.join('<br>')}`;
+        } },
+        legend: { data: fuels, top: 0, textStyle: { color: cssVar('--text') } },
+        grid: { left: 60, right: 20, top: 30, bottom: 30 },
+        xAxis: { type: 'category', data: periods.map(label), axisLabel: { fontSize: 10 } },
+        yAxis: { type: 'value', axisLabel: { formatter: v => v >= 1000 ? `${v / 1000}k` : v } },
+        series: fuels.map(f => ({ name: f, type: 'bar', stack: 'cur', barMaxWidth: 24,
+          itemStyle: { color: fuelColor(f) },
+          data: periods.map(p => Math.round(at.get(`${p}|${f}`)?.cur ?? 0)) })),
+      }, true);
+
+      titles.units.textContent = `Most curtailed farms (MWh)`;
+      if (!units.length) return showEmpty('chart-curtailunits');
+      const asc = [...units].reverse();
+      getChart('chart-curtailunits').setOption({
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
+          formatter: ps => { const r = asc[ps[0].dataIndex];
+            return `${escapeHtml(r.DUID)} &middot; ${escapeHtml(r.station ?? '')}<br>${escapeHtml(r.fuel)}<br><b>${fmtMwh(r.cur)}</b> curtailed, ${pct(r.cur, r.avail)} of what it could have made`; } },
+        grid: { left: 90, right: 30, top: 10, bottom: 25 },
+        xAxis: { type: 'value', axisLabel: { formatter: v => v >= 1000 ? `${v / 1000}k` : v } },
+        yAxis: { type: 'category', data: asc.map(r => r.DUID), axisLabel: { fontSize: 10 } },
+        series: [{ type: 'bar', barMaxWidth: 14,
+          data: asc.map(r => ({ value: Math.round(r.cur), itemStyle: { color: fuelColor(r.fuel) } })) }],
+      }, true);
+      // Clicking a farm filters the whole page to it, like the capacity-factor units.
+      const chart = getChart('chart-curtailunits');
+      chart.off('click');
+      chart.on('click', params => {
+        const duid = asc[params.dataIndex]?.DUID;
         if (!duid) return;
         if (!crossFilter.duids.includes(duid)) crossFilter.duids.push(duid);
         updateDuidTrigger();
@@ -2813,6 +2911,8 @@ ORDER BY ALL`;
         // The daily history is what a comparison with earlier days, and the History page, read.
         updateKpiDeltas(_renderSeq).catch(e => console.warn('[KPI] deltas unavailable:', e));
         if (document.getElementById('view-history').style.display !== 'none') guarded(renderHistory(_renderSeq));
+        // Curtailment reads agg whatever the range.
+        if (document.getElementById('view-insights').style.display !== 'none') guarded(renderCurtailment(_renderSeq));
       })
         .catch(e => console.warn('[OPFS] Agg load failed:', e));
     } catch (e) {

@@ -234,14 +234,21 @@ page itself reads any column or table a deployed file lacks as "no data"
 in the page), so a new page can go out before the data does.
 `energy_daily_agg.duckdb` holds, besides the per-day tables, hour-of-day × month tables
 (`scada_hourly`, `price_hourly`, `month_days`) that the daily-profile and price heatmap read
-for ranges over 30 days.
+for ranges over 30 days, and `curtailment_daily` (since 2026-10-04): per semi-scheduled unit
+and day, `curtailed_mwh` = Σ max(AVAILABILITY − TOTALCLEARED, 0) / 12 and `available_mwh`,
+from `fct_scada` (`cache_catalog.export_curtailment`). It is built in the export because a
+fully curtailed unit sits at 0 MW and the scada export drops 0 MW rows. Checked on 2026-10-03
+against AEMO's REGIONSUM `SS_WIND`/`SS_SOLAR` availability less cleared MW: the units add up
+to it. It ends with the newest complete next-day file (the export leaves out the newest
+date, which only has 00:05–04:00); the intraday files carry no availability, so there is no
+"today" part. The Insights page reads it for any range (`v_curtailment` in `model.js`).
 
 ## Models (10)
 | Model | Schema | Materialization |
 |-------|--------|-----------------|
 | stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
 | dim_calendar | mart | incremental append (the NOT-IN filter keeps existing dates out; runs 2 years ahead) |
-| dim_duid | mart | incremental insert-only merge on DUID; NEM units from the registration list, then `duid_unregistered.csv`; carries registered capacity (RegCapMW etc.) since 2026-10-01 and `Renewable` since 2026-10-04: **the list of renewable fuels lives in this model** (an inline CTE next to `states`), nowhere else; changing it reaches the existing rows with a `rebuild=dim_duid` |
+| dim_duid | mart | incremental insert-only merge on DUID; NEM units from the registration list, then `duid_unregistered.csv`; carries registered capacity (RegCapMW etc.) since 2026-10-01 and `Renewable` since 2026-10-04: **the list of renewable fuels lives in this model** (an inline CTE next to `states`), nowhere else; changing it reaches the existing rows with a `rebuild=dim_duid`. Also since 2026-10-04 `Classification` from the list (Scheduled / Semi-Scheduled / Non-Scheduled, stars stripped; NULL off the list): curtailment is measured on Semi-Scheduled, not on a fuel, because HPR1 (a battery) is registered with fuel "Wind" |
 | fct_scada, fct_price | landing | incremental insert-only merge (by file) |
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
 | fct_interconnector_today | landing | incremental insert-only merge (by file) — the INTERCONNECTORRES rows of the same archived DispatchIS files as fct_price_today (added 2026-10-01) **and, despite the name, the whole history**: AEMO's monthly MMSDM archive of the same record, 2018-01 → 2026-08 (source_type `interconnector_monthly`, a finite backfill added 2026-10-02; read with `strict_mode = false`, which the files from 2024-08 need). August 2026 is in both sources, so readers take `ANY_VALUE … GROUP BY`. Exported as `interconnector` in the half-year files; the Flows page plays any range ≤ 30 days |

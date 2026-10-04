@@ -17,6 +17,9 @@
 //                                                              once agg carries the table
 //   v_gen_today       v_scada_today   + the unit's columns     as v_gen, the newest 14 days
 //   v_gen_latest      v_gen_today, the newest interval only
+//   v_curtailment     v_curtailment_daily + the unit's columns   per wind/solar farm and day:
+//                                                              curtailed_mwh, available_mwh;
+//                                                              once agg carries the table
 //   v_gen_price       v_gen       + price, the price of the unit's region in that interval
 //   v_gen_price_daily v_gen_daily + price, the day's
 //   v_price_latest    v_price_today, the newest interval only
@@ -37,6 +40,7 @@
 //   v_month_days             month, days (the days of the month that have data)
 //   v_interconnector         interconnector, date, time, mw, export_limit, import_limit
 //   v_calendar               date, year, month (the first date is where the history starts)
+//   v_curtailment_daily      DUID, date, curtailed_mwh, available_mwh
 //
 // What the columns hold, in every view that has them:
 //   date, time       NEM time (AEST all year). time is HHMM as a number: 1435 is 14:35, and
@@ -171,6 +175,7 @@ export function createModel(data) {
         LEFT JOIN v_price_daily p ON p.date = g.date AND p.REGIONID = g.region`],
     ];
     if (data.has('v_scada_hourly')) views.push(['v_gen_hourly', gen('v_scada_hourly')]);
+    if (data.has('v_curtailment_daily')) views.push(['v_curtailment', gen('v_curtailment_daily')]);
 
     const fresh = views.filter(([name]) => !_views.has(name));
     if (!first.length && !fresh.length) return;
@@ -202,7 +207,7 @@ export function createModel(data) {
     // (ensureHistory) and/or the daily and hourly rollups (attachAgg).
     needs: sql => ({
       history: /\bv_(scada|price|interconnector|gen|gen_price)\b/i.test(sql),
-      agg: /\bv_(scada|price|gen|gen_price)_(daily|hourly)\b|\bv_month_days\b/i.test(sql),
+      agg: /\bv_(scada|price|gen|gen_price)_(daily|hourly)\b|\bv_month_days\b|\bv_curtailment/i.test(sql),
     }),
   };
 }

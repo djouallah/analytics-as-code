@@ -24,12 +24,10 @@ only: a finished item is removed, not ticked.
 
 ## Bigger
 
-- [ ] **Curtailment, up to yesterday** — `fct_scada` has `AVAILABILITY` and `TOTALCLEARED`; add
-  daily curtailed MWh per semi-scheduled wind/solar unit to `energy_daily_agg.duckdb`
-  (`scripts/cache_catalog.py build_daily_agg`), chart it in Insights. The last 5 days have no
-  per-unit availability, so the per-unit view ends yesterday — don't estimate it.
-  `fct_regionsum_today` does carry regional `SS_SOLAR_UIGF`/`SS_WIND_UIGF` against
-  `SS_*_CLEAREDMW` for the last days, so a per-region view can be real right up to now.
+- [ ] **Curtailment right up to now, per region** — the Insights chart ends with the newest
+  next-day file. `fct_regionsum_today` carries regional `SS_SOLAR_AVAILABILITY`/`SS_WIND_AVAILABILITY`
+  against `SS_*_CLEAREDMW` every 5 minutes, which matched the per-unit sum on 2026-10-03: a
+  per-region line for the last days could be real. Per-unit stays next-day only.
 - [ ] **History back to 2015** — AEMO's monthly MMSDM archive can rebuild the daily files for
   2015-01-01 → 2018-03-31 (1,186 days). A daily file's `DUNIT` v3 record is MMSDM
   `DISPATCHLOAD`, and `DREGION` v3 is `DISPATCHPRICE` joined to `DISPATCHREGIONSUM`: columns by
