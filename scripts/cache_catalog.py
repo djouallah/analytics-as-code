@@ -257,21 +257,21 @@ def export_interconnector():
 
 def export_dim_duid():
     """The registered units, plus the rooftop pseudo-units of rooftop_units(): one per region
-    that has an estimate, fuel 'Rooftop solar', renewable, the state name taken from the
-    region's own units. No coordinates and no capacity: neither is published with the
-    estimate, so those columns are left out below and BY NAME fills them with NULL."""
+    that has an estimate, fuel 'Rooftop solar', the state name taken from the region's own
+    units. No coordinates and no capacity: neither is published with the estimate, so those
+    columns are left out below and BY NAME fills them with NULL."""
     con = connect_iceberg()
     con.execute(f"""
         COPY (
             SELECT DUID, Region, FuelSourceDescriptor, Participant, State, latitude, longitude,
-                StationName, TechnologyType, RegCapMW, MaxCapMW, StorageMWh, Renewable
+                StationName, TechnologyType, RegCapMW, MaxCapMW, StorageMWh
             FROM catalog.mart.dim_duid
             UNION ALL BY NAME
             SELECT replace(r.REGIONID, '1', '') || '_PV' AS DUID, r.REGIONID AS Region,
                 'Rooftop solar' AS FuelSourceDescriptor,
                 'Rooftop solar (AEMO estimate)' AS Participant, s.State,
                 'Rooftop solar ' || replace(r.REGIONID, '1', '') AS StationName,
-                'Rooftop PV, estimated' AS TechnologyType, true AS Renewable
+                'Rooftop PV, estimated' AS TechnologyType
             FROM (SELECT DISTINCT REGIONID FROM {ROOFTOP}
                   WHERE TYPE = 'MEASUREMENT' AND REGIONID IN {ROOFTOP_REGIONS}) r
             LEFT JOIN (SELECT Region, ANY_VALUE(State) AS State FROM catalog.mart.dim_duid GROUP BY Region) s

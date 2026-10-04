@@ -31,8 +31,6 @@ models:
         description: Maximum generating capacity (MW)
       - name: StorageMWh
         description: Maximum storage capacity (MWh) for batteries; null otherwise
-      - name: Renewable
-        description: True when the unit's fuel is renewable (solar, wind, water, bagasse, biogas, landfill gas, sewerage gas - the list is in dim_duid.sql); false otherwise, batteries and units with no fuel included
 
   - name: dim_calendar
     description: Calendar dimension with date attributes
