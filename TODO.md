@@ -23,25 +23,6 @@ only: a finished item is removed, not ticked.
   "Natural gas" (the list had "Natural gas / fuel oil"), ADPBA1L, the load side of the
   Adelaide Desalination battery, has no fuel, so its charging shows as "Unknown". Fix in the
   generator of that file, then `rebuild=dim_duid`.
-- [ ] **History back to 2015** — AEMO's monthly MMSDM archive can rebuild the daily files for
-  2015-01-01 → 2018-03-31 (1,186 days). A daily file's `DUNIT` v3 record is MMSDM
-  `DISPATCHLOAD`, and `DREGION` v3 is `DISPATCHPRICE` joined to `DISPATCHREGIONSUM`: columns by
-  name in the models' `csv_cols` order, the trading day running 04:05 → 04:00 next day.
-  Rebuilt days that exist (2018-04-01, 2018-08-29, 2019-12-30) match the real files on every
-  row and column, read the way `fct_scada` and `fct_price` read them. The 1,187 files are
-  built (1.8 GB) but **not uploaded**. Left to do:
-  - push them to `djouallah/aemo_data` under `data/archive/2015` … `2018`;
-  - `stg_csv_archive_log.py`: list the archive from 2015, not 2018, and start the
-    interconnector months at 2015-01 (the 36 extra monthly URLs exist, same 22-column layout);
-  - `dim_calendar.sql`: start at 2015-01-01 instead of 2018-03-06;
-  - load (`download_limit` raised once), then `import_data.yml` with `all_periods=true`.
-
-  Two things to settle first: the deployed data files are about 984 MB against GitHub
-  Pages' 1 GB soft limit, and seven more half-year files add roughly 250 MB; and plants
-  closed before 2018 (Hazelwood, Northern) will show as "Unregistered" until
-  `duid_unregistered.csv` (aemo_data) is regenerated over the longer history, from the same
-  MMSDM tables. MMSDM months before 2015 sit in a different folder layout, not
-  looked at. Rooftop solar has no usable estimate before 2018-03-06.
 - [ ] **Interconnectors from the data** — the Flows page types each link's two regions and
   its name (`INTERCONNECTORS` in `dashboard/index.html`); the facts carry only the id. AEMO's
   MMSDM `INTERCONNECTOR` table should have them (`REGIONFROM`, `REGIONTO`, a description;
