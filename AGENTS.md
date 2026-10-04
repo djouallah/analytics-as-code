@@ -127,19 +127,63 @@ transport fails the OneLake TLS handshake).
 `NEMTRACKER_TOKEN` (gh-pages deploy) is the one remaining true secret.
 
 ## Dashboard deploy
-The dashboard is two files. `dashboard/index.html` is the page: charts and the SQL behind them,
-written against views only (`v_scada`, `v_price`, `v_duid`, …; the list at the top of
-`data.js` is the contract) and never against an attached table. Its measures (fuel name,
-renewable, output-only, renewable share, capacity factor) are DuckDB macros it creates itself
-at startup through `data.query` (`MACROS` in the page), so they are not part of that contract:
-a host's `data.js` needs nothing for them. `dashboard/data.js` is how the
-`.duckdb` files are fetched, cached, attached and merged into those views
-(`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `has`, `query`), and it is the only
-part that knows about `data/`, the half-year files, the `dim`/`today`/`agg` databases and
-OPFS. A host that stores the files differently (the Fabric app) keeps the page and ships its
-own `data.js` with the same members and the same views.
+The dashboard is three files, one job each (since 2026-10-04; before, the page held the joins
+and the macros).
+- `dashboard/index.html` is the page: charts, and SQL that only picks columns from views,
+  filters and groups them. **It joins nothing** and knows no `dim_duid` column, no fuel
+  naming rule, no list of renewable fuels. A new chart that needs a join or a rule gets a
+  view or a macro in `model.js`, not SQL in the page.
+- `dashboard/model.js` is the semantic layer (`createModel(dataSource)`: the same members as
+  the data source, plus `needs`). Over `data.js`'s views it builds the ones the page reads —
+  `v_unit` (a unit's attributes under the page's names), `v_gen`/`v_gen_daily`/`v_gen_hourly`/
+  `v_gen_today` (generation with the unit's attributes on every row), `v_gen_price*` (plus the
+  price of the unit's region), `v_gen_latest`/`v_price_latest`, `v_region` — and the measures
+  as DuckDB macros (`generated`, `renewable_share`, `capture_price`, `capacity_factor`). The
+  list at its top is the page's contract. It reads only `data.js`'s views, so it is the same
+  file for every host. Its views are created once, in one query: DuckDB binds a view again on
+  every read, so they follow `data.js` rebuilding the views under them (checked on the pinned
+  wasm build); only `v_gen_hourly` waits for agg. Creating them costs ~30 ms at startup and
+  ~50 ms with history attached (each is bound at creation), which is why they are not rebuilt
+  after every attach.
+- `dashboard/data.js` is how the `.duckdb` files are fetched, cached, attached and merged into
+  the base views (`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `has`, `query`;
+  the list at its top is its contract with `model.js`), and it is the only part that knows
+  about `data/`, the half-year files, the `dim`/`today`/`agg` databases and OPFS. A host that
+  stores the files differently (the Fabric app) keeps the page and `model.js` and ships its
+  own `data.js` with the same members and the same views.
 
-`build.yml` (index.html, data.js, dbt docs) and `import_data.yml` (the .duckdb files) publish into
+Four things in that design are there for speed and must survive an edit. The last two were
+measured regressions in the first cut (2026-10-04), found by reading `EXPLAIN` and by timing
+every query of the page old against new:
+- A query that needs nothing about the unit (previous-period generation with no filter, the
+  Flows generators, the cutoff) reads the plain fact view, not `v_gen*`: no join to pay for.
+- `v_gen_latest` takes its newest interval from `v_scada_today`, not from the joined view.
+- `renewable` is `list_contains([...], fuel)`, not `is_renewable(fuel)`: an IN list becomes a
+  hash join, and a join in a view runs for every query whether it reads the column or not.
+  `is_renewable` stays inside `renewable_share`, where it always was.
+- The charts that leave storage out filter on `generator` (`fuel <> 'Grid'`), never on
+  `NOT storage`: with the fuel filter on Grid the optimizer then sees
+  `fuel = 'Grid' AND fuel <> 'Grid'` and reads nothing (18 ms); through
+  `NOT (fuel = 'Grid')` it does not (65 ms).
+
+`v_gen_price*` is a LEFT join: capture price and the battery chart add `price IS NOT NULL`
+(the INNER join they had), Analyze's generation + price keeps the rows without a price.
+
+How the move was checked (2026-10-04, headless Chrome, the page at the previous commit against
+the new one on one snapshot of the deployed files, plus two altered copies: 50 units and some
+prices removed; the pre-October schema): 756 page states, 2,770 query results. 2,713 were
+identical bit for bit, 48 equal to within 2e-13 (sums taken in another order: without the
+calendar join the planner reads the facts first), 9 had a NULL column typed DOUBLE instead of
+REAL; page text, KPIs, sparklines and chart options were identical, the map's points in
+another order in 53 snapshots (its query has no ORDER BY). Timed old against new SQL
+alternately in one page, 1,297 queries: 7.5% less in total, none slower by more than 10% and
+10 ms; a query over the model's views plans ~0.5 ms longer (more view to expand), which shows
+only on the sub-10 ms ones. Data-ready to first render: 787 ms against 823 ms. A change to
+`model.js` deserves the same two checks: `EXPLAIN` for a join that was not there, and old
+against new timings taken alternately in the same page (two separate sessions differ by more
+than the change does).
+
+`build.yml` (index.html, data.js, model.js, dbt docs) and `import_data.yml` (the .duckdb files) publish into
 `NemTracker/nemtracker.github.io` with `scripts/deploy_pages.sh`: a blobless depth-1 clone, the
 published paths added with `-f`, push retried on a race. It replaced peaceiris/actions-gh-pages,
 whose full-history clone (~900 MB, ~2.5 min) made concurrent deploys collide, and whose
@@ -158,8 +202,8 @@ its own schedule.
 A daily run refuses to splice when the deployed aggregate's tables or columns differ from what
 `build_daily_agg` now builds, so a change to them needs one `all_periods=true` dispatch. The
 page itself reads any column or table a deployed file lacks as "no data"
-(`data.js` `loadColumns`/`colOrNull`, and `data.has` in the page), so a new page can go out
-before the data does.
+(`data.js` `loadColumns`/`colOrNull`, the NULL columns of `model.js`'s `v_unit`, and `data.has`
+in the page), so a new page can go out before the data does.
 `energy_daily_agg.duckdb` holds, besides the per-day tables, hour-of-day × month tables
 (`scada_hourly`, `price_hourly`, `month_days`) that the daily-profile and price heatmap read
 for ranges over 30 days.

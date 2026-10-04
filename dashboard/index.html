@@ -419,6 +419,7 @@
 
   <script type="module">
     import { createDataSource } from "./data.js";
+    import { createModel, UNREGISTERED, ROOFTOP } from "./model.js";
 
     // =========================================================================
     // 1. CONSTANTS & THEME
@@ -538,16 +539,16 @@
     // 3. DUCKDB SETUP
     // =========================================================================
 
-    // Where the .duckdb files live, how they are fetched and attached, and the views built over
-    // them are data.js's business: the page reads those views (listed at the top of data.js)
-    // and never an attached table. A host that stores the files differently ships its own data.js.
-    const data = createDataSource({ onStatus: setStatus });
+    // Where the .duckdb files live and how they are fetched and attached is data.js's business
+    // (a host that stores the files differently ships its own). What the data means is
+    // model.js's: the joins, the unit's attributes, the measures. The page reads the views
+    // listed at the top of those two files, never an attached table, and joins nothing.
+    const data = createModel(createDataSource({ onStatus: setStatus }));
     let _db = null;
 
     async function initDuckDB() {
       // enough attached for the default "Last 3 days" view
       ({ db: _db } = await data.init());
-      for (const macro of MACROS) await data.query(`CREATE OR REPLACE MACRO ${macro}`);
 
       setStatus(window._cutoffCached || "Connected", "connected");
     }
@@ -567,10 +568,6 @@
       viewsChanged();
       setStatus(window._cutoffCached || "Connected", "connected");
     }
-
-    // A column the deployed file lacks reads as NULL, which the charts show as "no data",
-    // never as a number.
-    const colOrNull = (view, c, expr = c, alias = c) => data.has(view, c) ? `${expr} AS ${alias}` : `NULL::REAL AS ${alias}`;
 
     // Keyed on the view generation as well as the SQL: a query that started before data.js
     // rebuilt its views and finishes after it stores its result under the old generation.
@@ -742,95 +739,65 @@
     // 5. SQL QUERY BUILDERS
     // =========================================================================
 
-    // dim_duid holds the units on AEMO's registration list plus the ones in the data that are
-    // not on it (retired plant, replaced DUIDs). A unit in neither, e.g. one the list hasn't
-    // caught up with yet, is missing: facts are LEFT JOINed to it so those still count toward
-    // totals, grouped as "Unregistered"; units that are in it without a fuel are "Unknown".
-    const UNREGISTERED = 'Unregistered';
-    // Renewable fuels as AEMO describes them. 'Grid' (batteries) is storage: neither side.
-    // 'Rooftop solar' is the fuel of the rooftop pseudo-units (AEMO's regional estimate,
-    // scripts/cache_catalog.py rooftop_units).
-    const ROOFTOP = 'Rooftop solar';
-    const RENEWABLE_FUELS = ['Solar', ROOFTOP, 'Wind', 'Water', 'Bagasse', 'Biogas - sludge',
-      'Landfill methane / landfill gas', 'Sewerage / waste water'];
-    // The page's measures, each defined once as a DuckDB macro. They are the page's own:
-    // created over the views through data.query (initDuckDB), so data.js knows nothing of
-    // them. One that holds aggregates is worked out at whatever grain the query groups by.
-    const MACROS = [
-      // The name a unit's fuel goes by on the page.
-      `fuel_name(duid, descr) AS CASE WHEN duid IS NULL THEN '${UNREGISTERED}' ELSE COALESCE(descr, 'Unknown') END`,
-      `is_renewable(fuel) AS fuel IN (${RENEWABLE_FUELS.map(sqlStr).join(',')})`,
-      // Output only: a unit that is charging (negative) generates nothing.
-      `generated(v) AS GREATEST(v, 0)`,
-      // Renewable share of the output, in %.
-      `renewable_share(v, fuel) AS 100 * SUM(CASE WHEN is_renewable(fuel) THEN generated(v) ELSE 0 END)
-        / NULLIF(SUM(CASE WHEN fuel <> 'Grid' THEN generated(v) ELSE 0 END), 0)`,
-      // Capacity factor in %: energy over what the registered capacity could make in the hours.
-      `capacity_factor(mwh, cap, hours) AS 100 * SUM(mwh) / (SUM(cap) * hours)`,
-    ];
-    const FUEL = 'fuel_name(d.DUID, d.FuelSourceDescriptor)';
+    // The views and the measures are model.js's (listed at its top): v_gen* are the generation
+    // facts with the unit's attributes on every row (read here as `g`), v_unit the units,
+    // v_price* the prices (read as `p`).
+    // What a date range reads: the 5-minute views up to 30 days, the daily ones beyond.
+    function grain() {
+      return isIntradayMode()
+        ? { gen: 'v_gen', genPrice: 'v_gen_price', price: 'v_price', val: 'g.mw', energy: 'SUM(generated(g.mw)) / 12.0' }
+        : { gen: 'v_gen_daily', genPrice: 'v_gen_price_daily', price: 'v_price_daily', val: 'g.mwh', energy: 'SUM(generated(g.mwh))' };
+    }
 
     const sql = {
-      // --- FROM clauses (views defined in data.js) ---
-      // Intraday (<=30d): 5-min grain | daily (>30d): pre-aggregated
-      fromScada() {
-        return `${isIntradayMode() ? 'v_scada' : 'v_scada_daily'} sc
-          JOIN v_calendar c ON c.date = sc.date
-          LEFT JOIN v_duid d ON sc.DUID = d.DUID`;
-      },
-
-      fromPrice() {
-        return `${isIntradayMode() ? 'v_price' : 'v_price_daily'} p
-          JOIN v_calendar c ON c.date = p.date`;
-      },
-
       // --- WHERE clauses ---
-      whereScada({ withFuel = true } = {}) {
+      whereGen({ withFuel = true } = {}) {
         const { from, to } = getDateRange();
-        return [`c.date >= ${sqlStr(from)} AND c.date <= ${sqlStr(to)}`, ...sql.scadaFilters('sc.DUID', withFuel)].join(" AND ");
+        return [`g.date >= ${sqlStr(from)} AND g.date <= ${sqlStr(to)}`, ...sql.unitFilters('g', withFuel)].join(" AND ");
       },
 
-      // Region / fuel / unit filters on a unit table joined to dim_duid as d.
-      scadaFilters(duidCol, withFuel = true) {
+      // Region / fuel / unit filters on v_unit or a v_gen* view read as `a`.
+      unitFilters(a, withFuel = true) {
         const region = activeRegion(), fuel = withFuel ? activeFuel() : null;
         const clauses = [];
-        if (region) clauses.push(`d.Region = ${sqlStr(region)}`);
-        if (fuel) clauses.push(`${FUEL} = ${sqlStr(fuel)}`);
-        if (crossFilter.duids.length) clauses.push(`${duidCol} IN (${duidList()})`);
+        if (region) clauses.push(`${a}.region = ${sqlStr(region)}`);
+        if (fuel) clauses.push(`${a}.fuel = ${sqlStr(fuel)}`);
+        if (crossFilter.duids.length) clauses.push(`${a}.DUID IN (${duidList()})`);
         return clauses;
       },
 
       wherePrice() {
         const { from, to } = getDateRange();
-        return [`c.date >= ${sqlStr(from)} AND c.date <= ${sqlStr(to)}`, ...sql.priceFilters('p.REGIONID')].join(" AND ");
+        return [`p.date >= ${sqlStr(from)} AND p.date <= ${sqlStr(to)}`, ...sql.priceFilters('p.REGIONID')].join(" AND ");
       },
 
       // The region filter on a price table; a fuel or unit pick narrows it to their regions.
-      // The fuel is matched under the name the charts give it (see FUEL), whether it came from
-      // the dropdown or a click. Units missing from dim_duid have no region to narrow to.
+      // The fuel is matched under the name the charts give it, whether it came from the
+      // dropdown or a click. Units missing from dim_duid have no region to narrow to.
       priceFilters(regionCol) {
         const region = activeRegion(), fuel = activeFuel();
         if (region) return [`${regionCol} = ${sqlStr(region)}`];
-        if (crossFilter.duids.length) return [`${regionCol} IN (SELECT Region FROM v_duid WHERE DUID IN (${duidList()}))`];
-        if (fuel && fuel !== UNREGISTERED) return [`${regionCol} IN (SELECT Region FROM v_duid WHERE fuel_name(DUID, FuelSourceDescriptor) = ${sqlStr(fuel)})`];
+        if (crossFilter.duids.length) return [`${regionCol} IN (SELECT region FROM v_unit WHERE DUID IN (${duidList()}))`];
+        if (fuel && fuel !== UNREGISTERED) return [`${regionCol} IN (SELECT region FROM v_unit WHERE fuel = ${sqlStr(fuel)})`];
         return [];
       },
 
       // --- Filter population ---
-      regions: "SELECT DISTINCT Region FROM v_duid WHERE Region IS NOT NULL AND Region != 'WA1' ORDER BY Region",
-      fuels: "SELECT DISTINCT FuelSourceDescriptor AS fuel FROM v_duid WHERE FuelSourceDescriptor IS NOT NULL ORDER BY fuel",
-      allDuids: "SELECT DUID, Region, FuelSourceDescriptor AS fuel FROM v_duid WHERE DUID IS NOT NULL ORDER BY DUID",
+      regions: "SELECT region AS Region FROM v_region ORDER BY region",
+      fuels: "SELECT DISTINCT fuel_source AS fuel FROM v_unit WHERE fuel_source IS NOT NULL ORDER BY fuel",
+      allDuids: "SELECT DUID, region AS Region, fuel_source AS fuel FROM v_unit WHERE DUID IS NOT NULL ORDER BY DUID",
 
       // --- Generation chart ---
       // Rows with negative output (charging) form their own "<series> (charging)" series, so
       // they sit below the axis instead of being netted into, and cutting into, the stack.
-      generation(seriesCol, valCol, intraday) {
-        const series = `CASE WHEN ${valCol} < 0 THEN ${seriesCol} || '${CHARGING}' ELSE ${seriesCol} END AS series`;
-        const time = intraday ? ', CAST(sc.time AS INTEGER) AS time' : '';
+      generation(seriesCol, intraday) {
+        const { gen, val } = grain();
+        const series = `CASE WHEN ${val} < 0 THEN ${seriesCol} || '${CHARGING}' ELSE ${seriesCol} END AS series`;
+        const time = intraday ? ', CAST(g.time AS INTEGER) AS time' : '';
         return `
-          SELECT CAST(sc.date AS VARCHAR) AS date${time}, ${series}, SUM(${valCol})::DOUBLE AS total_mw
-          FROM ${sql.fromScada()}
-          WHERE ${sql.whereScada()}
+          SELECT CAST(g.date AS VARCHAR) AS date${time}, ${series}, SUM(${val})::DOUBLE AS total_mw
+          FROM ${gen} g
+          WHERE ${sql.whereGen()}
           GROUP BY ALL
           ORDER BY ALL`;
       },
@@ -840,14 +807,14 @@
         if (intraday) {
           return `
             SELECT CAST(p.date AS VARCHAR) AS date, CAST(p.time AS INTEGER) AS time, p.REGIONID AS Region, AVG(p.price)::DOUBLE AS avg_price
-            FROM ${sql.fromPrice()}
+            FROM ${grain().price} p
             WHERE ${sql.wherePrice()}
             GROUP BY p.date, p.time, p.REGIONID
             ORDER BY p.date, p.time`;
         }
         return `
           SELECT CAST(p.date AS VARCHAR) AS date, p.REGIONID AS Region, AVG(p.price)::DOUBLE AS avg_price
-          FROM ${sql.fromPrice()}
+          FROM ${grain().price} p
           WHERE ${sql.wherePrice()}
           GROUP BY p.date, p.REGIONID
           ORDER BY p.date`;
@@ -873,21 +840,21 @@
       },
 
       // --- Map ---
-      mapScatter(col) {
+      mapScatter() {
+        const { gen, val } = grain();
         return `
-          SELECT sc.DUID, ${FUEL} AS fuel, d.Region,
-            d.latitude::DOUBLE AS lat, d.longitude::DOUBLE AS lon,
-            AVG(${col})::DOUBLE AS mw
-          FROM ${sql.fromScada()}
-          WHERE ${sql.whereScada()} AND d.latitude IS NOT NULL
+          SELECT g.DUID, g.fuel, g.region AS Region, g.lat, g.lon,
+            AVG(${val})::DOUBLE AS mw
+          FROM ${gen} g
+          WHERE ${sql.whereGen()} AND g.lat IS NOT NULL
           GROUP BY ALL`;
       },
 
       generatorCount() {
         return `
-          SELECT CAST(COUNT(DISTINCT sc.DUID) AS INTEGER) AS cnt
-          FROM ${sql.fromScada()}
-          WHERE ${sql.whereScada()}`;
+          SELECT CAST(COUNT(DISTINCT g.DUID) AS INTEGER) AS cnt
+          FROM ${grain().gen} g
+          WHERE ${sql.whereGen()}`;
       },
 
       // --- Cutoff timestamp ---
@@ -999,8 +966,7 @@
       // A fuel chosen in the dropdown drills into its units exactly like clicking the fuel.
       const drillFuel = activeFuel();
 
-      // In a drill, units can be grouped by power station (dim_duid.StationName; units without
-      // one stay on their own).
+      // In a drill, units can be grouped by power station (units without one stay on their own).
       const stationsAvailable = drillFuel ? hasCapacity() : false;
       document.getElementById('drillLevelWrap').hidden = !stationsAvailable;
       const byStation = stationsAvailable && document.getElementById('drillLevel').value === 'station';
@@ -1008,15 +974,14 @@
         ? `${drillFuel} by ${byStation ? 'station' : 'DUID'} (${unit})`
         : `Generation by Fuel Type (${unit})`;
 
-      const valCol = intraday ? 'sc.mw' : 'sc.mwh';
-      const seriesCol = drillFuel ? (byStation ? 'COALESCE(d.StationName, sc.DUID)' : 'sc.DUID') : FUEL;
+      const seriesCol = drillFuel ? (byStation ? 'COALESCE(g.station, g.DUID)' : 'g.DUID') : 'g.fuel';
       const key = [drillFuel, byStation, activeRegion(), ...Object.values(getDateRange())].join('|');
       if (key !== drillKey) { drillKey = key; drillShown = DRILL_STEP; }
 
       // Demand is regional, so it only sits over the fuel view, not over a drill or a unit pick.
       const withDemand = !drillFuel && !crossFilter.duids.length;
       const [data, demandRows] = await Promise.all([
-        runQuery(sql.generation(seriesCol, valCol, intraday)),
+        runQuery(sql.generation(seriesCol, intraday)),
         withDemand ? runQuery(sql.demand(intraday)) : [],
       ]);
       if (seq !== _renderSeq) return;
@@ -1127,7 +1092,7 @@
         if (drillFuel) {
           // A station toggles all its units as a group; a unit toggles itself.
           const duids = byStation
-            ? (await runQuery(`SELECT DUID FROM v_duid WHERE StationName = ${sqlStr(name)}`)).map(r => r.DUID)
+            ? (await runQuery(`SELECT DUID FROM v_unit WHERE station = ${sqlStr(name)}`)).map(r => r.DUID)
             : [];
           const group = duids.length ? duids : [name];
           const allOn = group.every(d => crossFilter.duids.includes(d));
@@ -1163,20 +1128,12 @@
 
     // Latest MW: latest 5-min reading, respects region/fuel/DUID filters but ignores date
     async function updateLatestMW(seq) {
-      const region = activeRegion(), fuel = activeFuel();
-      const mwFilters = [];
-      if (region) mwFilters.push(`d.Region = ${sqlStr(region)}`);
-      if (fuel) mwFilters.push(`${FUEL} = ${sqlStr(fuel)}`);
-      if (crossFilter.duids.length) mwFilters.push(`sc.DUID IN (${duidList()})`);
-      const mwWhere = mwFilters.length ? `AND ${mwFilters.join(' AND ')}` : '';
+      const mwFilters = sql.unitFilters('g');
       const latestMWResult = await runQuery(`
-        SELECT SUM(generated(sc.mw))::DOUBLE AS total_mw, CAST(sc.date AS VARCHAR) AS d, sc.time
-        FROM v_scada_today sc
-        LEFT JOIN v_duid d ON sc.DUID = d.DUID
-        WHERE sc.date = (SELECT MAX(date) FROM v_scada_today)
-          AND sc.time = (SELECT MAX(time) FROM v_scada_today WHERE date = (SELECT MAX(date) FROM v_scada_today))
-          ${mwWhere}
-        GROUP BY sc.date, sc.time`);
+        SELECT SUM(generated(g.mw))::DOUBLE AS total_mw, CAST(g.date AS VARCHAR) AS d, g.time
+        FROM v_gen_latest g
+        ${mwFilters.length ? `WHERE ${mwFilters.join(' AND ')}` : ''}
+        GROUP BY g.date, g.time`);
       if (seq !== _renderSeq) return;
       if (latestMWResult.length) {
         setKpiNumber('kpiLatestMW', latestMWResult[0].total_mw, v => Math.round(v).toLocaleString(), `at ${formatTime(latestMWResult[0].time)}`);
@@ -1270,13 +1227,10 @@
     // Latest Price: latest 5-min reading, respects region filter but ignores date
     async function updateLatestPrice(seq) {
       const regionP = activeRegion();
-      const priceWhere = regionP ? `AND p.REGIONID = ${sqlStr(regionP)}` : '';
       const latestPriceResult = await runQuery(`
         SELECT AVG(p.price)::DOUBLE AS avg_price, CAST(p.date AS VARCHAR) AS d, p.time
-        FROM v_price_today p
-        WHERE p.date = (SELECT MAX(date) FROM v_price_today)
-          AND p.time = (SELECT MAX(time) FROM v_price_today WHERE date = (SELECT MAX(date) FROM v_price_today))
-          ${priceWhere}
+        FROM v_price_latest p
+        ${regionP ? `WHERE p.REGIONID = ${sqlStr(regionP)}` : ''}
         GROUP BY p.date, p.time`);
       if (seq !== _renderSeq) return;
       if (latestPriceResult.length) {
@@ -1296,12 +1250,13 @@
     // purpose.
     async function renewableShare() {
       const intraday = isIntradayMode();
+      const { gen, val } = grain();
       const rows = await runQuery(`
-        SELECT CAST(sc.date AS VARCHAR) AS date${intraday ? ', CAST(sc.time AS INTEGER) AS time' : ''},
-          renewable_share(${intraday ? 'sc.mw' : 'sc.mwh'}, ${FUEL})::DOUBLE AS share
-        FROM ${sql.fromScada()}
-        WHERE ${sql.whereScada({ withFuel: false })}
-        GROUP BY GROUPING SETS ((sc.date${intraday ? ', sc.time' : ''}), ()) ORDER BY ALL`);
+        SELECT CAST(g.date AS VARCHAR) AS date${intraday ? ', CAST(g.time AS INTEGER) AS time' : ''},
+          renewable_share(${val}, g.fuel)::DOUBLE AS share
+        FROM ${gen} g
+        WHERE ${sql.whereGen({ withFuel: false })}
+        GROUP BY GROUPING SETS ((g.date${intraday ? ', g.time' : ''}), ()) ORDER BY ALL`);
       return { rows: rows.filter(r => r.date != null), overall: rows.find(r => r.date == null)?.share };
     }
 
@@ -1334,16 +1289,16 @@
 
       const dates = a => `${a}.date >= DATE ${sqlStr(prevFrom)} AND ${a}.date <= DATE ${sqlStr(last)}`;
       const cur = a => `CAST(${a}.date >= DATE ${sqlStr(from)} AS INTEGER) AS cur, CAST(COUNT(DISTINCT ${a}.date) AS INTEGER) AS n`;
-      const DIM = 'LEFT JOIN v_duid d ON sc.DUID = d.DUID';
+      // Generation with no region or fuel filter needs nothing about the unit: the plain fact.
       const [gen, price, re] = await Promise.all([
-        runQuery(`SELECT ${cur('sc')}, (SUM(generated(sc.mwh)) / COUNT(DISTINCT sc.date))::DOUBLE AS v
-          FROM v_scada_daily sc ${activeRegion() || activeFuel() ? DIM : ''}
-          WHERE ${[dates('sc'), ...sql.scadaFilters('sc.DUID')].join(' AND ')} GROUP BY ALL`),
+        runQuery(`SELECT ${cur('g')}, (SUM(generated(g.mwh)) / COUNT(DISTINCT g.date))::DOUBLE AS v
+          FROM ${activeRegion() || activeFuel() ? 'v_gen_daily' : 'v_scada_daily'} g
+          WHERE ${[dates('g'), ...sql.unitFilters('g')].join(' AND ')} GROUP BY ALL`),
         runQuery(`SELECT ${cur('p')}, AVG(p.price)::DOUBLE AS v FROM v_price_daily p
           WHERE ${[dates('p'), ...sql.priceFilters('p.REGIONID')].join(' AND ')} GROUP BY ALL`),
-        runQuery(`SELECT ${cur('sc')}, renewable_share(sc.mwh, ${FUEL})::DOUBLE AS v
-          FROM v_scada_daily sc ${DIM}
-          WHERE ${[dates('sc'), ...sql.scadaFilters('sc.DUID', false)].join(' AND ')} GROUP BY ALL`),
+        runQuery(`SELECT ${cur('g')}, renewable_share(g.mwh, g.fuel)::DOUBLE AS v
+          FROM v_gen_daily g
+          WHERE ${[dates('g'), ...sql.unitFilters('g', false)].join(' AND ')} GROUP BY ALL`),
       ]);
       if (seq !== _renderSeq) return;
       const vs = days === 1 ? 'vs the day before' : `vs previous ${days} days`;
@@ -1424,9 +1379,8 @@
     const GEN_LEGEND = ['Black coal', 'Brown coal', 'Natural gas', 'Water', 'Wind', 'Solar', 'Grid'];
     let _genUnits = null;
     async function genUnits() {
-      _genUnits ??= new Map((await runQuery(`SELECT DUID, FuelSourceDescriptor AS fuel, Region,
-        is_renewable(fuel_name(DUID, FuelSourceDescriptor)) AS renewable,
-        latitude::DOUBLE AS lat, longitude::DOUBLE AS lon FROM v_duid`)).map(u => [u.DUID, u]));
+      _genUnits ??= new Map((await runQuery(`SELECT DUID, fuel_source AS fuel, region AS Region,
+        renewable, lat, lon FROM v_unit`)).map(u => [u.DUID, u]));
       return _genUnits;
     }
     async function ensureGens(date) {
@@ -1819,7 +1773,7 @@
       if (!intraday && hourlyMissing('chart-heat', 'v_price_hourly')) return;
       const rows = await runQuery(intraday ? `
           SELECT CAST(p.date AS VARCHAR) AS date, CAST(p.time // 100 AS INTEGER) AS y, AVG(p.price)::DOUBLE AS price
-          FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()} GROUP BY ALL ORDER BY ALL` : `
+          FROM v_price p WHERE ${sql.wherePrice()} GROUP BY ALL ORDER BY ALL` : `
           SELECT CAST(h.month AS VARCHAR) AS date, CAST(h.hour AS INTEGER) AS y, (SUM(h.price * h.n) / SUM(h.n))::DOUBLE AS price
           FROM v_price_hourly h WHERE ${[monthsSql('h.month'), ...sql.priceFilters('h.REGIONID')].join(' AND ')}
           GROUP BY ALL ORDER BY ALL`);
@@ -1851,17 +1805,17 @@
     async function renderProfile(seq) {
       const intraday = isIntradayMode();
       document.getElementById('title-profile').textContent = 'Average day by fuel (MW)';
-      if (!intraday && hourlyMissing('chart-profile', 'v_scada_hourly')) return;
+      if (!intraday && hourlyMissing('chart-profile', 'v_gen_hourly')) return;
       const months = `SELECT month, days FROM v_month_days WHERE ${monthsSql('month')}`;
       const [rows, span] = await Promise.all([runQuery(intraday ? `
-        SELECT ${FUEL} AS fuel, CAST(sc.time AS INTEGER) AS time,
-          (SUM(generated(sc.mw)) / COUNT(DISTINCT sc.date))::DOUBLE AS mw
-        FROM ${sql.fromScada()} WHERE ${sql.whereScada()} AND ${FUEL} <> 'Grid'
+        SELECT g.fuel, CAST(g.time AS INTEGER) AS time,
+          (SUM(generated(g.mw)) / COUNT(DISTINCT g.date))::DOUBLE AS mw
+        FROM v_gen g WHERE ${sql.whereGen()} AND g.generator
         GROUP BY ALL ORDER BY ALL` : `
-        SELECT ${FUEL} AS fuel, CAST(h.hour AS INTEGER) * 100 AS time,
+        SELECT h.fuel, CAST(h.hour AS INTEGER) * 100 AS time,
           (SUM(h.mwh) / (SELECT SUM(days) FROM (${months})))::DOUBLE AS mw
-        FROM v_scada_hourly h LEFT JOIN v_duid d ON h.DUID = d.DUID
-        WHERE ${['h.month IN (SELECT month FROM (' + months + '))', ...sql.scadaFilters('h.DUID'), `${FUEL} <> 'Grid'`].join(' AND ')}
+        FROM v_gen_hourly h
+        WHERE ${['h.month IN (SELECT month FROM (' + months + '))', ...sql.unitFilters('h'), 'h.generator'].join(' AND ')}
         GROUP BY ALL ORDER BY ALL`),
         intraday ? [] : runQuery(`SELECT CAST(MIN(month) AS VARCHAR) AS first, CAST(MAX(month) AS VARCHAR) AS last FROM (${months})`)]);
       if (seq !== _renderSeq) return;
@@ -1888,17 +1842,17 @@
     // Generation-weighted price each fuel earned in its own region, against the plain average.
     async function renderCapture(seq) {
       const intraday = isIntradayMode();
-      const pView = intraday ? 'v_price' : 'v_price_daily';
-      const v = intraday ? 'generated(sc.mw)' : 'generated(sc.mwh)';
+      const { genPrice, price, val } = grain();
+      const v = `generated(${val})`;
+      // Only where the region has a price.
       const rows = await runQuery(`
-        SELECT ${FUEL} AS fuel,
-          (SUM(${v} * p.price) / NULLIF(SUM(${v}), 0))::DOUBLE AS capture,
+        SELECT g.fuel,
+          capture_price(${v}, g.price)::DOUBLE AS capture,
           SUM(${v})::DOUBLE AS volume
-        FROM ${sql.fromScada()}
-        JOIN ${pView} p ON p.date = sc.date ${intraday ? 'AND p.time = sc.time' : ''} AND p.REGIONID = d.Region
-        WHERE ${sql.whereScada({ withFuel: false })} AND ${FUEL} <> 'Grid'
+        FROM ${genPrice} g
+        WHERE ${sql.whereGen({ withFuel: false })} AND g.generator AND g.price IS NOT NULL
         GROUP BY ALL HAVING SUM(${v}) > 0 ORDER BY capture`);
-      const avg = await runQuery(`SELECT AVG(p.price)::DOUBLE AS avg FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()}`);
+      const avg = await runQuery(`SELECT AVG(p.price)::DOUBLE AS avg FROM ${price} p WHERE ${sql.wherePrice()}`);
       if (seq !== _renderSeq) return;
       document.getElementById('title-capture').textContent =
         `Capture price by fuel ($/MWh${intraday ? '' : ', from daily prices'})`;
@@ -1923,7 +1877,7 @@
       const rows = await runQuery(`
         SELECT p.REGIONID AS region, (100 * AVG(CASE WHEN p.price < 0 THEN 1 ELSE 0 END))::DOUBLE AS pct,
           MIN(p.price)::DOUBLE AS lowest
-        FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()} GROUP BY ALL ORDER BY region`);
+        FROM ${grain().price} p WHERE ${sql.wherePrice()} GROUP BY ALL ORDER BY region`);
       if (seq !== _renderSeq) return;
       document.getElementById('title-neg').textContent = intraday
         ? 'Share of 5-minute intervals with negative prices (%)' : 'Share of days with a negative average price (%)';
@@ -1947,7 +1901,7 @@
       const rows = await runQuery(`
         SELECT CAST(p.date AS VARCHAR) AS date${intraday ? ', CAST(p.time AS INTEGER) AS time' : ''},
           p.REGIONID AS region, AVG(p.net_interchange)::DOUBLE AS mw
-        FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()}
+        FROM ${grain().price} p WHERE ${sql.wherePrice()}
         GROUP BY ALL ORDER BY ALL`);
       if (seq !== _renderSeq) return;
       document.getElementById('title-net').textContent =
@@ -1970,7 +1924,7 @@
     }
 
     // Older energy_dim files (cached, or deployed before 2026-10-01) have no capacity columns.
-    const hasCapacity = () => data.has('v_duid', 'RegCapMW');
+    const hasCapacity = () => data.has('v_unit', 'cap_mw');
 
     async function renderCapacityFactor(seq) {
       if (!hasCapacity()) {
@@ -1979,18 +1933,18 @@
       }
       const intraday = isIntradayMode();
       // Hours in the range = intervals (or days) present in the price data for it.
+      const { gen, price, energy } = grain();
       const hours = intraday
-        ? `(SELECT COUNT(DISTINCT (p.date, p.time)) / 12.0 FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()})`
-        : `(SELECT COUNT(DISTINCT p.date) * 24.0 FROM ${sql.fromPrice()} WHERE ${sql.wherePrice()})`;
-      const energy = intraday ? 'SUM(generated(sc.mw)) / 12.0' : 'SUM(generated(sc.mwh))';
+        ? `(SELECT COUNT(DISTINCT (p.date, p.time)) / 12.0 FROM ${price} p WHERE ${sql.wherePrice()})`
+        : `(SELECT COUNT(DISTINCT p.date) * 24.0 FROM ${price} p WHERE ${sql.wherePrice()})`;
       // One row per unit, then the factor at two grains in one pass: per fuel (the rows
       // without a DUID) and per unit. Sorted by factor, so the top units are the last ones.
       const rows = (await runQuery(`
         WITH u AS (
-          SELECT sc.DUID, ${FUEL} AS fuel, ANY_VALUE(d.StationName) AS station, ANY_VALUE(d.RegCapMW) AS cap,
+          SELECT g.DUID, g.fuel, ANY_VALUE(g.station) AS station, ANY_VALUE(g.cap_mw) AS cap,
             ${energy} AS mwh
-          FROM ${sql.fromScada()} WHERE ${sql.whereScada()} AND d.RegCapMW > 0 AND ${FUEL} <> 'Grid'
-          GROUP BY sc.DUID, ${FUEL})
+          FROM ${gen} g WHERE ${sql.whereGen()} AND g.cap_mw > 0 AND g.generator
+          GROUP BY g.DUID, g.fuel)
         SELECT u.DUID, u.fuel, ANY_VALUE(u.station) AS station, SUM(u.cap)::DOUBLE AS cap,
           capacity_factor(u.mwh, u.cap, ${hours})::DOUBLE AS cf
         FROM u GROUP BY GROUPING SETS ((u.fuel), (u.DUID, u.fuel)) ORDER BY cf`)).filter(r => r.cf != null);
@@ -2039,23 +1993,20 @@
       const title = document.getElementById('title-battery');
       title.textContent = 'Batteries: average day (MW) and price';
       if (!isIntradayMode()) return showEmpty('chart-battery', 'Choose 30 days or less: daily totals net charging against output');
-      const BATTERY = `d.FuelSourceDescriptor = 'Grid'`;
       const [rows, fleet] = await Promise.all([
         runQuery(`
-          SELECT CAST(sc.time AS INTEGER) AS time,
-            (SUM(GREATEST(sc.mw, 0)) / COUNT(DISTINCT sc.date))::DOUBLE AS discharge,
-            (SUM(LEAST(sc.mw, 0)) / COUNT(DISTINCT sc.date))::DOUBLE AS charge,
-            AVG(p.price)::DOUBLE AS price,
-            SUM(GREATEST(sc.mw, 0) * p.price)::DOUBLE AS sold, SUM(GREATEST(sc.mw, 0))::DOUBLE AS sold_mw,
-            SUM(LEAST(sc.mw, 0) * p.price)::DOUBLE AS bought, SUM(LEAST(sc.mw, 0))::DOUBLE AS bought_mw
-          FROM ${sql.fromScada()}
-          JOIN v_price p ON p.date = sc.date AND p.time = sc.time AND p.REGIONID = d.Region
-          WHERE ${sql.whereScada({ withFuel: false })} AND ${BATTERY}
+          SELECT CAST(g.time AS INTEGER) AS time,
+            (SUM(GREATEST(g.mw, 0)) / COUNT(DISTINCT g.date))::DOUBLE AS discharge,
+            (SUM(LEAST(g.mw, 0)) / COUNT(DISTINCT g.date))::DOUBLE AS charge,
+            AVG(g.price)::DOUBLE AS price,
+            SUM(GREATEST(g.mw, 0) * g.price)::DOUBLE AS sold, SUM(GREATEST(g.mw, 0))::DOUBLE AS sold_mw,
+            SUM(LEAST(g.mw, 0) * g.price)::DOUBLE AS bought, SUM(LEAST(g.mw, 0))::DOUBLE AS bought_mw
+          FROM v_gen_price g
+          WHERE ${sql.whereGen({ withFuel: false })} AND g.storage AND g.price IS NOT NULL
           GROUP BY ALL ORDER BY ALL`),
         runQuery(`
-          SELECT COUNT(*)::INTEGER AS units, ${colOrNull('v_duid', 'RegCapMW', 'SUM(d.RegCapMW)::DOUBLE', 'mw')},
-            ${colOrNull('v_duid', 'StorageMWh', 'SUM(d.StorageMWh)::DOUBLE', 'mwh')}
-          FROM v_duid d WHERE ${[BATTERY, ...sql.scadaFilters('d.DUID', false)].join(' AND ')}`),
+          SELECT COUNT(*)::INTEGER AS units, SUM(u.cap_mw)::DOUBLE AS mw, SUM(u.storage_mwh)::DOUBLE AS mwh
+          FROM v_unit u WHERE ${['u.storage', ...sql.unitFilters('u', false)].join(' AND ')}`),
       ]);
       if (seq !== _renderSeq) return;
       if (!rows.length) return showEmpty('chart-battery', 'No battery output for the selected filters');
@@ -2088,16 +2039,15 @@
       }, true);
     }
 
-    // Energy by owner (dim_duid.Participant) and power station, coloured by fuel. Units that are
-    // not in dim_duid, or have no owner there, are grouped as "Unknown".
+    // Energy by owner and power station, coloured by fuel. Units that are not in dim_duid, or
+    // have no owner there, are grouped as "Unknown".
     async function renderOwners(seq) {
-      if (!data.has('v_duid', 'Participant')) return showEmpty('chart-owners', 'Ownership data not deployed yet');
-      const intraday = isIntradayMode();
-      const energy = intraday ? 'SUM(generated(sc.mw)) / 12.0' : 'SUM(generated(sc.mwh))';
+      if (!data.has('v_unit', 'owner')) return showEmpty('chart-owners', 'Ownership data not deployed yet');
+      const { gen, energy } = grain();
       const rows = await runQuery(`
-        SELECT COALESCE(d.Participant, 'Unknown') AS owner, COALESCE(d.StationName, sc.DUID) AS station,
-          ${FUEL} AS fuel, (${energy})::DOUBLE AS mwh
-        FROM ${sql.fromScada()} WHERE ${sql.whereScada()}
+        SELECT COALESCE(g.owner, 'Unknown') AS owner, COALESCE(g.station, g.DUID) AS station,
+          g.fuel, (${energy})::DOUBLE AS mwh
+        FROM ${gen} g WHERE ${sql.whereGen()}
         GROUP BY ALL HAVING ${energy} > 0 ORDER BY mwh DESC`);
       if (seq !== _renderSeq) return;
       if (!rows.length) return showEmpty('chart-owners');
@@ -2167,13 +2117,13 @@
       const region = activeRegion();
       // The newest day is still filling: its energy and its share are not a day's yet.
       const before = `< DATE ${sqlStr(document.getElementById('dateTo').max)}`;
-      const sumIf = (cond, alias) => `SUM(CASE WHEN ${cond} THEN generated(sc.mwh) ELSE 0 END)::DOUBLE AS ${alias}`;
+      const sumIf = (cond, alias) => `SUM(CASE WHEN ${cond} THEN generated(g.mwh) ELSE 0 END)::DOUBLE AS ${alias}`;
       const [gen, price] = await Promise.all([
         runQuery(`
-          SELECT CAST(sc.date AS VARCHAR) AS date, renewable_share(sc.mwh, ${FUEL})::DOUBLE AS re,
-            ${sumIf(`${FUEL} IN ('Solar', ${sqlStr(ROOFTOP)})`, 'solar')}, ${sumIf(`${FUEL} = 'Wind'`, 'wind')}
-          FROM v_scada_daily sc LEFT JOIN v_duid d ON sc.DUID = d.DUID
-          WHERE sc.date ${before}${region ? ` AND d.Region = ${sqlStr(region)}` : ''}
+          SELECT CAST(g.date AS VARCHAR) AS date, renewable_share(g.mwh, g.fuel)::DOUBLE AS re,
+            ${sumIf(`g.fuel IN ('Solar', ${sqlStr(ROOFTOP)})`, 'solar')}, ${sumIf(`g.fuel = 'Wind'`, 'wind')}
+          FROM v_gen_daily g
+          WHERE g.date ${before}${region ? ` AND g.region = ${sqlStr(region)}` : ''}
           GROUP BY ALL ORDER BY ALL`),
         runQuery(`
           SELECT CAST(p.date AS VARCHAR) AS date, AVG(p.price)::DOUBLE AS price,
@@ -2268,10 +2218,9 @@
 
       const intraday = isIntradayMode();
       const unit = intraday ? 'MW' : 'MWh';
-      const col = intraday ? 'sc.mw' : 'sc.mwh';
       document.getElementById('title-map').textContent = `Generators (average ${intraday ? 'MW' : 'MWh/day'}, sized by output)`;
 
-      const data = await runQuery(sql.mapScatter(col));
+      const data = await runQuery(sql.mapScatter());
       if (seq !== _renderSeq) return;
 
       const fuels = [...new Set(data.map(d => d.fuel))].sort();
@@ -2483,52 +2432,36 @@
       const raw = dimensions.time; // time dimension = 5-min raw, else daily
       if (hasGen && hasPrice) return buildGenPriceSQL(dimensions, raw);
 
-      // For price-only mode, use p. alias
-      const selDate = hasGen ? 'CAST(sc.date AS VARCHAR) AS date' : 'CAST(p.date AS VARCHAR) AS date';
-      const grpDate = hasGen ? 'sc.date' : 'p.date';
-
-      const sel = [selDate];
-      const grp = [grpDate];
-      const ord = [grpDate];
+      // Generation reads a v_gen* view as g, price alone a v_price* view as p.
+      const a = hasGen ? 'g' : 'p';
+      const sel = [`CAST(${a}.date AS VARCHAR) AS date`];
+      const grp = [`${a}.date`];
+      const ord = [`${a}.date`];
 
       if (raw) {
-        const timeAlias = hasGen ? 'sc' : 'p';
-        sel.push(`lpad(CAST(${timeAlias}.time AS VARCHAR), 4, '0') AS time`);
-        grp.push(`${timeAlias}.time`);
-        ord.push(`${timeAlias}.time`);
+        sel.push(`lpad(CAST(${a}.time AS VARCHAR), 4, '0') AS time`);
+        grp.push(`${a}.time`);
+        ord.push(`${a}.time`);
       }
 
-      if (dimensions.duid && hasGen) { sel.push('sc.DUID'); grp.push('sc.DUID'); ord.push('sc.DUID'); }
-      if (dimensions.fuel && hasGen) { sel.push(`${FUEL} AS fuel`); grp.push(FUEL); }
+      if (dimensions.duid && hasGen) { sel.push('g.DUID'); grp.push('g.DUID'); ord.push('g.DUID'); }
+      if (dimensions.fuel && hasGen) { sel.push('g.fuel'); grp.push('g.fuel'); }
       if (dimensions.region) {
-        if (hasGen) { sel.push('d.Region AS region'); grp.push('d.Region'); }
+        if (hasGen) { sel.push('g.region'); grp.push('g.region'); }
         else { sel.push('p.REGIONID AS region'); grp.push('p.REGIONID'); }
       }
 
       // Measures
       if (hasGen) {
-        if (raw) sel.push('ROUND(SUM(sc.mw)::DOUBLE, 2) AS mw');
-        else sel.push('ROUND(SUM(sc.mwh)::DOUBLE, 2) AS mwh');
+        if (raw) sel.push('ROUND(SUM(g.mw)::DOUBLE, 2) AS mw');
+        else sel.push('ROUND(SUM(g.mwh)::DOUBLE, 2) AS mwh');
       }
       if (hasPrice) {
         sel.push('ROUND(AVG(p.price)::DOUBLE, 2) AS price');
       }
 
-      // FROM clause
-      let from;
-      if (hasGen) {
-        const scView = raw ? 'v_scada' : 'v_scada_daily';
-        from = `${scView} sc
-          JOIN v_calendar c ON c.date = sc.date
-          LEFT JOIN v_duid d ON sc.DUID = d.DUID`;
-      } else {
-        const prView = raw ? 'v_price' : 'v_price_daily';
-        from = `${prView} p
-          JOIN v_calendar c ON c.date = p.date`;
-      }
-
-      // WHERE
-      const where = hasGen ? sql.whereScada() : sql.wherePrice();
+      const from = hasGen ? `${raw ? 'v_gen' : 'v_gen_daily'} g` : `${raw ? 'v_price' : 'v_price_daily'} p`;
+      const where = hasGen ? sql.whereGen() : sql.wherePrice();
 
       return `SELECT ${sel.join(', ')}\nFROM ${from}\nWHERE ${where}\nGROUP BY ${grp.join(', ')}\nORDER BY ${ord.join(', ')}`;
     }
@@ -2539,20 +2472,17 @@
     // how many units it has.
     function buildGenPriceSQL(dimensions, raw) {
       const val = raw ? 'mw' : 'mwh';
-      const inner = ['CAST(sc.date AS VARCHAR) AS date'], outer = ['date'];
-      if (raw) { inner.push(`lpad(CAST(sc.time AS VARCHAR), 4, '0') AS time`); outer.push('time'); }
-      if (dimensions.duid) { inner.push('sc.DUID'); outer.push('DUID'); }
-      if (dimensions.fuel) { inner.push(`${FUEL} AS fuel`); outer.push('fuel'); }
-      inner.push('d.Region AS region');
+      const inner = ['CAST(g.date AS VARCHAR) AS date'], outer = ['date'];
+      if (raw) { inner.push(`lpad(CAST(g.time AS VARCHAR), 4, '0') AS time`); outer.push('time'); }
+      if (dimensions.duid) { inner.push('g.DUID'); outer.push('DUID'); }
+      if (dimensions.fuel) { inner.push('g.fuel'); outer.push('fuel'); }
+      inner.push('g.region');
       if (dimensions.region) outer.push('region');
       return `SELECT ${outer.join(', ')}, ROUND(SUM(${val}), 2) AS ${val}, ROUND(AVG(price), 2) AS price
 FROM (
-  SELECT ${inner.join(', ')}, SUM(sc.${val})::DOUBLE AS ${val}, AVG(p.price)::DOUBLE AS price
-  FROM ${raw ? 'v_scada' : 'v_scada_daily'} sc
-  JOIN v_calendar c ON c.date = sc.date
-  LEFT JOIN v_duid d ON sc.DUID = d.DUID
-  LEFT JOIN ${raw ? 'v_price' : 'v_price_daily'} p ON sc.date = p.date${raw ? ' AND sc.time = p.time' : ''} AND d.Region = p.REGIONID
-  WHERE ${sql.whereScada()}
+  SELECT ${inner.join(', ')}, SUM(g.${val})::DOUBLE AS ${val}, AVG(g.price)::DOUBLE AS price
+  FROM ${raw ? 'v_gen_price' : 'v_gen_price_daily'} g
+  WHERE ${sql.whereGen()}
   GROUP BY ALL
 )
 GROUP BY ALL
@@ -2574,11 +2504,12 @@ ORDER BY ALL`;
     // Read from the query itself, which may have been edited by hand: a 5-minute view needs
     // the half-years of the header's date range, a daily or hourly one needs agg.
     async function ensureAnalyzeData(query) {
-      if (/\bv_(scada|price|interconnector)\b/i.test(query)) {
+      const needs = data.needs(query);
+      if (needs.history) {
         const { from, to } = getDateRange();
         await ensureHistory(from, to, "Downloading detailed data for export...");
       }
-      if (/\bv_(scada|price)_(daily|hourly)\b|\bv_month_days\b/i.test(query)) await loadDailyAggDatabase();
+      if (needs.agg) await loadDailyAggDatabase();
     }
 
     // --- Analyze: preview ---
