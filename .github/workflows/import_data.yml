@@ -190,12 +190,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.NEMTRACKER_TOKEN }}
         run: |
+          # pipefail: without it a failed `gh api` is hidden by `sort`, the list is empty and
+          # the manifest published below tells the page there is no 5-minute history at all.
+          set -o pipefail
           mkdir -p deploy_manifest/data
           # List energy_data_<YYYY>_h<H>.duckdb actually committed in the deploy
           # repo, derive the period tags, and write a manifest of exactly those.
           gh api repos/NemTracker/nemtracker.github.io/contents/data --paginate \
             --jq '.[].name | select(test("^energy_data_[0-9]{4}_h[12]\\.duckdb$")) | capture("^energy_data_(?<tag>[0-9]{4}_h[12])\\.duckdb$").tag' \
             | sort -u > tags.txt
+          if [ ! -s tags.txt ]; then
+            echo "::error::No energy_data_*.duckdb found in the deploy repo; not publishing an empty manifest"
+            exit 1
+          fi
           python - <<'PY'
           import json
           with open("tags.txt") as f:

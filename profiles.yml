@@ -1,11 +1,16 @@
 iceberg_as_code:
   target: dev
   outputs:
+    # TimeZone UTC on every target: the fact models cast AEMO's wall-clock strings to
+    # TIMESTAMPTZ, so the instant they store depends on the session's zone. The runners are
+    # UTC already; this keeps a run from a machine that isn't from writing other values.
     ci:
       type: duckdb
       path: "{{ env_var('DBT_DUCKDB_PATH', ':memory:') }}"
       threads: 1
       schema: "{{ env_var('DBT_SCHEMA', 'mart') }}"
+      settings:
+        TimeZone: UTC
       extensions:
         - parquet
         - httpfs
@@ -25,6 +30,8 @@ iceberg_as_code:
       path: ':memory:'
       threads: 1
       schema: "{{ env_var('DBT_SCHEMA', 'mart') }}"
+      settings:
+        TimeZone: UTC
       extensions:
         - parquet
         - httpfs
@@ -53,6 +60,8 @@ iceberg_as_code:
       path: ':memory:'
       threads: 1
       schema: "{{ env_var('DBT_SCHEMA', 'mart') }}"
+      settings:
+        TimeZone: UTC
       extensions:
         - parquet
         - httpfs

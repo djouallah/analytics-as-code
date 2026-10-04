@@ -176,37 +176,69 @@ def model(dbt, session):
                     )
             save_log()
 
+    def warn(msg):
+        """A warning on the workflow run's page (a plain print is buried in the log)."""
+        print(f"::warning::{msg}")
+
+    def list_nemweb(table, url, like, limit=None):
+        """TEMP TABLE `table` (full_url, filename): the zips a nemweb folder lists whose line
+        matches `like`, the newest `limit` of them when capped. True if the folder answered.
+
+        A folder that doesn't answer (nemweb down, a folder AEMO has removed) leaves the table
+        empty: that feed downloads nothing this run, and the other feeds and the fact models'
+        backlog carry on. Raising here would fail this model and skip every fact with it."""
+        host = "/".join(url.split("/", 3)[:3])
+        try:
+            session.sql(f"""
+                CREATE OR REPLACE TEMP TABLE {table} AS
+                WITH
+                  html_data AS (SELECT content AS html FROM read_text('{url}')),
+                  lines AS (SELECT unnest(string_split(html, '<br>')) AS line FROM html_data)
+                SELECT
+                  '{host}' || regexp_extract(line, 'HREF="([^"]+)"', 1) AS full_url,
+                  split_part(regexp_extract(line, 'HREF="[^"]+/([^"]+\\.zip)"', 1), '.', 1) AS filename
+                FROM lines
+                WHERE line LIKE '{like}'
+                {f"ORDER BY full_url DESC LIMIT {limit}" if limit else ""}
+            """)
+            return True
+        except Exception as e:
+            warn(f"{url} could not be listed, nothing downloaded from it this run: {e}")
+            session.sql(f"CREATE OR REPLACE TEMP TABLE {table} (full_url VARCHAR, filename VARCHAR)")
+            return False
+
+    def not_archived(source_type):
+        """WHERE fragment over a listing `w`: the log has no such file of this source type.
+        NOT EXISTS, not NOT IN: one NULL in the log would turn NOT IN into "never true"."""
+        return (f"NOT EXISTS (SELECT 1 FROM _csv_archive_log l "
+                f"WHERE l.source_type = '{source_type}' AND l.source_filename = w.filename)")
+
+    def to_download(table, source_type, where="TRUE"):
+        """(full_url, filename) of the listed files the log doesn't have, newest first."""
+        return session.sql(f"""
+            SELECT full_url, filename FROM {table} w
+            WHERE {where} AND {not_archived(source_type)}
+            ORDER BY filename DESC
+            LIMIT {download_limit}
+        """).fetchall()
+
     # =========================================================================
     # DAILY REPORTS (SCADA + PRICE)
     # =========================================================================
 
     # Fetch file listing from AEMO
-    session.sql("""
-        CREATE OR REPLACE TEMP TABLE daily_files_web AS
-        WITH
-          html_data AS (
-            SELECT content AS html
-            FROM read_text('https://nemweb.com.au/Reports/Current/Daily_Reports/')
-          ),
-          lines AS (
-            SELECT unnest(string_split(html, '<br>')) AS line FROM html_data
-          )
-        SELECT
-          'https://nemweb.com.au' || regexp_extract(line, 'HREF="([^"]+)"', 1) AS full_url,
-          split_part(regexp_extract(line, 'HREF="[^"]+/([^"]+\\.zip)"', 1), '.', 1) AS filename
-        FROM lines
-        WHERE line LIKE '%PUBLIC_DAILY%.zip%'
-    """)
+    daily_listed = list_nemweb('daily_files_web', 'https://nemweb.com.au/Reports/Current/Daily_Reports/',
+                               '%PUBLIC_DAILY%.zip%')
 
     # Check if AEMO has enough new files before hitting GitHub
     aemo_new = session.sql(f"""
-        SELECT count(*) FROM daily_files_web
-        WHERE 'daily::' || filename NOT IN (
-            SELECT source_type || '::' || source_filename FROM _csv_archive_log
-        )
+        SELECT count(*) FROM daily_files_web w WHERE {not_archived('daily')}
     """).fetchone()[0]
+    # The backfills below wait for the daily feed to have caught up; a listing that failed
+    # says nothing about that, so they wait for the next run too.
+    caught_up = daily_listed and aemo_new < download_limit
 
-    if aemo_new < download_limit:
+    if caught_up:
         # Authenticated GitHub API calls get 5000 req/h vs 60 anonymous — shared CI
         # runner IPs exhaust the anonymous quota and the listing calls fail.
         github_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
@@ -236,20 +268,15 @@ def model(dbt, session):
                       split_part(json_extract_string(file_info, '$.name'), '.', 1) AS filename
                     FROM parsed_files
                     WHERE json_extract_string(file_info, '$.name') LIKE 'PUBLIC_DAILY%.zip'
-                      AND split_part(json_extract_string(file_info, '$.name'), '.', 1)
-                          NOT IN (SELECT filename FROM daily_files_web)
+                      AND NOT EXISTS (
+                        SELECT 1 FROM daily_files_web w
+                        WHERE w.filename = split_part(json_extract_string(file_info, '$.name'), '.', 1))
                 """)
             except Exception as e:
                 print(f"  WARN: GitHub backfill listing for {year} unavailable, skipping it: {e}")
 
     # Get new daily files to download
-    daily_to_download = session.sql(f"""
-        SELECT full_url, filename FROM daily_files_web
-        WHERE 'daily::' || filename NOT IN (
-            SELECT source_type || '::' || source_filename FROM _csv_archive_log
-        )
-        LIMIT {download_limit}
-    """).fetchall()
+    daily_to_download = to_download('daily_files_web', 'daily')
 
     if daily_to_download:
         process_downloads(daily_to_download, 'daily', 'daily')
@@ -258,32 +285,10 @@ def model(dbt, session):
     # INTRADAY SCADA
     # =========================================================================
 
-    session.sql("""
-        CREATE OR REPLACE TEMP TABLE intraday_scada_web AS
-        WITH
-          html_data AS (
-            SELECT content AS html
-            FROM read_text('http://nemweb.com.au/Reports/Current/Dispatch_SCADA/')
-          ),
-          lines AS (
-            SELECT unnest(string_split(html, '<br>')) AS line FROM html_data
-          )
-        SELECT
-          'http://nemweb.com.au' || regexp_extract(line, 'HREF="([^"]+)"', 1) AS full_url,
-          split_part(regexp_extract(line, 'HREF="[^"]+/([^"]+\\.zip)"', 1), '.', 1) AS filename
-        FROM lines
-        WHERE line LIKE '%PUBLIC_DISPATCHSCADA%'
-        ORDER BY full_url DESC
-        LIMIT 500
-    """)
+    list_nemweb('intraday_scada_web', 'http://nemweb.com.au/Reports/Current/Dispatch_SCADA/',
+                '%PUBLIC_DISPATCHSCADA%', limit=500)
 
-    scada_to_download = session.sql(f"""
-        SELECT full_url, filename FROM intraday_scada_web
-        WHERE 'scada_today::' || filename NOT IN (
-            SELECT source_type || '::' || source_filename FROM _csv_archive_log
-        )
-        LIMIT {download_limit}
-    """).fetchall()
+    scada_to_download = to_download('intraday_scada_web', 'scada_today')
 
     if scada_to_download:
         process_downloads(scada_to_download, 'scada_today', 'scada_today')
@@ -292,32 +297,10 @@ def model(dbt, session):
     # INTRADAY PRICE
     # =========================================================================
 
-    session.sql("""
-        CREATE OR REPLACE TEMP TABLE intraday_price_web AS
-        WITH
-          html_data AS (
-            SELECT content AS html
-            FROM read_text('http://nemweb.com.au/Reports/Current/DispatchIS_Reports/')
-          ),
-          lines AS (
-            SELECT unnest(string_split(html, '<br>')) AS line FROM html_data
-          )
-        SELECT
-          'http://nemweb.com.au' || regexp_extract(line, 'HREF="([^"]+)"', 1) AS full_url,
-          split_part(regexp_extract(line, 'HREF="[^"]+/([^"]+\\.zip)"', 1), '.', 1) AS filename
-        FROM lines
-        WHERE line LIKE '%PUBLIC_DISPATCHIS_%.zip%'
-        ORDER BY full_url DESC
-        LIMIT 500
-    """)
+    list_nemweb('intraday_price_web', 'http://nemweb.com.au/Reports/Current/DispatchIS_Reports/',
+                '%PUBLIC_DISPATCHIS_%.zip%', limit=500)
 
-    price_to_download = session.sql(f"""
-        SELECT full_url, filename FROM intraday_price_web
-        WHERE 'price_today::' || filename NOT IN (
-            SELECT source_type || '::' || source_filename FROM _csv_archive_log
-        )
-        LIMIT {download_limit}
-    """).fetchall()
+    price_to_download = to_download('intraday_price_web', 'price_today')
 
     if price_to_download:
         process_downloads(price_to_download, 'price_today', 'price_today')
@@ -331,7 +314,7 @@ def model(dbt, session):
     # is what fct_interconnector_today needs to go back as far as the other facts.
     # Newest months first, and like the GitHub backfill only once the daily feed has caught
     # up. When every month is in the log there is nothing left to do here.
-    if aemo_new < download_limit:
+    if caught_up:
         interconnector_months = months_to_download('DISPATCHINTERCONNECTORRES', 'interconnector_monthly')
         if interconnector_months:
             process_downloads(interconnector_months[:download_limit],
@@ -344,33 +327,12 @@ def model(dbt, session):
     # Not metered: AEMO estimates each region's rooftop output every half hour and publishes
     # it as ROOFTOP_PV_ACTUAL, one small file per interval and estimate type. MEASUREMENT
     # (scaled up from sampled systems) is the one used; SATELLITE runs lower and is left out.
-    # The current folder holds two weeks.
-    session.sql("""
-        CREATE OR REPLACE TEMP TABLE rooftop_web AS
-        WITH
-          html_data AS (
-            SELECT content AS html
-            FROM read_text('https://nemweb.com.au/Reports/Current/ROOFTOP_PV/ACTUAL/')
-          ),
-          lines AS (
-            SELECT unnest(string_split(html, '<br>')) AS line FROM html_data
-          )
-        SELECT
-          'https://nemweb.com.au' || regexp_extract(line, 'HREF="([^"]+)"', 1) AS full_url,
-          split_part(regexp_extract(line, 'HREF="[^"]+/([^"]+\\.zip)"', 1), '.', 1) AS filename
-        FROM lines
-        WHERE line LIKE '%PUBLIC_ROOFTOP_PV_ACTUAL_MEASUREMENT_%.zip%'
-        ORDER BY full_url DESC
-        LIMIT 700
-    """)
+    # The current folder holds two weeks. AEMO has said this record is to be removed (see
+    # fct_rooftop_pv.sql): when the folder goes, list_nemweb warns and the other feeds go on.
+    list_nemweb('rooftop_web', 'https://nemweb.com.au/Reports/Current/ROOFTOP_PV/ACTUAL/',
+                '%PUBLIC_ROOFTOP_PV_ACTUAL_MEASUREMENT_%.zip%', limit=700)
 
-    rooftop_to_download = session.sql(f"""
-        SELECT full_url, filename FROM rooftop_web
-        WHERE 'rooftop_today::' || filename NOT IN (
-            SELECT source_type || '::' || source_filename FROM _csv_archive_log
-        )
-        LIMIT {download_limit}
-    """).fetchall()
+    rooftop_to_download = to_download('rooftop_web', 'rooftop_today')
 
     if rooftop_to_download:
         process_downloads(rooftop_to_download, 'rooftop_today', 'rooftop_today')
@@ -380,35 +342,15 @@ def model(dbt, session):
     # weekly archives from the one that reaches into September 2026. The weekly files keep
     # coming, one a week, and repeat what the current folder gave: that is what refills a
     # stretch the pipeline missed for more than two weeks. Readers take one row per interval.
-    if aemo_new < download_limit:
+    if caught_up:
         rooftop_months = months_to_download('ROOFTOP_PV_ACTUAL', 'rooftop_monthly')
         if rooftop_months:
             process_downloads(rooftop_months[:download_limit], 'rooftop_monthly', 'rooftop_monthly')
 
-        rooftop_weeks = session.sql(f"""
-            WITH
-              html_data AS (
-                SELECT content AS html
-                FROM read_text('https://nemweb.com.au/Reports/Archive/ROOFTOP_PV/ACTUAL/')
-              ),
-              lines AS (
-                SELECT unnest(string_split(html, '<br>')) AS line FROM html_data
-              ),
-              weeks AS (
-                SELECT
-                  'https://nemweb.com.au' || regexp_extract(line, 'HREF="([^"]+)"', 1) AS full_url,
-                  split_part(regexp_extract(line, 'HREF="[^"]+/([^"]+\\.zip)"', 1), '.', 1) AS filename
-                FROM lines
-                WHERE line LIKE '%PUBLIC_ROOFTOP_PV_ACTUAL_MEASUREMENT_%.zip%'
-              )
-            SELECT full_url, filename FROM weeks
-            WHERE filename >= 'PUBLIC_ROOFTOP_PV_ACTUAL_MEASUREMENT_20260827'
-              AND 'rooftop_weekly::' || filename NOT IN (
-                SELECT source_type || '::' || source_filename FROM _csv_archive_log
-              )
-            ORDER BY filename DESC
-            LIMIT {download_limit}
-        """).fetchall()
+        list_nemweb('rooftop_weeks_web', 'https://nemweb.com.au/Reports/Archive/ROOFTOP_PV/ACTUAL/',
+                    '%PUBLIC_ROOFTOP_PV_ACTUAL_MEASUREMENT_%.zip%')
+        rooftop_weeks = to_download('rooftop_weeks_web', 'rooftop_weekly',
+                                    "filename >= 'PUBLIC_ROOFTOP_PV_ACTUAL_MEASUREMENT_20260827'")
         if rooftop_weeks:
             process_downloads(rooftop_weeks, 'rooftop_weekly', 'rooftop_weekly')
 
@@ -446,45 +388,53 @@ def model(dbt, session):
         ),
     ]
 
-    # Check if DUID data was downloaded recently (< 24 hours ago)
-    last_duid_download = session.sql("""
-        SELECT max(archived_at) FROM _csv_archive_log
-        WHERE source_type LIKE 'duid_%'
-    """).fetchone()[0]
+    # Each file on its own: it is downloaded when its log row is missing or 24 hours old, and
+    # one that fails keeps its previous copy and its previous log row, so the next run tries
+    # it again and the other files, and the facts, are not held up by it.
+    def is_fresh(source_type):
+        return session.sql(f"""
+            SELECT count(*) > 0 FROM _csv_archive_log
+            WHERE source_type = '{source_type}' AND archived_at > now() - INTERVAL 24 HOUR
+        """).fetchone()[0]
 
-    # Also refresh at once if the log lacks one of the two files dim_duid reads its NEM
-    # units from: the registration list (a failed download leaves it out of the log, so
-    # the next run tries again) or duid_unregistered.csv (added 2026-10-03).
-    has_nem_units_log = session.sql("""
-        SELECT count(DISTINCT source_type) FROM _csv_archive_log
-        WHERE source_type IN ('duid_registration', 'duid_unregistered')
-    """).fetchone()[0] == 2
-    skip_duid = (
-        last_duid_download is not None
-        and has_nem_units_log
-        and (datetime.now(last_duid_download.tzinfo) - last_duid_download).total_seconds() < 86400
-    )
+    def log_duid(source_type, source_filename, url, csv_filename):
+        session.execute("DELETE FROM _csv_archive_log WHERE source_type = ?", [source_type])
+        session.execute(
+            "INSERT INTO _csv_archive_log VALUES "
+            "(?, ?, ?, CAST(? AS TIMESTAMPTZ), NULL, ?, NULL, ?)",
+            [source_type, source_filename, f"/duid/{csv_filename}",
+             datetime.now(timezone.utc).isoformat(), url, csv_filename.rsplit(".", 1)[0]],
+        )
 
-    if skip_duid:
-        print(f"  DUID data is fresh (last download: {last_duid_download}), skipping")
-    else:
-        duid_dir = f"{csv_archive_path}/duid"
-        if not duid_dir.startswith(("az://", "abfss://")):
-            os.makedirs(duid_dir, exist_ok=True)
+    duid_dir = f"{csv_archive_path}/duid"
+    if not duid_dir.startswith(("az://", "abfss://")):
+        os.makedirs(duid_dir, exist_ok=True)
 
-        for source_type, source_filename, url, csv_filename in duid_sources:
-            session.sql(f"""
-                COPY (
-                    SELECT * FROM read_csv_auto('{url}',
-                        null_padding=true, ignore_errors=true
-                        {", header=true" if source_filename == "WA_ENERGY" else ""})
-                ) TO ('{csv_archive_path}/duid/{csv_filename}') (FORMAT CSV, HEADER)
-            """)
+    for source_type, source_filename, url, csv_filename in duid_sources:
+        if is_fresh(source_type):
+            continue
+        try:
+            # Through a local file: a download that breaks half way must not leave a
+            # truncated file over the previous copy.
+            with tempfile.TemporaryDirectory() as tmp:
+                local = os.path.join(tmp, csv_filename).replace("\\", "/")
+                session.sql(f"""
+                    COPY (
+                        SELECT * FROM read_csv_auto('{url}',
+                            null_padding=true, ignore_errors=true
+                            {", header=true" if source_filename == "WA_ENERGY" else ""})
+                    ) TO '{local}' (FORMAT CSV, HEADER)
+                """)
+                copy_to_onelake(local, f"{duid_dir}/{csv_filename}")
+            log_duid(source_type, source_filename, url, csv_filename)
+        except Exception as e:
+            warn(f"{csv_filename} unavailable, keeping the previous copy: {e}")
 
-        # AEMO's NEM Registration and Exemption List, as archived weekly by
-        # djouallah/aemo_data (data/duid/registration/<name>_<YYYYMMDD>.xls, really an
-        # .xlsx): the newest one's generator sheet is saved as registration.csv, which
-        # dim_duid reads. When this fails the previous registration.csv stays in place.
+    # AEMO's NEM Registration and Exemption List, as archived weekly by
+    # djouallah/aemo_data (data/duid/registration/<name>_<YYYYMMDD>.xls, really an
+    # .xlsx): the newest one's generator sheet is saved as registration.csv, which
+    # dim_duid reads. When this fails the previous registration.csv stays in place.
+    if not is_fresh("duid_registration"):
         try:
             import json
             api = "https://api.github.com/repos/djouallah/aemo_data/contents/data/duid/registration"
@@ -507,24 +457,13 @@ def model(dbt, session):
                         SELECT * FROM read_xlsx('{xlsx_path}', sheet = 'PU and Scheduled Loads',
                                                 all_varchar = true)
                         WHERE DUID IS NOT NULL
-                    ) TO ('{csv_archive_path}/duid/registration.csv') (FORMAT CSV, HEADER)
+                    ) TO ('{duid_dir}/registration.csv') (FORMAT CSV, HEADER)
                 """)
-            duid_sources.append(("duid_registration", latest["name"].rsplit(".", 1)[0],
-                                 latest["download_url"], "registration.csv"))
+            log_duid("duid_registration", latest["name"].rsplit(".", 1)[0],
+                     latest["download_url"], "registration.csv")
             print(f"  DUID registration list: {latest['name']}")
         except Exception as e:
-            print(f"  WARN: AEMO registration list unavailable, keeping the previous registration.csv: {e}")
-
-        # Delete old DUID log entries and re-insert
-        session.sql("DELETE FROM _csv_archive_log WHERE source_type LIKE 'duid_%'")
-        now = datetime.now(timezone.utc).isoformat()
-        for source_type, source_filename, url, csv_filename in duid_sources:
-            csv_base = csv_filename.rsplit(".", 1)[0]
-            session.execute(
-                "INSERT INTO _csv_archive_log VALUES "
-                "(?, ?, ?, CAST(? AS TIMESTAMPTZ), NULL, ?, NULL, ?)",
-                [source_type, source_filename, f"/duid/{csv_filename}", now, url, csv_base],
-            )
+            warn(f"AEMO registration list unavailable, keeping the previous registration.csv: {e}")
 
     # =========================================================================
     # Save log to parquet and return

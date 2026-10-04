@@ -15,6 +15,10 @@ clean-targets:
 # first spill. Guarded off the ci target, which runs plain in-memory DuckDB with no
 # azure extension.
 on-run-start:
+  # dev and prod write the shared catalog: without FILES_PATH the download would archive to
+  # this machine's /tmp and log those paths in the shared log table, for files no other run
+  # can read.
+  - "{% if execute and target.name != 'ci' and flags.WHICH in ('run', 'build', 'retry') and not env_var('FILES_PATH', '') %}{{ exceptions.raise_compiler_error('FILES_PATH is not set: the ' ~ target.name ~ ' target writes the shared catalog and needs the OneLake Files path of its CSV archive (see AGENTS.md, Auth)') }}{% else %}SELECT 1{% endif %}"
   - "{% if target.name != 'ci' %}SET GLOBAL azure_transport_option_type = '{{ env_var('AZURE_TRANSPORT_OPTION_TYPE', 'default') }}'{% else %}SELECT 1{% endif %}"
   - "{% if target.name != 'ci' %}SET GLOBAL temp_directory = '/tmp/duckdb_spill'{% else %}SELECT 1{% endif %}"
 
