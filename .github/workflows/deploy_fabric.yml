@@ -113,17 +113,22 @@ jobs:
           echo "OneLake issued a user delegation key (HTTP 200)."
 
       # A visitor's 500 says nothing, and CI cannot sign in to the app as a visitor does. So it
-      # calls the function where it can, with the owner's own token: the User Data Functions
-      # item behind the app (Fabric's public invoke), and the app's own invoke route. Each
-      # answer is printed whole, except a SAS. Never fails the run: it is there to be read.
+      # calls the function where it can, with the owner's own token: Fabric's public invoke on
+      # the User Data Functions item behind the app, with the two headers the app's backend
+      # adds on the way (x-ms-rayfin-info, x-ms-rayfin-secrets), and the app's own invoke
+      # route. Each answer is printed whole, except a SAS. Never fails the run: it is there
+      # to be read.
       - name: Call getDataSas
         if: ${{ !inputs.dry_run }}
         working-directory: fabric
+        env:
+          ONELAKE_FILES_URL: ${{ vars.ONELAKE_FILES_URL }}
         run: |
           set +e
           FABRIC=https://api.fabric.microsoft.com/v1
           APP=$(jq -r '.deployments[.active].fabricApiUrl' rayfin/.deployments.json)
           WS=$(jq -r '.deployments[.active].fabricWorkspaceId' rayfin/.deployments.json)
+          KEY=$(jq -r '.deployments[.active].publishableKey' rayfin/.deployments.json)
           # The User Data Functions item behind the app: the CLI names it in its diagnostic
           # log, or else in the verbose output of a functions deploy (JSON output refuses
           # --verbose, so the deploy above cannot say it).
@@ -133,18 +138,17 @@ jobs:
             npx rayfin up functions deploy --verbose > functions.log 2>&1
             UDF=$(udf_id functions.log)
           fi
-          PBI_TOKEN=$(az account get-access-token --resource https://analysis.windows.net/powerbi/api --query accessToken -o tsv)
-          echo "::add-mask::$PBI_TOKEN"
           echo "app: $APP"
           echo "User Data Functions item: ${UDF:-not found}"
 
-          call() {  # label, method, url, token
+          call() {  # label, url, then any curl arguments
             echo "::group::$1"
-            CODE=$(curl -s -o body.txt -D headers.txt -w '%{http_code}' -X "$2" "$3" \
-              -H "Authorization: Bearer $4" -H 'Content-Type: application/json' ${5:+-d "$5"})
-            echo "$2 $3"
+            URL=$2; shift 2
+            CODE=$(curl -s -o body.txt -D headers.txt -w '%{http_code}' -X POST "$URL" \
+              -H "Authorization: Bearer $RAYFIN_TOKEN" -H 'Content-Type: application/json' -d '{}' "$@")
+            echo "POST $URL"
             echo "HTTP $CODE"
-            grep -iE '^(requestid|x-ms-root-activity-id|x-ms-public-api-error-code|x-ms-request-id):' headers.txt
+            grep -iE '^(requestid|x-ms-root-activity-id|x-ms-public-api-error-code):' headers.txt
             if grep -q 'sig=' body.txt; then
               echo "The function returned a SAS (not printed)."
             else
@@ -153,14 +157,11 @@ jobs:
             echo "::endgroup::"
           }
 
-          echo "Items of the workspace that hold functions:"
-          curl -s "$FABRIC/workspaces/$WS/items" -H "Authorization: Bearer $RAYFIN_TOKEN" \
-            | jq -r '.value[]? | select(.type | test("Function|AppBackend"; "i")) | "\(.type)\t\(.id)\t\(.displayName)"'
-
+          INFO=$(jq -cn --arg e "$APP" --arg k "$KEY" '{rayfinToken: "", publishableKey: $k, rayFinEndpoint: $e}')
+          SECRETS=$(jq -cn --arg u "$ONELAKE_FILES_URL" '{ONELAKE_FILES_URL: $u}')
           if [ -n "$UDF" ]; then
-            call "functions metadata" GET "$FABRIC/workspaces/$WS/userDataFunctions/$UDF/__private/functions/metadata" "$RAYFIN_TOKEN"
-            call "public invoke, Fabric token" POST "$FABRIC/workspaces/$WS/userDataFunctions/$UDF/functions/getDataSas/invoke" "$RAYFIN_TOKEN" '{}'
-            call "public invoke, Power BI token" POST "$FABRIC/workspaces/$WS/userDataFunctions/$UDF/functions/getDataSas/invoke" "$PBI_TOKEN" '{}'
+            call "public invoke, as the backend calls it" "$FABRIC/workspaces/$WS/userDataFunctions/$UDF/functions/getDataSas/invoke" \
+              -H "x-ms-rayfin-info: $INFO" -H "x-ms-rayfin-secrets: $SECRETS"
           fi
-          call "the app's invoke route, Fabric token" POST "${APP%/}/functions/getDataSas/invoke" "$RAYFIN_TOKEN" '{}'
+          call "the app's invoke route" "${APP%/}/functions/getDataSas/invoke" -H "X-Publishable-Key: $KEY"
           exit 0
