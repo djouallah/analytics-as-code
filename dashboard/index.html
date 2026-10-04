@@ -361,9 +361,10 @@
       against the other). Who generated it: energy by owner and power station, coloured by fuel;
       click an owner to zoom in. Curtailment: what the wind and solar farms AEMO dispatches as
       semi-scheduled could have made and were not dispatched for (available MW less the dispatch
-      target, each 5 minutes), whether for network limits or economic spill at low prices. It
-      comes from the next-day files, so it ends a day or two ago, and it leaves out rooftop
-      solar and the small non-scheduled farms. All charts follow the header filters.
+      target, each 5 minutes), whether for network limits or economic spill at low prices. Per
+      farm it comes from the next-day files, so it ends a day or two ago; the days after come
+      from AEMO's regional figures (lighter bars), which the farms add up to. It leaves out
+      rooftop solar and the small non-scheduled farms. All charts follow the header filters.
     </p>
   </div>
 
@@ -2022,10 +2023,15 @@
       const where = [`c.date >= ${sqlStr(from)} AND c.date <= ${sqlStr(to)}`, ...sql.unitFilters('c')].join(' AND ');
       const byMonth = rangeDays() > 120;
       const period = byMonth ? `CAST(date_trunc('month', c.date) AS DATE)` : 'c.date';
+      // Past the newest next-day file, AEMO's regional figures carry it on: per region, so not
+      // when units are picked.
+      const recent = data.has('v_curtailment_recent') && !crossFilter.duids.length;
+      const cols = 'region, fuel, date, curtailed_mwh, available_mwh';
+      const source = recent ? `(SELECT ${cols} FROM v_curtailment UNION ALL SELECT ${cols} FROM v_curtailment_recent)` : 'v_curtailment';
       const [rows, units, last] = await Promise.all([
         runQuery(`SELECT CAST(${period} AS VARCHAR) AS period, c.fuel,
             SUM(c.curtailed_mwh)::DOUBLE AS cur, SUM(c.available_mwh)::DOUBLE AS avail
-          FROM v_curtailment c WHERE ${where} GROUP BY ALL ORDER BY ALL`),
+          FROM ${source} c WHERE ${where} GROUP BY ALL ORDER BY ALL`),
         runQuery(`SELECT c.DUID, ANY_VALUE(c.station) AS station, c.fuel,
             SUM(c.curtailed_mwh)::DOUBLE AS cur, SUM(c.available_mwh)::DOUBLE AS avail
           FROM v_curtailment c WHERE ${where} GROUP BY c.DUID, c.fuel
@@ -2034,10 +2040,12 @@
       ]);
       if (seq !== _renderSeq) return;
       const lastDay = last[0]?.d;
-      const note = lastDay ? ` <span class="chart-note">next-day data, to ${formatDate(lastDay)}</span>` : '';
+      const note = !lastDay ? '' : recent
+        ? ` <span class="chart-note">per farm to ${formatDate(lastDay)}, AEMO's regional figures after (lighter)</span>`
+        : ` <span class="chart-note">next-day data, to ${formatDate(lastDay)}</span>`;
       if (!rows.length) {
         titles.curtail.innerHTML = 'Wind and solar curtailment' + note;
-        return ids.forEach(id => showEmpty(id, lastDay && from > lastDay ? `No next-day data yet: it ends ${formatDate(lastDay)}` : undefined));
+        return ids.forEach(id => showEmpty(id, !recent && lastDay && from > lastDay ? `No next-day data yet: it ends ${formatDate(lastDay)}` : undefined));
       }
       const total = { cur: 0, avail: 0 };
       for (const r of rows) { total.cur += r.cur; total.avail += r.avail; }
@@ -2052,7 +2060,8 @@
           const p = periods[ps[0].dataIndex];
           const lines = fuels.map(f => at.get(`${p}|${f}`)).filter(Boolean)
             .map(r => `${escapeHtml(r.fuel)}: <b>${fmtMwh(r.cur)}</b> (${pct(r.cur, r.avail)})`);
-          return `${label(p)}<br>${lines.join('<br>')}`;
+          const regional = !byMonth && lastDay && p > lastDay ? `<br><span style="color:var(--muted)">AEMO's regional figures</span>` : '';
+          return `${label(p)}<br>${lines.join('<br>')}${regional}`;
         } },
         legend: { data: fuels, top: 0, textStyle: { color: cssVar('--text') } },
         grid: { left: 60, right: 20, top: 30, bottom: 30 },
@@ -2060,7 +2069,8 @@
         yAxis: { type: 'value', axisLabel: { formatter: mwhAxis } },
         series: fuels.map(f => ({ name: f, type: 'bar', stack: 'cur', barMaxWidth: 24,
           itemStyle: { color: fuelColor(f) },
-          data: periods.map(p => Math.round(at.get(`${p}|${f}`)?.cur ?? 0)) })),
+          data: periods.map(p => ({ value: Math.round(at.get(`${p}|${f}`)?.cur ?? 0),
+            itemStyle: !byMonth && lastDay && p > lastDay ? { opacity: 0.55 } : undefined })) })),
       }, true);
 
       titles.units.textContent = `Most curtailed farms (MWh)`;

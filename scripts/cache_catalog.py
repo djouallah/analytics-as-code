@@ -237,7 +237,12 @@ def export_scada_today():
 def export_price_today():
     """Price from the PRICE rows, demand and net interchange from the REGIONSUM rows of the
     same DispatchIS files (fct_regionsum_today), last 14 days. An interval fct_regionsum_today
-    doesn't have keeps a NULL demand."""
+    doesn't have keeps a NULL demand.
+
+    Also the region's semi-scheduled wind and solar: available MW and curtailed MW (available
+    less the dispatch target, never below 0), AEMO's own regional figures. They are the same
+    measure as export_curtailment's per unit (the units add up to them), and they carry the
+    curtailment chart past the newest next-day file, right up to now."""
     con = connect_iceberg()
     con.execute(f"""
         COPY (
@@ -249,14 +254,19 @@ def export_price_today():
             ), r AS (
                 SELECT REGIONID, SETTLEMENTDATE,
                     CAST(ANY_VALUE(TOTALDEMAND) AS REAL) AS demand,
-                    CAST(ANY_VALUE(NETINTERCHANGE) AS REAL) AS net_interchange
+                    CAST(ANY_VALUE(NETINTERCHANGE) AS REAL) AS net_interchange,
+                    CAST(ANY_VALUE(SS_WIND_AVAILABILITY) AS REAL) AS wind_available,
+                    CAST(GREATEST(ANY_VALUE(SS_WIND_AVAILABILITY) - ANY_VALUE(SS_WIND_CLEAREDMW), 0) AS REAL) AS wind_curtailed,
+                    CAST(ANY_VALUE(SS_SOLAR_AVAILABILITY) AS REAL) AS solar_available,
+                    CAST(GREATEST(ANY_VALUE(SS_SOLAR_AVAILABILITY) - ANY_VALUE(SS_SOLAR_CLEAREDMW), 0) AS REAL) AS solar_curtailed
                 FROM catalog.landing.fct_regionsum_today
                 WHERE DATE >= CURRENT_DATE - INTERVAL 14 DAY AND INTERVENTION = 0
                 GROUP BY ALL
             )
             SELECT p.REGIONID, CAST(p.SETTLEMENTDATE AS DATE) AS date,
                 CAST(strftime(p.SETTLEMENTDATE, '%H%M') AS SMALLINT) AS time,
-                p.price, r.demand, r.net_interchange
+                p.price, r.demand, r.net_interchange,
+                r.wind_available, r.wind_curtailed, r.solar_available, r.solar_curtailed
             FROM p LEFT JOIN r ON r.REGIONID = p.REGIONID AND r.SETTLEMENTDATE = p.SETTLEMENTDATE
         ) TO '{DASHBOARD_DIR}/fct_price_today.parquet' (FORMAT PARQUET);
     """)

@@ -18,7 +18,8 @@
 //   v_price_daily     REGIONID, date, price, demand, net_interchange, demand_mwh
 //   v_interconnector  interconnector, date, time, mw, export_limit, import_limit  5-minute
 //   v_scada_today     DUID, date, time, mw             the newest days, for "latest interval"
-//   v_price_today     REGIONID, date, time, price, demand, net_interchange
+//   v_price_today     REGIONID, date, time, price, demand, net_interchange, wind_available,
+//                     wind_curtailed, solar_available, solar_curtailed
 //   v_duid            dim_duid, under the names the    has(view, column) says whether a
 //                     export gives its columns         deployed file carries a newer column
 //   v_calendar        dim_calendar: date, year, month

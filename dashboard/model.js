@@ -20,7 +20,9 @@
 //   v_curtailment     v_curtailment_daily + the unit's columns   per wind/solar farm and day:
 //                                                              curtailed_mwh, available_mwh;
 //                                                              once agg carries the table
-//   v_gen_price       v_gen       + price, the price of the unit's region in that interval
+//   v_curtailment_recent  region, date, fuel, curtailed_mwh, available_mwh   the days after
+//                     v_curtailment's newest, per region, from AEMO's regional figures in today
+//   v_gen_price      v_gen       + price, the price of the unit's region in that interval
 //   v_gen_price_daily v_gen_daily + price, the day's
 //   v_price_latest    v_price_today, the newest interval only
 //   v_region          region                                   the NEM regions
@@ -35,6 +37,8 @@
 //   v_scada_daily            DUID, date, mwh
 //   v_scada_hourly           DUID, month, hour, mwh
 //   v_price, v_price_today   REGIONID, date, time, price, demand, net_interchange
+//                            (v_price_today also wind_available, wind_curtailed,
+//                            solar_available, solar_curtailed: MW, the region's semi-scheduled)
 //   v_price_daily            REGIONID, date, price, demand, net_interchange, demand_mwh
 //   v_price_hourly           REGIONID, month, hour, price, n (the intervals averaged)
 //   v_month_days             month, days (the days of the month that have data)
@@ -176,6 +180,14 @@ export function createModel(data) {
     ];
     if (data.has('v_scada_hourly')) views.push(['v_gen_hourly', gen('v_scada_hourly')]);
     if (data.has('v_curtailment_daily')) views.push(['v_curtailment', gen('v_curtailment_daily')]);
+    // The days after the newest next-day file, from AEMO's regional 5-minute figures in `today`:
+    // per region, fuel and day, the same two measures. No unit, so no DUID.
+    if (data.has('v_curtailment_daily') && data.has('v_price_today', 'wind_curtailed')) {
+      const fuel = (name, col) => `SELECT REGIONID AS region, date, '${name}' AS fuel,
+        SUM(${col}_curtailed) / 12.0 AS curtailed_mwh, SUM(${col}_available) / 12.0 AS available_mwh
+        FROM v_price_today WHERE date > (SELECT MAX(date) FROM v_curtailment_daily) GROUP BY ALL`;
+      views.push(['v_curtailment_recent', `${fuel('Wind', 'wind')} UNION ALL ${fuel('Solar', 'solar')}`]);
+    }
 
     const fresh = views.filter(([name]) => !_views.has(name));
     if (!first.length && !fresh.length) return;
