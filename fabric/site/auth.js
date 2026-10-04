@@ -61,7 +61,13 @@ function createRayfinAuth() {
   async function dataAccess() {
     if (fresh(_data)) return _data;
     await init();
-    _data = await perf.time('sas', 'getDataSas (function call)', () => _client.functions.getDataSas.invoke());
+    // The function returns its failure as { error }, naming the step that failed.
+    const signed = await perf.time('sas', 'getDataSas (function call)', async () => {
+      const r = await _client.functions.getDataSas.invoke();
+      if (r?.error) throw new Error(`getDataSas failed at ${r.error}`);
+      return r;
+    });
+    _data = signed;
     // How long the new SAS lives (the function signs ~55 min; data.js renews ~10 min before expiry).
     perf.log('info', `SAS valid ${((Date.parse(_data.expiresOn) - Date.now()) / 60000).toFixed(1)} min (expires ${_data.expiresOn})`);
     save(_data);

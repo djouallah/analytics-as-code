@@ -52,10 +52,13 @@ async function getDelegationKey(base: URL, token: string, start: Date, expiry: D
     body: `<?xml version="1.0" encoding="utf-8"?><KeyInfo><Start>${iso(start)}</Start><Expiry>${iso(expiry)}</Expiry></KeyInfo>`,
   });
   const xml = await res.text();
+  const find = (name: string): string | undefined => xml.match(new RegExp(`<${name}>([^<]*)</${name}>`))?.[1];
+  // OneLake's own error code and message (an error body carries no key).
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${find('Code') ?? ''} ${(find('Message') ?? '').slice(0, 200)}`.trim());
   const tag = (name: string): string => {
-    const m = xml.match(new RegExp(`<${name}>([^<]*)</${name}>`));
-    if (!m) throw new Error(`OneLake user delegation key request failed (HTTP ${res.status})`);
-    return m[1];
+    const v = find(name);
+    if (v === undefined) throw new Error(`no ${name} in the answer (HTTP ${res.status})`);
+    return v;
   };
   return {
     oid: tag('SignedOid'), tid: tag('SignedTid'), start: tag('SignedStart'), expiry: tag('SignedExpiry'),
@@ -87,15 +90,27 @@ function signFolderSas(base: URL, relPath: string, permissions: string, key: Del
   return query.toString();
 }
 
-/** Read-only SAS for the data/ folder: the browser reads data/latest.txt and the .duckdb with it. */
+/**
+ * Read-only SAS for the data/ folder: the browser reads data/latest.txt and the .duckdb with it.
+ * A failure is returned as { error }, naming the step: thrown, it reaches the browser as a bare
+ * 500 that says nothing. The message never holds a token or a key.
+ */
 udf.func(
   'getDataSas',
-  async (ctx: RayfinContext<BlankAppSchema, AudienceType.Storage>): Promise<{ baseUrl: string; sas: string; expiresOn: string }> => {
-    const token = ctx.Tokens.Storage;
-    const base = filesBase(ctx);
-    const { start, expiry } = sasWindow();
-    const key = await getDelegationKey(base, token, start, expiry);
-    return { baseUrl: `${base}/data`, sas: signFolderSas(base, 'data', 'r', key, start, expiry), expiresOn: iso(expiry) };
+  async (ctx: RayfinContext<BlankAppSchema, AudienceType.Storage>): Promise<{ baseUrl: string; sas: string; expiresOn: string } | { error: string }> => {
+    let step = 'the storage token of the app identity';
+    try {
+      const token = ctx.Tokens.Storage;
+      step = 'the secret ONELAKE_FILES_URL';
+      const base = filesBase(ctx);
+      step = 'the OneLake user delegation key';
+      const { start, expiry } = sasWindow();
+      const key = await getDelegationKey(base, token, start, expiry);
+      step = 'signing the SAS';
+      return { baseUrl: `${base}/data`, sas: signFolderSas(base, 'data', 'r', key, start, expiry), expiresOn: iso(expiry) };
+    } catch (e) {
+      return { error: `${step}: ${e instanceof Error ? e.message : String(e)}` };
+    }
   },
   [],
 );

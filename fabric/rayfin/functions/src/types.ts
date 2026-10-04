@@ -19,6 +19,6 @@
 export type AppFunctionsSchema = {
   getDataSas: {
     input: Record<string, never>;
-    output: { baseUrl: string; sas: string; expiresOn: string };
+    output: { baseUrl: string; sas: string; expiresOn: string } | { error: string };
   };
 };
