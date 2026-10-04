@@ -2008,7 +2008,8 @@
     // reads the daily table, which ends with the newest complete next-day file.
     const CURTAIL_FUELS = ['Wind', 'Solar'];
     const pct = (part, whole) => whole ? `${(100 * part / whole).toFixed(1)}%` : '--';
-    const fmtMwh = v => v >= 10000 ? fmtGwh(v) : `${Math.round(v).toLocaleString()} MWh`;
+    const fmtMwh = v => v >= 1e6 ? `${(v / 1e6).toFixed(2)} TWh` : v >= 10000 ? fmtGwh(v) : `${Math.round(v).toLocaleString()} MWh`;
+    const mwhAxis = v => v >= 1e6 ? `${v / 1e6}M` : v >= 1000 ? `${v / 1000}k` : v;
     async function renderCurtailment(seq) {
       const ids = ['chart-curtail', 'chart-curtailunits'];
       const titles = { curtail: document.getElementById('title-curtail'), units: document.getElementById('title-curtailunits') };
@@ -2056,7 +2057,7 @@
         legend: { data: fuels, top: 0, textStyle: { color: cssVar('--text') } },
         grid: { left: 60, right: 20, top: 30, bottom: 30 },
         xAxis: { type: 'category', data: periods.map(label), axisLabel: { fontSize: 10 } },
-        yAxis: { type: 'value', axisLabel: { formatter: v => v >= 1000 ? `${v / 1000}k` : v } },
+        yAxis: { type: 'value', axisLabel: { formatter: mwhAxis } },
         series: fuels.map(f => ({ name: f, type: 'bar', stack: 'cur', barMaxWidth: 24,
           itemStyle: { color: fuelColor(f) },
           data: periods.map(p => Math.round(at.get(`${p}|${f}`)?.cur ?? 0)) })),
@@ -2070,7 +2071,7 @@
           formatter: ps => { const r = asc[ps[0].dataIndex];
             return `${escapeHtml(r.DUID)} &middot; ${escapeHtml(r.station ?? '')}<br>${escapeHtml(r.fuel)}<br><b>${fmtMwh(r.cur)}</b> curtailed, ${pct(r.cur, r.avail)} of what it could have made`; } },
         grid: { left: 90, right: 30, top: 10, bottom: 25 },
-        xAxis: { type: 'value', axisLabel: { formatter: v => v >= 1000 ? `${v / 1000}k` : v } },
+        xAxis: { type: 'value', axisLabel: { formatter: mwhAxis } },
         yAxis: { type: 'category', data: asc.map(r => r.DUID), axisLabel: { fontSize: 10 } },
         series: [{ type: 'bar', barMaxWidth: 14,
           data: asc.map(r => ({ value: Math.round(r.cur), itemStyle: { color: fuelColor(r.fuel) } })) }],
