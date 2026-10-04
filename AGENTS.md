@@ -213,6 +213,23 @@ Four things in that design are there for speed and must survive an edit:
 `v_gen_price*` is a LEFT join: capture price and the battery chart add `price IS NOT NULL`,
 Analyze's generation + price keeps the rows without a price.
 
+How the page looks is decided in four places of `index.html`, and a chart goes through them
+rather than round them:
+- The chrome is monochrome: surfaces, ink and hairlines are CSS tokens on `:root` (light under
+  `[data-theme="light"]`, set by the `<head>` script before first paint: the stored choice,
+  else the system's). Colour is for the data and for status, and status comes with an arrow
+  or a label. The CSS stays inline: a separate file would need both deploy copy lists
+  (`build.yml`, `fabric/build.mjs`).
+- `chartTheme()` builds one ECharts theme per scheme from those tokens (font, label size,
+  tooltip, legend, zoom slider, colour scale) and `plot()` is every chart's plot area, with
+  measured axis labels. A chart sets no margin, font or tooltip style of its own.
+- A colour of the data is a pair, `[dark, light]`: `FUEL_COLORS`, `REGION_COLORS`, `PALETTES`.
+  The eight fuels that carry the stack were checked pair by pair for colour-blind and normal
+  vision; black coal (a neutral) and rooftop solar (a lighter solar) are off the checker's
+  bands on purpose. A region keeps its colour on every chart.
+- The Dashboard tab leads with "Right now" (`renderNow`): the newest interval from
+  `v_gen_latest` and `v_price_latest`, two queries, following the region filter only.
+
 **Checking a change to `model.js`, `views.js`, a `data.js` or the page:** in headless Chrome, the page before against
 the page after on one copy of the deployed files, through the same page states; compare the
 query results (same SQL, same rows), read `EXPLAIN` for a join that was not there, and time

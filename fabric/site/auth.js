@@ -32,7 +32,7 @@ function createRayfinAuth() {
   // The gate: over the whole page until the Fabric session resolves, so the dashboard is not
   // shown, even empty, before sign-in. The colours are the page's.
   const _gate = document.createElement('div');
-  _gate.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;gap:1.2rem;align-items:center;justify-content:center;background:var(--bg, #0d1117);color:var(--muted, #8b949e);text-align:center;padding:2rem;font-family:system-ui,sans-serif;line-height:1.55';
+  _gate.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;gap:1.2rem;align-items:center;justify-content:center;background:var(--bg, #0a0c10);color:var(--muted, #9aa3b2);text-align:center;padding:2rem;font-family:system-ui,sans-serif;line-height:1.55';
   _gate.textContent = 'Loading…';
   document.body.append(_gate);
 
@@ -90,7 +90,7 @@ function createRayfinAuth() {
   async function signIn() {
     try {
       if (!await ensureSession(false)) await new Promise(resolve => {
-        _gate.innerHTML = '<button style="padding:0.8rem 1.6rem;font-size:1rem;border:0;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer">Sign in with Fabric</button><div></div>';
+        _gate.innerHTML = '<button style="padding:0.8rem 1.8rem;font:600 1rem system-ui,sans-serif;border:0;border-radius:999px;background:var(--accent, #f2f4f8);color:var(--on-accent, #0a0c10);cursor:pointer">Sign in with Fabric</button><div></div>';
         const [btn, note] = _gate.children;
         btn.onclick = async () => {
           btn.textContent = 'Signing in…';

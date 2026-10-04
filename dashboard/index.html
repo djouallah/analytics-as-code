@@ -4,182 +4,296 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Australian Energy Dashboard</title>
+  <meta name="description" content="Australia's National Electricity Market in 5-minute detail: generation by fuel, spot prices, interconnector flows and renewable share, from AEMO data since 2018.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Australian Energy Dashboard">
+  <meta property="og:description" content="Australia's National Electricity Market in 5-minute detail: generation by fuel, spot prices, interconnector flows and renewable share.">
+  <meta name="theme-color" content="#0a0c10">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23f1c93b'/%3E%3Cstop offset='.55' stop-color='%2319b394'/%3E%3Cstop offset='1' stop-color='%234b8ff0'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cpath d='M18.2 4.5 8.5 17.6h6.1l-1.6 9.9 9.7-13.3h-6.2z' fill='%230a0c10'/%3E%3C/svg%3E">
+  <script>
+    // The stored choice, else the system's, set before first paint: the page never flashes
+    // the other theme. The header toggle switches it and the choice is remembered.
+    try {
+      const t = localStorage.getItem('theme');
+      if (t === 'light' || (!t && matchMedia('(prefers-color-scheme: light)').matches)) document.documentElement.dataset.theme = 'light';
+    } catch {}
+  </script>
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
   <style>
+    /* The chrome is monochrome: surfaces, ink and hairlines. Colour belongs to the data (the
+       fuels, the regions, the price bands) and to status, which always comes with an arrow
+       or a label. Charts read these tokens too (cssVar, chartTheme). */
     :root {
       color-scheme: dark;
-      --bg: #0f1117; --card: #161b22; --input-bg: #0d1117; --border: #30363d; --row-line: #21262d;
-      --text: #e1e4e8; --muted: #8b949e; --faint: #6e7681; --disabled: #484f58; --accent: #58a6ff;
-      --header-bg: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); --hairline: rgba(255,255,255,0.06);
-      --chips-bg: rgba(210,153,34,0.08); --focus-ring: rgba(88,166,255,0.15); --hover: rgba(88,166,255,0.1);
-      --hover-soft: rgba(88,166,255,0.05); --shadow: 0 8px 24px rgba(0,0,0,0.4);
+      --bg: #0a0c10; --card: #12151c; --raised: #181c25; --input-bg: #0e1116; --border: #262b36; --row-line: #1c212b;
+      --text: #f2f4f8; --muted: #9aa3b2; --faint: #6b7483; --disabled: #4a515e;
+      --accent: #f2f4f8; --on-accent: #0a0c10;
+      --hairline: rgba(255,255,255,0.07); --hover: rgba(255,255,255,0.07); --hover-soft: rgba(255,255,255,0.035);
+      --focus-ring: rgba(255,255,255,0.18);
+      --good: #3fb950; --bad: #f85149; --warn: #d29922; --export: #3fb950; --import: #f0883e;
+      --shadow: 0 12px 32px rgba(0,0,0,0.5);
+      --card-shadow: inset 0 1px 0 rgba(255,255,255,0.03), 0 8px 24px rgba(0,0,0,0.25);
+      --map-land: #1f2531; --map-border: #4a5261;
+      --radius: 14px; --radius-sm: 8px; --gutter: 2rem; --gap: 1rem;
     }
-    /* Dark is the default; the header toggle switches to light (remembered per browser). */
     :root[data-theme="light"] {
       color-scheme: light;
-      --bg: #f6f8fa; --card: #ffffff; --input-bg: #ffffff; --border: #d0d7de; --row-line: #eaeef2;
-      --text: #1f2328; --muted: #57606a; --faint: #6e7781; --disabled: #8c959f; --accent: #0969da;
-      --header-bg: linear-gradient(135deg, #ffffff 0%, #eef2f7 100%); --hairline: rgba(31,35,40,0.08);
-      --chips-bg: rgba(212,167,44,0.12); --focus-ring: rgba(9,105,218,0.2); --hover: rgba(9,105,218,0.08);
-      --hover-soft: rgba(9,105,218,0.04); --shadow: 0 8px 24px rgba(140,149,159,0.3);
+      --bg: #f4f3ef; --card: #ffffff; --raised: #faf9f6; --input-bg: #ffffff; --border: #dcdad2; --row-line: #ecebe5;
+      --text: #14161a; --muted: #5c6068; --faint: #82858c; --disabled: #a9abb0;
+      --accent: #14161a; --on-accent: #ffffff;
+      --hairline: rgba(20,22,26,0.09); --hover: rgba(20,22,26,0.06); --hover-soft: rgba(20,22,26,0.03);
+      --focus-ring: rgba(20,22,26,0.16);
+      --good: #1a7f37; --bad: #cf222e; --warn: #9a6700; --export: #1a7f37; --import: #bc4c00;
+      --shadow: 0 12px 32px rgba(60,55,40,0.18);
+      --card-shadow: 0 1px 2px rgba(60,55,40,0.06), 0 8px 24px rgba(60,55,40,0.06);
+      --map-land: #e6e4dc; --map-border: #a09d92;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); }
-    header { background: var(--header-bg); padding: 0.4rem 2rem; border-bottom: 1px solid var(--hairline); display: flex; align-items: center; gap: 1.2rem; flex-wrap: wrap; }
-    header .title-block { display: flex; flex-direction: column; }
-    header h1 { font-size: 1.2rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.3; }
-    header .subtitle { font-size: 0.7rem; color: var(--muted); }
-    #status { font-size: 0.7rem; display: flex; align-items: center; gap: 0.4rem; margin-left: auto; }
-    #status .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
-    #status.connected .dot { background: #3fb950; box-shadow: 0 0 6px #3fb950; }
-    #status.error .dot { background: #f85149; box-shadow: 0 0 6px #f85149; }
-    #status.loading .dot { background: #d29922; box-shadow: 0 0 6px #d29922; animation: pulse 1.2s infinite; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-    .filter-group { display: flex; align-items: center; gap: 0.4rem; }
-    .filter-group label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
-    .filter-group select, .filter-group input[type=date] { padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.8rem; background: var(--input-bg); color: var(--text); cursor: pointer; outline: none; transition: border-color 0.2s; }
-    .filter-group select:hover { border-color: var(--accent); }
-    .filter-group select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring); }
-    .filter-group.presets { gap: 0.25rem; }
-    .preset-btn { padding: 0.3rem 0.5rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.72rem; font-weight: 600; background: var(--input-bg); color: var(--muted); cursor: pointer; transition: all 0.2s; }
-    .preset-btn:hover, .preset-btn.active { border-color: var(--accent); color: var(--accent); }
-    .preset-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .active-filters { display: flex; gap: 0.4rem; padding: 0.5rem 2rem; background: var(--chips-bg); flex-wrap: wrap; align-items: center; font-size: 0.75rem; }
-    .active-filters:empty { display: none; }
-    .filter-tag { background: var(--accent); color: #fff; padding: 0.15rem 0.5rem; border-radius: 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 0.25rem; font-weight: 600; font-size: 0.7rem; transition: background 0.2s; }
-    .filter-tag:hover { background: #f85149; color: white; }
-    .filter-tag::after { content: "\00d7"; font-size: 0.9rem; }
-    .kpi-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0.6rem; padding: 0.5rem 2rem; }
-    .kpi-card { min-width: 0; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.8rem; position: relative; }
-    .kpi-spark { position: absolute; right: 0.7rem; top: 1.45rem; width: 34%; height: 1.5rem; pointer-events: none; }
-    .kpi-card .kpi-delta { font-weight: 600; color: var(--text); min-height: 1.2em; }
-    .kpi-card .kpi-delta.up { color: #3fb950; }
-    .kpi-card .kpi-delta.down { color: #f85149; }
-    .kpi-card .kpi-label { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
-    .kpi-card .kpi-value { font-size: 1.3rem; font-weight: 700; margin-top: 0.1rem; }
-    .kpi-card .kpi-sub { font-size: 0.65rem; color: var(--muted); margin-top: 0.05rem; }
-    .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; padding: 0 2rem 1rem; transition: opacity 0.2s; }
-    .charts.loading { opacity: 0.4; }
-    .chart-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem; }
-    .chart-card h2 { font-size: 0.8rem; font-weight: 600; margin-bottom: 0.3rem; color: var(--text); display: inline; }
-    .chart-card .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.3rem; }
-    .chart-card.full-width { grid-column: 1 / -1; }
-    .duid-dropdown { position: relative; }
-    .duid-trigger { padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.8rem; background: var(--input-bg); color: var(--text); cursor: pointer; outline: none; transition: border-color 0.2s; white-space: nowrap; }
-    .duid-trigger:hover { border-color: var(--accent); }
-    .duid-panel { display: none; position: absolute; top: 100%; left: 0; z-index: 1000; background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; width: min(280px, calc(100vw - 2rem)); margin-top: 4px; box-shadow: var(--shadow); }
-    .duid-panel.open { display: block; }
-    .duid-search { width: 100%; padding: 0.4rem 0.5rem; border: none; border-bottom: 1px solid var(--border); background: var(--card); color: var(--text); font-size: 0.8rem; outline: none; border-radius: 6px 6px 0 0; box-sizing: border-box; }
-    .duid-list { max-height: 240px; overflow-y: auto; }
-    .duid-list label { display: flex; align-items: center; gap: 0.4rem; padding: 0.25rem 0.5rem; cursor: pointer; font-size: 0.75rem; color: var(--text); text-transform: none; letter-spacing: normal; font-weight: 400; }
-    .duid-list label:hover { background: var(--hover); }
-    .duid-list input[type=checkbox] { accent-color: var(--accent); }
-    .chart-container { width: 100%; }
-    .tab-bar { display: flex; gap: 0; padding: 0 2rem; border-bottom: 1px solid var(--border); background: var(--bg); }
-    .tab-btn { padding: 0.5rem 1.2rem; font-size: 0.8rem; font-weight: 600; color: var(--muted); background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; transition: all 0.2s; }
+    html { background: var(--bg); }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 15px; line-height: 1.4; background: var(--bg); color: var(--text); max-width: 1720px; margin: 0 auto; -webkit-font-smoothing: antialiased; }
+    button, input, select, textarea { font-family: inherit; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    /* --- Top bar: brand, tabs, links --- */
+    .topbar { display: flex; align-items: center; gap: 0.8rem 1.5rem; flex-wrap: wrap; padding: 0.9rem var(--gutter) 0.6rem; }
+    .brand { display: flex; align-items: center; gap: 0.7rem; }
+    .brand svg { width: 34px; height: 34px; flex: none; }
+    .brand h1 { font-size: 1.15rem; font-weight: 750; letter-spacing: -0.02em; line-height: 1.15; }
+    .brand .subtitle { font-size: 0.75rem; color: var(--muted); }
+    .tab-bar { display: flex; gap: 0.15rem; padding: 0.25rem; background: var(--card); border: 1px solid var(--hairline); border-radius: 999px; overflow-x: auto; scrollbar-width: none; max-width: 100%; }
+    .tab-btn { padding: 0.4rem 0.95rem; font-size: 0.85rem; font-weight: 600; color: var(--muted); background: none; border: none; border-radius: 999px; cursor: pointer; white-space: nowrap; transition: color 0.15s, background 0.15s; }
     .tab-btn:hover { color: var(--text); }
-    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
-    .analyze-controls { display: flex; gap: 0.8rem; padding: 0.8rem 2rem; align-items: center; flex-wrap: wrap; }
-    .analyze-controls label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
-    .multi-dropdown { position: relative; }
-    .multi-dropdown .dd-trigger { padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.8rem; background: var(--input-bg); color: var(--text); cursor: pointer; outline: none; transition: border-color 0.2s; white-space: nowrap; }
-    .multi-dropdown .dd-trigger:hover { border-color: var(--accent); }
-    .multi-dropdown .dd-panel { display: none; position: absolute; top: 100%; left: 0; z-index: 1000; background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; min-width: 200px; margin-top: 4px; box-shadow: var(--shadow); }
-    .multi-dropdown .dd-panel.open { display: block; }
-    .multi-dropdown .dd-panel label { display: flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.8rem; color: var(--text); text-transform: none; letter-spacing: normal; font-weight: 400; }
-    .multi-dropdown .dd-panel label:hover { background: var(--hover); }
-    .multi-dropdown .dd-panel label.disabled { color: var(--disabled); cursor: default; }
-    .multi-dropdown .dd-panel input[type=checkbox] { accent-color: var(--accent); }
-    .btn-analyze { padding: 0.4rem 1rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.8rem; font-weight: 600; background: none; color: var(--text); cursor: pointer; transition: all 0.2s; }
-    .btn-analyze:hover { border-color: var(--accent); color: var(--accent); }
-    .btn-analyze.primary { background: #238636; border-color: #238636; color: #fff; }
-    .btn-analyze.primary:hover { background: #2ea043; border-color: #2ea043; }
-    .btn-analyze:disabled { opacity: 0.5; cursor: not-allowed; }
-    .analyze-info { font-size: 0.75rem; color: var(--muted); padding: 0 2rem; }
-    .analyze-sql { padding: 0 2rem 0.4rem; }
-    .analyze-sql-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem; }
-    .analyze-sql-head label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
-    .analyze-sql-head label span { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--faint); }
-    .analyze-sql textarea { width: 100%; box-sizing: border-box; min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.78rem; line-height: 1.5; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.8rem; resize: vertical; white-space: pre; }
-    .analyze-sql textarea:focus { outline: none; border-color: var(--accent); }
-    .analyze-table-wrap { padding: 0 2rem 1rem; overflow-x: auto; max-height: 60vh; overflow-y: auto; }
-    .analyze-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
-    .analyze-table th { position: sticky; top: 0; background: var(--card); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.7rem; font-weight: 600; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); text-align: left; }
-    .analyze-table td { padding: 0.3rem 0.6rem; border-bottom: 1px solid var(--row-line); color: var(--text); }
-    .analyze-table tr:hover td { background: var(--hover-soft); }
-    .chart-card h2 .chart-note { font-weight: 400; color: var(--muted); font-size: 0.7rem; }
-    .chart-toggle { font-size: 0.7rem; color: var(--muted); display: inline-flex; align-items: center; gap: 0.3rem; cursor: pointer; }
-    .chart-toggle input { accent-color: var(--accent); }
-    .tab-btn:focus-visible, .duid-trigger:focus-visible, .dd-trigger:focus-visible, .btn-analyze:focus-visible, .filter-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .header-link { color: var(--muted); text-decoration: none; display: inline-flex; align-items: center; gap: 3px; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.05em; }
+    .tab-btn.active { color: var(--on-accent); background: var(--accent); }
+    .top-actions { display: flex; align-items: center; gap: 0.9rem; margin-left: auto; }
+    #status { font-size: 0.78rem; color: var(--muted); display: flex; align-items: center; gap: 0.45rem; }
+    #status .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
+    #status.connected .dot { background: var(--good); box-shadow: 0 0 6px var(--good); }
+    #status.error .dot { background: var(--bad); box-shadow: 0 0 6px var(--bad); }
+    #status.error { color: var(--bad); }
+    #status.loading .dot { background: var(--warn); box-shadow: 0 0 6px var(--warn); animation: pulse 1.2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    .header-link { color: var(--muted); text-decoration: none; display: inline-flex; align-items: center; gap: 3px; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.04em; transition: color 0.15s; }
+    .header-link:hover { color: var(--text); }
     .header-link svg { fill: currentColor; }
-    .theme-toggle { background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); cursor: pointer; font-size: 0.9rem; line-height: 1; padding: 0.3rem 0.45rem; }
-    .theme-toggle:hover { color: var(--accent); border-color: var(--accent); }
-    .theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    @media (max-width: 1100px) { .kpi-row { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+    .theme-toggle { background: none; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); cursor: pointer; font-size: 0.9rem; line-height: 1; width: 2rem; height: 2rem; transition: color 0.15s, border-color 0.15s; }
+    .theme-toggle:hover { color: var(--text); border-color: var(--muted); }
+
+    /* --- Filter bar: stays in view while the page scrolls --- */
+    .filter-bar { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; gap: 0.6rem 1.1rem; flex-wrap: wrap; padding: 0.6rem var(--gutter); background: color-mix(in srgb, var(--bg) 84%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--hairline); }
+    .filter-group { display: flex; align-items: center; gap: 0.45rem; }
+    .filter-group label, .analyze-controls label, .analyze-sql-head label { font-size: 0.7rem; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+    .filter-group select, .filter-group input[type=date], .duid-trigger, .multi-dropdown .dd-trigger { padding: 0.4rem 0.7rem; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 0.85rem; background: var(--input-bg); color: var(--text); cursor: pointer; outline: none; white-space: nowrap; transition: border-color 0.15s, box-shadow 0.15s; }
+    .filter-group select:hover, .filter-group input[type=date]:hover, .duid-trigger:hover, .multi-dropdown .dd-trigger:hover { border-color: var(--muted); }
+    .filter-group select:focus-visible, .filter-group input[type=date]:focus-visible, .duid-trigger:focus-visible, .multi-dropdown .dd-trigger:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus-ring); outline: none; }
+    .filter-group.presets { gap: 0; padding: 2px; background: var(--card); border: 1px solid var(--hairline); border-radius: 999px; }
+    .preset-btn { padding: 0.28rem 0.7rem; border: none; border-radius: 999px; font-size: 0.78rem; font-weight: 600; background: none; color: var(--muted); cursor: pointer; transition: color 0.15s, background 0.15s; }
+    .preset-btn:hover { color: var(--text); }
+    .preset-btn.active { background: var(--accent); color: var(--on-accent); }
+    .active-filters { display: flex; gap: 0.4rem; padding: 0.7rem var(--gutter) 0; flex-wrap: wrap; align-items: center; }
+    .active-filters:empty { display: none; }
+    .filter-tag { background: var(--accent); color: var(--on-accent); border: none; padding: 0.2rem 0.65rem; border-radius: 999px; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; font-weight: 600; font-size: 0.76rem; transition: background 0.15s, color 0.15s; }
+    .filter-tag:hover { background: var(--bad); color: #fff; }
+    .filter-tag::after { content: "\00d7"; font-size: 0.95rem; }
+    .duid-dropdown, .multi-dropdown { position: relative; }
+    .duid-panel, .multi-dropdown .dd-panel { display: none; position: absolute; top: 100%; left: 0; z-index: 1000; background: var(--raised); border: 1px solid var(--border); border-radius: 10px; margin-top: 6px; box-shadow: var(--shadow); overflow: hidden; }
+    .duid-panel { width: min(280px, calc(100vw - 2rem)); }
+    .multi-dropdown .dd-panel { min-width: 200px; }
+    .duid-panel.open, .multi-dropdown .dd-panel.open { display: block; }
+    .duid-search { width: 100%; padding: 0.5rem 0.7rem; border: none; border-bottom: 1px solid var(--border); background: transparent; color: var(--text); font-size: 0.85rem; outline: none; }
+    .duid-list { max-height: 240px; overflow-y: auto; }
+    .duid-list label, .multi-dropdown .dd-panel label { display: flex; align-items: center; gap: 0.45rem; padding: 0.3rem 0.7rem; cursor: pointer; font-size: 0.8rem; color: var(--text); text-transform: none; letter-spacing: normal; font-weight: 400; }
+    .duid-list label:hover, .multi-dropdown .dd-panel label:hover { background: var(--hover); }
+    .multi-dropdown .dd-panel label.disabled { color: var(--disabled); cursor: default; }
+    input[type=checkbox], input[type=range] { accent-color: var(--accent); }
+
+    /* --- Right now: the newest interval --- */
+    .hero { display: grid; grid-template-columns: minmax(200px, auto) minmax(0, 1fr); gap: 1.4rem 2.4rem; align-items: center; margin: var(--gap) var(--gutter) 0; padding: 1.4rem 1.6rem; border-radius: 20px; border: 1px solid var(--hairline); box-shadow: var(--card-shadow);
+      /* --glow is the colour of the fuel generating the most right now (renderNow). */
+      background: radial-gradient(120% 150% at 0% 0%, color-mix(in srgb, var(--glow, transparent) 18%, transparent), transparent 60%), var(--card); }
+    .hero-eyebrow { font-size: 0.74rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+    .hero-eyebrow span { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--faint); margin-left: 0.35rem; }
+    .hero-figure { font-size: clamp(3.2rem, 5.6vw, 5rem); font-weight: 800; letter-spacing: -0.04em; line-height: 1; margin-top: 0.35rem; white-space: nowrap; }
+    .hero-figure small { font-size: 0.42em; font-weight: 700; letter-spacing: 0; margin-left: 0.12em; color: var(--muted); }
+    .hero-caption { font-size: 1rem; font-weight: 600; margin-top: 0.3rem; }
+    .hero-sub { font-size: 0.85rem; color: var(--muted); margin-top: 0.15rem; min-height: 1.2em; }
+    .mix-title { font-size: 0.78rem; font-weight: 600; color: var(--muted); margin-bottom: 0.5rem; }
+    .mix-bar { display: flex; gap: 2px; height: 44px; border-radius: 12px; overflow: hidden; background: var(--row-line); }
+    .mix-seg { flex: 1 1 0; min-width: 3px; border: none; padding: 0; cursor: pointer; transition: flex-grow 0.6s cubic-bezier(0.2, 0.8, 0.2, 1), filter 0.15s; }
+    .mix-seg:hover { filter: brightness(1.15); }
+    .mix-seg:focus-visible { outline-offset: -3px; }
+    .mix-legend { display: flex; flex-wrap: wrap; gap: 0.35rem 0.4rem; margin-top: 0.8rem; }
+    .mix-chip { display: inline-flex; align-items: baseline; gap: 0.4rem; padding: 0.22rem 0.6rem; border-radius: 999px; border: 1px solid var(--hairline); background: none; color: var(--text); font-size: 0.8rem; cursor: pointer; white-space: nowrap; transition: border-color 0.15s; }
+    .mix-chip .sw { width: 9px; height: 9px; border-radius: 50%; align-self: center; flex: none; }
+    .mix-chip .sw.ring { background: none; border: 2px solid; }
+    .mix-chip b { font-weight: 650; }
+    .mix-chip i { font-style: normal; color: var(--muted); }
+    .mix-chip:hover, .mix-chip.active { border-color: var(--accent); }
+    .mix-chip.static, .mix-seg.static { cursor: default; }
+    .mix-chip.static { border-style: dashed; }
+    .mix-chip.static:hover { border-color: var(--hairline); }
+    .hero-regions { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.6rem; }
+    .region-tile { text-align: left; min-width: 0; background: var(--raised); border: 1px solid var(--hairline); border-radius: 12px; padding: 0.6rem 0.8rem 0.65rem; color: inherit; cursor: pointer; transition: border-color 0.15s, transform 0.15s; }
+    .region-tile:hover { border-color: var(--muted); transform: translateY(-1px); }
+    .region-tile.active { border-color: var(--accent); }
+    .rt-row { display: flex; align-items: baseline; justify-content: space-between; gap: 0.1rem 0.6rem; flex-wrap: wrap; }
+    .rt-code { font-size: 0.8rem; font-weight: 700; letter-spacing: 0.07em; color: var(--muted); }
+    .rt-price { font-size: 1.3rem; font-weight: 750; letter-spacing: -0.02em; white-space: nowrap; }
+    .rt-price small { font-size: 0.62rem; font-weight: 500; letter-spacing: 0; color: var(--faint); margin-left: 0.15rem; }
+    .rt-band { height: 4px; border-radius: 2px; margin: 0.35rem 0 0.4rem; }
+    .rt-meta, .rt-net { font-size: 0.76rem; color: var(--muted); white-space: nowrap; }
+    .rt-net.export { color: var(--export); }
+    .rt-net.import { color: var(--import); }
+    /* The hover card of the mix bar (charts have ECharts' own). */
+    .tip { position: fixed; z-index: 2000; pointer-events: none; background: var(--raised); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 0.45rem 0.7rem; font-size: 0.8rem; box-shadow: var(--shadow); white-space: nowrap; opacity: 0; transition: opacity 0.1s; }
+    .tip.show { opacity: 1; }
+    .tip i { font-style: normal; color: var(--muted); }
+    /* Before the first render: a shimmer where a figure will be. */
+    .skeleton { color: transparent !important; border-radius: 8px; background: linear-gradient(90deg, var(--row-line) 25%, var(--hover) 50%, var(--row-line) 75%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
+    .skeleton * { visibility: hidden; }
+    .kpi-value.skeleton, .hero-figure.skeleton { width: 60%; }
+    @keyframes shimmer { to { background-position: -200% 0; } }
+
+    /* --- KPI tiles (and the History records) --- */
+    .kpi-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--gap); padding: var(--gap) var(--gutter) 0; }
+    /* The figure on the left, its sparkline beside it; a tile without one gives the figure the whole width. */
+    .kpi-card { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 36%; column-gap: 0.8rem; align-content: start; background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 0.9rem 1rem; box-shadow: var(--card-shadow); }
+    .kpi-card > * { grid-column: 1 / -1; }
+    .kpi-card .kpi-label { font-size: 0.78rem; color: var(--muted); font-weight: 600; }
+    .kpi-card .kpi-value { font-size: 1.75rem; font-weight: 750; letter-spacing: -0.025em; line-height: 1.15; margin-top: 0.2rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .kpi-card:has(.kpi-spark) .kpi-value { grid-column: 1; }
+    .kpi-card .kpi-sub { font-size: 0.76rem; color: var(--muted); margin-top: 0.15rem; }
+    .kpi-card .kpi-delta { font-weight: 600; color: var(--text); min-height: 1.2em; }
+    .kpi-card .kpi-delta.up { color: var(--good); }
+    .kpi-card .kpi-delta.down { color: var(--bad); }
+    .kpi-spark { grid-column: 2; grid-row: 2; align-self: end; width: 100%; height: 30px; color: var(--muted); overflow: visible; }
+    [hidden] { display: none !important; }
+
+    /* --- Chart cards --- */
+    .charts { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); padding: var(--gap) var(--gutter) 1.5rem; transition: opacity 0.2s; }
+    .charts.loading { opacity: 0.4; }
+    .chart-card { min-width: 0; background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 1rem 1.1rem 0.8rem; box-shadow: var(--card-shadow); }
+    .chart-card h2 { font-size: 0.95rem; font-weight: 650; letter-spacing: -0.01em; color: var(--text); display: inline; }
+    .chart-card h2 .chart-note { font-weight: 400; letter-spacing: 0; color: var(--muted); font-size: 0.8rem; }
+    .chart-card .chart-header { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; margin-bottom: 0.6rem; }
+    .chart-card.full-width { grid-column: 1 / -1; }
+    .chart-container { width: 100%; }
+    .chart-toggle { font-size: 0.78rem; color: var(--muted); display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; white-space: nowrap; }
+    .chart-toggle select, .flows-bar select { background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.2rem 0.4rem; font-size: 0.78rem; }
+    /* What the charts of a tab mean, folded away under them. */
+    .notes { margin: 0 var(--gutter) 1.5rem; border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--card); }
+    .notes summary { cursor: pointer; padding: 0.75rem 1.1rem; font-size: 0.85rem; font-weight: 600; color: var(--muted); }
+    .notes summary:hover { color: var(--text); }
+    .notes p { padding: 0 1.1rem 1rem; font-size: 0.85rem; color: var(--muted); line-height: 1.65; max-width: 100ch; }
+
+    /* --- Analyze and Logs --- */
+    .analyze-controls { display: flex; gap: 0.8rem; padding: var(--gap) var(--gutter) 0.8rem; align-items: center; flex-wrap: wrap; }
+    .btn-analyze, .flows-btn { padding: 0.42rem 1rem; border: 1px solid var(--border); border-radius: 999px; font-size: 0.82rem; font-weight: 600; background: none; color: var(--text); cursor: pointer; transition: border-color 0.15s, background 0.15s, color 0.15s; }
+    .btn-analyze:hover, .flows-btn:hover { border-color: var(--muted); }
+    .btn-analyze.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+    .btn-analyze.primary:hover { opacity: 0.88; }
+    .btn-analyze:disabled { opacity: 0.5; cursor: not-allowed; }
+    .analyze-info { font-size: 0.8rem; color: var(--muted); padding: 0 var(--gutter); }
+    .analyze-sql { padding: 0 var(--gutter) 0.4rem; }
+    .analyze-sql-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem; }
+    .analyze-sql-head label span { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--faint); }
+    .analyze-sql textarea { width: 100%; min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; line-height: 1.5; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.7rem 0.9rem; resize: vertical; white-space: pre; }
+    .analyze-sql textarea:focus { outline: none; border-color: var(--accent); }
+    .analyze-table-wrap { margin: 0.6rem var(--gutter) 1.5rem; overflow: auto; max-height: 60vh; border-radius: var(--radius); }
+    .analyze-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+    .analyze-table th { position: sticky; top: 0; background: var(--card); color: var(--muted); font-size: 0.74rem; font-weight: 600; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); text-align: left; }
+    .analyze-table td { padding: 0.35rem 0.7rem; border-bottom: 1px solid var(--row-line); color: var(--text); }
+    .analyze-table tr:hover td { background: var(--hover-soft); }
+
     /* --- Flows page --- */
-    .flows-bar { display: flex; align-items: center; gap: 0.8rem; padding: 0.6rem 2rem 0.2rem; flex-wrap: wrap; }
-    .flows-time { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; min-width: 12rem; }
-    .flows-time small { display: block; font-size: 0.7rem; font-weight: 500; color: var(--muted); letter-spacing: 0; }
-    .flows-now { display: block; font-size: 0.85rem; font-weight: 600; letter-spacing: 0; min-height: 1.2em; }
-    .flows-now b { color: #3fb950; }
-    .flows-event { display: block; font-size: 0.85rem; font-weight: 700; letter-spacing: 0; color: #f85149; min-height: 1.2em; }
-    .ic-dead .ic-mw, .ic-dead .ic-util { color: #f85149; }
+    .flows-bar { display: flex; align-items: center; gap: 0.8rem; padding: var(--gap) var(--gutter) 0.2rem; flex-wrap: wrap; }
+    .flows-time { font-size: 1.8rem; font-weight: 750; font-variant-numeric: tabular-nums; letter-spacing: -0.025em; min-width: 12rem; }
+    .flows-time small { display: block; font-size: 0.76rem; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+    .flows-now { display: block; font-size: 0.9rem; font-weight: 600; letter-spacing: 0; min-height: 1.2em; }
+    .flows-now b { color: var(--good); }
+    .flows-event { display: block; font-size: 0.9rem; font-weight: 700; letter-spacing: 0; color: var(--bad); min-height: 1.2em; }
+    .ic-dead .ic-mw, .ic-dead .ic-util { color: var(--bad); }
     .ic-dead .ic-util { font-weight: 600; }
-    .ic-dead .ic-bar span { background: repeating-linear-gradient(135deg, #f85149 0 6px, transparent 6px 12px); }
-    .flows-bar input[type=range] { flex: 1; min-width: 160px; accent-color: var(--accent); }
-    .flows-btn { background: var(--card); border: 1px solid var(--border); border-radius: 6px; color: var(--text); cursor: pointer; font-size: 0.8rem; font-weight: 600; padding: 0.35rem 0.8rem; }
-    .flows-btn:hover { border-color: var(--accent); color: var(--accent); }
-    .flows-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .flows-bar select { background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0.3rem; font-size: 0.8rem; }
-    .flows-main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); gap: 0.6rem; padding: 0.5rem 2rem; }
-    .flows-board h3 { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 0.2rem 0 0.4rem; }
-    .ic-row { display: grid; grid-template-columns: 1fr auto; gap: 0.1rem 0.6rem; padding: 0.45rem 0; border-bottom: 1px solid var(--row-line); }
+    .ic-dead .ic-bar span { background: repeating-linear-gradient(135deg, var(--bad) 0 6px, transparent 6px 12px); }
+    .flows-bar input[type=range] { flex: 1; min-width: 160px; }
+    .flows-main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); gap: var(--gap); padding: 0.5rem var(--gutter); }
+    .flows-board h3 { font-size: 0.78rem; font-weight: 600; color: var(--muted); margin: 0.2rem 0 0.4rem; }
+    .ic-row { display: grid; grid-template-columns: 1fr auto; gap: 0.1rem 0.6rem; padding: 0.5rem 0; border-bottom: 1px solid var(--row-line); }
     .ic-row:last-child { border-bottom: none; }
-    .ic-name { font-size: 0.82rem; font-weight: 600; }
+    .ic-name { font-size: 0.86rem; font-weight: 600; }
     .ic-name span { font-weight: 500; color: var(--muted); margin-left: 0.3rem; }
-    .ic-mw { font-size: 0.9rem; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+    .ic-mw { font-size: 0.92rem; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
     .ic-bar { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: var(--row-line); overflow: hidden; }
     .ic-bar span { display: block; height: 100%; border-radius: 3px; transition: width 0.15s linear; }
-    .ic-util { grid-column: 1 / -1; font-size: 0.68rem; color: var(--muted); }
-    .rg-row { display: grid; grid-template-columns: 1fr auto auto; gap: 0.6rem; align-items: center; padding: 0.3rem 0; font-size: 0.8rem; border-bottom: 1px solid var(--row-line); }
+    .ic-util { grid-column: 1 / -1; font-size: 0.74rem; color: var(--muted); }
+    .rg-row { display: grid; grid-template-columns: 1fr auto auto; gap: 0.6rem; align-items: center; padding: 0.35rem 0; font-size: 0.84rem; border-bottom: 1px solid var(--row-line); }
     .rg-row:last-child { border-bottom: none; }
-    .rg-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 0.4rem; vertical-align: -1px; }
+    .rg-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 0.4rem; vertical-align: -1px; }
     .rg-price, .rg-net { font-variant-numeric: tabular-nums; text-align: right; }
-    .rg-net { font-size: 0.72rem; min-width: 6.5rem; }
-    .price-legend { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.7rem; color: var(--muted); padding: 0.2rem 0.4rem 0; }
+    .rg-net { font-size: 0.76rem; min-width: 6.5rem; }
+    .price-legend { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.76rem; color: var(--muted); padding: 0.4rem 0.2rem 0; }
     .price-legend > div > span { margin-right: 0.6rem; white-space: nowrap; }
     .price-legend b { color: var(--text); margin-right: 0.3rem; }
-    .flows-minis { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 0.6rem; padding: 0 2rem 0.6rem; }
-    @media (max-width: 900px) { .flows-main { grid-template-columns: 1fr; } }
-    @media (max-width: 600px) { .flows-bar, .flows-main, .flows-minis { padding-left: 1rem; padding-right: 1rem; } .flows-time { font-size: 1.2rem; } }
-    .insights-note { font-size: 0.72rem; color: var(--muted); padding: 0 2rem 1rem; line-height: 1.5; }
-    .chart-toggle select { background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0.15rem 0.3rem; font-size: 0.72rem; }
+    .flows-minis { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: var(--gap); padding: 0.5rem var(--gutter) var(--gap); }
+
     /* --- History page --- */
-    .kpi-row.records { grid-template-columns: repeat(6, minmax(0, 1fr)); padding-top: 0.6rem; padding-bottom: 0.6rem; }
-    .record-card { text-align: left; font: inherit; color: inherit; cursor: pointer; transition: border-color 0.2s; }
-    .record-card:hover { border-color: var(--accent); }
-    .record-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .record-new { background: #238636; color: #fff; border-radius: 8px; padding: 0 0.35rem; margin-left: 0.3rem; font-size: 0.6rem; font-weight: 700; text-transform: uppercase; }
-    @media (max-width: 1100px) { .kpi-row.records { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-    @media (max-width: 600px) { .kpi-row.records { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-    @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
-    @media (max-width: 600px) {
-      header, .kpi-row, .tab-bar, .analyze-controls, .analyze-sql, .analyze-info, .analyze-table-wrap, .active-filters { padding-left: 1rem; padding-right: 1rem; }
-      header { gap: 0.6rem; }
-      #status { margin-left: 0; width: 100%; }
-      .charts { padding: 0 1rem 1rem; }
-      .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .kpi-card .kpi-value { font-size: 1.1rem; }
+    .kpi-row.records { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+    .record-card { text-align: left; font: inherit; color: inherit; cursor: pointer; transition: border-color 0.15s, transform 0.15s; }
+    .record-card:hover { border-color: var(--muted); transform: translateY(-1px); }
+    .record-card .kpi-value { font-size: 1.4rem; }
+    .record-new { background: var(--good); color: var(--card); border-radius: 999px; padding: 0 0.4rem; margin-left: 0.35rem; font-size: 0.62rem; font-weight: 700; text-transform: uppercase; }
+
+    @media (max-width: 1100px) {
+      .hero-regions { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+      .kpi-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .kpi-row.records { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 900px) {
+      .charts, .flows-main { grid-template-columns: 1fr; }
+      .filter-bar { position: static; }
+      .top-actions { margin-left: 0; }
+    }
+    @media (max-width: 700px) {
+      :root { --gutter: 1rem; --gap: 0.75rem; }
+      .hero { grid-template-columns: 1fr; padding: 1.1rem; }
+      .hero-regions { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+      .kpi-row, .kpi-row.records { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .kpi-row > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+      .kpi-card .kpi-value { font-size: 1.4rem; }
+      .brand .subtitle { display: none; }
+      .flows-time { font-size: 1.3rem; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .skeleton, #status.loading .dot { animation: none; }
+      .mix-seg, .region-tile, .record-card { transition: none; }
     }
   </style>
 </head>
 <body>
-  <header>
-    <div class="title-block">
-      <h1>Australian Energy Dashboard</h1>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="brandMark" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f1c93b"/><stop offset=".55" stop-color="#19b394"/><stop offset="1" stop-color="#4b8ff0"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#brandMark)"/><path d="M18.2 4.5 8.5 17.6h6.1l-1.6 9.9 9.7-13.3h-6.2z" fill="#0a0c10"/></svg>
+      <div>
+        <h1>Australian Energy Dashboard</h1>
+        <div class="subtitle">The National Electricity Market, every 5 minutes since 2018</div>
+      </div>
     </div>
+    <div class="tab-bar" role="tablist">
+      <button class="tab-btn active" data-tab="dashboard" role="tab" id="tab-dashboard" aria-selected="true" aria-controls="view-dashboard">Dashboard</button>
+      <button class="tab-btn" data-tab="flows" role="tab" id="tab-flows" aria-selected="false" aria-controls="view-flows" tabindex="-1">Flows</button>
+      <button class="tab-btn" data-tab="insights" role="tab" id="tab-insights" aria-selected="false" aria-controls="view-insights" tabindex="-1">Insights</button>
+      <button class="tab-btn" data-tab="history" role="tab" id="tab-history" aria-selected="false" aria-controls="view-history" tabindex="-1">History</button>
+      <button class="tab-btn" data-tab="analyze" role="tab" id="tab-analyze" aria-selected="false" aria-controls="view-analyze" tabindex="-1">Analyze</button>
+      <button class="tab-btn" data-tab="logs" role="tab" id="tab-logs" aria-selected="false" aria-controls="view-logs" tabindex="-1">Logs</button>
+    </div>
+    <div class="top-actions">
+      <div id="status" class="loading" role="status" aria-live="polite"><span class="dot" aria-hidden="true"></span><span id="statusText">Loading...</span></div>
+      <a href="https://github.com/djouallah/analytics-as-code" target="_blank" rel="noopener" class="header-link" title="View on GitHub" aria-label="View on GitHub"><svg height="16" width="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <a href="dag/#!/overview?g_v=1" target="_blank" rel="noopener" class="header-link" title="View dbt DAG">DAG</a>
+      <button type="button" class="theme-toggle" id="themeToggle" aria-label="Switch to light theme" title="Switch to light theme">&#9728;</button>
+    </div>
+  </header>
+  <div class="filter-bar">
     <div class="filter-group">
       <label for="regionFilter">Region</label>
       <select id="regionFilter"><option value="">All Regions</option></select>
@@ -213,30 +327,32 @@
       <button type="button" class="preset-btn" data-preset="365" title="Last year">1y</button>
       <button type="button" class="preset-btn" data-preset="all" title="All of the history">All</button>
     </div>
-    <a href="https://github.com/djouallah/analytics-as-code" target="_blank" rel="noopener" class="header-link" title="View on GitHub" aria-label="View on GitHub"><svg height="16" width="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
-    <a href="dag/#!/overview?g_v=1" target="_blank" rel="noopener" class="header-link" title="View dbt DAG">DAG</a>
-    <button type="button" class="theme-toggle" id="themeToggle" aria-label="Switch to light theme" title="Switch to light theme">&#9728;</button>
-    <div id="status" class="loading" role="status" aria-live="polite"><span class="dot" aria-hidden="true"></span><span id="statusText">Loading...</span></div>
-  </header>
-  <div class="active-filters" id="activeFilters"></div>
-  <div class="tab-bar" role="tablist">
-    <button class="tab-btn active" data-tab="dashboard" role="tab" id="tab-dashboard" aria-selected="true" aria-controls="view-dashboard">Dashboard</button>
-    <button class="tab-btn" data-tab="flows" role="tab" id="tab-flows" aria-selected="false" aria-controls="view-flows" tabindex="-1">Flows</button>
-    <button class="tab-btn" data-tab="insights" role="tab" id="tab-insights" aria-selected="false" aria-controls="view-insights" tabindex="-1">Insights</button>
-    <button class="tab-btn" data-tab="history" role="tab" id="tab-history" aria-selected="false" aria-controls="view-history" tabindex="-1">History</button>
-    <button class="tab-btn" data-tab="analyze" role="tab" id="tab-analyze" aria-selected="false" aria-controls="view-analyze" tabindex="-1">Analyze</button>
-    <button class="tab-btn" data-tab="logs" role="tab" id="tab-logs" aria-selected="false" aria-controls="view-logs" tabindex="-1">Logs</button>
   </div>
+  <div class="active-filters" id="activeFilters"></div>
 
   <div id="view-dashboard" role="tabpanel" aria-labelledby="tab-dashboard">
+  <!-- The newest interval, whatever the date range (renderNow). -->
+  <section class="hero" id="hero" aria-label="The grid right now">
+    <div>
+      <div class="hero-eyebrow">Right now<span id="heroAsOf"></span></div>
+      <div class="hero-figure skeleton" id="heroFigure"><span id="heroValue">--</span><small id="heroUnit"></small></div>
+      <div class="hero-caption" id="heroCaption">&nbsp;</div>
+      <div class="hero-sub" id="heroSub"></div>
+    </div>
+    <div>
+      <div class="mix-title" id="mixTitle">Generation by fuel (MW)</div>
+      <div class="mix-bar" id="mixBar"></div>
+      <div class="mix-legend" id="mixLegend"></div>
+    </div>
+    <div class="hero-regions" id="heroRegions"></div>
+  </section>
+
   <div class="kpi-row">
-    <div class="kpi-card"><div class="kpi-label">Total Generation</div><div class="kpi-value" id="kpiGen">--</div><svg class="kpi-spark" id="kpiGenSpark" aria-hidden="true"></svg><div class="kpi-sub" id="kpiGenSub">Average MW</div><div class="kpi-sub kpi-delta" id="kpiGenDelta"></div></div>
-    <div class="kpi-card"><div class="kpi-label">Avg Price</div><div class="kpi-value" id="kpiPrice">--</div><svg class="kpi-spark" id="kpiPriceSpark" aria-hidden="true"></svg><div class="kpi-sub">$/MWh across regions</div><div class="kpi-sub kpi-delta" id="kpiPriceDelta"></div></div>
-    <div class="kpi-card"><div class="kpi-label">Active Generators</div><div class="kpi-value" id="kpiGens">--</div><div class="kpi-sub">DUIDs reporting</div></div>
-    <div class="kpi-card"><div class="kpi-label">Renewables</div><div class="kpi-value" id="kpiRE">--</div><svg class="kpi-spark" id="kpiRESpark" aria-hidden="true"></svg><div class="kpi-sub" id="kpiRESub">share of generation</div><div class="kpi-sub kpi-delta" id="kpiREDelta"></div></div>
-    <div class="kpi-card"><div class="kpi-label">Top Fuel Source</div><div class="kpi-value" id="kpiTopFuel">--</div><div class="kpi-sub" id="kpiTopFuelSub">by generation</div></div>
-    <div class="kpi-card"><div class="kpi-label">Latest MW</div><div class="kpi-value" id="kpiLatestMW">--</div><div class="kpi-sub" id="kpiLatestMWSub">total generation</div></div>
-    <div class="kpi-card"><div class="kpi-label">Latest Price</div><div class="kpi-value" id="kpiLatestPrice">--</div><div class="kpi-sub" id="kpiLatestPriceSub">avg $/MWh</div></div>
+    <div class="kpi-card"><div class="kpi-label">Total generation</div><div class="kpi-value skeleton" id="kpiGen">--</div><div class="kpi-sub" id="kpiGenSub">Average MW</div><div class="kpi-sub kpi-delta" id="kpiGenDelta"></div><svg class="kpi-spark" id="kpiGenSpark" aria-hidden="true"></svg></div>
+    <div class="kpi-card"><div class="kpi-label">Average price</div><div class="kpi-value skeleton" id="kpiPrice">--</div><div class="kpi-sub">$/MWh across regions</div><div class="kpi-sub kpi-delta" id="kpiPriceDelta"></div><svg class="kpi-spark" id="kpiPriceSpark" aria-hidden="true"></svg></div>
+    <div class="kpi-card"><div class="kpi-label">Renewables</div><div class="kpi-value skeleton" id="kpiRE">--</div><div class="kpi-sub" id="kpiRESub">share of generation</div><div class="kpi-sub kpi-delta" id="kpiREDelta"></div><svg class="kpi-spark" id="kpiRESpark" aria-hidden="true"></svg></div>
+    <div class="kpi-card"><div class="kpi-label">Active generators</div><div class="kpi-value skeleton" id="kpiGens">--</div><div class="kpi-sub">DUIDs reporting</div></div>
+    <div class="kpi-card"><div class="kpi-label">Top fuel source</div><div class="kpi-value skeleton" id="kpiTopFuel">--</div><div class="kpi-sub" id="kpiTopFuelSub">by generation</div></div>
   </div>
 
   <div class="charts">
@@ -244,15 +360,15 @@
       <div class="chart-header"><h2 id="title-generation">Generation by Fuel Type (MW)</h2>
         <label class="chart-toggle" id="drillLevelWrap" hidden>Show
           <select id="drillLevel" aria-label="Group the drilled fuel by unit or by power station"><option value="unit">Units</option><option value="station">Stations</option></select></label></div>
-      <div class="chart-container" id="chart-generation" style="height:320px;"></div>
+      <div class="chart-container" id="chart-generation" style="height:340px;"></div>
     </div>
     <div class="chart-card">
       <div class="chart-header"><h2>Average Price by Region ($/MWh)</h2><label class="chart-toggle"><input type="checkbox" id="clipSpikes" checked> Clip spikes</label></div>
-      <div class="chart-container" id="chart-price" style="height:280px;"></div>
+      <div class="chart-container" id="chart-price" style="height:300px;"></div>
     </div>
     <div class="chart-card">
       <div class="chart-header"><h2 id="title-map">Generators (average MW)</h2></div>
-      <div class="chart-container" id="chart-map" style="height:280px;"></div>
+      <div class="chart-container" id="chart-map" style="height:300px;"></div>
     </div>
   </div>
   </div>
@@ -279,7 +395,7 @@
       </div>
     </div>
     <div class="flows-minis" id="icMinis"></div>
-    <p class="insights-note">
+    <details class="notes"><summary>How to read this page</summary><p>
       MW is power at that moment; $/MWh is the wholesale spot price, not the cost of the flow.
       AEMO 5-minute dispatch since 2018, up to 30 days at a time. Arrows point the way power flows; their thickness is the
       flow and their colour how close the link runs to its limit (green &lt; 70% &le; amber &lt; 90%
@@ -288,7 +404,7 @@
       charging (batteries, pumped hydro). In the small charts the band is
       the link's import&ndash;export limit and the line the flow, positive from the first region in
       the name to the second. Hover any small chart to move the map; Play steps through the range.
-    </p>
+    </p></details>
   </div>
 
   <div id="view-insights" role="tabpanel" aria-labelledby="tab-insights" style="display:none">
@@ -337,12 +453,12 @@
         <div class="chart-header"><h2 id="title-battery">Batteries: average day (MW) and price</h2></div>
         <div class="chart-container" id="chart-battery" style="height:320px;"></div>
       </div>
-      <div class="chart-card">
+      <div class="chart-card full-width">
         <div class="chart-header"><h2 id="title-owners">Who generated it: energy by owner and station</h2></div>
         <div class="chart-container" id="chart-owners" style="height:320px;"></div>
       </div>
     </div>
-    <p class="insights-note">
+    <details class="notes"><summary>How to read these charts</summary><p>
       Rooftop solar is included, as one unit per region (QLD_PV, NSW_PV, VIC_PV, SA_PV, TAS_PV)
       from 6 March 2018. It is not metered: AEMO estimates it every half hour, and the 5-minute
       values here are a straight line between two estimates, the newest one held for up to 55
@@ -366,7 +482,7 @@
       farm it comes from the next-day files, so it ends a day or two ago; the days after come
       from AEMO's regional figures (lighter bars), which the farms add up to. It leaves out
       rooftop solar and the small non-scheduled farms. All charts follow the header filters.
-    </p>
+    </p></details>
   </div>
 
   <div id="view-history" role="tabpanel" aria-labelledby="tab-history" style="display:none">
@@ -385,12 +501,12 @@
         <div class="chart-container" id="chart-calendar" style="height:300px;"></div>
       </div>
     </div>
-    <p class="insights-note">
+    <details class="notes"><summary>How to read this page</summary><p>
       One cell per day, over all of the history. This page follows the region filter only: the
       date range and the other filters don't apply. The records are daily figures (a share or an
       average over a whole day), not 5-minute peaks. The newest day is still filling and is left
       out. Click a day or a record to open it on the Dashboard at 5-minute detail.
-    </p>
+    </p></details>
   </div>
 
   <div id="view-analyze" role="tabpanel" aria-labelledby="tab-analyze" style="display:none">
@@ -456,68 +572,94 @@
     // 1. CONSTANTS & THEME
     // =========================================================================
 
-    // Chart theme follows the page's colour scheme (CSS tokens on :root); see applyScheme().
-    const darkTheme = {
-      backgroundColor: 'transparent',
-      textStyle: { color: '#8b949e' },
-      title: { textStyle: { color: '#e1e4e8' } },
-      legend: { textStyle: { color: '#8b949e' }, pageTextStyle: { color: '#8b949e' } },
-      tooltip: {
-        backgroundColor: 'rgba(22,27,34,0.95)',
-        borderColor: '#30363d',
-        textStyle: { color: '#e1e4e8', fontSize: 12 },
-      },
-      categoryAxis: { axisLine: { lineStyle: { color: '#30363d' } }, axisTick: { lineStyle: { color: '#30363d' } }, axisLabel: { color: '#8b949e' }, splitLine: { lineStyle: { color: '#21262d' } } },
-      valueAxis: { axisLine: { lineStyle: { color: '#30363d' } }, axisTick: { lineStyle: { color: '#30363d' } }, axisLabel: { color: '#8b949e' }, splitLine: { lineStyle: { color: '#21262d' } } },
-      timeAxis: { axisLine: { lineStyle: { color: '#30363d' } }, axisTick: { lineStyle: { color: '#30363d' } }, axisLabel: { color: '#8b949e' }, splitLine: { lineStyle: { color: '#21262d' } } },
-    };
-    echarts.registerTheme('dark-custom', darkTheme);
-    echarts.registerTheme('light-custom', {
-      backgroundColor: 'transparent',
-      textStyle: { color: '#57606a' },
-      title: { textStyle: { color: '#1f2328' } },
-      legend: { textStyle: { color: '#57606a' }, pageTextStyle: { color: '#57606a' } },
-      tooltip: { backgroundColor: 'rgba(255,255,255,0.97)', borderColor: '#d0d7de', textStyle: { color: '#1f2328', fontSize: 12 } },
-      categoryAxis: { axisLine: { lineStyle: { color: '#d0d7de' } }, axisTick: { lineStyle: { color: '#d0d7de' } }, axisLabel: { color: '#57606a' }, splitLine: { lineStyle: { color: '#eaeef2' } } },
-      valueAxis: { axisLine: { lineStyle: { color: '#d0d7de' } }, axisTick: { lineStyle: { color: '#d0d7de' } }, axisLabel: { color: '#57606a' }, splitLine: { lineStyle: { color: '#eaeef2' } } },
-    });
-    // Dark by default; the header toggle switches theme and the choice is remembered.
-    function storedTheme() { try { return localStorage.getItem('theme'); } catch { return null; } }
-    if (storedTheme() === 'light') document.documentElement.dataset.theme = 'light';
+    // The theme (the <head> script set it before first paint) and the page's CSS tokens: the
+    // charts take every chrome colour from them, so a token changes the page and its charts.
     const isLight = () => document.documentElement.dataset.theme === 'light';
-    const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    const _cssVars = new Map();   // per theme; the toggle clears it
+    const cssVar = name => _cssVars.get(name)
+      ?? _cssVars.set(name, getComputedStyle(document.documentElement).getPropertyValue(name).trim()).get(name);
+
+    // One ECharts theme per colour scheme, built from the tokens the first time a chart needs
+    // it: the font, the label size, the tooltip card, the legend, the zoom slider and the
+    // colour scale are said here once, not in every chart.
+    function chartTheme() {
+      const name = isLight() ? 'page-light' : 'page-dark';
+      if (chartTheme.done?.has(name)) return name;
+      const text = cssVar('--text'), muted = cssVar('--muted'), line = cssVar('--border'), split = cssVar('--row-line');
+      const axis = { axisLine: { lineStyle: { color: line } }, axisTick: { lineStyle: { color: line } },
+        axisLabel: { color: muted, fontSize: 12 }, splitLine: { lineStyle: { color: split } }, nameTextStyle: { color: muted } };
+      echarts.registerTheme(name, {
+        backgroundColor: 'transparent',
+        textStyle: { color: muted, fontFamily: getComputedStyle(document.body).fontFamily },
+        title: { textStyle: { color: text } },
+        legend: { icon: 'circle', itemWidth: 9, itemHeight: 9, itemGap: 14, textStyle: { color: muted, fontSize: 12 },
+          pageTextStyle: { color: muted }, pageIconColor: muted, pageIconInactiveColor: cssVar('--disabled') },
+        tooltip: { backgroundColor: cssVar('--raised'), borderColor: line, borderWidth: 1, padding: [8, 12],
+          textStyle: { color: text, fontSize: 12 }, extraCssText: `border-radius:10px;box-shadow:${cssVar('--shadow')};` },
+        categoryAxis: axis, valueAxis: axis, timeAxis: axis,
+        dataZoom: { borderColor: 'transparent', backgroundColor: split, fillerColor: cssVar('--hover'),
+          dataBackground: { lineStyle: { color: line }, areaStyle: { color: line } },
+          selectedDataBackground: { lineStyle: { color: muted }, areaStyle: { color: muted } },
+          handleStyle: { color: cssVar('--card'), borderColor: muted }, moveHandleStyle: { color: line },
+          emphasis: { handleStyle: { borderColor: text }, moveHandleStyle: { color: muted } },
+          brushStyle: { color: cssVar('--hover') }, textStyle: { color: muted } },
+        visualMap: { textStyle: { color: muted }, handleStyle: { color: cssVar('--card'), borderColor: muted } },
+      });
+      (chartTheme.done ??= new Set()).add(name);
+      return name;
+    }
+    // The plot area of every chart: the axis labels are measured (containLabel), so no chart
+    // sets a left margin of its own and neighbouring cards line up.
+    const plot = ({ legend = false, zoom = false, bottom = 4 } = {}) =>
+      ({ left: 4, right: 16, top: legend ? 36 : 10, bottom: zoom ? 34 : bottom, containLabel: true });
 
     // Negative output (batteries and pumped hydro charging) is its own series below the axis.
     const CHARGING = ' (charging)';
     // The demand line drawn over the generation stack (not a fuel, never stacked or clicked).
     const DEMAND = 'Demand';
-    const PALETTE = ['#58a6ff','#f0883e','#3fb950','#bc8cff','#f778ba','#d29922','#79c0ff','#56d364','#db6d28','#ff7b72','#7ee787','#a5d6ff'];
+    // Every colour of the data is a pair: [on the dark card, on the light card].
+    const themed = pair => pair[isLight() ? 1 : 0];
+    // Series with no colour of their own (the units of a drilled fuel, an unknown fuel).
+    const PALETTES = [
+      ['#3987e5','#d95926','#199e70','#c98500','#d55181','#4f9a3a','#9085e9','#e66767','#5aa7b8','#b0762f','#a86bc4','#7f8a9c'],
+      ['#2a78d6','#eb6834','#1baf7a','#eda100','#e87ba4','#008300','#4a3aa7','#e34948','#2f8ea3','#9a6420','#8a3190','#6b7483'],
+    ];
+    const palette = () => themed(PALETTES);
+    // The fuels keep their hue in both themes, stepped for each card. The eight that carry the
+    // stack were checked pair by pair for colour-blind and normal vision (dataviz
+    // validate_palette.js); two are off its bands on purpose: black coal is a neutral, and
+    // rooftop solar is a lighter solar.
     const FUEL_COLORS = {
-      'Black coal': '#5c6370',   // dark grey that still reads on the dark card (was #444)
-      'Brown coal': '#8B4513',
-      'Natural gas': '#f0883e',
-      'Natural gas / fuel oil': '#d29922',
-      'Natural gas / diesel': '#db6d28',
-      'Coal seam methane': '#6b4c2a',
-      'Wind': '#58a6ff',
-      'Solar': '#f7c948',
-      'Rooftop solar': '#fff3a3',
-      'Water': '#3fb950',
-      'Bagasse': '#7ee787',
-      'Diesel': '#ff7b72',
-      'Kerosene': '#f778ba',
-      'Waste coal mine gas': '#888888',
-      'Grid': '#bc8cff',
-      'Other': '#aaaaaa',
-      '-': '#aaaaaa',
+      'Black coal': ['#5f6b7c', '#1d222b'],
+      'Brown coal': ['#8c5615', '#7d4200'],
+      'Natural gas': ['#d05848', '#da4130'],
+      'Wind': ['#5b93e6', '#3d84ea'],
+      'Solar': ['#bb8a00', '#c49a0b'],
+      'Rooftop solar': ['#dfc662', '#f1e344'],
+      'Water': ['#00a795', '#038c6e'],
+      'Grid': ['#9749b0', '#8a3190'],
+      // The small ones, in the shade of their family.
+      'Natural gas / fuel oil': ['#e3876f', '#e8715f'],
+      'Natural gas / diesel': ['#a8443a', '#a83226'],
+      'Coal seam methane': ['#7a6a58', '#6b5a47'],
+      'Waste coal mine gas': ['#857d74', '#8a8279'],
+      'Bagasse': ['#7aa33c', '#5b8f1f'],
+      'Diesel': ['#d86a9a', '#c94f86'],
+      'Kerosene': ['#e0a1bd', '#d98aa9'],
+      'Other': ['#8b93a1', '#8a909a'],
+      '-': ['#8b93a1', '#8a909a'],
+      [UNREGISTERED]: ['#7d8491', '#9aa0a8'],
+      'Unknown': ['#a3a9b4', '#b4b8be'],
     };
-    FUEL_COLORS['Unregistered'] = '#9e9e9e';
-    FUEL_COLORS['Unknown'] = '#bdbdbd';
     function fuelColor(name) {
       if (name.endsWith(CHARGING)) name = name.slice(0, -CHARGING.length);
-      if (name === 'Black coal' && isLight()) return '#2b2b2b';
-      return FUEL_COLORS[name] || PALETTE[Math.abs([...name].reduce((h,c)=>h*31+c.charCodeAt(0)|0,0)) % PALETTE.length];
+      const p = palette();
+      return FUEL_COLORS[name] ? themed(FUEL_COLORS[name]) : p[Math.abs([...name].reduce((h,c)=>h*31+c.charCodeAt(0)|0,0)) % p.length];
     }
+    // A region keeps its colour on every chart, whichever regions are shown.
+    const REGION_COLORS = { NSW1: ['#3987e5', '#2a78d6'], QLD1: ['#d95926', '#eb6834'], SA1: ['#199e70', '#1baf7a'],
+      TAS1: ['#c98500', '#eda100'], VIC1: ['#d55181', '#e87ba4'] };
+    const regionColor = code => REGION_COLORS[code] ? themed(REGION_COLORS[code]) : fuelColor(code);
 
     // =========================================================================
     // 2. STATE & DOM UTILITIES
@@ -582,7 +724,7 @@
       // enough attached for the default "Last 3 days" view
       ({ db: _db } = await data.init());
 
-      setStatus(window._cutoffCached || "Connected", "connected");
+      setConnected();
     }
 
     // One load, shared by the background load at startup and by Analyze: a second ATTACH of
@@ -598,7 +740,7 @@
     async function ensureHistory(from, to, msg) {
       if (!await data.ensureHistory(from, to, msg)) return;
       viewsChanged();
-      setStatus(window._cutoffCached || "Connected", "connected");
+      setConnected();
     }
 
     // Keyed on the view generation as well as the SQL: a query that started before data.js
@@ -711,7 +853,7 @@
 
     function dataZoomConfig(timeDetail) {
       return timeDetail
-        ? [{ type: 'inside', start: 0, end: 100 }, { type: 'slider', start: 0, end: 100, height: 18, bottom: 5 }]
+        ? [{ type: 'inside', start: 0, end: 100 }, { type: 'slider', start: 0, end: 100, height: 18, bottom: 6 }]
         : [];
     }
 
@@ -901,7 +1043,7 @@
     const charts = {};
     function getChart(id) {
       if (!charts[id]) {
-        const chart = charts[id] = echarts.init(document.getElementById(id), isLight() ? 'light-custom' : 'dark-custom');
+        const chart = charts[id] = echarts.init(document.getElementById(id), chartTheme());
         chart.on('georoam', () => {
           const geo = chart.getOption().geo?.[0];
           if (geo) _geoView.set(id, { center: geo.center, zoom: geo.zoom });
@@ -925,6 +1067,7 @@
       if (isLight()) delete document.documentElement.dataset.theme;
       else document.documentElement.dataset.theme = 'light';
       try { localStorage.setItem('theme', isLight() ? 'light' : 'dark'); } catch {}
+      _cssVars.clear();
       syncThemeToggle();
       for (const id of Object.keys(charts)) { charts[id].dispose(); delete charts[id]; }
       renderAll();
@@ -935,7 +1078,7 @@
     // render (and its KPIs) on screen as if it still matched the filters.
     function showEmpty(id, msg = 'No data for the selected filters') {
       getChart(id).setOption({
-        title: { text: msg, left: 'center', top: 'middle', textStyle: { color: '#8b949e', fontSize: 13, fontWeight: 'normal' } },
+        title: { text: msg, left: 'center', top: 'middle', textStyle: { color: cssVar('--muted'), fontSize: 13, fontWeight: 'normal' } },
         series: [],
       }, true);
     }
@@ -943,6 +1086,7 @@
       const el = document.getElementById(id);
       cancelAnimationFrame(_kpiAnim.get(id));
       delete el.dataset.value;
+      el.classList.remove('skeleton');
       el.textContent = value;
       const subEl = document.getElementById(id + 'Sub');
       if (subEl) subEl.textContent = sub;
@@ -954,6 +1098,7 @@
       cancelAnimationFrame(_kpiAnim.get(id));
       const from = Number(el.dataset.value ?? 0);
       el.dataset.value = value;
+      el.classList.remove('skeleton');
       if (sub != null) document.getElementById(id + 'Sub').textContent = sub;
       if (matchMedia('(prefers-reduced-motion: reduce)').matches) { el.textContent = format(value); return; }
       const t0 = performance.now();
@@ -964,9 +1109,10 @@
       };
       _kpiAnim.set(id, requestAnimationFrame(tick));
     }
-    // Sparkline of a KPI's own series: an SVG line, averaged down to 80 points. `clip` keeps the
-    // scale to the 2nd-98th percentile so one price spike doesn't flatten the rest.
-    function setSpark(id, values, color, clip = false) {
+    // Sparkline of a KPI's own series: an SVG line over a faint fill, in the tile's muted ink,
+    // averaged down to 80 points. `clip` keeps the scale to the 2nd-98th percentile so one
+    // price spike doesn't flatten the rest.
+    function setSpark(id, values, clip = false) {
       const el = document.getElementById(id);
       let v = values.filter(x => x != null && isFinite(x));
       if (v.length < 2) { el.innerHTML = ''; return; }
@@ -985,7 +1131,8 @@
       const line = pts.map((p, i) => `${(i * W / (n - 1)).toFixed(1)},${(H - 2 - (p - min) / span * (H - 4)).toFixed(1)}`).join(' ');
       el.setAttribute('viewBox', `0 0 ${W} ${H}`);
       el.setAttribute('preserveAspectRatio', 'none');
-      el.innerHTML = `<polyline points="${line}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+      el.innerHTML = `<polygon points="0,${H} ${line} ${W},${H}" fill="currentColor" opacity="0.12"/>`
+        + `<polyline points="${line}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
     }
 
     // --- Generation by Fuel Type (stacked area) ---
@@ -1022,7 +1169,7 @@
         showEmpty('chart-generation');
         setKpi('kpiGen', '--'); setKpi('kpiTopFuel', '--');
         setSpark('kpiGenSpark', []);
-        return updateLatestMW(seq);
+        return;
       }
 
       const { xKeys, xLabels } = buildTimeAxis(data, intraday);
@@ -1050,7 +1197,7 @@
       const valueAt = (k, name) => isOther(name)
         ? buckets[name].reduce((s, n) => s + (lookup.get(`${k}|${n}`) || 0), 0)
         : (lookup.get(`${k}|${name}`) || 0);
-      const colorOf = (name, i) => isOther(name) ? '#9e9e9e' : drillFuel ? PALETTE[i % PALETTE.length] : fuelColor(name);
+      const colorOf = (name, i) => isOther(name) ? fuelColor('Other') : drillFuel ? palette()[i % palette().length] : fuelColor(name);
 
       const largeMode = xKeys.length > 2000;
       const series = seriesNames.map((name, i) => ({
@@ -1058,8 +1205,9 @@
         type: 'line',
         // Charging below the axis gets its own stack; everything else stacks upward.
         stack: name.endsWith(CHARGING) ? 'charging' : 'total',
-        areaStyle: { opacity: name.endsWith(CHARGING) ? 0.5 : 0.85 },
-        lineStyle: { width: 0 },
+        areaStyle: { opacity: name.endsWith(CHARGING) ? 0.5 : 0.92 },
+        // A hairline of the card's colour keeps two neighbouring fills apart.
+        lineStyle: { width: 1, color: cssVar('--card') },
         symbol: 'none',
         emphasis: { focus: 'series' },
         triggerLineEvent: true,
@@ -1103,12 +1251,12 @@
             + (d ? `<div style="margin-top:2px">${line(d)}</div>` : '');
         }},
         // Click a legend entry to hide/show that series; click the chart area to drill.
-        legend: { type: 'scroll', top: 0, itemGap: 12, itemWidth: 10, itemHeight: 10, data: [
+        legend: { type: 'scroll', top: 0, data: [
           ...seriesNames.map((name, i) => ({ name, itemStyle: { color: colorOf(name, i) } })),
           ...(hasDemand ? [{ name: DEMAND, icon: 'path://M0,4h4v2h-4zM6,4h4v2h-4z', itemStyle: { color: cssVar('--text') } }] : []),
         ] },
-        grid: { left: 60, right: 20, top: 35, bottom: intraday ? 60 : 25 },
-        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 11 } },
+        grid: plot({ legend: true, zoom: intraday }),
+        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true } },
         yAxis: { type: 'value', axisLabel: { formatter: v => Math.abs(v) >= 1000 ? (v/1000).toFixed(0) + 'k' : v } },
         dataZoom: dataZoomConfig(intraday),
         series,
@@ -1148,32 +1296,111 @@
         const k = intraday ? `${d.date}|${padTime(d.time)}` : d.date;
         totalAt.set(k, (totalAt.get(k) || 0) + Math.max(d.total_mw, 0));
       }
-      setSpark('kpiGenSpark', xKeys.map(k => totalAt.get(k) ?? 0), cssVar('--accent'));
+      setSpark('kpiGenSpark', xKeys.map(k => totalAt.get(k) ?? 0));
 
       const topFuel = Object.entries(seriesTotals).filter(([n]) => !n.endsWith(CHARGING)).sort((a, b) => b[1] - a[1])[0];
       if (topFuel) {
-        document.getElementById('kpiTopFuel').textContent = topFuel[0];
         const avgLabel = intraday ? 'MW avg' : 'MWh/day avg';
-        document.getElementById('kpiTopFuelSub').textContent = `${Math.round(topFuel[1] / (uniqueIntervals || 1)).toLocaleString()} ${avgLabel}`;
+        setKpi('kpiTopFuel', topFuel[0], `${Math.round(topFuel[1] / (uniqueIntervals || 1)).toLocaleString()} ${avgLabel}`);
       }
-      await updateLatestMW(seq);
     }
 
-    // Latest MW: latest 5-min reading, respects region/fuel/DUID filters but ignores date
-    async function updateLatestMW(seq) {
-      const mwFilters = sql.unitFilters('g');
-      const latestMWResult = await runQuery(`
-        SELECT SUM(generated(g.mw))::DOUBLE AS total_mw, CAST(g.date AS VARCHAR) AS d, g.time
-        FROM v_gen_latest g
-        ${mwFilters.length ? `WHERE ${mwFilters.join(' AND ')}` : ''}
-        GROUP BY g.date, g.time`);
+    // --- Right now: the newest interval, whatever the date range ---
+    // The page's lead: the renewable share of the output, the output by fuel as one bar, and
+    // each region's price, demand and net flow. It follows the region filter only (the fuel,
+    // unit and date filters are about the charts below). The share is the same measure as the
+    // Renewables KPI; the bar is the stack of the generation chart at its last interval, so
+    // batteries discharging are in it, and what is charging is said beside it.
+    const MIX_MIN_SHARE = 0.01;   // fuels below this share of the output are drawn as one "Other"
+    async function renderNow(seq) {
+      const region = activeRegion();
+      const [mix, prices] = await Promise.all([
+        runQuery(`
+          SELECT g.fuel, SUM(generated(g.mw))::DOUBLE AS mw, SUM(LEAST(g.mw, 0))::DOUBLE AS charging,
+            renewable_share(g.mw, g.renewable, g.generator)::DOUBLE AS share,
+            CAST(MAX(g.date) AS VARCHAR) AS date, CAST(MAX(g.time) AS INTEGER) AS time
+          FROM v_gen_latest g
+          ${region ? `WHERE g.region = ${sqlStr(region)}` : ''}
+          GROUP BY GROUPING SETS ((g.fuel), ())`),
+        runQuery(`
+          SELECT p.REGIONID AS region, p.price::DOUBLE AS price, p.demand::DOUBLE AS demand,
+            p.net_interchange::DOUBLE AS net
+          FROM v_price_latest p ORDER BY p.REGIONID`),
+      ]);
       if (seq !== _renderSeq) return;
-      if (latestMWResult.length) {
-        setKpiNumber('kpiLatestMW', latestMWResult[0].total_mw, v => Math.round(v).toLocaleString(), `at ${formatTime(latestMWResult[0].time)}`);
+      const all = mix.find(r => r.fuel == null), total = all?.mw ?? 0;
+      const figure = document.getElementById('heroFigure');
+      figure.classList.remove('skeleton');
+      document.getElementById('heroAsOf').textContent = all?.date
+        ? `as of ${formatDate(all.date).replace(/ \d{4}$/, '')}, ${formatTime(all.time)} AEST` : '';
+      const where = region ? `in ${regionName(region)}` : 'across the NEM';
+      const mwText = v => `${Math.round(v).toLocaleString()} MW`;
+      // The share leads; a dim_duid that doesn't say what is renewable leaves the output to.
+      if (all?.share != null) {
+        setKpiNumber('heroValue', all.share, v => v.toFixed(0));
+        document.getElementById('heroUnit').textContent = '%';
+        document.getElementById('heroCaption').textContent = `renewable ${where}`;
+        document.getElementById('heroSub').textContent = `${mwText(total)} generating`;
       } else {
-        setKpi('kpiLatestMW', '--');
+        if (total) setKpiNumber('heroValue', total, v => Math.round(v).toLocaleString()); else setKpi('heroValue', '--');
+        document.getElementById('heroUnit').textContent = total ? 'MW' : '';
+        document.getElementById('heroCaption').textContent = `generating ${where}`;
+        document.getElementById('heroSub').textContent = '';
       }
+
+      // --- the mix bar and its legend ---
+      const fuels = mix.filter(r => r.fuel != null && r.mw > 0).sort((a, b) => b.mw - a.mw);
+      const shown = fuels.filter(r => r.mw >= MIX_MIN_SHARE * total), rest = fuels.filter(r => r.mw < MIX_MIN_SHARE * total);
+      const label = fuel => fuel === 'Grid' ? 'Battery' : fuel;
+      const share = v => total ? `${(100 * v / total).toFixed(v >= 0.1 * total ? 0 : 1)}%` : '';
+      const picked = activeFuel();
+      const items = shown.map(r => ({ fuel: r.fuel, name: label(r.fuel), mw: r.mw, color: fuelColor(r.fuel) }));
+      const restMw = rest.reduce((s, r) => s + r.mw, 0);
+      if (rest.length) items.push({ name: 'Other', mw: restMw, color: fuelColor('Other'),
+        tip: rest.map(r => `${escapeHtml(label(r.fuel))} <i>${mwText(r.mw)}</i>`).join('<br>') });
+      const tipOf = it => it.tip ?? `<b>${escapeHtml(it.name)}</b> ${mwText(it.mw)} <i>${share(it.mw)}</i>`;
+      const attrs = it => `${it.fuel ? `data-fuel="${escapeHtml(it.fuel)}"` : 'tabindex="-1"'} data-tip="${escapeHtml(tipOf(it))}"`;
+      document.getElementById('hero').style.setProperty('--glow', items[0]?.color ?? 'transparent');
+      document.getElementById('mixTitle').textContent = `Generation by fuel ${where} (MW)`;
+      document.getElementById('mixBar').innerHTML = items.map(it =>
+        `<button type="button" class="mix-seg${it.fuel ? '' : ' static'}" style="flex-grow:${Math.round(it.mw)};background:${it.color}" ${attrs(it)} aria-label="${escapeHtml(it.name)} ${mwText(it.mw)}"></button>`).join('');
+      const charging = -(all?.charging ?? 0);
+      document.getElementById('mixLegend').innerHTML = items.map(it =>
+        `<button type="button" class="mix-chip${it.fuel ? '' : ' static'}${it.fuel && it.fuel === picked ? ' active' : ''}" ${attrs(it)}>
+          <span class="sw" style="background:${it.color}"></span>${escapeHtml(it.name)} <b>${Math.round(it.mw).toLocaleString()}</b> <i>${share(it.mw)}</i></button>`).join('')
+        + (charging >= 1 ? `<span class="mix-chip static" data-tip="Batteries and pumped hydro taking power from the grid"><span class="sw ring" style="border-color:${fuelColor('Grid')}"></span>Charging <b>${Math.round(charging).toLocaleString()}</b></span>` : '');
+
+      // --- the regions ---
+      document.getElementById('heroRegions').innerHTML = prices.map(p => {
+        const net = p.net == null ? '' : `<span class="rt-net ${p.net >= 0 ? 'export' : 'import'}">${p.net >= 0 ? '&#9650; exports' : '&#9660; imports'} ${mwText(Math.abs(p.net))}</span>`;
+        return `<button type="button" class="region-tile${p.region === region ? ' active' : ''}" data-region="${escapeHtml(p.region)}" title="${p.region === crossFilter.region ? 'Show all regions' : `Show ${escapeHtml(regionName(p.region))} only`}">
+          <div class="rt-row"><span class="rt-code">${escapeHtml(short(p.region))}</span><span class="rt-price">${fmtPrice(p.price)}<small>/MWh</small></span></div>
+          <div class="rt-band" style="background:${priceColor(p.price)}"></div>
+          <div class="rt-row">${p.demand == null ? '' : `<span class="rt-meta">${mwText(p.demand)} demand</span>`}${net}</div>
+        </button>`;
+      }).join('');
     }
+    // A click on the mix filters the page to that fuel, like a click on the generation chart;
+    // a click on a region does what a click on its price line does. A second click undoes it.
+    document.getElementById('hero').addEventListener('click', e => {
+      const fuel = e.target.closest('[data-fuel]')?.dataset.fuel, region = e.target.closest('[data-region]')?.dataset.region;
+      if (!fuel && !region) return;
+      if (fuel) crossFilter.fuel = crossFilter.fuel === fuel ? null : fuel;
+      if (region) crossFilter.region = crossFilter.region === region ? null : region;
+      renderAll();
+    });
+    // The hover card of the mix: what the element under the pointer says in data-tip.
+    const _tip = document.body.appendChild(Object.assign(document.createElement('div'), { className: 'tip' }));
+    document.getElementById('hero').addEventListener('pointermove', e => {
+      const tip = e.target.closest('[data-tip]')?.dataset.tip;
+      _tip.classList.toggle('show', !!tip);
+      if (!tip) return;
+      _tip.innerHTML = tip;
+      const w = _tip.offsetWidth;
+      _tip.style.left = `${Math.max(8, Math.min(e.clientX - w / 2, innerWidth - w - 8))}px`;
+      _tip.style.top = `${e.clientY + 18}px`;
+    });
+    document.getElementById('hero').addEventListener('pointerleave', () => _tip.classList.remove('show'));
 
     // --- Average Price by Region (line) ---
     async function renderPrice(seq) {
@@ -1185,7 +1412,7 @@
         showEmpty('chart-price');
         setKpi('kpiPrice', '--');
         setSpark('kpiPriceSpark', []);
-        return updateLatestPrice(seq);
+        return;
       }
 
       const { xKeys, xLabels } = buildTimeAxis(data, intraday);
@@ -1201,6 +1428,7 @@
         name: regionName(region),
         type: 'line',
         symbol: 'none',
+        itemStyle: { color: regionColor(region) },
         lineStyle: { width: largeModeP ? 1 : 2 },
         emphasis: { focus: 'series', lineStyle: { width: 3 } },
         triggerLineEvent: true,
@@ -1224,13 +1452,12 @@
 
       const chart = getChart('chart-price');
       chart.setOption({
-        color: PALETTE,
-        tooltip: { trigger: 'axis', axisPointer: { type: 'line' } },
-        legend: { type: 'scroll', bottom: 0, textStyle: { fontSize: 11 } },
-        grid: { left: 55, right: 15, top: 15, bottom: intraday ? 80 : 40 },
-        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 11 } },
+        tooltip: { trigger: 'axis', axisPointer: { type: 'line' }, valueFormatter: v => v == null ? '-' : fmtPrice(v, 2) },
+        legend: { type: 'scroll', top: 0 },
+        grid: plot({ legend: true, zoom: intraday }),
+        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true } },
         yAxis: { type: 'value', max: yMax, min: yMin, axisLabel: { formatter: v => '$' + v } },
-        dataZoom: intraday ? [{ type: 'inside' }, { type: 'slider', height: 18, bottom: 28 }] : [],
+        dataZoom: dataZoomConfig(intraday),
         series,
         animationDuration: 600,
       }, true);
@@ -1253,24 +1480,7 @@
         const acc = priceAt.get(k) ?? priceAt.set(k, [0, 0]).get(k);
         acc[0] += d.avg_price; acc[1]++;
       }
-      setSpark('kpiPriceSpark', xKeys.map(k => priceAt.has(k) ? priceAt.get(k)[0] / priceAt.get(k)[1] : null), '#d29922', true);
-      await updateLatestPrice(seq);
-    }
-
-    // Latest Price: latest 5-min reading, respects region filter but ignores date
-    async function updateLatestPrice(seq) {
-      const regionP = activeRegion();
-      const latestPriceResult = await runQuery(`
-        SELECT AVG(p.price)::DOUBLE AS avg_price, CAST(p.date AS VARCHAR) AS d, p.time
-        FROM v_price_latest p
-        ${regionP ? `WHERE p.REGIONID = ${sqlStr(regionP)}` : ''}
-        GROUP BY p.date, p.time`);
-      if (seq !== _renderSeq) return;
-      if (latestPriceResult.length) {
-        setKpiNumber('kpiLatestPrice', latestPriceResult[0].avg_price, v => '$' + v.toFixed(1), `at ${formatTime(latestPriceResult[0].time)}`);
-      } else {
-        setKpi('kpiLatestPrice', '--');
-      }
+      setSpark('kpiPriceSpark', xKeys.map(k => priceAt.has(k) ? priceAt.get(k)[0] / priceAt.get(k)[1] : null), true);
     }
 
     // =========================================================================
@@ -1296,7 +1506,7 @@
     async function updateRenewablesKpi(seq) {
       const { rows, overall } = await renewableShare();
       if (seq !== _renderSeq) return;
-      setSpark('kpiRESpark', rows.map(r => r.share), '#3fb950');
+      setSpark('kpiRESpark', rows.map(r => r.share));
       if (overall == null) return setKpi('kpiRE', '--', 'share of generation');
       const peak = rows.reduce((best, r) => r.share != null && (!best || r.share > best.share) ? r : best, null);
       const when = peak.time != null ? `${formatDate(peak.date).replace(/ \d{4}$/, '')} ${formatTime(peak.time)}` : formatDate(peak.date);
@@ -1379,7 +1589,7 @@
     const STATE_REGION = { 'Queensland': 'QLD1', 'New South Wales': 'NSW1', 'Australian Capital Territory': 'NSW1',
       'Victoria': 'VIC1', 'South Australia': 'SA1', 'Tasmania': 'TAS1' };
     const short = code => code.replace('1', '');
-    const utilColor = u => u >= 0.9 ? '#f85149' : u >= 0.7 ? '#d29922' : '#3fb950';
+    const utilColor = u => cssVar(u >= 0.9 ? '--bad' : u >= 0.7 ? '--warn' : '--good');
     // Price bands shared by the map shading and the region board.
     const PRICE_BANDS = [
       { lt: 0, color: '#2c7bb6', label: '< $0' },
@@ -1532,7 +1742,7 @@
         `<div><b>Arrows</b> power flowing now (MW), thicker = more; colour = share of the link's limit ` +
           [[0, '&lt; 70%'], [0.7, '70&ndash;90%'], [0.9, '&ge; 90%']].map(([u, l]) => swatch(utilColor(u), l)).join(' ') +
           ` ${swatch(OUT_COLOR, 'dashed &#10005; = no flow')}</div>` +
-        `<div><b>Dots</b> ${swatch('#3fb950', 'net exporter')} ${swatch('#f0883e', 'net importer')}</div>` +
+        `<div><b>Dots</b> ${swatch(cssVar('--export'), 'net exporter')} ${swatch(cssVar('--import'), 'net importer')}</div>` +
         `<div><b>Bubbles</b> generators, sized by output; ring = charging ` +
           GEN_LEGEND.map(f => swatch(fuelColor(f), f === 'Grid' ? 'Battery' : f)).join(' ') + '</div>' +
         `<div><b>Shading</b> spot price ($/MWh) ` + PRICE_BANDS.map(b => swatch(b.color, b.label)).join(' ') + '</div>';
@@ -1557,7 +1767,7 @@
             const ic = INTERCONNECTORS[id], [a, b] = r.mw >= 0 ? [ic.from, ic.to] : [ic.to, ic.from];
             return `<div style="color:${cssVar('--muted')}">${ps[0].axisValueLabel}</div><b>${Math.round(Math.abs(r.mw))} MW</b> ${short(a)}&rarr;${short(b)}<br>limits ${Math.round(r.import_limit)} / ${Math.round(r.export_limit)} MW`;
           } },
-          grid: { left: 48, right: 10, top: 8, bottom: 22 },
+          grid: plot(),
           xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 10 } },
           yAxis: { type: 'value', splitNumber: 3, axisLabel: { fontSize: 10, formatter: v => Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + 'k' : v } },
           series: [
@@ -1567,9 +1777,9 @@
             { type: 'line', stack: 'band', stackStrategy: 'all', symbol: 'none', lineStyle: { opacity: 0 }, silent: true,
               data: ser.map(r => r ? r.import_limit : null) },
             { type: 'line', stack: 'band', stackStrategy: 'all', symbol: 'none', lineStyle: { opacity: 0 }, silent: true,
-              areaStyle: { color: isLight() ? 'rgba(9,105,218,0.10)' : 'rgba(88,166,255,0.12)' },
+              areaStyle: { color: cssVar('--muted'), opacity: 0.16 },
               data: ser.map(r => r ? r.export_limit - r.import_limit : null) },
-            { type: 'line', symbol: 'none', sampling: 'average', lineStyle: { width: 1.6, color: '#58a6ff' },
+            { type: 'line', symbol: 'none', sampling: 'average', lineStyle: { width: 1.6, color: cssVar('--text') },
               data: ser.map(r => r ? Math.round(r.mw) : null),
               markLine: { symbol: 'none', silent: true, label: { show: false },
                 lineStyle: { color: cssVar('--faint'), type: 'dashed', width: 1 }, data: [{ yAxis: 0 }] } },
@@ -1668,12 +1878,12 @@
         const p = price(code), n = Math.round(net[code] || 0);
         return `<div class="rg-row"><div><span class="rg-swatch" style="background:${priceColor(p)}"></span>${escapeHtml(regionName(code))}</div>
           <div class="rg-price"${p >= SPIKE_PRICE ? ` style="color:${SPIKE_COLOR};font-weight:700"` : ''}>${fmtPrice(p)}${p == null ? '' : '<small style="color:var(--muted);font-weight:400">/MWh</small>'}</div>
-          <div class="rg-net" style="color:${n >= 0 ? '#3fb950' : '#f0883e'}">${n >= 0 ? 'exports' : 'imports'} ${Math.abs(n).toLocaleString()} MW</div></div>`;
+          <div class="rg-net" style="color:var(${n >= 0 ? '--export' : '--import'})">${n >= 0 ? 'exports' : 'imports'} ${Math.abs(n).toLocaleString()} MW</div></div>`;
       }).join('');
 
       // --- map ---
       if (!australiaMapRegistered) return;
-      const light = isLight();
+      const ink = cssVar('--text'), halo = cssVar('--card'), land = cssVar('--map-land');
       getChart('chart-flowmap').setOption({
         tooltip: { trigger: 'item', formatter: p => {
           if (p.seriesType === 'lines' && p.data.dead) return `<b>${p.data.name}</b><br>no flow for ${p.data.since}`;
@@ -1684,7 +1894,7 @@
         } },
         geo: { map: 'australia', nameProperty: 'STATE_NAME', roam: true, ...geoView('chart-flowmap', [145.4, -31.8], 1.85),
           // Land clearly lighter than the card, borders visible; WA and NT (not in the NEM) stay neutral.
-          itemStyle: { areaColor: light ? '#dfe5ec' : '#2b3446', borderColor: light ? '#8c959f' : '#7d8899', borderWidth: 1 },
+          itemStyle: { areaColor: land, borderColor: cssVar('--map-border'), borderWidth: 1 },
           emphasis: { disabled: true },
           tooltip: { show: true, formatter: p => {
             const code = STATE_REGION[p.name], v = code ? price(code) : null;
@@ -1692,7 +1902,7 @@
           } },
           // NEM states shaded by their region's price in this interval.
           regions: Object.entries(STATE_REGION).map(([state, code]) => ({
-            name: state, itemStyle: { areaColor: price(code) == null ? (light ? '#dfe5ec' : '#2b3446') : priceColor(price(code)), opacity: light ? 0.75 : 0.55 } })) },
+            name: state, itemStyle: { areaColor: price(code) == null ? land : priceColor(price(code)), opacity: isLight() ? 0.75 : 0.55 } })) },
         series: [
           { type: 'scatter', coordinateSystem: 'geo', zlevel: 1, animation: false,
             symbolSize: v => 3 + 20 * Math.sqrt(Math.min(1, Math.abs(v[2]) / GEN_FULL_MW)),
@@ -1702,9 +1912,9 @@
                 itemStyle: g.mw < 0 ? { color: 'transparent', borderColor: color, borderWidth: 1.5 } : { color, opacity: 0.8 } };
             }) },
           { type: 'lines', coordinateSystem: 'geo', zlevel: 2,
-            effect: { show: true, period: 2.5, trailLength: 0.2, symbol: 'arrow', symbolSize: 11, color: light ? '#1f2328' : '#ffffff' },
-            label: { show: true, position: 'middle', fontSize: 11, fontWeight: 600, color: light ? '#1f2328' : '#ffffff',
-              textBorderColor: light ? '#ffffff' : '#0f1117', textBorderWidth: 3, formatter: p => `${p.data.name} ${p.data.value} MW` },
+            effect: { show: true, period: 2.5, trailLength: 0.2, symbol: 'arrow', symbolSize: 11, color: ink },
+            label: { show: true, position: 'middle', fontSize: 11, fontWeight: 600, color: ink,
+              textBorderColor: halo, textBorderWidth: 3, formatter: p => `${p.data.name} ${p.data.value} MW` },
             data: enriched.filter(e => !e.dead).map(({ r, ic, a, b, util }) => ({
               name: ic.name, dir: `${short(a)}→${short(b)}`, value: Math.round(Math.abs(r.mw)), util,
               coords: [REGION_ANCHORS[a], REGION_ANCHORS[b]],
@@ -1714,7 +1924,7 @@
           // Links carrying nothing: dashed, no moving arrow, always named.
           { type: 'lines', coordinateSystem: 'geo', zlevel: 2,
             label: { show: true, position: 'middle', fontSize: 13, fontWeight: 700, color: OUT_COLOR,
-              textBorderColor: light ? '#ffffff' : '#0f1117', textBorderWidth: 3, formatter: p => `✕ ${p.data.name} no flow` },
+              textBorderColor: halo, textBorderWidth: 3, formatter: p => `✕ ${p.data.name} no flow` },
             data: enriched.filter(e => e.dead).map(({ ic, since }) => ({
               name: ic.name, dead: true, since, coords: [REGION_ANCHORS[ic.from], REGION_ANCHORS[ic.to]],
               lineStyle: { width: 3, type: 'dashed', color: OUT_COLOR, curveness: ic.curve, opacity: 0.95 },
@@ -1725,12 +1935,12 @@
             data: spikes.map(code => ({ name: code, value: REGION_ANCHORS[code] })) },
           { type: 'effectScatter', coordinateSystem: 'geo', zlevel: 3, rippleEffect: { scale: 3, brushType: 'stroke' },
             symbolSize: v => 9 + Math.min(14, Math.abs(v[2]) / 120),
-            label: { show: true, position: 'right', fontSize: 12, fontWeight: 700, color: light ? '#1f2328' : '#ffffff',
-              textBorderColor: light ? '#ffffff' : '#0f1117', textBorderWidth: 3,
+            label: { show: true, position: 'right', fontSize: 12, fontWeight: 700, color: ink,
+              textBorderColor: halo, textBorderWidth: 3,
               formatter: p => { const pr = price(p.name); return `${short(p.name)}${pr == null ? '' : '  ' + fmtPrice(pr) + '/MWh'}`; } },
             data: Object.entries(REGION_ANCHORS).map(([code, xy]) => ({
               name: code, value: [...xy, Math.round(net[code] || 0)],
-              itemStyle: { color: (net[code] || 0) >= 0 ? '#3fb950' : '#f0883e', borderColor: light ? '#ffffff' : '#0f1117', borderWidth: 1.5 },
+              itemStyle: { color: cssVar((net[code] || 0) >= 0 ? '--export' : '--import'), borderColor: halo, borderWidth: 1.5 },
               ...(spikes.includes(code) ? { label: { fontSize: 16, color: SPIKE_COLOR } } : {}),
             })) },
         ],
@@ -1776,12 +1986,12 @@
         r => r.share == null ? null : Math.round(10 * r.share) / 10);
       getChart('chart-re').setOption({
         tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '-' : `${v}%` },
-        grid: { left: 45, right: 20, top: 15, bottom: intraday ? 60 : 25 },
-        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 11 } },
+        grid: plot({ zoom: intraday }),
+        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true } },
         yAxis: { type: 'value', min: 0, max: 100, axisLabel: { formatter: '{value}%' } },
         dataZoom: dataZoomConfig(intraday),
         series: [{ name: 'Renewables', type: 'line', symbol: 'none', sampling: 'average',
-          lineStyle: { width: 1.5, color: '#3fb950' }, areaStyle: { color: 'rgba(63,185,80,0.25)' },
+          itemStyle: { color: cssVar('--good') }, lineStyle: { width: 1.5 }, areaStyle: { opacity: 0.2 },
           data: xKeys.map(k => lookup.get(k) ?? null) }],
       }, true);
     }
@@ -1822,8 +2032,8 @@
       const q = f => vals[Math.min(vals.length - 1, Math.floor(f * vals.length))];
       getChart('chart-heat').setOption({
         tooltip: { position: 'top', formatter: p => `${xLabel(dates[p.value[0]])} &middot; ${yLabels[p.value[1]]}<br><b>$${p.value[2].toFixed(1)}</b>` },
-        grid: { left: 50, right: 15, top: 10, bottom: 70 },
-        xAxis: { type: 'category', data: dates.map(d => intraday ? formatDate(d).replace(/ \d{4}$/, '') : formatMonth(d)), axisLabel: { hideOverlap: true, fontSize: 11 } },
+        grid: plot({ bottom: 52 }),
+        xAxis: { type: 'category', data: dates.map(d => intraday ? formatDate(d).replace(/ \d{4}$/, '') : formatMonth(d)), axisLabel: { hideOverlap: true } },
         yAxis: { type: 'category', data: yLabels, axisLabel: { fontSize: 10 } },
         // Scale clipped to the 2nd-98th percentile so one spike doesn't wash out the rest.
         visualMap: { min: Math.min(0, Math.floor(q(0.02))), max: Math.max(1, Math.ceil(q(0.98))), calculable: true,
@@ -1864,12 +2074,12 @@
       const lookup = buildLookup(rows, r => `${r.fuel}|${r.time}`, r => r.mw);
       getChart('chart-profile').setOption({
         tooltip: { trigger: 'axis', valueFormatter: v => `${Math.round(v).toLocaleString()} MW` },
-        legend: { type: 'scroll', top: 0, itemWidth: 10, itemHeight: 10, textStyle: { fontSize: 10 } },
-        grid: { left: 50, right: 15, top: 30, bottom: 25 },
-        xAxis: { type: 'category', data: times.map(formatTime), boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 11 } },
+        legend: { type: 'scroll', top: 0 },
+        grid: plot({ legend: true }),
+        xAxis: { type: 'category', data: times.map(formatTime), boundaryGap: false, axisLabel: { hideOverlap: true } },
         yAxis: { type: 'value', axisLabel: { formatter: v => v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v } },
-        series: fuels.map(f => ({ name: f, type: 'line', stack: 'total', symbol: 'none', lineStyle: { width: 0 },
-          areaStyle: { opacity: 0.85 }, itemStyle: { color: fuelColor(f) },
+        series: fuels.map(f => ({ name: f, type: 'line', stack: 'total', symbol: 'none', lineStyle: { width: 1, color: cssVar('--card') },
+          areaStyle: { opacity: 0.92 }, itemStyle: { color: fuelColor(f) },
           data: times.map(t => lookup.get(`${f}|${t}`) || 0) })),
       }, true);
     }
@@ -1897,12 +2107,12 @@
       if (!shown.length) return showEmpty('chart-capture');
       getChart('chart-capture').setOption({
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => `$${v.toFixed(1)}` },
-        grid: { left: 150, right: 30, top: 10, bottom: 40 },
+        grid: { ...plot(), top: 24 },
         xAxis: { type: 'value', axisLabel: { formatter: '${value}' } },
-        yAxis: { type: 'category', data: shown.map(r => r.fuel), axisLabel: { fontSize: 11 } },
-        series: [{ type: 'bar', name: 'Capture price', barMaxWidth: 18,
+        yAxis: { type: 'category', data: shown.map(r => r.fuel) },
+        series: [{ type: 'bar', name: 'Capture price', barMaxWidth: 18, itemStyle: { borderRadius: [0, 4, 4, 0] },
           data: shown.map(r => ({ value: Math.round(r.capture * 10) / 10, itemStyle: { color: fuelColor(r.fuel) } })),
-          markLine: avg[0]?.avg == null ? undefined : { symbol: 'none', label: { formatter: 'avg price ${c}', position: 'start', fontSize: 10, color: cssVar('--muted') },
+          markLine: avg[0]?.avg == null ? undefined : { symbol: 'none', label: { formatter: 'avg price ${c}', position: 'end', fontSize: 11, color: cssVar('--muted') },
             lineStyle: { type: 'dashed', color: cssVar('--muted') }, data: [{ xAxis: Math.round(avg[0].avg * 10) / 10 }] } }],
       }, true);
     }
@@ -1920,10 +2130,11 @@
       getChart('chart-neg').setOption({
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
           formatter: ps => `${escapeHtml(ps[0].name)}<br><b>${ps[0].value.toFixed(1)}%</b> negative<br>lowest $${rows[ps[0].dataIndex].lowest.toFixed(0)}` },
-        grid: { left: 110, right: 30, top: 10, bottom: 25 },
+        grid: plot(),
         xAxis: { type: 'value', axisLabel: { formatter: '{value}%' } },
-        yAxis: { type: 'category', data: rows.map(r => regionName(r.region)), axisLabel: { fontSize: 11 } },
-        series: [{ type: 'bar', barMaxWidth: 18, itemStyle: { color: '#2c7bb6' },
+        yAxis: { type: 'category', data: rows.map(r => regionName(r.region)) },
+        // The colour of the "< $0" price band.
+        series: [{ type: 'bar', barMaxWidth: 18, itemStyle: { color: PRICE_BANDS[0].color, borderRadius: [0, 4, 4, 0] },
           data: rows.map(r => Math.round(r.pct * 10) / 10) }],
       }, true);
     }
@@ -1946,15 +2157,15 @@
       const lookup = buildLookup(rows, r => `${intraday ? `${r.date}|${padTime(r.time)}` : r.date}|${r.region}`, r => r.mw);
       const regions = [...new Set(rows.map(r => r.region))].sort();
       getChart('chart-net').setOption({
-        color: PALETTE,
         tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '-' : `${Math.round(v).toLocaleString()} MW` },
-        legend: { type: 'scroll', top: 0, textStyle: { fontSize: 11 } },
-        grid: { left: 55, right: 20, top: 30, bottom: intraday ? 60 : 25 },
-        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 11 } },
+        legend: { type: 'scroll', top: 0 },
+        grid: plot({ legend: true, zoom: intraday }),
+        xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true } },
         yAxis: { type: 'value', axisLabel: { formatter: v => Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + 'k' : v } },
         dataZoom: dataZoomConfig(intraday),
         series: regions.map(region => ({ name: regionName(region), type: 'line', symbol: 'none', sampling: 'lttb',
-          lineStyle: { width: 1.5 }, data: xKeys.map(k => lookup.get(`${k}|${region}`) ?? null) })),
+          itemStyle: { color: regionColor(region) }, lineStyle: { width: 1.5 },
+          data: xKeys.map(k => lookup.get(`${k}|${region}`) ?? null) })),
       }, true);
     }
 
@@ -1991,10 +2202,10 @@
       else getChart('chart-cf').setOption({
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
           formatter: ps => `${escapeHtml(ps[0].name)}<br><b>${ps[0].value.toFixed(1)}%</b> of ${Math.round(byFuel[ps[0].dataIndex].cap).toLocaleString()} MW registered` },
-        grid: { left: 150, right: 30, top: 10, bottom: 25 },
+        grid: plot(),
         xAxis: pctAxis,
-        yAxis: { type: 'category', data: byFuel.map(r => r.fuel), axisLabel: { fontSize: 11 } },
-        series: [{ type: 'bar', barMaxWidth: 18,
+        yAxis: { type: 'category', data: byFuel.map(r => r.fuel) },
+        series: [{ type: 'bar', barMaxWidth: 18, itemStyle: { borderRadius: [0, 4, 4, 0] },
           data: byFuel.map(r => ({ value: Math.round(r.cf * 10) / 10, itemStyle: { color: fuelColor(r.fuel) } })) }],
       }, true);
       if (!topAsc.length) showEmpty('chart-cfunits');
@@ -2002,10 +2213,10 @@
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
           formatter: ps => { const r = topAsc[ps[0].dataIndex];
             return `${escapeHtml(r.DUID)} &middot; ${escapeHtml(r.station ?? '')}<br>${escapeHtml(r.fuel)}, ${Math.round(r.cap)} MW<br><b>${r.cf.toFixed(1)}%</b>`; } },
-        grid: { left: 90, right: 30, top: 10, bottom: 25 },
+        grid: plot(),
         xAxis: pctAxis,
-        yAxis: { type: 'category', data: topAsc.map(r => r.DUID), axisLabel: { fontSize: 10 } },
-        series: [{ type: 'bar', barMaxWidth: 14,
+        yAxis: { type: 'category', data: topAsc.map(r => r.DUID), axisLabel: { fontSize: 11 } },
+        series: [{ type: 'bar', barMaxWidth: 14, itemStyle: { borderRadius: [0, 4, 4, 0] },
           data: topAsc.map(r => ({ value: Math.round(r.cf * 10) / 10, itemStyle: { color: fuelColor(r.fuel) } })) }],
       }, true);
       // Clicking a unit filters the whole page to it, like a click on the map.
@@ -2081,12 +2292,12 @@
           const regional = !byMonth && lastDay && p > lastDay ? `<br><span style="color:var(--muted)">AEMO's regional figures</span>` : '';
           return `${label(p)}<br>${lines.join('<br>')}${regional}`;
         } },
-        legend: { data: fuels, top: 0, textStyle: { color: cssVar('--text') } },
-        grid: { left: 60, right: 20, top: 30, bottom: 30 },
-        xAxis: { type: 'category', data: periods.map(label), axisLabel: { fontSize: 10 } },
+        legend: { data: fuels, top: 0 },
+        grid: plot({ legend: true }),
+        xAxis: { type: 'category', data: periods.map(label), axisLabel: { hideOverlap: true } },
         yAxis: { type: 'value', axisLabel: { formatter: mwhAxis } },
         series: fuels.map(f => ({ name: f, type: 'bar', stack: 'cur', barMaxWidth: 24,
-          itemStyle: { color: fuelColor(f) },
+          itemStyle: { color: fuelColor(f), borderColor: cssVar('--card'), borderWidth: 1 },
           data: periods.map(p => ({ value: Math.round(at.get(`${p}|${f}`)?.cur ?? 0),
             itemStyle: !byMonth && lastDay && p > lastDay ? { opacity: 0.55 } : undefined })) })),
       }, true);
@@ -2098,10 +2309,10 @@
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
           formatter: ps => { const r = asc[ps[0].dataIndex];
             return `${escapeHtml(r.DUID)} &middot; ${escapeHtml(r.station ?? '')}<br>${escapeHtml(r.fuel)}<br><b>${fmtMwh(r.cur)}</b> curtailed, ${pct(r.cur, r.avail)} of what it could have made`; } },
-        grid: { left: 90, right: 30, top: 10, bottom: 25 },
+        grid: plot(),
         xAxis: { type: 'value', axisLabel: { formatter: mwhAxis } },
-        yAxis: { type: 'category', data: asc.map(r => r.DUID), axisLabel: { fontSize: 10 } },
-        series: [{ type: 'bar', barMaxWidth: 14,
+        yAxis: { type: 'category', data: asc.map(r => r.DUID), axisLabel: { fontSize: 11 } },
+        series: [{ type: 'bar', barMaxWidth: 14, itemStyle: { borderRadius: [0, 4, 4, 0] },
           data: asc.map(r => ({ value: Math.round(r.cur), itemStyle: { color: fuelColor(r.fuel) } })) }],
       }, true);
       // Clicking a farm filters the whole page to it, like the capacity-factor units.
@@ -2150,17 +2361,17 @@
         + (sold != null && bought != null ? `, bought at ${fmtPrice(bought)}, sold at ${fmtPrice(sold)} (spread ${fmtPrice(sold - bought)}/MWh)` : '')
         + (f?.units ? ` <span class="chart-note">${f.units} unit${f.units === 1 ? '' : 's'}${f.mw ? `, ${Math.round(f.mw).toLocaleString()} MW` : ''}${f.mwh ? ` / ${Math.round(f.mwh).toLocaleString()} MWh` : ''}</span>` : '');
 
-      const color = fuelColor('Grid'), gold = '#d29922';
+      const color = fuelColor('Grid'), gold = cssVar('--warn');
       const area = (name, key, opacity) => ({ name, type: 'line', symbol: 'none', lineStyle: { width: 0 },
         areaStyle: { opacity }, itemStyle: { color }, data: rows.map(r => Math.round(r[key])) });
       getChart('chart-battery').setOption({
         tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '-' : Math.round(v).toLocaleString() },
-        legend: { top: 0, itemWidth: 10, itemHeight: 10, textStyle: { fontSize: 10 } },
-        grid: { left: 50, right: 50, top: 30, bottom: 25 },
-        xAxis: { type: 'category', data: rows.map(r => formatTime(r.time)), boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 11 } },
+        legend: { top: 0 },
+        grid: { ...plot({ legend: true }), top: 52 },
+        xAxis: { type: 'category', data: rows.map(r => formatTime(r.time)), boundaryGap: false, axisLabel: { hideOverlap: true } },
         yAxis: [
-          { type: 'value', name: 'MW', nameTextStyle: { fontSize: 10 } },
-          { type: 'value', name: '$/MWh', nameTextStyle: { fontSize: 10 }, splitLine: { show: false }, axisLabel: { formatter: '${value}' } },
+          { type: 'value', name: 'MW', nameTextStyle: { fontSize: 11 } },
+          { type: 'value', name: '$/MWh', nameTextStyle: { fontSize: 11 }, splitLine: { show: false }, axisLabel: { formatter: '${value}' } },
         ],
         series: [
           area('Output (MW)', 'discharge', 0.85), area('Charging (MW)', 'charge', 0.45),
@@ -2369,16 +2580,15 @@
         })),
         symbolSize: d => Math.max(5, Math.sqrt(Math.max(d[2], 0) / maxMw) * 25),
         itemStyle: { color: fuelColor(fuel) },
-        emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(88,166,255,0.5)' }, scale: 1.3 },
+        emphasis: { itemStyle: { shadowBlur: 10, shadowColor: cssVar('--muted') }, scale: 1.3 },
       }));
 
       const chart = getChart('chart-map');
       chart.setOption({
-        color: PALETTE,
         geo: {
           map: 'australia',
           roam: true,
-          itemStyle: { areaColor: isLight() ? '#eef2f7' : '#1a1f2e', borderColor: cssVar('--border'), borderWidth: 1 },
+          itemStyle: { areaColor: cssVar('--map-land'), borderColor: cssVar('--map-border'), borderWidth: 1 },
           emphasis: { disabled: true },
           label: { show: false },
           ...geoView('chart-map', [134, -28], 1.1),
@@ -2388,7 +2598,7 @@
           const d = p.data;
           return `<div style="font-weight:600">${escapeHtml(d.duid)}</div><div>${escapeHtml(p.seriesName)} &middot; ${escapeHtml(d.region)}</div><div style="margin-top:4px"><b>${Math.round(d.value[2]).toLocaleString()} ${unit}</b></div>`;
         }},
-        legend: { type: 'scroll', bottom: 0, itemWidth: 10, itemHeight: 10, textStyle: { fontSize: 10 } },
+        legend: { type: 'scroll', bottom: 0 },
         series,
         animationDuration: 600,
       }, true);
@@ -2670,7 +2880,7 @@ ORDER BY ALL`;
 
         if (!rows.length) {
           info.textContent = 'No data found for the selected filters.';
-          setStatus(window._cutoffCached || "Connected", "connected");
+          setConnected();
           return;
         }
 
@@ -2689,7 +2899,7 @@ ORDER BY ALL`;
           ? `Showing ${rows.length} of ${Number(total).toLocaleString()} rows`
           : `${Number(total).toLocaleString()} rows`;
 
-        setStatus(window._cutoffCached || "Connected", "connected");
+        setConnected();
       } catch (e) {
         if (e.message && e.message.includes('Out of Memory')) {
           info.textContent = 'Out of memory. Apply filters or reduce the date range.';
@@ -2725,7 +2935,7 @@ ORDER BY ALL`;
         const esc = plan.replace(/&/g, '&amp;').replace(/</g, '&lt;');
         table.innerHTML = `<tbody><tr><td><pre style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.72rem;line-height:1.4;white-space:pre;overflow-x:auto;margin:0">${esc}</pre></td></tr></tbody>`;
         info.textContent = 'Query plan (EXPLAIN)';
-        setStatus(window._cutoffCached || "Connected", "connected");
+        setConnected();
       } catch (e) {
         info.textContent = 'Error: ' + e.message;
         setStatus("Query error", "error");
@@ -2874,7 +3084,11 @@ ORDER BY ALL`;
     document.getElementById('drillLevel').addEventListener('change', () => renderAll());
 
     // --- Render all ---
-    let _renderNote = '';   // " · N queries, S s" of the last render, shown after the data's cutoff
+    // The status reads the data's cutoff; what the last render cost is its tooltip (and the Logs tab).
+    function setConnected(cost) {
+      setStatus(window._cutoffCached ? `Data to ${window._cutoffCached}` : "Connected", "connected");
+      if (cost) document.getElementById('status').title = `Last render: ${cost}`;
+    }
     async function renderAll() {
       if (!_ready) return;
       const seq = ++_renderSeq;
@@ -2896,7 +3110,7 @@ ORDER BY ALL`;
           await ensureHistory(from, to, "Downloading detailed data...");
         }
         const visible = id => document.getElementById(id).style.display !== 'none';
-        await Promise.all([renderGeneration(seq), renderPrice(seq), renderMap(seq), updateRenewablesKpi(seq),
+        await Promise.all([renderNow(seq), renderGeneration(seq), renderPrice(seq), renderMap(seq), updateRenewablesKpi(seq),
           updateKpiDeltas(seq).catch(e => console.warn('[KPI] deltas unavailable:', e)),
           visible('view-insights') ? renderInsights(seq) : null,
           visible('view-history') ? renderHistory(seq) : null,
@@ -2917,12 +3131,13 @@ ORDER BY ALL`;
         }
         // What this render cost: queries that ran (a cached view runs none) and wall time.
         const ran = _queriesRun - ranBefore;
-        _renderNote = ` · ${ran} ${ran === 1 ? 'query' : 'queries'}, ${((performance.now() - started) / 1000).toFixed(2)} s`;
-        setStatus((window._cutoffCached || "Connected") + _renderNote, "connected");
+        setConnected(`${ran} ${ran === 1 ? 'query' : 'queries'}, ${((performance.now() - started) / 1000).toFixed(2)} s`);
       } catch (e) {
         console.error(e);
         if (seq !== _renderSeq) return;   // a newer render owns the page now
         dim(false);
+        // No figure is coming: the placeholders stop shimmering.
+        document.querySelectorAll('.skeleton').forEach(el => el.classList.remove('skeleton'));
         setStatus("Query error: " + e.message, "error");
       }
     }
@@ -2937,7 +3152,7 @@ ORDER BY ALL`;
       // agg only feeds the daily-grain views (ranges over 30 days); don't redraw an intraday view.
       loadDailyAggDatabase().then(() => {
         if (!isIntradayMode()) return renderAll();
-        setStatus((window._cutoffCached || "Connected") + _renderNote, "connected");   // clear "Downloading..."
+        setConnected();   // clear "Downloading..."
         // The daily history is what a comparison with earlier days, and the History page, read.
         updateKpiDeltas(_renderSeq).catch(e => console.warn('[KPI] deltas unavailable:', e));
         if (document.getElementById('view-history').style.display !== 'none') guarded(renderHistory(_renderSeq));
