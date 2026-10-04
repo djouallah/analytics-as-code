@@ -8,21 +8,61 @@
 //   v_unit            DUID, fuel_source, region, station, owner, cap_mw, storage_mwh, lat, lon,
 //                     fuel, renewable, storage, generator      one row per unit (dim_duid)
 //                     (fuel: the name the charts use; fuel_source: as registered, may be NULL;
-//                     storage: a battery; generator: anything else)
-//   v_gen             v_scada         + the unit's columns     5-minute
-//   v_gen_daily       v_scada_daily   + the unit's columns
-//   v_gen_hourly      v_scada_hourly  + the unit's columns     once agg carries the table
-//   v_gen_today       v_scada_today   + the unit's columns
+//                     storage: a battery; generator: anything else; cap_mw: registered
+//                     capacity; storage_mwh: a battery's storage)
+//   v_gen             v_scada         + the unit's columns     per unit and 5 minutes
+//   v_gen_daily       v_scada_daily   + the unit's columns     per unit and day
+//   v_gen_hourly      v_scada_hourly  + the unit's columns     per unit, month and hour of day;
+//                                                              once agg carries the table
+//   v_gen_today       v_scada_today   + the unit's columns     as v_gen, the newest 14 days
 //   v_gen_latest      v_gen_today, the newest interval only
 //   v_gen_price       v_gen       + price, the price of the unit's region in that interval
 //   v_gen_price_daily v_gen_daily + price, the day's
 //   v_price_latest    v_price_today, the newest interval only
 //   v_region          region                                   the NEM regions
-// Measures (macros, worked out at whatever grain the query groups by):
+// Measures (macros, worked out at whatever grain the query groups by; how to call each is
+// said where it is defined below):
 //   generated(v), renewable_share(v, fuel), capture_price(v, price),
 //   capacity_factor(mwh, cap, hours)
-// The fact views of data.js (v_scada, v_price, v_interconnector, ...) stay readable as they
-// are: a query that needs nothing about the unit reads them and pays for no join.
+// The fact views of data.js stay readable as they are: a query that needs nothing about the
+// unit reads them and pays for no join.
+//   v_scada, v_scada_today   DUID, date, time, mw
+//   v_scada_daily            DUID, date, mwh
+//   v_scada_hourly           DUID, month, hour, mwh
+//   v_price                  REGIONID, date, time, price, demand, net_interchange
+//   v_price_today            REGIONID, date, time, price
+//   v_price_daily            REGIONID, date, price, demand, net_interchange, demand_mwh
+//   v_price_hourly           REGIONID, month, hour, price, n (the intervals averaged)
+//   v_month_days             month, days (the days of the month that have data)
+//   v_interconnector         interconnector, date, time, mw, export_limit, import_limit
+//
+// What the columns hold, in every view that has them:
+//   date, time       NEM time (AEST all year). time is HHMM as a number: 1435 is 14:35, and
+//                    the hour is time // 100.
+//   mw               MW in that 5 minutes; a battery charging is negative. Energy in MWh is
+//                    SUM(mw) / 12. An interval at 0 MW is not stored, so AVG(mw) and COUNT(*)
+//                    only see the others: the intervals of a range are counted in v_price.
+//   mwh              energy. Daily: the day's, net of charging. Hourly: that hour of the day
+//                    over the month, output only (charging is left out).
+//   month, hour      the month's first day; hour of day, 0-23. The average MW at an hour over
+//                    a range is SUM(mwh) / SUM(v_month_days.days) over its months.
+//   price            the regional reference price (AEMO's RRP), $/MWh; in the daily and
+//                    hourly views the plain average of the intervals.
+//   demand           operational demand in MW: rooftop solar is not in it. Daily: the
+//                    average MW, and demand_mwh the day's energy.
+//   net_interchange  MW, positive when the region exports.
+//   interconnector   mw is positive from the first region in the name to the second
+//                    (T-V-MNSP1 > 0: Tasmania to Victoria); export_limit and import_limit
+//                    bound it, in the same sign.
+//   region, REGIONID NSW1, QLD1, SA1, TAS1, VIC1. v_unit also holds the units of WA1
+//                    (Western Australia, another market), which v_region leaves out.
+//
+// Before a query: a view only holds what is attached, and a query over the rest runs and
+// returns the newest days alone, with no error. needs(sql) says what a query reads. The
+// 5-minute views (v_gen, v_gen_price, v_scada, v_price, v_interconnector) hold the last 5 days
+// (v_interconnector 14) until ensureHistory(from, to) has attached the half-years of the
+// range; the daily views hold the last 14 days, and the hourly ones do not exist, until
+// attachAgg().
 //
 // Host-independent: it only reads the views listed at the top of data.js, so a host that
 // ships its own data.js keeps this file as it is.
@@ -34,7 +74,9 @@
 // totals, with the fuel "Unregistered"; units that are in it without a fuel are "Unknown".
 export const UNREGISTERED = 'Unregistered';
 // 'Rooftop solar' is the fuel of the rooftop pseudo-units (AEMO's regional estimate,
-// scripts/cache_catalog.py rooftop_units).
+// scripts/cache_catalog.py rooftop_units): QLD_PV, NSW_PV, VIC_PV, SA_PV, TAS_PV, one per
+// region, with no capacity and no coordinates. The estimate is half-hourly, drawn as a
+// straight line onto the 5-minute intervals.
 export const ROOFTOP = 'Rooftop solar';
 // Renewable fuels as AEMO describes them. 'Grid' (batteries) is storage: neither side.
 const RENEWABLE_FUELS = ['Solar', ROOFTOP, 'Wind', 'Water', 'Bagasse', 'Biogas - sludge',
@@ -47,14 +89,21 @@ const MACROS = [
   // The name a unit's fuel goes by on the page.
   `fuel_name(duid, descr) AS CASE WHEN duid IS NULL THEN ${sqlStr(UNREGISTERED)} ELSE COALESCE(descr, 'Unknown') END`,
   `is_renewable(fuel) AS fuel IN (${RENEWABLE_FUELS.map(sqlStr).join(',')})`,
-  // Output only: a unit that is charging (negative) generates nothing.
+  // Output only: a unit that is charging (negative) generates nothing. Given a daily mwh it
+  // clips the day's net: a battery counts for its output less its charging, never below 0.
   `generated(v) AS GREATEST(v, 0)`,
-  // Renewable share of the output, in %.
+  // Renewable share of the output, in %. Takes the raw mw or mwh and the `fuel` column;
+  // batteries are in neither the renewables nor the total.
   `renewable_share(v, fuel) AS 100 * SUM(CASE WHEN is_renewable(fuel) THEN generated(v) ELSE 0 END)
     / NULLIF(SUM(CASE WHEN fuel <> ${sqlStr(STORAGE_FUEL)} THEN generated(v) ELSE 0 END), 0)`,
-  // The price a volume earned: the prices weighted by it.
+  // The price a volume earned: the prices weighted by it. Takes generated(mw) or
+  // generated(mwh), over v_gen_price* with `price IS NOT NULL`: the join there is LEFT, and
+  // a volume without a price would count below the line only.
   `capture_price(v, price) AS SUM(v * price) / NULLIF(SUM(v), 0)`,
   // Capacity factor in %: energy over what the registered capacity could make in the hours.
+  // Takes one row per unit (its energy in the range, its cap_mw once) and the hours of the
+  // range; a unit without a capacity (cap_mw NULL or 0, the rooftop ones) is filtered out
+  // first, or its energy counts against no capacity.
   `capacity_factor(mwh, cap, hours) AS 100 * SUM(mwh) / (SUM(cap) * hours)`,
 ];
 
