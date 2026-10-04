@@ -238,7 +238,7 @@ for ranges over 30 days.
 |-------|--------|-----------------|
 | stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
 | dim_calendar | mart | incremental append (the NOT-IN filter keeps existing dates out; runs 2 years ahead) |
-| dim_duid | mart | incremental insert-only merge on DUID; NEM units from the registration list, then `duid_unregistered.csv`; carries registered capacity (RegCapMW etc.) since 2026-10-01 |
+| dim_duid | mart | incremental insert-only merge on DUID; NEM units from the registration list, then `duid_unregistered.csv`; carries registered capacity (RegCapMW etc.) since 2026-10-01 and `Renewable` since 2026-10-04: **the list of renewable fuels lives in this model** (an inline CTE next to `states`), nowhere else; changing it reaches the existing rows with a `rebuild=dim_duid` |
 | fct_scada, fct_price | landing | incremental insert-only merge (by file) |
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
 | fct_interconnector_today | landing | incremental insert-only merge (by file) — the INTERCONNECTORRES rows of the same archived DispatchIS files as fct_price_today (added 2026-10-01) **and, despite the name, the whole history**: AEMO's monthly MMSDM archive of the same record, 2018-01 → 2026-08 (source_type `interconnector_monthly`, a finite backfill added 2026-10-02; read with `strict_mode = false`, which the files from 2024-08 need). August 2026 is in both sources, so readers take `ANY_VALUE … GROUP BY`. Exported as `interconnector` in the half-year files; the Flows page plays any range ≤ 30 days |
@@ -247,8 +247,9 @@ for ranges over 30 days.
 
 **Rooftop solar reaches the dashboard as pseudo-units, built in the export, not in Iceberg.**
 `scripts/cache_catalog.py rooftop_units` adds `QLD_PV`, `NSW_PV`, `VIC_PV`, `SA_PV`, `TAS_PV` to
-the scada exports and `export_dim_duid` adds them to the units with fuel `Rooftop solar` (no
-coordinates, no capacity), so every unit-based chart shows rooftop with no special case. The
+the scada exports and `export_dim_duid` adds them to the units with fuel `Rooftop solar`,
+`Renewable` true (no coordinates, no capacity), so every unit-based chart shows rooftop with
+no special case. The
 rules, all in that function: the `MEASUREMENT` estimate only (it starts 2018-03-06); a blank
 (`QI = 0`) is missing, not zero; a straight line between two consecutive half hours, nothing
 across a missing one; the newest half hour held for up to 55 minutes (the next estimate lands
