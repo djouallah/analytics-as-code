@@ -17,13 +17,13 @@ only: a finished item is removed, not ticked.
   `import_onelake.yml` (read venv);
   check Process Data, maintenance and import; update AGENTS.md's version policy.
 - [ ] **Capability probe** (separate repo, manual) — re-run against the 2.0 pin.
-- [ ] **Does the Fabric app deployed by CI work?** — `nemtracker` (the item `deploy_fabric.yml`
-  owns) answered 500 from `getDataSas` on its first load, 2026-10-04; that build predated the
-  function's secret, and it has not been loaded again since. If a reload still fails, find
-  out whether Rayfin hands a storage token to a function whose owner is a service principal
-  (OneLake does give that identity a delegation key: the deploy checks it). Until then the
-  app that works is `wasm`, deployed from the laptop (`cd fabric && npx rayfin up`); if CI
-  cannot be made to work, drop `deploy_fabric.yml` and the `nemtracker` item.
+- [ ] **Fabric app from CI** — parked: the app is deployed from the laptop
+  (`cd fabric && npx rayfin up`), and `deploy_fabric.yml` is dispatch-only. The CI deploy
+  itself worked, into an item CI owned; on that item `getDataSas` answered 500 on its one
+  load, 2026-10-04 (the build predated the function's secret; the item is deleted now).
+  To decide: who owns the item, since only its owner can deploy to it, and whether Rayfin
+  hands a storage token to a function whose owner is a service principal. If not, drop the
+  workflow.
 
 ## Bigger
 

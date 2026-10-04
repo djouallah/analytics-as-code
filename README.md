@@ -55,7 +55,7 @@ browser gets them (`data.js`), so a chart or a measure is written once and reach
 | Data files | next to the page | a lakehouse, under `Files/data` |
 | 5-minute history | one file per half-year (GitHub's 100 MB limit), downloaded | one 1.5 GB file, read in place by HTTP range requests |
 | Host code | `dashboard/data.js` | `fabric/` |
-| Deployed by | `build.yml` (page), `import_data.yml` (data) | `deploy_fabric.yml` (page), `import_onelake.yml` (data) |
+| Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `fabric/` (page), `import_onelake.yml` (data) |
 
 ### The Fabric app
 
@@ -176,6 +176,6 @@ Then run the **Import OneLake** workflow to fill the lakehouse (`LAKE_TENANT_ID`
 `LAKE_CLIENT_ID`: an Entra app with a federated credential for this repo and write access to
 the workspace), and open the app in the Fabric portal or in its own tab.
 
-`deploy_fabric.yml` runs the same deploy from CI with that Entra app, no secret
-(`FABRIC_APP_WORKSPACE_ID`, `ONELAKE_FILES_URL`). It deploys an item of its own, because
-only an item's owner can deploy to it.
+`deploy_fabric.yml` can run the same deploy from CI with that Entra app, no secret; it is
+parked for now, because only an item's owner can deploy to it and the app is deployed from
+a laptop.

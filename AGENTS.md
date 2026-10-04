@@ -126,9 +126,9 @@ The ids live in repository **variables** (public identifiers, not secrets):
   ever recreated, update `LH_ID`; CI is deliberately not in the provisioning business.
 - `LAKE_TENANT_ID`, `LAKE_CLIENT_ID` — the Fabric app's tenant and an Entra app there
   (`fabric-github-deploy`), a member of the app's workspace: it uploads the data
-  (`scripts/deploy_onelake.py`) and deploys the app (`deploy_fabric.yml`). It is a second
-  tenant: `deploy_onelake.py` exchanges the job's GitHub OIDC token itself, next to the
-  workflow's catalog login; `deploy_fabric.yml` logs in to it with `azure/login`. The app's
+  (`scripts/deploy_onelake.py`); the parked `deploy_fabric.yml` deployed the app with it.
+  It is a second tenant: `deploy_onelake.py` exchanges the job's GitHub OIDC token itself,
+  next to the workflow's catalog login. The app's
   federated credential for this repo has the subject
   `repo:djouallah/analytics-as-code:ref:refs/heads/main`.
 - `FABRIC_APP_WORKSPACE_ID` (workspace `app`), `ONELAKE_FILES_URL` (the lakehouse's Files
@@ -244,31 +244,38 @@ function, `getDataSas` (`fabric/rayfin/functions`), which signs a read-only SAS 
 folder so that the browser never holds a storage token. `fabric/build.mjs` assembles
 `fabric/dist`: the shared page files and `dag/` from `dashboard/`, plus `fabric/site/`
 (its `data.js`, `auth.js`, `perflog.js`, `logs.js`), with `?v=<build>` added to every
-relative import. `deploy_fabric.yml` deploys it on a push that touches `dashboard/**` or
-`fabric/**`: `rayfin up` under a Fabric API token from the OIDC login (`RAYFIN_TOKEN`), no
-secret. Three things it took to work, all of which must survive an edit:
-- **The item is CI's own** (`--item-name nemtracker`). Rayfin lets only the owner of an app
-  item deploy to it, and the owner is whoever created it: a deploy to an item made from a
-  laptop fails with `403 Only AppBackend artifact owner can perform this operation`. For
-  the same reason `rayfin up` from a laptop cannot deploy to `nemtracker`. The owner is
-  also the identity `getDataSas` reads the lakehouse as.
+relative import.
+
+**It is deployed from the owner's laptop**, under their own login:
+```
+cd fabric
+npm ci && npm ci --prefix rayfin/functions
+export RAYFIN_TOKEN=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv)
+npx rayfin up --yes --output json
+```
+The item is `wasm` in workspace `app`, created that way on 2026-10-04;
+`fabric/rayfin/.deployments.json` (untracked) records it, and its URL is in
+`fabric/rayfin/rayfin.yml` (`allowedRedirectUris`; the deploy adds it). On a machine without
+that record, add `--workspace-id <app>`. A new item needs its secret once, then one more
+deploy: `echo <Files URL> | npx rayfin secret set ONELAKE_FILES_URL --stdin`.
+
+**Rayfin lets only the owner of an app item deploy to it**, and the owner is whoever created
+it; the owner is also the identity `getDataSas` reads the lakehouse as. That is why the
+laptop and CI cannot share an item: a deploy to someone else's fails with
+`403 Only AppBackend artifact owner can perform this operation`.
+
+**`deploy_fabric.yml` is parked** (dispatch only). It ran the same `rayfin up` with a Fabric
+API token from the OIDC login, no secret, into an item of its own (`nemtracker`, since
+deleted), and the deploy itself worked. What it took, should it come back:
 - `fabric/rayfin/functions/host.json` is committed: the deploy refuses without it, and the
   Rayfin scaffold's `.gitignore` leaves it out.
 - The lock files resolve from `registry.npmjs.org`: generated on a laptop they name a
   private feed the runner cannot read.
-The app's URL is the `hostingUrl` the deploy step prints (it is also in
-`fabric/rayfin/rayfin.yml`, `allowedRedirectUris`). A change to the function or to
-`rayfin.yml` goes out the same way; there is no separate step.
-
-**Two app items exist** in workspace `app`: `nemtracker`, created and deployed by CI, and
-`wasm`, created from the owner's laptop, where `fabric/rayfin/.deployments.json` (untracked)
-records it. From a laptop: `cd fabric`, `npm ci`, `npm ci --prefix rayfin/functions`,
-`npx rayfin up`. **Open, 2026-10-04:** on `nemtracker`, `getDataSas` answered 500 on its
-first load. That deploy predated the function's secret, and the app has not been loaded
-again since the redeploys. OneLake does issue the CI identity a delegation key (the deploy's
-last step checks it), so if it still fails the suspect is the platform handing no storage
-token (`ctx.Tokens.Storage`) to a function whose owner is a service principal. `wasm` is the
-app that is known to work.
+- Open: on the CI-owned item `getDataSas` answered 500 on its one load. That deploy
+  predated the function's secret and the item was deleted before a second try. OneLake does
+  issue the CI identity a delegation key (the workflow's last step checks it), so the
+  remaining suspect is the platform handing no storage token (`ctx.Tokens.Storage`) to a
+  function whose owner is a service principal.
 
 Rules of the Fabric host that are easy to break:
 - The browser never receives a storage token, only the SAS from `getDataSas` (read-only, one
