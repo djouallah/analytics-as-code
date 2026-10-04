@@ -19,10 +19,10 @@ only: a finished item is removed, not ticked.
 
 ## Bigger
 
-- [ ] **Two units with a wrong fuel in `duid_unregistered.csv`** (aemo_data) — TORRB1 is
-  "Natural gas" (the list had "Natural gas / fuel oil"), ADPBA1L, the load side of the
-  Adelaide Desalination battery, has no fuel, so its charging shows as "Unknown". Fix in the
-  generator of that file, then `rebuild=dim_duid`.
+- [ ] **`rebuild=dim_duid` once the fixed `duid_unregistered.csv` is downloaded** — the file
+  in aemo_data now gives TORRB1 "Natural Gas / Fuel Oil" and ADPBA1L "Grid" (from the older
+  AEMO list, `duid_data.csv`). The pipeline re-downloads it 24 hours after its last copy
+  (2026-10-05 after ~07:15 UTC); `dim_duid` holds the old values until a rebuild after that.
 - [ ] **Interconnectors from the data** — the Flows page types each link's two regions and
   its name (`INTERCONNECTORS` in `dashboard/index.html`); the facts carry only the id. AEMO's
   MMSDM `INTERCONNECTOR` table should have them (`REGIONFROM`, `REGIONTO`, a description;
