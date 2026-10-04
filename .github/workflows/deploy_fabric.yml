@@ -160,7 +160,11 @@ jobs:
           INFO=$(jq -cn --arg e "$APP" --arg k "$KEY" '{rayfinToken: "", publishableKey: $k, rayFinEndpoint: $e}')
           SECRETS=$(jq -cn --arg u "$ONELAKE_FILES_URL" '{ONELAKE_FILES_URL: $u}')
           if [ -n "$UDF" ]; then
-            call "public invoke, as the backend calls it" "$FABRIC/workspaces/$WS/userDataFunctions/$UDF/functions/getDataSas/invoke" \
+            # api.fabric.microsoft.com drops the two headers on the way; the functions item's
+            # own host (udfPublicInvokeUri in its metadata) is the other public door.
+            DIRECT=$(curl -s "$FABRIC/workspaces/$WS/userDataFunctions/$UDF/__private/functions/metadata" -H "Authorization: Bearer $RAYFIN_TOKEN" \
+              | jq -r '.functions[] | select(.name == "getDataSas") | .udfPublicInvokeUri')
+            call "public invoke, the functions item's own host" "$DIRECT" \
               -H "x-ms-rayfin-info: $INFO" -H "x-ms-rayfin-secrets: $SECRETS"
           fi
           call "the app's invoke route" "${APP%/}/functions/getDataSas/invoke" -H "X-Publishable-Key: $KEY"
