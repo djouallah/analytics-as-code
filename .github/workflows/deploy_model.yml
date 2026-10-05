@@ -1,0 +1,51 @@
+name: Deploy Semantic Model
+
+# Publishes dashboard/semantic/nem.SemanticModel (a Direct Lake model over the catalog's
+# Iceberg tables) to the workspace that holds the lakehouse, then refreshes it and asks it a
+# row count per table in DAX (scripts/check_model.py).
+#
+# Manual only: it creates or updates a Fabric item. It touches no table and no dashboard
+# file. The identity is the catalog's (the same OIDC login as Process Data), so the model
+# is owned by it and reads OneLake as it.
+
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: deploy-model
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write   # OIDC federated login to Azure
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      WS_ID: ${{ vars.WS_ID }}
+      LH_ID: ${{ vars.LH_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Pinned exactly, like every other version here (AGENTS.md, version policy).
+      - run: pip install -q "fabric-cicd==1.3.0"
+      - name: Azure federated login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Publish the model
+        run: python scripts/deploy_model.py
+      - name: Refresh it and query it
+        run: |
+          TOKEN=$(az account get-access-token --resource https://analysis.windows.net/powerbi/api --query accessToken -o tsv)
+          echo "::add-mask::$TOKEN"
+          POWERBI_TOKEN="$TOKEN" python scripts/check_model.py

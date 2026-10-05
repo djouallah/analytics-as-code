@@ -1,0 +1,200 @@
+{
+  "compatibilityLevel": 1604,
+  "model": {
+    "culture": "en-US",
+    "defaultPowerBIDataSourceVersion": "powerBI_V3",
+    "description": "Australia's National Electricity Market, over the Iceberg tables of the nem lakehouse, in Direct Lake: nothing is imported and no SQL endpoint is involved. Deployed by scripts/deploy_model.py, which writes the workspace and the lakehouse into the DirectLake expression.",
+    "expressions": [
+      {
+        "name": "DirectLake",
+        "kind": "m",
+        "description": "The nem lakehouse in OneLake. {WS_ID} and {LH_ID} are filled in at deploy.",
+        "expression": [
+          "let",
+          "    Source = AzureStorage.DataLake(\"https://onelake.dfs.fabric.microsoft.com/{WS_ID}/{LH_ID}\", [HierarchicalNavigation=true])",
+          "in",
+          "    Source"
+        ]
+      }
+    ],
+    "tables": [
+      {
+        "name": "dim_calendar",
+        "description": "One row per day, from 2018-03-06 (where the history starts) to two years ahead.",
+        "sourceLineageTag": "[mart].[dim_calendar]",
+        "columns": [
+          {
+            "name": "date",
+            "dataType": "dateTime",
+            "description": "Calendar date, NEM time (AEST all year).",
+            "sourceColumn": "date",
+            "sourceLineageTag": "date",
+            "summarizeBy": "none",
+            "isKey": true,
+            "formatString": "yyyy-MM-dd"
+          },
+          {
+            "name": "year",
+            "dataType": "int64",
+            "description": "Calendar year.",
+            "sourceColumn": "year",
+            "sourceLineageTag": "year",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "month",
+            "dataType": "int64",
+            "description": "Month of the year, 1-12.",
+            "sourceColumn": "month",
+            "sourceLineageTag": "month",
+            "summarizeBy": "none"
+          }
+        ],
+        "partitions": [
+          {
+            "name": "dim_calendar",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "dim_calendar",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "dim_duid",
+        "description": "One row per unit: the units on AEMO's registration list, the ones in the data that are not on it (retired plant, replaced DUIDs), and the WA facilities.",
+        "sourceLineageTag": "[mart].[dim_duid]",
+        "columns": [
+          {
+            "name": "DUID",
+            "dataType": "string",
+            "description": "AEMO's id of a dispatchable unit.",
+            "sourceColumn": "DUID",
+            "sourceLineageTag": "DUID",
+            "summarizeBy": "none",
+            "isKey": true
+          },
+          {
+            "name": "Region",
+            "dataType": "string",
+            "description": "NSW1, QLD1, SA1, TAS1, VIC1; WA1 for Western Australia, another market.",
+            "sourceColumn": "Region",
+            "sourceLineageTag": "Region",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "State",
+            "dataType": "string",
+            "description": "The region's name.",
+            "sourceColumn": "State",
+            "sourceLineageTag": "State",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "FuelSourceDescriptor",
+            "dataType": "string",
+            "description": "The fuel as registered; blank for the loads AEMO gives no energy source for.",
+            "sourceColumn": "FuelSourceDescriptor",
+            "sourceLineageTag": "FuelSourceDescriptor",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "Participant",
+            "dataType": "string",
+            "description": "The registered participant that operates the unit.",
+            "sourceColumn": "Participant",
+            "sourceLineageTag": "Participant",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "StationName",
+            "dataType": "string",
+            "description": "The power station the unit belongs to; blank for WA.",
+            "sourceColumn": "StationName",
+            "sourceLineageTag": "StationName",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "TechnologyType",
+            "dataType": "string",
+            "description": "AEMO's technology descriptor; blank off the registration list.",
+            "sourceColumn": "TechnologyType",
+            "sourceLineageTag": "TechnologyType",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "Classification",
+            "dataType": "string",
+            "description": "Scheduled, Semi-Scheduled (wind and solar farms that can be capped) or Non-Scheduled; blank off the registration list.",
+            "sourceColumn": "Classification",
+            "sourceLineageTag": "Classification",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "Renewable",
+            "dataType": "boolean",
+            "description": "Whether the unit's fuel is renewable; the list of fuels is in dim_duid.sql.",
+            "sourceColumn": "Renewable",
+            "sourceLineageTag": "Renewable",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "RegCapMW",
+            "dataType": "double",
+            "description": "Registered generating capacity, MW.",
+            "sourceColumn": "RegCapMW",
+            "sourceLineageTag": "RegCapMW",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "MaxCapMW",
+            "dataType": "double",
+            "description": "Maximum generating capacity, MW.",
+            "sourceColumn": "MaxCapMW",
+            "sourceLineageTag": "MaxCapMW",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "StorageMWh",
+            "dataType": "double",
+            "description": "A battery's storage, MWh.",
+            "sourceColumn": "StorageMWh",
+            "sourceLineageTag": "StorageMWh",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "latitude",
+            "dataType": "double",
+            "description": "Latitude; blank when unknown.",
+            "sourceColumn": "latitude",
+            "sourceLineageTag": "latitude",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "longitude",
+            "dataType": "double",
+            "description": "Longitude; blank when unknown.",
+            "sourceColumn": "longitude",
+            "sourceLineageTag": "longitude",
+            "summarizeBy": "none"
+          }
+        ],
+        "partitions": [
+          {
+            "name": "dim_duid",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "dim_duid",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
