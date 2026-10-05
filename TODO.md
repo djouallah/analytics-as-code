@@ -22,6 +22,15 @@ only: a finished item is removed, not ticked.
   500 to every function call on an item owned by a service principal, and only an item's
   owner can deploy to it. When it is fixed: dispatch the workflow and open `nemtracker`.
   Until then the app is deployed from the laptop (`cd dashboard/fabric_app && npx rayfin up`).
+- [ ] **What the mart step costs once the backfill is over** — read the model timings of a
+  Process Data run when `fct_summary_daily` reaches back to 2018-03. During the backfill
+  (run 37312125168, 2026-10-05, dispatched with `debug`): `fct_summary` 460 s,
+  `fct_summary_daily` 79 s, `fct_curtailment` 67 s, nearly all of it the model's SELECT, not
+  the MERGE (10 s on `fct_summary`). If they stay there with one new day to write, it is a
+  problem: `whole_days` reads all of `fct_scada` to find the whole days, and
+  `fct_summary_daily` filters `fct_summary` with a subquery, not constants (not measured
+  whether the scan skips files on it). The fix that fits: a pre-hook puts the days to write
+  in a variable, as the fact models do with their files, so the model filters on constants.
 
 ## Bigger
 
