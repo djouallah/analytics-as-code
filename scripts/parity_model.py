@@ -281,6 +281,26 @@ def main():
                 if value is not None:
                     got[(grain, row[date_column][:10], "|".join(row[c] for c in keys), measure)] = value
 
+    # The hour-of-day figures again, from the 5-minute tables: the model's ordinary measures by
+    # dim_time[hour] over each whole month, against what the dashboard's hour-of-day tables hold.
+    # It says the two grains agree, and its timing says what the hour-of-day tables save.
+    for by, hourly, measure in (("fuel", "Output MWh hourly", "Generation MWh"), ("region", "Price at hour", "Average price")):
+        grain = f"{by}, month, 5 min"
+        for month in months:
+            y, m, _ = (int(x) for x in month.split("-"))
+            dax = (f'EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS({SLICE[by]}, dim_time[hour], "v", [{measure}]), '
+                   f'dim_calendar[date] >= DATE({y}, {m}, 1), dim_calendar[date] < DATE({y + m // 12}, {m % 12 + 1}, 1))')
+            started = time.perf_counter()
+            rows = model.query(conn, dax)
+            slow.append((time.perf_counter() - started, grain, measure, len(rows)))
+            for row in rows:
+                value = number(row["[v]"])
+                if value is not None:
+                    got[(grain, month, f"{row[SLICE[by]]}|{row['dim_time[hour]']}", measure)] = value
+            for key, value in list(expected.items()):
+                if key[0] == f"{by}, month" and key[1] == month and key[3] == hourly:
+                    expected[(grain, month, key[2], measure)] = value
+
     # A value one side does not have counts as 0 there: a blank and a zero are the same answer
     # (no charging in a region), and a figure that is really missing shows as its whole size.
     bad = []
