@@ -1,7 +1,7 @@
-// Static "build" of the Fabric target: dist/ = the shared page (../dashboard: index.html,
-// model.js, views.js, history.js, perflog.js, logs.js, the dbt docs in dag/) + this target's host files
-// (site/: data.js, auth.js). ../dashboard/data.js, the GitHub Pages host, is the one file
-// left out.
+// Static "build" of the Fabric target: dist/ = the shared page (../dashboard: index.html and
+// its frontend/, semantic/ and storage/ folders, the dbt docs in dag/) + this target's host
+// files (site/storage/: data.js, auth.js). ../dashboard/storage/data.js, the GitHub Pages
+// host, is the one file replaced: site/ is copied over it.
 // No bundler. Two stamps, so a browser never mixes files of two deploys and the Logs tab
 // can tell a fresh deploy from a cached one: __BUILD__ (git sha + time), and ?v=<build> on
 // every relative import.
@@ -22,14 +22,15 @@ const BUILD = `${sha}${dirty}.${new Date().toISOString().replace(/[-:]/g, "").re
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist);
-for (const f of ["index.html", "model.js", "views.js", "history.js", "perflog.js", "logs.js"]) await cp(page + f, dist + f);
+await cp(page + "index.html", dist + "index.html");
+for (const d of ["frontend", "semantic", "storage"]) await cp(page + d, dist + d, { recursive: true });
 await cp(here("./site/"), dist, { recursive: true });
-for (const f of await readdir(dist)) {
+for (const f of await readdir(dist, { recursive: true })) {
   if (!/\.(html|js)$/.test(f)) continue;
   const s = await readFile(dist + f, "utf8");
   await writeFile(dist + f, s
     .replaceAll("__BUILD__", BUILD)
-    .replace(/(\b(?:from|import)\s*["']\.\/[\w.-]+\.js)(["'])/g, `$1?v=${BUILD}$2`));
+    .replace(/(\b(?:from|import)\s*["']\.{1,2}\/[\w./-]+\.js)(["'])/g, `$1?v=${BUILD}$2`));
 }
 // After the stamping, which must not touch them.
 await cp(page + "dag", dist + "dag", { recursive: true });

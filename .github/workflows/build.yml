@@ -60,14 +60,11 @@ jobs:
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: |
           mkdir -p deploy
+          # The page and one folder per layer, as they are in the repo.
           cp dashboard/index.html deploy/
-          cp dashboard/data.js deploy/
-          cp dashboard/views.js deploy/
-          cp dashboard/history.js deploy/
-          cp dashboard/logs.js deploy/
+          cp -r dashboard/frontend dashboard/semantic dashboard/storage deploy/
           # perflog.js carries the build stamp the Logs panel shows.
-          sed "s/__BUILD__/${GITHUB_SHA::7}/" dashboard/perflog.js > deploy/perflog.js
-          cp dashboard/model.js deploy/
+          sed -i "s/__BUILD__/${GITHUB_SHA::7}/" deploy/frontend/perflog.js
           cp -r dashboard/dag deploy/
       - name: Deploy to nemtracker
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'

@@ -26,10 +26,10 @@
 // =============================================================================
 
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev65.0/+esm";
-import { createViews, RECENT_CUT } from "./views.js";
+import { createViews, RECENT_CUT } from "../semantic/views.js";
 import { periodsForRange, attachCached } from "./history.js";
 import { createAuth } from "./auth.js";
-import { perf, HTTP_TRACE_SHIM } from "./perflog.js";
+import { perf, HTTP_TRACE_SHIM } from "../frontend/perflog.js";
 
 const CHUNK = 2 * 1024 * 1024;           // whole-file download: Range size per request ...
 const PARALLEL = 6;                      // ... and how many in flight (a 14 MB file needs small chunks to use them all)
