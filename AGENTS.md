@@ -143,12 +143,16 @@ transport fails the OneLake TLS handshake).
 `NEMTRACKER_TOKEN` (gh-pages deploy) is the one true secret.
 
 ## Dashboard
-The dashboard has the layers of a BI stack, each in its own place under `dashboard/` (the
+**The layout says who reads the model** (the owner's, 2026-10-05): `semantic_model/` at the
+top of the repo is the one semantic model, and `dashboard/` holds its three clients:
+`github/` (the page, on GitHub Pages), `fabric_app/` (the same page as a Fabric app) and
+`powerbi/` (a report over the deployed model: a README for now).
+The page has the layers of a BI stack, each in its own place under `dashboard/github/` (the
 table of what stands in each place in a real product is in `ARCHITECTURE.md`), and two hosts:
 GitHub Pages and a Fabric app. Everything is the same file on both except `storage/data.js`.
 - consumer: `index.html`
 - query language: DAX, written in the page
-- semantic model: `semantic/model.bim`, a Tabular model in TMSL
+- semantic model: `semantic_model/model.bim` (at the top of the repo), a Tabular model in TMSL
 - compiler: `semantic/compiler.js`, the model to views and the DAX to SQL
 - engine: DuckDB-WASM
 - storage: `storage/data.js`, `storage/history.js`
@@ -169,10 +173,13 @@ page's.
 same views. The compiler never sees text a user typed: `query()` translates what
 starts with `EVALUATE`, and only the page's own queries do. Don't make the box accept DAX.
 
-`index.html` is the one file at the top of `dashboard/`: it is the site's URL, and `data.js`
+`index.html` is the one file at the top of `dashboard/github/`: it is the site's URL, and `data.js`
 finds `data/` from the page's URL. The deployed tree is the repo tree, so a relative import
-resolves the same locally and deployed.
-- `dashboard/index.html` is the page: charts, and DAX that names the model's tables, columns
+resolves the same locally and deployed, with one exception: `model.bim` is not in this
+folder. Both builds (`build.yml`, `dashboard/fabric_app/build.mjs`) copy
+`semantic_model/model.bim` to `semantic/model.bim`, next to the compiler that fetches it,
+and anything that serves the page from the repo has to do the same.
+- `dashboard/github/index.html` is the page: charts, and DAX that names the model's tables, columns
   and measures (`fct_summary[mw]`, `dim_duid[FuelSourceDescriptor]`, `[Capture price]`). **It
   joins nothing** and names no view (outside Analyze and `data.has('v_...')`). Which fuels
   are renewable is not in the dashboard at all: `dim_duid[Renewable]` says. The rules it does
@@ -191,14 +198,14 @@ resolves the same locally and deployed.
   the page's, where it draws: the newest half hour carried forward for up to 55 minutes,
   never past the newest unit interval (`heldRooftop`), and so the renewable share and the
   average day are divided in JS. Rooftop is in no unit list, search or Analyze row.
-- `dashboard/semantic/model.bim` is the semantic model, **the same file Power BI runs**
+- `semantic_model/model.bim` is the semantic model, **the same file Power BI runs**
   (see "The Power BI model"): TMSL, compatibility level 1604, every table one Direct Lake
   partition on a `mart` table, single-column relationships, and the measures. It holds DAX
   only: nothing in it is written for DuckDB, and no SQL goes into it, as an annotation or
   otherwise. `.platform` and `definition.pbism` next to it make the folder a Fabric item.
   It is JSON, so a browser reads it with no library: there are no comments, so the why goes
   in a `description`, and a long expression is an array of lines.
-- `dashboard/semantic/compiler.js` has two parts (`createModel(dataSource)`: the data
+- `dashboard/github/semantic/compiler.js` has two parts (`createModel(dataSource)`: the data
   source's members plus `has`, `needs` and `toSQL`). **It is a toy on purpose** (the owner,
   2026-10-05): the example of the one layer of the stack with no open-source equivalent. It
   translates what this page asks, by fixed cases; it does not plan, and a construct it cannot
@@ -232,9 +239,9 @@ resolves the same locally and deployed.
   `today`, `agg` and the 5-minute history, and builds no view. On both the files are
   downloaded whole into OPFS, and the history is the half-year files (`p2026_h1`, ...), the
   ones a range needs. There are two, with the same members:
-  - `dashboard/storage/data.js`, GitHub Pages: the files sit in `data/` (`mart_dim`, `mart_today`,
+  - `dashboard/github/storage/data.js`, GitHub Pages: the files sit in `data/` (`mart_dim`, `mart_today`,
     `mart_agg`, `mart_<YYYY>_h<N>`), with `mart_manifest.json` listing the half-years.
-  - `fabric/site/storage/data.js`, the Fabric app: the files are in a lakehouse behind a
+  - `dashboard/fabric_app/site/storage/data.js`, the Fabric app: the files are in a lakehouse behind a
     Fabric sign-in, read with a short-lived read-only SAS, and downloaded as 2 MB Range
     requests, 6 at a time. Its own, and unknown to the page: the sign-in gate (`auth.js`,
     next to it).
@@ -243,10 +250,10 @@ resolves the same locally and deployed.
   (one 2024 day took 38 s that way, 2026-10-04).
   Both set the session to Brisbane time, on purpose: the files carry `date` and `time`, no
   TIMESTAMPTZ, and the only thing the zone decides is that `CURRENT_DATE` is the NEM's day.
-- `dashboard/storage/history.js` is what both `data.js` share about the half-year history
+- `dashboard/github/storage/history.js` is what both `data.js` share about the half-year history
   files: `periodsForRange` (which ones a date range needs) and `attachCached` (ATTACH from
   OPFS in place, into memory if a second tab holds the file).
-- `dashboard/frontend/perflog.js` and `dashboard/frontend/logs.js` are the Logs tab, on both
+- `dashboard/github/frontend/perflog.js` and `dashboard/github/frontend/logs.js` are the Logs tab, on both
   hosts: a table of what this session fetched, attached and ran, with timings, and the build
   stamp. This session only: it lives in the page's memory, nothing is stored, written to a
   file or uploaded, and the Copy button is the one way out. A host's `data.js` does the
@@ -272,7 +279,7 @@ rather than round them:
   `[data-theme="light"]`, set by the `<head>` script before first paint: the stored choice,
   else the system's). Colour is for the data and for status, and status comes with an arrow
   or a label. The CSS stays inline: a separate file next to `index.html` would need both
-  deploy copy lists (`build.yml`, `fabric/build.mjs`).
+  deploy copy lists (`build.yml`, `dashboard/fabric_app/build.mjs`).
 - `chartTheme()` builds one ECharts theme per scheme from those tokens (font, label size,
   tooltip, legend, zoom slider, colour scale) and `plot()` is every chart's plot area, with
   measured axis labels. A chart sets no margin, font or tooltip style of its own.
@@ -330,23 +337,24 @@ of two imports are kept so that an open page keeps reading the one it attached. 
 OPFS cache keeps one import, so each daily import downloads a half-year again the first time
 it is viewed.
 
-**The Fabric app is `fabric/`**, a Rayfin project: static hosting, Fabric sign-in, and one
-function, `getDataSas` (`fabric/rayfin/functions`), which signs a read-only SAS on the data
-folder so that the browser never holds a storage token. `fabric/build.mjs` assembles
-`fabric/dist`: `index.html`, the three folders and `dag/` from `dashboard/`, with
-`fabric/site/` copied over them (`storage/data.js`, its own, and `storage/auth.js`), and
+**The Fabric app is `dashboard/fabric_app/`**, a Rayfin project: static hosting, Fabric sign-in, and one
+function, `getDataSas` (`dashboard/fabric_app/rayfin/functions`), which signs a read-only SAS on the data
+folder so that the browser never holds a storage token. `dashboard/fabric_app/build.mjs` assembles
+`dashboard/fabric_app/dist`: `index.html`, the three folders and `dag/` from `dashboard/github/`,
+`semantic_model/model.bim`, with
+`dashboard/fabric_app/site/` copied over them (`storage/data.js`, its own, and `storage/auth.js`), and
 `?v=<build>` added to every relative import; `compiler.js` passes its own on to `model.bim`.
 
 **It is deployed from the owner's laptop**, under their own login:
 ```
-cd fabric
+cd dashboard/fabric_app
 npm ci && npm ci --prefix rayfin/functions
 export RAYFIN_TOKEN=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv)
 npx rayfin up --yes --output json
 ```
 The item is `wasm` in workspace `app`, created that way on 2026-10-04;
-`fabric/rayfin/.deployments.json` (untracked) records it, and its URL is in
-`fabric/rayfin/rayfin.yml` (`allowedRedirectUris`; the deploy adds it). On a machine without
+`dashboard/fabric_app/rayfin/.deployments.json` (untracked) records it, and its URL is in
+`dashboard/fabric_app/rayfin/rayfin.yml` (`allowedRedirectUris`; the deploy adds it). On a machine without
 that record, add `--workspace-id <app>`. A new item needs its secret once, then one more
 deploy: `echo <Files URL> | npx rayfin secret set ONELAKE_FILES_URL --stdin`.
 
@@ -366,7 +374,7 @@ checks it). The page-only deploy into the owner's item (`rayfin up staticapp dep
 way round it: owner-only too, the same 403. When #89 is fixed: dispatch the workflow, open
 `nemtracker`, read its Logs tab. Keep that item until then: the comment on #89 says it is
 there for re-testing. What the workflow took:
-- `fabric/rayfin/functions/host.json` is committed: the deploy refuses without it, and the
+- `dashboard/fabric_app/rayfin/functions/host.json` is committed: the deploy refuses without it, and the
   Rayfin scaffold's `.gitignore` leaves it out.
 - The lock files resolve from `registry.npmjs.org`: generated on a laptop they name a
   private feed the runner cannot read.
@@ -424,7 +432,7 @@ they are what these tables are built from.
   (`fct_summary`), because joining two facts at query time is too slow; rooftop is its own
   table, never units; a value that is only held, carried forward or interpolated for drawing
   is the reader's to work out and is never stored; the logic is measures.
-- `dashboard/semantic/` is the model, a Fabric item (`model.bim`, `definition.pbism`,
+- `semantic_model/` is the model, a Fabric item (`model.bim`, `definition.pbism`,
   `.platform`; fabric-cicd finds an item by its `.platform`, whatever the folder is called,
   and `deploy_model.py` publishes a copy of those three files only): fourteen tables, each one Direct Lake partition on a `mart`
   table of the `nem` lakehouse, reached through OneLake (no SQL endpoint; Fabric shows
@@ -611,7 +619,7 @@ the same pins, and pins the two Azure SDK packages its upload uses.
 - **The dashboard pins `@duckdb/duckdb-wasm@1.33.1-dev65.0`** (DuckDB 1.5.x line), a dev build
   because nothing stable has shipped since 1.33.0. Don't take npm's `latest` tag: it points
   at `1.33.1-dev57.0`, which the DuckDB blog says breaks OPFS. The dev build lets
-  `attachCached` (`dashboard/storage/history.js`) read the OPFS-cached files in place
+  `attachCached` (`dashboard/github/storage/history.js`) read the OPFS-cached files in place
   (`registerFileHandle` + `BROWSER_FSACCESS`) instead of copying each one into the WASM heap.
   Register the plain filename, not `opfs://`: an `opfs://` ATTACH also opens `<file>.wal`,
   which is never registered, so the ATTACH fails. The handle is exclusive, so a second tab

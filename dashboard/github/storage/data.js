@@ -13,7 +13,7 @@
 // The model and index.html know none of this: ../semantic/compiler.js wraps the members
 // createDataSource returns and builds its views over the attached databases, which it finds
 // in the engine's catalog. A host that stores the files differently (the Fabric app,
-// fabric/site/storage/data.js: a lakehouse behind a Fabric sign-in) has its own data.js with
+// ../../fabric_app/site/storage/data.js: a lakehouse behind a Fabric sign-in) has its own data.js with
 // the same members, over the same history.js.
 //
 // DOM-free: progress is reported through the injected `onStatus` callback, and what is

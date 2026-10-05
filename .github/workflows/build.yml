@@ -45,27 +45,29 @@ jobs:
         run: |
           dbt build --target ci --profiles-dir .
           dbt docs generate --target ci --profiles-dir . --empty-catalog
-          mkdir -p dashboard/dag
-          cp target/index.html dashboard/dag/
-          cp target/manifest.json dashboard/dag/
-          cp target/catalog.json dashboard/dag/
+          mkdir -p dashboard/github/dag
+          cp target/index.html dashboard/github/dag/
+          cp target/manifest.json dashboard/github/dag/
+          cp target/catalog.json dashboard/github/dag/
       - name: Commit dbt docs
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add dashboard/dag/
+          git add dashboard/github/dag/
           git diff --cached --quiet || (git commit -m "Update dbt docs" && git pull --rebase && git push)
       - name: Prepare deploy directory
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: |
           mkdir -p deploy
-          # The page and one folder per layer, as they are in the repo.
-          cp dashboard/index.html deploy/
-          cp -r dashboard/frontend dashboard/semantic dashboard/storage deploy/
+          # The page and one folder per layer, as they are in the repo, and the semantic
+          # model next to its compiler: it is the repo's (semantic_model/), not this client's.
+          cp dashboard/github/index.html deploy/
+          cp -r dashboard/github/frontend dashboard/github/semantic dashboard/github/storage deploy/
+          cp semantic_model/model.bim deploy/semantic/
           # perflog.js carries the build stamp the Logs panel shows.
           sed -i "s/__BUILD__/${GITHUB_SHA::7}/" deploy/frontend/perflog.js
-          cp -r dashboard/dag deploy/
+          cp -r dashboard/github/dag deploy/
       - name: Deploy to nemtracker
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:

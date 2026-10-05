@@ -34,7 +34,7 @@ only: a finished item is removed, not ticked.
   AEMO list, `duid_data.csv`). The pipeline re-downloads it 24 hours after its last copy
   (2026-10-05 after ~07:15 UTC); `dim_duid` holds the old values until a rebuild after that.
 - [ ] **Interconnectors from the data** — the Flows page types each link's two regions and
-  its name (`INTERCONNECTORS` in `dashboard/index.html`); the facts carry only the id. AEMO's
+  its name (`INTERCONNECTORS` in `dashboard/github/index.html`); the facts carry only the id. AEMO's
   MMSDM `INTERCONNECTOR` table should have them (`REGIONFROM`, `REGIONTO`, a description;
   not checked against the archive): a small `dim_interconnector`, exported with the dims.
 - [ ] **Site size** — the deployed data files total about 984 MB against GitHub Pages' 1 GB

@@ -44,8 +44,8 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 
 ## Two Deploy Targets
 
-The dashboard is one page (`dashboard/index.html`) over one semantic model
-(`dashboard/semantic/model.bim`). A target only decides where the data files live and how the
+The dashboard is one page (`dashboard/github/index.html`) over one semantic model
+(`semantic_model/model.bim`). A target only decides where the data files live and how the
 browser gets them (`storage/data.js`), so a chart or a measure is written once and reaches both.
 
 | | GitHub Pages | Microsoft Fabric app |
@@ -54,8 +54,8 @@ browser gets them (`storage/data.js`), so a chart or a measure is written once a
 | Who can open it | anyone | people the app is shared with, after Fabric sign-in |
 | Data files | next to the page | a lakehouse, under `Files/data` |
 | 5-minute history | one file per half-year (GitHub's 100 MB limit), downloaded | the same half-year files, downloaded as parallel range requests |
-| Host code | `dashboard/storage/data.js` | `fabric/site/storage/` |
-| Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `fabric/` (page), `import_onelake.yml` (data) |
+| Host code | `dashboard/github/storage/data.js` | `dashboard/fabric_app/site/storage/` |
+| Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `dashboard/fabric_app/` (page), `import_onelake.yml` (data) |
 
 ### The layers of the dashboard
 
@@ -64,12 +64,12 @@ on purpose: the point is the layers, not their maturity.
 
 | Layer | Here | In a real product |
 |---|---|---|
-| Consumer | `dashboard/index.html` | the BI tool |
+| Consumer | `dashboard/github/index.html` | the BI tool |
 | Query language | DAX, written in the page | DAX, MDX, VizQL, Malloy, a metrics request |
-| Semantic model | `dashboard/semantic/model.bim`, a Tabular model in TMSL | a Tabular model (TMSL, TMDL), LookML, MetricFlow YAML |
-| Compiler | `dashboard/semantic/compiler.js` | MetricFlow, Cube's schema compiler, Malloy's compiler, Looker's SQL generator, Power BI's formula engine, Tableau's VizQL |
+| Semantic model | `semantic_model/model.bim`, a Tabular model in TMSL | a Tabular model (TMSL, TMDL), LookML, MetricFlow YAML |
+| Compiler | `dashboard/github/semantic/compiler.js` | MetricFlow, Cube's schema compiler, Malloy's compiler, Looker's SQL generator, Power BI's formula engine, Tableau's VizQL |
 | Engine | DuckDB-WASM | the warehouse, VertiPaq, Hyper |
-| Storage | `dashboard/storage/` | the lakehouse or warehouse connection |
+| Storage | `dashboard/github/storage/` | the lakehouse or warehouse connection |
 
 - **The semantic model** describes the tables, their relationships and the measures, each
   with a description, in the format of a Power BI model (`model.bim`). It is the only place
@@ -89,9 +89,9 @@ Built with [Rayfin](https://www.npmjs.com/package/@microsoft/rayfin-cli). Fabric
 page and signs you in, and the page reads its data directly from OneLake: no backend to run,
 no query service.
 
-![The dashboard as a Fabric app](fabric/screenshots.png)
+![The dashboard as a Fabric app](dashboard/fabric_app/screenshots.png)
 
-![Architecture of the Fabric app](fabric/architecture.svg)
+![Architecture of the Fabric app](dashboard/fabric_app/architecture.svg)
 
 - **Hosting:** `rayfin up` deploys the page to Fabric static hosting.
 - **Sign-in:** Fabric single sign-on. Inside the Fabric portal there is no extra login; in
@@ -111,8 +111,11 @@ no query service.
 │   └── marts/            # Incremental fact tables
 ├── macros/               # Iceberg compatibility overrides, helpers
 ├── scripts/              # Iceberg → DuckDB import, table maintenance, deploy
-├── dashboard/            # The page, and a folder per layer: frontend/, semantic/, storage/ (the GitHub Pages host)
-├── fabric/               # The Fabric app: its host code, sign-in, and the Rayfin project
+├── semantic_model/       # The one semantic model (model.bim): what every dashboard reads, and a Fabric item
+├── dashboard/            # Its three clients
+│   ├── github/           # The page, and a folder per layer: frontend/, semantic/ (the compiler), storage/ (the GitHub Pages host)
+│   ├── fabric_app/       # The same page as a Fabric app: its host code, sign-in, and the Rayfin project
+│   └── powerbi/          # A report over the deployed model
 ├── tests/                # dbt data tests
 ├── .github/workflows/    # CI/CD pipelines
 ├── dbt_project.yml
@@ -188,7 +191,7 @@ Everything else is Rayfin — see the
 [Rayfin documentation](https://learn.microsoft.com/fabric/embedded/rayfin/overview):
 
 ```bash
-cd fabric
+cd dashboard/fabric_app
 npm ci && npm ci --prefix rayfin/functions
 npx rayfin login      # sign in to Fabric
 npx rayfin up         # build + deploy to Fabric static hosting; prints the hosting URL

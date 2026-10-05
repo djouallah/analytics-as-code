@@ -1,9 +1,9 @@
 name: Deploy Fabric
 
 # The dashboard's second target. build.yml publishes the page to GitHub Pages; this deploys
-# the same page as a Fabric app (fabric/, Rayfin: static hosting, Fabric sign-in, and the
-# function that signs the read-only SAS for the data). fabric/build.mjs puts the shared page
-# files and the Fabric host's own (fabric/site/) into fabric/dist.
+# the same page as a Fabric app (dashboard/fabric_app/, Rayfin: static hosting, Fabric sign-in, and the
+# function that signs the read-only SAS for the data). build.mjs there puts the shared page
+# files and the Fabric host's own (site/) into dist/.
 # On dispatch only. Only an item's owner can deploy to it (the page alone included: 403), so
 # CI deploys into an item of its own, `nemtracker`, next to the one deployed from the owner's
 # laptop (`wasm`). The deploy works; the app it makes does not yet: Fabric answers 500 to
@@ -40,8 +40,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            fabric/package-lock.json
-            fabric/rayfin/functions/package-lock.json
+            dashboard/fabric_app/package-lock.json
+            dashboard/fabric_app/rayfin/functions/package-lock.json
 
       # The app's tenant, not the catalog's: the Entra app that import_onelake.yml uploads the
       # data with (LAKE_*). It is a member of the app's workspace.
@@ -60,7 +60,7 @@ jobs:
           echo "RAYFIN_TOKEN=$TOKEN" >> "$GITHUB_ENV"
 
       - name: Install
-        working-directory: fabric
+        working-directory: dashboard/fabric_app
         run: |
           npm ci
           npm ci --prefix rayfin/functions
@@ -70,7 +70,7 @@ jobs:
       # an item made from a laptop (`rayfin up` under a user login) refuses it with 403.
       # --yes: reuse that item on every later run, never ask.
       - name: Deploy
-        working-directory: fabric
+        working-directory: dashboard/fabric_app
         env:
           RAYFIN_WORKSPACE_ID: ${{ vars.FABRIC_APP_WORKSPACE_ID }}
         run: npx rayfin up --item-name nemtracker --workspace-id "$RAYFIN_WORKSPACE_ID" --yes --output json ${{ inputs.dry_run && '-n' || '' }}
@@ -82,7 +82,7 @@ jobs:
         # went out before the secret existed, and the app that works was deployed in this
         # order (deploy, secret, deploy).
         if: ${{ !inputs.dry_run }}
-        working-directory: fabric
+        working-directory: dashboard/fabric_app
         env:
           ONELAKE_FILES_URL: ${{ vars.ONELAKE_FILES_URL }}
         run: |

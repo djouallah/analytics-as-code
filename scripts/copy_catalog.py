@@ -5,7 +5,7 @@
 
 No rule of its own (the owner, 2026-10-05: the import "is a simple import and has zero logic
 to it beside maybe splitting per size"). Every table is `SELECT *` of a table of the semantic
-model (dashboard/semantic/model.bim), under its own name, with its own types: what a chart
+model (semantic_model/model.bim), under its own name, with its own types: what a chart
 needs that the tables do not hold is a dbt model first. What this file decides is only which
 file a table goes into, so that a browser downloads what a page needs and no file outgrows
 what the host takes:

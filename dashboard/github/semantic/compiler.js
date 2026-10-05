@@ -10,31 +10,26 @@
 //   engine          DuckDB-WASM                the warehouse, VertiPaq, Hyper
 //   storage         ../storage/data.js         the lakehouse or warehouse connection
 //
-// It is a proof of concept, not a DAX engine. It knows the constructs the page uses and
-// throws on anything else, and where DAX and SQL differ the result is SQL's: a blank is a
-// NULL, and a group whose measures are all blank is kept. There is no filter context: a
-// filter is a boolean argument of CALCULATETABLE or CALCULATE, and becomes a WHERE.
+// The model is the repo's semantic_model/model.bim, the file Power BI runs in Direct Lake:
+// it holds DAX only, and nothing in it is written for this compiler. The builds put it next
+// to this file.
+//
+// This compiler is a toy, on purpose: the example of the one layer with no open-source
+// equivalent, not a DAX engine. It knows the constructs the page uses and throws on anything
+// else; what it cannot translate has its equivalent SQL written here, as a fixed case. Where
+// DAX and SQL differ the result is SQL's: a blank is a NULL, and a group whose measures are
+// all blank is kept. There is no filter context: a filter is a boolean argument of
+// CALCULATETABLE or CALCULATE, and becomes a WHERE.
 //
 // Part 1, the model. What model.bim holds and what each entry becomes:
-//   measures             nothing of their own: a measure is DAX, written out where a query
-//                        names it ([Renewable share]), so a CALCULATE around it reaches its
-//                        aggregates
-//   tables               a view each, v_<table>, of one of four kinds, told by its partitions:
-//     one entity partition with a schema   that attached table, as it is; no view if a
-//                        deployed file lacks it
-//     two partitions     `history` and `recent`, stitched (the `stitch` annotation, described
-//                        in the model's annotations). Schema `p*` is every attached half-year
-//                        database. An `optional` column reads NULL from a file that lacks it;
-//                        `rollup` is a column's expression on the recent side, which is then
-//                        grouped
-//     one entity partition without a schema   columns picked from another table of the model,
-//                        plus the calculated columns over them
-//     a query partition  SQL over other views; `when` names columns that must exist
+//   tables               a view each, v_<table>: the table of the lakehouse its partition
+//                        names, over the files that are attached (see "The model -> views")
 //   relationships        a view each, under the relationship's name: the `from` side LEFT JOIN
-//                        the `to` side, with the columns of `to` (all of them, or the ones in
-//                        `columns`). The calculated columns of `to` are worked out again on
-//                        the joined row, so a row with no match gets a value too
-// In an expression, {name} is one of the model's `expressions`.
+//                        the `to` side, with the columns of `to`
+//   measures             nothing of their own: a measure is DAX, written out where a query
+//                        names it ([Capture price]), so a CALCULATE around it reaches its
+//                        aggregates. Two fixed cases: [Rooftop MW], and the measures that
+//                        pick their table
 //
 // Part 2, the queries (toSQL). A DAX query becomes one SELECT over those views:
 //   SUMMARIZECOLUMNS, ROW             an aggregate; ROLLUPADDISSUBTOTAL is GROUPING SETS
@@ -46,9 +41,10 @@
 //   UNION, a table VAR                UNION ALL, a CTE; a scalar VAR is a scalar subquery
 //   CALCULATE(measure, filter)        the aggregates of the measure with FILTER (WHERE ..)
 //   [Name]                            a column of the table being built, else a measure
-// Which view a query reads is decided here, from the tables it names: `scada` alone reads
-// v_scada, with `unit` v_gen, with `price` v_gen_price. So a query that needs nothing about
-// the unit pays for no join, with no rule for the author to remember.
+// Which view a query reads is decided here, from the tables it names: `fct_summary` alone
+// reads v_fct_summary, with a column of `dim_duid` the relationship's view. So a query that
+// needs nothing about the unit pays for no join, with no rule for the author to remember.
+// The key of a dimension is read off the fact's own column, with no join.
 // What comes back is cast by the column's dataType, as the browser wants it: a date as text,
 // a whole number as INTEGER, a number as DOUBLE.
 //

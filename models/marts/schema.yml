@@ -429,7 +429,7 @@ models:
 exposures:
   - name: dashboard_summary
     type: application
-    description: "The NemTracker dashboard, and the Power BI model: both read these tables through one semantic model (dashboard/semantic/model.bim). scripts/copy_catalog.py copies them as they are into the dashboard's .duckdb files (mart_dim / mart_today / mart_agg / mart_<year>_h<n>)"
+    description: "The NemTracker dashboard, and the Power BI model: both read these tables through one semantic model (semantic_model/model.bim). scripts/copy_catalog.py copies them as they are into the dashboard's .duckdb files (mart_dim / mart_today / mart_agg / mart_<year>_h<n>)"
     depends_on:
       - ref('fct_summary')
       - ref('fct_region')

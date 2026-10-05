@@ -725,7 +725,7 @@
 
     // Where the .duckdb files live and how they are fetched and attached is data.js's business
     // (a host that stores the files differently ships its own). What the data means is the
-    // semantic model's (semantic/model.bim, the Tabular model Power BI reads in Direct Lake:
+    // semantic model's (semantic_model/model.bim, the Tabular model Power BI reads in Direct Lake:
     // the tables of the lakehouse, the relationships, the measures), which compiler.js turns
     // into views. The page queries the model in DAX, which compiler.js turns into SQL over
     // those views: it names no attached table and writes no join. The Analyze tab alone is
@@ -926,7 +926,7 @@
     // 5. SQL QUERY BUILDERS
     // =========================================================================
 
-    // The tables and the measures are the model's (semantic/model.bim), and the queries are
+    // The tables and the measures are the model's (semantic_model/model.bim), and the queries are
     // DAX: `fct_summary` is the generation per unit, with the price of its region on the row,
     // `dim_duid` the units, `fct_region` the regions' price and demand. A query that names a
     // column of `dim_duid` next to a fact reads the two joined; one that does not reads the

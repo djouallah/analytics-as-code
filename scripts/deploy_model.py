@@ -2,17 +2,16 @@
 
     python deploy_model.py
 
-The model is dashboard/semantic/model.bim (a Tabular model in TMSL whose tables are Direct
-Lake partitions on the Iceberg tables of the `nem` lakehouse), the same file the dashboard
-reads. With .platform and definition.pbism next to it, that folder is a Fabric item:
+The model is semantic_model/model.bim (a Tabular model in TMSL whose tables are Direct Lake
+partitions on the Iceberg tables of the `nem` lakehouse), the same file the dashboards
+read. With .platform and definition.pbism next to it, that folder is a Fabric item:
 fabric-cicd finds an item by its .platform, whatever the folder is called. It is
 published with fabric-cicd, as the sibling repo publishes its own (dbt-fabric,
 .github/scripts/deploy.py): the item is created on the first run and updated after that.
 
 model.bim names the lakehouse as {WS_ID}/{LH_ID}: Direct Lake has no parameter for them, they
 are literals in the DirectLake expression, and the repo does not hold the ids (they are
-repository variables). They are written in here, on a copy: of the item's three files
-only, since the folder also holds the dashboard's compiler.
+repository variables). They are written in here, on a copy.
 
 Needs `az login` (azure/login on CI) as an identity that can create items in the workspace.
 """
@@ -22,8 +21,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-ITEM = Path(__file__).resolve().parent.parent / "dashboard" / "semantic"
-FILES = (".platform", "definition.pbism", "model.bim")
+ITEM = Path(__file__).resolve().parent.parent / "semantic_model"
 
 
 def main():
@@ -32,11 +30,7 @@ def main():
 
     workspace, lakehouse = os.environ["WS_ID"], os.environ["LH_ID"]
     with tempfile.TemporaryDirectory() as tmp:
-        item = Path(tmp, "nem")
-        item.mkdir()
-        for name in FILES:
-            shutil.copy(ITEM / name, item / name)
-        bim = item / "model.bim"
+        bim = Path(shutil.copytree(ITEM, Path(tmp, ITEM.name)), "model.bim")
         bim.write_text(bim.read_text(encoding="utf-8")
                        .replace("{WS_ID}", workspace).replace("{LH_ID}", lakehouse), encoding="utf-8")
         publish_all_items(FabricWorkspace(
