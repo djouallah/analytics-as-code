@@ -1,0 +1,38 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.8.0/schema.json",
+  "name": "card_price",
+  "position": {
+    "x": 776,
+    "y": 16,
+    "z": 4,
+    "height": 120,
+    "width": 236,
+    "tabOrder": 4
+  },
+  "visual": {
+    "visualType": "card",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fct_region"
+                    }
+                  },
+                  "Property": "Average price"
+                }
+              },
+              "queryRef": "fct_region.Average price",
+              "nativeQueryRef": "Average price"
+            }
+          ]
+        }
+      }
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

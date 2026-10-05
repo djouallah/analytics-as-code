@@ -146,7 +146,7 @@ transport fails the OneLake TLS handshake).
 **The layout says who reads the model** (the owner's, 2026-10-05): `semantic_model/` at the
 top of the repo is the one semantic model, and `dashboard/` holds its three clients:
 `github/` (the page, on GitHub Pages), `fabric_app/` (the same page as a Fabric app) and
-`powerbi/` (a report over the deployed model: a README for now).
+`powerbi/` (`nem.Report`, a report over the deployed model).
 The page has the layers of a BI stack, each in its own place under `dashboard/github/` (the
 table of what stands in each place in a real product is in `ARCHITECTURE.md`), and two hosts:
 GitHub Pages and a Fabric app. Everything is the same file on both except `storage/data.js`.
@@ -435,7 +435,7 @@ they are what these tables are built from.
   is the reader's to work out and is never stored; the logic is measures.
 - `semantic_model/` is the model, a Fabric item (`model.bim`, `definition.pbism`,
   `.platform`; fabric-cicd finds an item by its `.platform`, whatever the folder is called,
-  and `deploy_model.py` publishes a copy of those three files only): fourteen tables, each one Direct Lake partition on a `mart`
+  and `deploy_model.py` publishes a copy of that folder): fourteen tables, each one Direct Lake partition on a `mart`
   table of the `nem` lakehouse, reached through OneLake (no SQL endpoint; Fabric shows
   Direct Lake the Iceberg tables as Delta on its own), single-column relationships, and the
   measures. `{WS_ID}`/`{LH_ID}` in the `DirectLake` expression are placeholders. A measure
@@ -461,10 +461,20 @@ they are what these tables are built from.
 - **Rooftop at 5 minutes is a measure**, `[Rooftop MW]`: only the half-hourly estimate is
   stored, and the measure draws the straight line between two consecutive half hours
   (nothing across a missing one). The newest value is not held forward: that is the chart's.
-- `deploy_model.yml` (dispatch only) publishes it into the catalog's workspace with
+- **The report is `dashboard/powerbi/nem.Report`**, in PBIR (a JSON file per page and per
+  visual; schema versions and base theme as Power BI Desktop wrote them in 2026). One page,
+  "Overview": the model's measures by day, fuel, region and station, over the last 30 days
+  (a page filter). It holds no measure of its own, and its filters are on the dimensions, so
+  the measures read the daily tables. `definition.pbir` names the model by its path in the
+  repo (`../../../semantic_model`); fabric-cicd turns that into the deployed model's id, so
+  `deploy_model.py` copies the two to the same places relative to each other. No `.pbip`:
+  the model's lakehouse ids are placeholders here, so Desktop could not open it. Nothing in
+  CI sees a chart draw: a change to a visual is checked by opening the report.
+- `deploy_model.yml` (dispatch only) publishes the model and the report into the catalog's
+  workspace with
   `scripts/deploy_model.py` (fabric-cicd; the owner asked for it, not duckrun) and runs
   `scripts/check_model.py`: a refresh, then a row count per table and each measure per day
-  for the newest week. A table or a column the model
+  for the newest week, then that the report is there and reads the model. A table or a column the model
   names has to exist before a deploy: the refresh fails on it and leaves the deployed model
   broken until the next good one. And a dispatched `process_data.yml` can be cancelled by
   the next scheduled run queueing behind it (one concurrency group), so read its conclusion

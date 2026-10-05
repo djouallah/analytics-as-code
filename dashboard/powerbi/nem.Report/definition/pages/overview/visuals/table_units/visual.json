@@ -1,0 +1,125 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.8.0/schema.json",
+  "name": "table_units",
+  "position": {
+    "x": 272,
+    "y": 448,
+    "z": 8,
+    "height": 256,
+    "width": 992,
+    "tabOrder": 8
+  },
+  "visual": {
+    "visualType": "tableEx",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "dim_duid"
+                    }
+                  },
+                  "Property": "StationName"
+                }
+              },
+              "queryRef": "dim_duid.StationName",
+              "nativeQueryRef": "StationName"
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "dim_duid"
+                    }
+                  },
+                  "Property": "FuelSourceDescriptor"
+                }
+              },
+              "queryRef": "dim_duid.FuelSourceDescriptor",
+              "nativeQueryRef": "FuelSourceDescriptor"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fct_summary"
+                    }
+                  },
+                  "Property": "Generation MWh"
+                }
+              },
+              "queryRef": "fct_summary.Generation MWh",
+              "nativeQueryRef": "Generation MWh"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fct_summary"
+                    }
+                  },
+                  "Property": "Capture price"
+                }
+              },
+              "queryRef": "fct_summary.Capture price",
+              "nativeQueryRef": "Capture price"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fct_summary"
+                    }
+                  },
+                  "Property": "Capacity factor"
+                }
+              },
+              "queryRef": "fct_summary.Capacity factor",
+              "nativeQueryRef": "Capacity factor"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fct_summary"
+                    }
+                  },
+                  "Property": "Revenue"
+                }
+              },
+              "queryRef": "fct_summary.Revenue",
+              "nativeQueryRef": "Revenue"
+            }
+          ]
+        }
+      },
+      "sortDefinition": {
+        "sort": [
+          {
+            "field": {
+              "Measure": {
+                "Expression": {
+                  "SourceRef": {
+                    "Entity": "fct_summary"
+                  }
+                },
+                "Property": "Generation MWh"
+              }
+            },
+            "direction": "Descending"
+          }
+        ]
+      }
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

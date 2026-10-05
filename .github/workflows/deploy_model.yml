@@ -1,10 +1,11 @@
 name: Deploy Semantic Model
 
 # Publishes semantic_model/model.bim (a Direct Lake model over the catalog's
-# Iceberg tables) to the workspace that holds the lakehouse, then refreshes it and asks it,
-# in DAX over XMLA, a row count per table and its measures (scripts/check_model.py).
+# Iceberg tables) and the Power BI report on it (dashboard/powerbi/nem.Report) to the
+# workspace that holds the lakehouse, then refreshes the model and asks it, in DAX over
+# XMLA, a row count per table and its measures (scripts/check_model.py).
 #
-# Manual only: it creates or updates a Fabric item. It touches no table and no dashboard
+# Manual only: it creates or updates two Fabric items. It touches no table and no dashboard
 # file. The identity is the catalog's (the same OIDC login as Process Data), so the model
 # is owned by it and reads OneLake as it.
 
@@ -55,7 +56,7 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
-      - name: Publish the model
+      - name: Publish the model and the report
         run: python scripts/deploy_model.py
       - name: Mint Power BI token
         run: |

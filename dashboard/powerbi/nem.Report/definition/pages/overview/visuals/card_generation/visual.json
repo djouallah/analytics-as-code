@@ -1,0 +1,38 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.8.0/schema.json",
+  "name": "card_generation",
+  "position": {
+    "x": 272,
+    "y": 16,
+    "z": 2,
+    "height": 120,
+    "width": 236,
+    "tabOrder": 2
+  },
+  "visual": {
+    "visualType": "card",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fct_summary"
+                    }
+                  },
+                  "Property": "Total generation MWh"
+                }
+              },
+              "queryRef": "fct_summary.Total generation MWh",
+              "nativeQueryRef": "Total generation MWh"
+            }
+          ]
+        }
+      }
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

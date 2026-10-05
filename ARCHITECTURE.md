@@ -51,8 +51,8 @@ One semantic model (`semantic_model/model.bim`), three clients under `dashboard/
 - `github/` and `fabric_app/` are one page (`dashboard/github/index.html`) on two hosts. A
   host only decides where the data files live and how the browser gets them
   (`storage/data.js`), so a chart is written once and reaches both.
-- `powerbi/` is a Power BI report on the model as deployed to Fabric (`deploy_model.yml`),
-  which reads the Iceberg tables in Direct Lake.
+- `powerbi/` is a Power BI report (`nem.Report`, as JSON) on the model as deployed to Fabric,
+  which reads the Iceberg tables in Direct Lake. `deploy_model.yml` publishes the two together.
 
 A measure is written once, in the model, and reaches all three.
 

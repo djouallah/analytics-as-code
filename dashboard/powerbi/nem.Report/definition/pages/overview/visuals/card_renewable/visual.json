@@ -1,0 +1,38 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.8.0/schema.json",
+  "name": "card_renewable",
+  "position": {
+    "x": 524,
+    "y": 16,
+    "z": 3,
+    "height": 120,
+    "width": 236,
+    "tabOrder": 3
+  },
+  "visual": {
+    "visualType": "card",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fct_summary"
+                    }
+                  },
+                  "Property": "Renewable share"
+                }
+              },
+              "queryRef": "fct_summary.Renewable share",
+              "nativeQueryRef": "Renewable share"
+            }
+          ]
+        }
+      }
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

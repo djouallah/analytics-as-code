@@ -1,0 +1,38 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.8.0/schema.json",
+  "name": "card_updated",
+  "position": {
+    "x": 1028,
+    "y": 16,
+    "z": 5,
+    "height": 120,
+    "width": 236,
+    "tabOrder": 5
+  },
+  "visual": {
+    "visualType": "card",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fct_summary"
+                    }
+                  },
+                  "Property": "Latest update"
+                }
+              },
+              "queryRef": "fct_summary.Latest update",
+              "nativeQueryRef": "Latest update"
+            }
+          ]
+        }
+      }
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

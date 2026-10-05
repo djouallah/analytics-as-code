@@ -6,7 +6,8 @@ A Direct Lake model holds no data: a refresh only points it at the tables' curre
 and the query is what makes VertiPaq read them. So a row count per table, answered, says the
 whole chain works: the model was published, OneLake shows it the Iceberg tables, and the
 columns it names are there with the types it expects. Then every measure, per day, over the
-newest week of fct_summary, a query each.
+newest week of fct_summary, a query each. Last, the report on it (dashboard/powerbi): that
+it is in the workspace and reads this model. Nothing here sees a chart draw.
 
 THE QUERIES GO OVER XMLA (ADOMD.NET, loaded through pythonnet), not the REST executeQueries
 call: that call answers 401 PowerBINotAuthorizedException to a service principal on this
@@ -40,6 +41,8 @@ NAME = json.loads((ITEM / ".platform").read_text(encoding="utf-8"))["metadata"][
 MODEL = json.loads((ITEM / "model.bim").read_text(encoding="utf-8"))["model"]
 TABLES = [t["name"] for t in MODEL["tables"]]
 MEASURES = [m["name"] for t in MODEL["tables"] for m in t.get("measures", [])]
+REPORT = json.loads((ITEM.parent / "dashboard" / "powerbi" / "nem.Report" / ".platform")
+                    .read_text(encoding="utf-8"))["metadata"]["displayName"]
 
 
 def call(method, path, body=None):
@@ -152,6 +155,14 @@ def main():
         else:
             bad += 1
             print(f"FAILED {' '.join(dax.split())}\n  {error}")
+
+    status, body = call("GET", f"/groups/{WORKSPACE}/reports")
+    report = next((r for r in (body or {}).get("value", []) if r["name"] == REPORT), None) if status == 200 else None
+    if report and report.get("datasetId") == model["id"]:
+        print(f"report {REPORT} {report['id']} reads the model: {report.get('webUrl')}")
+    else:
+        bad += 1
+        print(f"FAILED no report named {REPORT} on model {model['id']} ({status}): {report or body}")
     return 1 if bad else 0
 
 

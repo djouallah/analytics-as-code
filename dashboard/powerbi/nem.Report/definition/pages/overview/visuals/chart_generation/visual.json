@@ -1,0 +1,74 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.8.0/schema.json",
+  "name": "chart_generation",
+  "position": {
+    "x": 272,
+    "y": 152,
+    "z": 6,
+    "height": 280,
+    "width": 488,
+    "tabOrder": 6
+  },
+  "visual": {
+    "visualType": "columnChart",
+    "query": {
+      "queryState": {
+        "Category": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "dim_calendar"
+                    }
+                  },
+                  "Property": "date"
+                }
+              },
+              "queryRef": "dim_calendar.date",
+              "nativeQueryRef": "date"
+            }
+          ]
+        },
+        "Series": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "dim_duid"
+                    }
+                  },
+                  "Property": "FuelSourceDescriptor"
+                }
+              },
+              "queryRef": "dim_duid.FuelSourceDescriptor",
+              "nativeQueryRef": "FuelSourceDescriptor"
+            }
+          ]
+        },
+        "Y": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fct_summary"
+                    }
+                  },
+                  "Property": "Generation MWh"
+                }
+              },
+              "queryRef": "fct_summary.Generation MWh",
+              "nativeQueryRef": "Generation MWh"
+            }
+          ]
+        }
+      }
+    },
+    "drillFilterOtherVisuals": true
+  }
+}
