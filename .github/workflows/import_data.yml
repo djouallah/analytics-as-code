@@ -41,7 +41,7 @@ jobs:
       WAREHOUSE_PATH: ${{ vars.WS_ID }}/${{ vars.LH_ID }}
       AZURE_TRANSPORT_OPTION_TYPE: curl
       CURL_CA_INFO: /etc/ssl/certs/ca-certificates.crt
-      # Daily runs copy and rebuild only the latest two half-years (scripts/copy_catalog.py
+      # Daily runs copy and rebuild only the latest two half-years (scripts/cache_catalog.py
       # export_cutoff); the older files stay as deployed. Dispatch with all_periods=true to
       # copy and rebuild everything.
       ALL_PERIODS: ${{ inputs.all_periods && 'true' || 'false' }}
@@ -105,14 +105,14 @@ jobs:
           .venv-write/bin/pip install -q "duckdb==1.5.6"
 
       # The files are a copy of the mart tables, with no rule of their own
-      # (scripts/copy_catalog.py). Which file a table goes into is all that is decided here.
+      # (scripts/cache_catalog.py). Which file a table goes into is all that is decided here.
 
       # --- Phase 1: the newest days (always) + the dimensions (daily only) -> deploy at once ---
       - name: Copy the newest days (and the dimensions, daily)
         run: |
           for group in today ${{ steps.mode.outputs.is_daily == 'true' && 'dim' || '' }}; do
-            .venv-read/bin/python scripts/copy_catalog.py export $group
-            .venv-write/bin/python scripts/copy_catalog.py build $group
+            .venv-read/bin/python scripts/cache_catalog.py export $group
+            .venv-write/bin/python scripts/cache_catalog.py build $group
           done
 
       - name: Stage data for deploy
@@ -133,8 +133,8 @@ jobs:
         if: steps.mode.outputs.is_daily == 'true'
         run: |
           for group in agg history; do
-            .venv-read/bin/python scripts/copy_catalog.py export $group
-            .venv-write/bin/python scripts/copy_catalog.py build $group
+            .venv-read/bin/python scripts/cache_catalog.py export $group
+            .venv-write/bin/python scripts/cache_catalog.py build $group
           done
           ls -l mart_data
 

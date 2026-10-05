@@ -308,7 +308,7 @@ depth-1 clone, the published paths added with `-f` (so the deploy repo's `.gitig
 skip a file), push retried on a race. It only adds and replaces: a file leaves the site by
 hand, in the deploy repo.
 **The files are a copy of the `mart` tables, with no rule of their own**
-(`scripts/copy_catalog.py`: `SELECT *` per table, into `mart_dim`, `mart_agg`, `mart_today`
+(`scripts/cache_catalog.py`: `SELECT *` per table, into `mart_dim`, `mart_agg`, `mart_today`
 and `mart_<YYYY>_h<N>`). Every run copies the newest 14 days; the daily run also copies the
 dimensions, the aggregates whole, and the latest two half-years: older half-year files stay
 as deployed. Dispatch `import_data.yml` with `all_periods=true` after a backfill that
@@ -327,7 +327,7 @@ larger than the ones before the port.
 
 **The same files also go to OneLake**, for the Fabric app (the same page, hosted in Fabric,
 reading a lakehouse in another tenant — workspace `app`, lakehouse `data`).
-`import_onelake.yml` (daily, 22:30 UTC) runs the same `copy_catalog.py` steps and publishes
+`import_onelake.yml` (daily, 22:30 UTC) runs the same `cache_catalog.py` steps and publishes
 with `scripts/deploy_onelake.py`. It builds the same files, with one difference: it sets
 `ALL_PERIODS=true`, so every run copies all the history (OneLake keeps two whole imports and
 has no deployed copy to add to). The build fails on both if a half-year file
@@ -391,7 +391,7 @@ To check a deploy, open the Logs tab: the build stamp, each fetch, attach and qu
 
 A table or a column the page asks for and a deployed file lacks reads as "no data" where
 the page checks (`data.has`), so a new page can go out before its data; a new table goes
-into `copy_catalog.py`'s lists once it is a dbt model and a table of `model.bim`.
+into `cache_catalog.py`'s lists once it is a dbt model and a table of `model.bim`.
 What the charts read beyond 30 days: `fct_summary_daily` and `fct_region_daily` (whole
 days: a day is written once the next-day files hold it, so a long range ends on the newest
 whole day), `fct_summary_hourly`, `fct_region_hourly` and `dim_month` (hour of day by whole
@@ -409,14 +409,14 @@ order: keep the existing tables and the dashboard as they are, add the tables Po
 next to them, deploy the model and check it, and only then port `compiler.js` and the cache
 to it (the import ends as a copy with no rule of its own). **All of it is done
 (2026-10-05)**: the dashboard reads these tables, through this model, and
-`scripts/copy_catalog.py` is the import, a plain copy. The old facts in `landing` stay:
+`scripts/cache_catalog.py` is the import, a plain copy. The old facts in `landing` stay:
 they are what these tables are built from.
 - **The tables** are dbt models in schema `mart`, tagged `powerbi`: `fct_summary`,
   `fct_region`, `fct_rooftop`, `fct_interconnector`, `fct_curtailment`, `dim_region`,
   `dim_time`, the aggregates `fct_summary_daily`, `fct_region_daily`, `fct_summary_hourly`,
   `fct_region_hourly` and `dim_month` (and the existing `dim_duid`, `dim_calendar`). Each of
   the new ones is a query that
-  the old export (`cache_catalog.py`, gone) ran, written as a model: the raw facts cannot be read by
+  the export used to run when it still held rules, written as a model: the raw facts cannot be read by
   Direct Lake as they are (both dispatch runs, an interval under two `file`s, regional data
   split over three tables, no curtailment table at all), and Direct Lake has no view to fix
   that in. `process_data.yml` builds them in a second step, after the tables the dashboard
@@ -551,7 +551,7 @@ that has never been probed either.
   is 10h early; the `DATE`/`YEAR` columns next to it are cast from the string and are right.
   `profiles.yml` sets `TimeZone: UTC` on every target, so a run from any machine writes the
   same values. Every reader of the Iceberg tables must run with `TimeZone = 'UTC'` too (as
-  `scripts/copy_catalog.py` does) — a Brisbane session shifts every date and time by +10h.
+  `scripts/cache_catalog.py` does) — a Brisbane session shifts every date and time by +10h.
   The browser is not such a reader: the exported files hold `date` and `time`, and `data.js`
   runs in Brisbane time for `CURRENT_DATE` alone. Fixing it at the writer would change the
   column's values and mean rebuilding all seven facts.

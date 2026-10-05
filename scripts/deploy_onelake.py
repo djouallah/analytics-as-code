@@ -3,7 +3,7 @@
     python deploy_onelake.py
 
 The counterpart of deploy_pages.sh for the Fabric app (dashboard/fabric_app/), which reads the same files
-from OneLake instead of GitHub Pages. Run after copy_catalog.py's builds with
+from OneLake instead of GitHub Pages. Run after cache_catalog.py's builds with
 ALL_PERIODS=true.
 
     mart_dim.duckdb                  ->  dim_<ts>.duckdb

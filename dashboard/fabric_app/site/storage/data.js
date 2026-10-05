@@ -16,7 +16,7 @@
 //                                                   only the half-years a range needs
 //      The history is downloaded, not read in place over HTTP: OneLake answers each Range read
 //      in ~700 ms whatever its size, so whole files in parallel beat a block at a time.
-// The files are built and uploaded by import_onelake.yml (scripts/copy_catalog.py,
+// The files are built and uploaded by import_onelake.yml (scripts/cache_catalog.py,
 // scripts/deploy_onelake.py). Every read goes to the OneLake data/ folder with a read-only SAS
 // from the getDataSas function; auth.dataAccess() signs a new one when it is about to expire.
 //

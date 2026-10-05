@@ -3,7 +3,7 @@
 // =============================================================================
 // The GitHub Pages version. The files sit next to the page in data/ and are downloaded whole
 // into OPFS; GitHub caps a file at 100 MB, hence the half-year split of the 5-minute history:
-// They are the tables of the semantic model, copied as they are (scripts/copy_catalog.py):
+// They are the tables of the semantic model, copied as they are (scripts/cache_catalog.py):
 //   mart_dim.duckdb            as `dim`          the dimensions
 //   mart_today.duckdb          as `today`        the 5-minute tables and rooftop, the newest 14 days
 //   mart_agg.duckdb            as `agg`          the per-day and per-month tables, and rooftop whole:

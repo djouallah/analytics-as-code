@@ -71,12 +71,12 @@ jobs:
           pip install -q "azure-identity==1.26.0" "azure-storage-file-datalake==12.26.0"
 
       - name: Copy the mart tables
-        # A plain copy, with no rule of its own (scripts/copy_catalog.py).
+        # A plain copy, with no rule of its own (scripts/cache_catalog.py).
         run: |
           for group in dim agg today history; do
             echo "::group::$group"
-            .venv-read/bin/python scripts/copy_catalog.py export $group
-            .venv-write/bin/python scripts/copy_catalog.py build $group
+            .venv-read/bin/python scripts/cache_catalog.py export $group
+            .venv-write/bin/python scripts/cache_catalog.py build $group
             echo "::endgroup::"
           done
 

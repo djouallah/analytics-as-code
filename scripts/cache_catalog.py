@@ -1,7 +1,7 @@
 """The dashboard's .duckdb files: a copy of the mart tables.
 
-    python copy_catalog.py export <dim|agg|today|history>     (the read venv: catalog -> parquet)
-    python copy_catalog.py build  <dim|agg|today|history>     (the write venv: parquet -> .duckdb)
+    python cache_catalog.py export <dim|agg|today|history>     (the read venv: catalog -> parquet)
+    python cache_catalog.py build  <dim|agg|today|history>     (the write venv: parquet -> .duckdb)
 
 No rule of its own (the owner, 2026-10-05: the import "is a simple import and has zero logic
 to it beside maybe splitting per size"). Every table is `SELECT *` of a table of the semantic
