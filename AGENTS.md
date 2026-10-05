@@ -498,8 +498,9 @@ still `semantic/model.bim` and its data the old tables through `cache_catalog.py
   rooftop's capture price, half-hourly in the model and 5-minute in the dashboard (mean
   1.14 $/MWh apart). Compared to within a cent or five: capture prices and revenue, because
   `fct_summary` keeps MW to 4 decimals and the dashboard's files a REAL.
-- **Three things that cost a deploy each, 2026-10-05:** a variable in a measure named
-  `before`, `after` or `step` did not parse (the names are now `_mwBefore`...); dividing a
+- **Three things that cost a deploy each, 2026-10-05:** the first `[Rooftop MW]` did not
+  parse (`SYNTAXERROR`) with variables named `d`, `m`, `r`, `step`, `before`, `after`, and
+  did once they had a leading underscore (which name it was is not known); dividing a
   fixed-decimal column gives a fixed decimal, 4 places (`SUMX(...) / 12` on `mw`: hence
   `CONVERT(..., DOUBLE)`); and a filter set inside `CALCULATE` on one column of a dimension
   does not remove the query's filter on another column of it (`[Rooftop MW]` removes the
