@@ -140,7 +140,11 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     return { db: _db };
   }
 
-  const attachAgg = () => loadDb('mart_agg.duckdb', 'agg');
+  // One attach, whoever asks; a failed one can be asked for again.
+  let _agg = null;
+  function attachAgg() {
+    return _agg ??= loadDb('mart_agg.duckdb', 'agg').catch(e => { _agg = null; throw e; });
+  }
 
   let _manifest = null;
   const _attachedPeriods = new Set();
@@ -184,6 +188,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
 
   return {
     init, attachAgg, ensureHistory,
-    query: sql => perf.query(sql, () => conn.query(sql)),
+    // `dax`: the query as the page wrote it, for the Logs tab (the compiler passes it).
+    query: (sql, dax) => perf.query(sql, () => conn.query(sql), dax),
   };
 }

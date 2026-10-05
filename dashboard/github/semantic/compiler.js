@@ -606,10 +606,13 @@ export function createModel(data) {
       const requires = new Set(recent ? ['history'] : dbs.includes('dim') ? [] : ['agg']);
       if (!dbs.length) return { requires };
       const older = recent && dbs.includes('agg') ? ['agg'] : periods;
+      // BY NAME: a file built before the table got a column reads as NULL in it, instead of
+      // the view failing on files that differ. The view has the columns of all of them.
       const sql = recent && older.length
-        ? `SELECT * FROM (${older.map(read).join(' UNION ALL ')}) WHERE date < DATE '${_recentFrom}' UNION ALL ${read('today')}`
-        : dbs.sort().map(read).join(' UNION ALL ');
-      return { sql, cols: tables.get(`${dbs[0]}.${item.table}`), requires };
+        ? `SELECT * FROM (${older.map(read).join(' UNION ALL BY NAME ')}) WHERE date < DATE '${_recentFrom}' UNION ALL BY NAME ${read('today')}`
+        : dbs.sort().map(read).join(' UNION ALL BY NAME ');
+      const cols = new Set(dbs.flatMap(db => [...tables.get(`${db}.${item.table}`)]));
+      return { sql, cols, requires };
     }
     if (item.to) {
       const from = views.get(item.from), to = views.get(item.to);
@@ -670,8 +673,9 @@ export function createModel(data) {
       const v = _views.get(view);
       return !!v && (!column || !v.cols || v.cols.has(column));
     },
-    // A DAX query (it starts with EVALUATE) is translated; SQL goes as it is.
-    query: async q => data.query(isDax(q) ? toSQL(q) : q),
+    // A DAX query (it starts with EVALUATE) is translated, and goes with its SQL for the
+    // Logs tab; SQL goes as it is.
+    query: async q => isDax(q) ? data.query(toSQL(q), q) : data.query(q),
     toSQL,
     // What a SQL query reads, by the views it names: the 5-minute history of a date range
     // (ensureHistory) and/or the aggregates (attachAgg).

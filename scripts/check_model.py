@@ -6,7 +6,8 @@ A Direct Lake model holds no data: a refresh only points it at the tables' curre
 and the query is what makes VertiPaq read them. So a row count per table, answered, says the
 whole chain works: the model was published, OneLake shows it the Iceberg tables, and the
 columns it names are there with the types it expects. Then every measure, per day, over the
-newest week of fct_summary, a query each. Last, the report on it (dashboard/powerbi): that
+newest week of fct_summary, a query each (the measures of the tables by month: per month,
+over the newest three). Last, the report on it (dashboard/powerbi): that
 it is in the workspace and reads this model. Nothing here sees a chart draw.
 
 THE QUERIES GO OVER XMLA (ADOMD.NET, loaded through pythonnet), not the REST executeQueries
@@ -40,7 +41,9 @@ ITEM = Path(__file__).resolve().parent.parent / "semantic_model"
 NAME = json.loads((ITEM / ".platform").read_text(encoding="utf-8"))["metadata"]["displayName"]
 MODEL = json.loads((ITEM / "model.bim").read_text(encoding="utf-8"))["model"]
 TABLES = [t["name"] for t in MODEL["tables"]]
-MEASURES = [m["name"] for t in MODEL["tables"] for m in t.get("measures", [])]
+# The tables that hold whole months: dim_calendar does not reach them, dim_month does.
+MONTHLY = {"dim_month"} | {r["fromTable"] for r in MODEL["relationships"] if r["toTable"] == "dim_month"}
+MEASURES = [(m["name"], t["name"] in MONTHLY) for t in MODEL["tables"] for m in t.get("measures", [])]
 REPORT = json.loads((ITEM.parent / "dashboard" / "powerbi" / "nem.Report" / ".platform")
                     .read_text(encoding="utf-8"))["metadata"]["displayName"]
 
@@ -129,13 +132,20 @@ def main():
 
     queries = [f"EVALUATE ROW(\"table\", \"{table}\", \"rows\", COUNTROWS('{table}'))" for table in TABLES]
     # Every measure, per day, over the newest week fct_summary holds: the numbers to hold
-    # against the dashboard's. A query each, so that one wrong measure fails alone.
+    # against the dashboard's. A query each, so that one wrong measure fails alone. The
+    # measures of the tables by month, per month, over the newest three: a date does not
+    # filter those tables, and they would answer one total on every day.
     queries += [f"""EVALUATE
+            VAR newest = MAX(dim_month[month])
+            RETURN CALCULATETABLE(
+                SUMMARIZECOLUMNS(dim_month[month], "{m}", [{m}]),
+                dim_month[month] > EDATE(newest, -3))
+            ORDER BY dim_month[month]""" if monthly else f"""EVALUATE
             VAR newest = MAX(fct_summary[date])
             RETURN CALCULATETABLE(
                 SUMMARIZECOLUMNS(dim_calendar[date], "{m}", [{m}]),
                 dim_calendar[date] > newest - 7, dim_calendar[date] <= newest)
-            ORDER BY dim_calendar[date]""" for m in MEASURES]
+            ORDER BY dim_calendar[date]""" for m, monthly in MEASURES]
 
     conn, bad = None, 0
     for n, dax in enumerate(queries):

@@ -213,7 +213,8 @@ and anything that serves the page from the repo has to do the same.
   translate gets its equivalent SQL written here, never a general mechanism.
   The model: a view `v_<table>` per table of the model, over the files that are attached
   (the table whole in `dim` or `agg`, or split by date over `today` and the half-years:
-  `today` has the days it holds, cut at a literal date), and a view per relationship under
+  `today` has the days it holds, cut at a literal date; the files are stacked by column
+  name, so one built before a column was added reads as NULL in it), and a view per relationship under
   its name (`fct_summary_to_dim_duid`: the fact LEFT JOIN the dimension). It compiles after
   every attach: one query reads what is attached from the engine's catalog
   (`information_schema`), and one runs the statements that are new or changed.
@@ -259,7 +260,10 @@ and anything that serves the page from the repo has to do the same.
   stamp. This session only: it lives in the page's memory, nothing is stored, written to a
   file or uploaded, and the Copy button is the one way out. A host's `data.js` does the
   logging (`perf.log`, `perf.time`, and `perf.query` around every query, the compiler's
-  included); the page has the tab and its panel, and `logs.js` fills it.
+  included); the page has the tab and its panel, and `logs.js` fills it. A query the page
+  wrote in DAX is shown as written, with the SQL it became under it: `query(sql, dax)` in
+  both `data.js`, the compiler passing the DAX. An event's `what` is always the SQL, which
+  is what a change is checked against; the DAX is its `dax`.
 
 Three things in that design are there for speed and must survive an edit:
 - A query that needs nothing about the unit (previous-period generation with no filter, the
@@ -421,10 +425,12 @@ they are what these tables are built from.
   Direct Lake as they are (both dispatch runs, an interval under two `file`s, regional data
   split over three tables, no curtailment table at all), and Direct Lake has no view to fix
   that in. `process_data.yml` builds them in a second step, after the landing facts they are
-  built from; that step cannot fail the job, **and it stays in that workflow**: the
-  dashboard's files are a copy of these tables, so the import has to find them built (the
-  owner refused a workflow of its own for them, 2026-10-05). A failure of that step shows
-  as a warning on a green run, and the import then copies the tables as they were.
+  built from, **and it stays in that workflow**: the dashboard's files are a copy of these
+  tables, so the import has to find them built (the owner refused a workflow of its own for
+  them, 2026-10-05). A failure of that step fails the job (since 2026-10-05; while the
+  dashboard did not read these tables it could not): Import Data only runs after a green
+  Process Data, so the dashboard keeps the files it has and the red run says why.
+  Dispatched with `debug`, both steps print every statement with its timing.
 - **The import is a copy** (the owner, 2026-10-05: "python import for duckdb native file is
   a simple import and has zero logic to it beside maybe splitting per size"). So every table
   the dashboard reads is a dbt model here and a table of the semantic model, its aggregates
@@ -476,7 +482,8 @@ they are what these tables are built from.
   workspace with
   `scripts/deploy_model.py` (fabric-cicd; the owner asked for it, not duckrun) and runs
   `scripts/check_model.py`: a refresh, then a row count per table and each measure per day
-  for the newest week, then that the report is there and reads the model. A table or a column the model
+  for the newest week (the measures of the tables by month per month: a date does not
+  filter those tables), then that the report is there and reads the model. A table or a column the model
   names has to exist before a deploy: the refresh fails on it and leaves the deployed model
   broken until the next good one. And a dispatched `process_data.yml` can be cancelled by
   the next scheduled run queueing behind it (one concurrency group), so read its conclusion

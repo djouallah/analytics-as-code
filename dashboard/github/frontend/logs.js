@@ -2,6 +2,8 @@
 // logs.js — the Logs tab: in-memory timings (perflog.js), newest first; a click on a column
 // header sorts by it (numbers largest first, text A-Z), a second click reverses
 // =============================================================================
+// A query the page wrote in DAX is shown as written, with the SQL it became under it; one
+// written in SQL (the Analyze tab, the compiler's own) is the SQL alone.
 // The same file on every host. This session only (perflog.js); the one way out is the Copy
 // button. index.html has the tab and its panel and calls renderLogs() when the tab is opened;
 // after that it is re-rendered on new events while the tab is visible (throttled to one
@@ -51,8 +53,9 @@ export function renderLogs() {
     th.style.cursor = 'pointer';
     th.textContent = th.dataset.label + (COLS[i] === col ? (desc ? ' ▼' : ' ▲') : '');
   });
+  const what = e => e.dax ? `<div>${esc(e.dax)}</div><div style="color:var(--muted)">${esc(e.what)}</div>` : esc(e.what);
   document.querySelector('#logsTable tbody').innerHTML = rows.map(e =>
-    `<tr><td>${((e.at - _pageStart) / 1000).toFixed(2)}</td><td>${e.kind}</td><td>${esc(e.what)}</td>` +
+    `<tr><td>${((e.at - _pageStart) / 1000).toFixed(2)}</td><td>${e.kind}</td><td>${what(e)}</td>` +
     `<td>${esc(e.range || '')}</td><td>${esc(e.status ?? '')}</td>` +
     `<td>${e.bytes == null ? '' : (e.bytes / 1024).toFixed(0)}</td><td>${e.ms == null ? '' : e.ms.toFixed(0)}</td></tr>`).join('');
 }
@@ -67,9 +70,11 @@ document.querySelector('#logsTable thead').onclick = (e) => {
   _sort = col === _sort.col ? { col, desc: !_sort.desc } : { col, desc: ['at', 'bytes', 'ms'].includes(col) };
   renderLogs();
 };
-// Copy: summary + table as TSV (pastes cleanly into chat or a spreadsheet).
+// Copy: summary + table as TSV (pastes cleanly into chat or a spreadsheet). A DAX query and
+// its SQL stay in one cell: "<DAX>  =>  <SQL>".
 document.getElementById('logsCopy').onclick = async (e) => {
-  const rows = [...document.querySelectorAll('#logsTable tr')].map(tr => [...tr.cells].map(c => c.textContent).join('\t'));
+  const cell = c => c.children.length ? [...c.children].map(d => d.textContent).join('  =>  ') : c.textContent;
+  const rows = [...document.querySelectorAll('#logsTable tr')].map(tr => [...tr.cells].map(cell).join('\t'));
   const text = document.getElementById('logsSummary').textContent + '\n' + rows.join('\n');
   const btn = e.currentTarget;
   try { await navigator.clipboard.writeText(text); btn.textContent = 'Copied'; }

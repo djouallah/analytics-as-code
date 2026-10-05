@@ -224,5 +224,6 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     return { db };
   }
 
-  return { init, attachAgg, ensureHistory, query: sql => perf.query(sql, () => conn.query(sql)) };
+  // `dax`: the query as the page wrote it, for the Logs tab (the compiler passes it).
+  return { init, attachAgg, ensureHistory, query: (sql, dax) => perf.query(sql, () => conn.query(sql), dax) };
 }

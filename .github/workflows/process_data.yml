@@ -22,6 +22,10 @@ on:
       rebuild:
         description: 'Table to DROP before the run so it is rebuilt from the archive (e.g. fct_scada). Blank = none. Refills at process_limit files per run.'
         required: false
+      debug:
+        description: 'Print every statement dbt runs, with its timing: where a model spends its time'
+        type: boolean
+        default: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -102,13 +106,11 @@ jobs:
       - name: Process data
         # The download, the landing facts and the two dimensions the mart tables are built
         # from. The mart tables are the next step.
-        run: dbt run --target prod --profiles-dir . --exclude tag:powerbi
+        run: dbt ${{ inputs.debug && '--debug' || '' }} run --target prod --profiles-dir . --exclude tag:powerbi
       - name: Build the Power BI tables
         # The mart tables (tag powerbi), built from the facts above: what the semantic model
-        # reads, and so Power BI and the dashboard. A step of its own that cannot fail the
-        # job: a failure shows as a warning on the run and in this step's log, and Import
-        # Data, which only runs after a green Process Data, then copies the tables as they
-        # were.
-        continue-on-error: true
+        # reads, and so Power BI and the dashboard. A failure fails the job: Import Data only
+        # runs after a green Process Data, so the dashboard keeps the files it has and the
+        # red run says why.
         timeout-minutes: 45
-        run: dbt run --target prod --profiles-dir . --select tag:powerbi || { echo "::warning::the Power BI tables failed to build"; exit 1; }
+        run: dbt ${{ inputs.debug && '--debug' || '' }} run --target prod --profiles-dir . --select tag:powerbi

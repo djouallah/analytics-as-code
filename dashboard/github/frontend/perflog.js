@@ -28,8 +28,8 @@ function push(e) {
 }
 
 export const perf = {
-  log(kind, what, { ms = null, status = '', bytes = null, range = '' } = {}) {
-    push({ at: performance.timeOrigin + performance.now(), kind, what, ms, status, bytes, range });
+  log(kind, what, { ms = null, status = '', bytes = null, range = '', dax = '' } = {}) {
+    push({ at: performance.timeOrigin + performance.now(), kind, what, ms, status, bytes, range, dax });
   },
   // Time an async step: await perf.time('attach', file, () => conn.query(...))
   async time(kind, what, fn) {
@@ -44,15 +44,19 @@ export const perf = {
     }
   },
   // Time a query: perf.query(sql, () => conn.query(sql)). A failure is logged and rethrown.
-  async query(sql, run) {
-    const what = sql.replace(/\s+/g, ' ').trim();
+  // `what` is the SQL that ran, always: it is what a change is checked against. `dax` is the
+  // query as the page wrote it, when it wrote it in DAX (the compiler passes it on).
+  async query(sql, run, dax = '') {
+    const flat = s => s.replace(/\s+/g, ' ').trim();
+    const what = flat(sql);
+    dax = flat(dax);
     const t = performance.now();
     try {
       const result = await run();
-      perf.log('query', what, { ms: performance.now() - t, status: `${result.numRows} rows` });
+      perf.log('query', what, { ms: performance.now() - t, status: `${result.numRows} rows`, dax });
       return result;
     } catch (e) {
-      perf.log('error', what, { ms: performance.now() - t, status: String(e?.message || e) });
+      perf.log('error', what, { ms: performance.now() - t, status: String(e?.message || e), dax });
       throw e;
     }
   },

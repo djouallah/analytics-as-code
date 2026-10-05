@@ -22,10 +22,6 @@ only: a finished item is removed, not ticked.
   500 to every function call on an item owned by a service principal, and only an item's
   owner can deploy to it. When it is fixed: dispatch the workflow and open `nemtracker`.
   Until then the app is deployed from the laptop (`cd dashboard/fabric_app && npx rayfin up`).
-- [ ] **DAX in the Logs tab** — a query the page wrote in DAX is logged as the SQL it became.
-  Show the DAX as written, with its timing, and the SQL under it; a query written as SQL
-  (the Analyze tab) stays SQL alone. `query()` in the two `data.js` takes a label next to
-  the SQL, and `frontend/logs.js` draws the second line.
 
 ## Bigger
 
