@@ -232,6 +232,104 @@ models:
       - name: cutoff
         description: Newest SETTLEMENTDATE in the facts when the row was written. Provenance only
 
+  - name: fct_region
+    description: For Power BI - price, demand and net interchange per region and 5 minutes, with the region's semi-scheduled wind and solar. The intraday record where the price and the REGIONSUM rows both have the interval, else the next-day record. In schema mart
+    columns:
+      - name: REGIONID
+        description: NEM region (QLD1, NSW1, VIC1, SA1, TAS1)
+        tests:
+          - not_null
+      - name: date
+        description: Calendar date of the dispatch interval, NEM time
+        tests:
+          - not_null
+      - name: time
+        description: Time of day as an HHMM integer, 5-minute grain; the interval ends at it
+        tests:
+          - not_null
+      - name: price
+        description: Regional Reference Price ($/MWh), DECIMAL(18,4)
+        tests:
+          - not_null
+      - name: demand
+        description: Operational demand (MW); rooftop solar is not in it
+      - name: net_interchange
+        description: Net flow out of the region (MW); positive = export
+      - name: wind_available
+        description: MW the region's semi-scheduled wind could make; blank before the intraday feeds (2026-08)
+      - name: wind_curtailed
+        description: MW of it that was not dispatched - available less the dispatch target, never below 0
+      - name: solar_available
+        description: MW the region's semi-scheduled solar could make; blank before the intraday feeds (2026-08)
+      - name: solar_curtailed
+        description: MW of it that was not dispatched
+
+  - name: fct_rooftop
+    description: For Power BI - rooftop solar per region and half hour, AEMO's MEASUREMENT estimate as published, with the half hour's average price. Its own table, not units; nothing interpolated or carried forward is stored. In schema mart
+    columns:
+      - name: REGIONID
+        description: NEM region (QLD1, NSW1, VIC1, SA1, TAS1)
+        tests:
+          - not_null
+      - name: date
+        description: Calendar date of the end of the half hour, NEM time
+        tests:
+          - not_null
+      - name: time
+        description: End of the half hour as an HHMM integer
+        tests:
+          - not_null
+      - name: mw
+        description: Estimated rooftop output at the end of the half hour (MW); 0 is stored, a blank estimate is not. Energy is SUM(mw) / 2
+        tests:
+          - not_null
+      - name: price
+        description: Average of the region's six 5-minute prices in the half hour ($/MWh)
+        tests:
+          - not_null
+
+  - name: fct_interconnector
+    description: For Power BI - flow on each link between regions per 5 minutes since 2018, the pricing run, one row per interval. In schema mart
+    columns:
+      - name: interconnector
+        description: AEMO interconnector id; the flow is positive from its first region to its second
+        tests:
+          - not_null
+      - name: date
+        description: Calendar date of the dispatch interval, NEM time
+        tests:
+          - not_null
+      - name: time
+        description: Time of day as an HHMM integer, 5-minute grain
+        tests:
+          - not_null
+      - name: mw
+        description: Dispatch target flow MWFLOW (MW), not the metered flow
+      - name: export_limit
+        description: Flow limit in the positive direction (MW)
+      - name: import_limit
+        description: Flow limit in the negative direction (MW)
+
+  - name: fct_curtailment
+    description: For Power BI - curtailed and available energy per semi-scheduled unit and day, from the next-day files. A day is written once fct_scada holds its 288 intervals. In schema mart
+    columns:
+      - name: DUID
+        description: The unit; Semi-Scheduled in dim_duid when its day was written
+        tests:
+          - not_null
+      - name: date
+        description: Calendar date, NEM time
+        tests:
+          - not_null
+      - name: curtailed_mwh
+        description: Sum over the day of max(availability - dispatch target, 0) / 12
+        tests:
+          - not_null
+      - name: available_mwh
+        description: What the unit could have made - the denominator of a curtailment rate
+        tests:
+          - not_null
+
 exposures:
   - name: dashboard_summary
     type: application

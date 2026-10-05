@@ -59,3 +59,14 @@ models:
         description: Calendar year of the date
       - name: month
         description: Month of the date, 1-12
+
+  - name: dim_region
+    description: For Power BI - one row per region, what the unit, the regional and the rooftop tables are filtered by. From dim_duid, so WA1 is in it
+    columns:
+      - name: Region
+        description: QLD1, NSW1, VIC1, SA1, TAS1, and WA1 (Western Australia, another market)
+        tests:
+          - unique
+          - not_null
+      - name: State
+        description: The region's name

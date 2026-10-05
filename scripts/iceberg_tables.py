@@ -22,5 +22,10 @@ TABLES = [
     "landing.stg_csv_archive_log",
     "landing.fct_price",
     "landing.fct_scada",
+    "mart.dim_region",
+    "mart.fct_region",
+    "mart.fct_rooftop",
+    "mart.fct_interconnector",
+    "mart.fct_curtailment",
     "mart.fct_summary",
 ]
