@@ -194,6 +194,138 @@
             }
           }
         ]
+      },
+      {
+        "name": "fct_summary",
+        "description": "Output and price per unit and 5 minutes: the daily files where they have landed, the intraday feed after them. A unit's row carries the price of its region, so no measure joins two facts. An interval at 0 MW is not stored.",
+        "sourceLineageTag": "[mart].[fct_summary]",
+        "columns": [
+          {
+            "name": "date",
+            "dataType": "dateTime",
+            "description": "Date of the dispatch interval, NEM time (AEST all year).",
+            "sourceColumn": "date",
+            "sourceLineageTag": "date",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM-dd"
+          },
+          {
+            "name": "time",
+            "dataType": "int64",
+            "description": "Time of day as HHMM: 1435 is 14:35. The interval ends at it.",
+            "sourceColumn": "time",
+            "sourceLineageTag": "time",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "DUID",
+            "dataType": "string",
+            "description": "The unit.",
+            "sourceColumn": "DUID",
+            "sourceLineageTag": "DUID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "mw",
+            "dataType": "decimal",
+            "description": "MW in that 5 minutes; a battery charging is negative.",
+            "sourceColumn": "mw",
+            "sourceLineageTag": "mw",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "price",
+            "dataType": "decimal",
+            "description": "The regional reference price of the unit's region in that interval, $/MWh.",
+            "sourceColumn": "price",
+            "sourceLineageTag": "price",
+            "summarizeBy": "none",
+            "formatString": "$#,##0.00"
+          },
+          {
+            "name": "cutoff",
+            "dataType": "dateTime",
+            "description": "The newest interval in the facts when the row was written. Provenance only.",
+            "sourceColumn": "cutoff",
+            "sourceLineageTag": "cutoff",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM-dd HH:mm"
+          }
+        ],
+        "measures": [
+          {
+            "name": "Generation MWh",
+            "formatString": "#,##0",
+            "expression": "SUMX(fct_summary, MAX(fct_summary[mw], 0)) / 12",
+            "description": "Energy generated. Output only: a unit that is charging (negative) generates nothing. A row is 5 minutes, so MW / 12 is MWh."
+          },
+          {
+            "name": "Charging MWh",
+            "formatString": "#,##0",
+            "expression": "SUMX(fct_summary, MIN(fct_summary[mw], 0)) / 12",
+            "description": "Energy the batteries took, negative."
+          },
+          {
+            "name": "Renewable share",
+            "formatString": "0.0",
+            "expression": [
+              "DIVIDE(",
+              "    100 * CALCULATE([Generation MWh], dim_duid[Renewable] = TRUE()),",
+              "    CALCULATE([Generation MWh], dim_duid[FuelSourceDescriptor] <> \"Grid\")",
+              ")"
+            ],
+            "description": "Renewable share of the output, %. Batteries (fuel Grid) are in neither the renewables nor the total. Rooftop solar is not in it yet: it gets its own table."
+          },
+          {
+            "name": "Capture price",
+            "formatString": "$#,##0.00",
+            "expression": "DIVIDE(SUMX(fct_summary, MAX(fct_summary[mw], 0) * fct_summary[price]), SUMX(fct_summary, MAX(fct_summary[mw], 0)))",
+            "description": "The price the output earned, $/MWh: the prices of the unit's region weighted by the output."
+          },
+          {
+            "name": "Units",
+            "formatString": "#,##0",
+            "expression": "DISTINCTCOUNT(fct_summary[DUID])",
+            "description": "Units with output or charging in the selection."
+          },
+          {
+            "name": "Latest update",
+            "formatString": "yyyy-MM-dd HH:mm",
+            "expression": "CALCULATE(MAX(fct_summary[cutoff]), REMOVEFILTERS())",
+            "description": "The newest interval the table had seen at its last write, whatever is filtered."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_summary",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_summary",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "name": "fct_summary_to_dim_duid",
+        "fromTable": "fct_summary",
+        "fromColumn": "DUID",
+        "toTable": "dim_duid",
+        "toColumn": "DUID",
+        "relyOnReferentialIntegrity": true
+      },
+      {
+        "name": "fct_summary_to_dim_calendar",
+        "fromTable": "fct_summary",
+        "fromColumn": "date",
+        "toTable": "dim_calendar",
+        "toColumn": "date",
+        "relyOnReferentialIntegrity": true
       }
     ]
   }

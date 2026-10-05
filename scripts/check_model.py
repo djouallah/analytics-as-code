@@ -5,7 +5,8 @@
 A Direct Lake model holds no data: a refresh only points it at the tables' current version,
 and the query is what makes VertiPaq read them. So a row count per table, answered, says the
 whole chain works: the model was published, OneLake shows it the Iceberg tables, and the
-columns it names are there with the types it expects.
+columns it names are there with the types it expects. Then every measure, per day, over the
+newest week of fct_summary.
 
 Every answer is printed as it came, because the first run of this is how we learn what the
 catalog's tables look like to Direct Lake. Exits 1 on a refresh or a query that failed.
@@ -24,7 +25,9 @@ TOKEN = os.environ["POWERBI_TOKEN"]
 WORKSPACE = os.environ["WS_ID"]
 ITEM = Path(__file__).resolve().parent.parent / "dashboard" / "semantic" / "nem.SemanticModel"
 NAME = json.loads((ITEM / ".platform").read_text(encoding="utf-8"))["metadata"]["displayName"]
-TABLES = [t["name"] for t in json.loads((ITEM / "model.bim").read_text(encoding="utf-8"))["model"]["tables"]]
+MODEL = json.loads((ITEM / "model.bim").read_text(encoding="utf-8"))["model"]
+TABLES = [t["name"] for t in MODEL["tables"]]
+MEASURES = [m["name"] for t in MODEL["tables"] for m in t.get("measures", [])]
 
 
 def call(method, path, body=None):
@@ -67,13 +70,24 @@ def main():
     if last.get("status") != "Completed":
         return 1
 
+    queries = [f"EVALUATE ROW(\"table\", \"{table}\", \"rows\", COUNTROWS('{table}'))" for table in TABLES]
+    if MEASURES:
+        # Every measure, per day, over the newest week the fact holds: the numbers to hold
+        # against the dashboard's.
+        measures = ", ".join(f'"{m}", [{m}]' for m in MEASURES)
+        queries.append(f"""EVALUATE
+            VAR newest = MAX(fct_summary[date])
+            RETURN CALCULATETABLE(
+                SUMMARIZECOLUMNS(fct_summary[date], {measures}),
+                fct_summary[date] > newest - 7)
+            ORDER BY fct_summary[date]""")
     bad = 0
-    for table in TABLES:
-        dax = f"EVALUATE ROW(\"table\", \"{table}\", \"rows\", COUNTROWS('{table}'))"
+    for dax in queries:
         status, body = call("POST", f"{base}/executeQueries",
                             {"queries": [{"query": dax}], "serializerSettings": {"includeNulls": True}})
         try:
-            print(f"{status} {body['results'][0]['tables'][0]['rows']}")
+            for row in body["results"][0]["tables"][0]["rows"]:
+                print(f"{status} {json.dumps(row)}")
         except (KeyError, IndexError, TypeError):
             bad += 1
             print(f"{status} {dax}\n  {json.dumps(body)}")
