@@ -420,11 +420,15 @@ meant to read it: the two DuckDB-WASM hosts above, and Power BI in Direct Lake. 
 order: keep the existing tables and the dashboard as they are, add the tables Power BI needs
 next to them, deploy the model and check it, and only then port `compiler.js` and the cache
 to it (`cache_catalog.py` ends as a copy with no rule of its own). **The first three are
-done; the port is not started.** Until it is, the dashboard reads none of this: its model is
+done; the port has started and nothing of it is deployed**: `scripts/copy_catalog.py` is the
+import as a plain copy of these tables, built by `copy_mart.yml` (dispatch only) as a
+workflow artifact. Until the port lands, the dashboard reads none of this: its model is
 still `semantic/model.bim` and its data the old tables through `cache_catalog.py`.
 - **The tables** are dbt models in schema `mart`, tagged `powerbi`: `fct_summary`,
-  `fct_region`, `fct_rooftop`, `fct_interconnector`, `fct_curtailment`, `dim_region`
-  (and the existing `dim_duid`, `dim_calendar`). Each of the new ones is a query that
+  `fct_region`, `fct_rooftop`, `fct_interconnector`, `fct_curtailment`, `dim_region`,
+  `dim_time`, the aggregates `fct_summary_daily`, `fct_region_daily`, `fct_summary_hourly`,
+  `fct_region_hourly` and `dim_month` (and the existing `dim_duid`, `dim_calendar`). Each of
+  the new ones is a query that
   `cache_catalog.py` runs at export, written as a model: the raw facts cannot be read by
   Direct Lake as they are (both dispatch runs, an interval under two `file`s, regional data
   split over three tables, no curtailment table at all), and Direct Lake has no view to fix
@@ -432,33 +436,78 @@ still `semantic/model.bim` and its data the old tables through `cache_catalog.py
   reads; that step cannot fail the job, **and it stays in that workflow**: DuckDB will read
   these tables too, so the import has to find them built (the owner refused a workflow of
   its own for them, 2026-10-05).
+- **The import is a copy** (the owner, 2026-10-05: "python import for duckdb native file is
+  a simple import and has zero logic to it beside maybe splitting per size"). So every table
+  the dashboard reads is a dbt model here and a table of the semantic model, its aggregates
+  included: per day (`fct_summary_daily`, `fct_region_daily`) and per month and hour of day
+  (`fct_summary_hourly`, `fct_region_hourly`, with `dim_month` for the days of a month). An
+  aggregate row is written once, when its day or month is whole.
 - **What the owner decided about their shape:** MW and price sit on one row at 5 minutes
   (`fct_summary`), because joining two facts at query time is too slow; rooftop is its own
   table, never units; a value that is only held, carried forward or interpolated for drawing
   is the reader's to work out and is never stored; the logic is measures.
 - `dashboard/semantic/nem.SemanticModel/` is the model, a Fabric item (`model.bim`,
-  `definition.pbism`, `.platform`): eight tables, each one Direct Lake partition on a `mart`
+  `definition.pbism`, `.platform`): fourteen tables, each one Direct Lake partition on a `mart`
   table of the `nem` lakehouse, reached through OneLake (no SQL endpoint; Fabric shows
   Direct Lake the Iceberg tables as Delta on its own), single-column relationships, and the
   measures. `{WS_ID}`/`{LH_ID}` in the `DirectLake` expression are placeholders. A measure
   cannot have the name of a column of its table, in any case (`Price` on `fct_region` was
   refused). Rooftop has no unit, so a filter on `dim_duid` does not reach it:
   `[Total generation MWh]` and `[Renewable share]` are for slicing by region or date.
+- **A quantity is one measure, and the measure picks the table.** Direct Lake has no
+  aggregation tables (user-defined aggregations are not supported), so the switch is DAX:
+  `[Generation MWh]`, `[Charging MWh]`, `[Revenue]`, `[Capture price]`, `[Units]` and
+  `[Capacity factor]` read `fct_summary_daily` when no time of day is asked for, plus
+  `fct_summary` for the days the daily table does not hold yet (`EXCEPT` on the dates), and
+  `fct_summary` alone when one is; `[Average price]`, `[Demand MWh]` and
+  `[Net interchange MW]` do the same over `fct_region_daily` (a day there is 288 intervals).
+  "A time of day is asked for" is written once per fact, in a hidden measure
+  (`[Reads 5 minutes]`, `[Reads 5 minutes regional]`): any column of `dim_time` filtered or
+  grouped, or a column of the fact itself filtered. So filters go through the dimensions.
+  For the number to be the same from either table, the daily table stores the day's sums of
+  what the 5-minute measure sums: `output_mwh`, `charging_mwh`, `revenue`. Its `mwh` (net)
+  and `price` (the day's average) are the dashboard's long-range figures, which are not the
+  same numbers (a battery's day nets out, a day is priced at its average) and are not
+  measures of this model. The hour-of-day tables are not switched to: `[Output MWh hourly]`,
+  `[Average MW at hour]` and `[Price at hour]` name them.
+- **Rooftop at 5 minutes is a measure**, `[Rooftop MW]`: only the half-hourly estimate is
+  stored, and the measure draws the straight line between two consecutive half hours
+  (nothing across a missing one). The newest value is not held forward: that is the chart's.
 - `deploy_model.yml` (dispatch only) publishes it into the catalog's workspace with
   `scripts/deploy_model.py` (fabric-cicd; the owner asked for it, not duckrun) and runs
   `scripts/check_model.py`: a refresh, then a row count per table and each measure per day
-  for the newest week. A table the model names has to exist before a deploy.
+  for the newest week, then `scripts/parity_model.py` (below). A table or a column the model
+  names has to exist before a deploy: the refresh fails on it and leaves the deployed model
+  broken until the next good one. And a dispatched `process_data.yml` can be cancelled by
+  the next scheduled run queueing behind it (one concurrency group), so read its conclusion
+  and its Power BI step before deploying on the strength of it.
 - **The check asks its DAX over XMLA** (ADOMD.NET under pythonnet), not the REST
   `executeQueries` call: that one answers 401 `PowerBINotAuthorizedException` to a service
   principal on this model, as Contributor and as Admin. Its reference page says service
   principals are not supported on a model with single sign-on. The same token is accepted
   over XMLA.
-- **Checked against the dashboard, 2026-10-05:** for 29 Sep to 3 Oct, per day, the model
-  and the dashboard's deployed files give the same generation, charging, unit count, rooftop
-  energy, renewable share, capture price, average price, demand, net interchange,
-  interconnector flow, and curtailed and available energy (to the last digit compared).
+- **`scripts/parity_model.py` holds the model to the dashboard's deployed files**, at the
+  grains the dashboard draws: per day (by region, by fuel, by link) for the newest five
+  settled days, per 5-minute time for the newest of them, and per hour of day for the two
+  newest whole months. The per-day figures come from the daily tables and the per-time ones
+  from the 5-minute tables, through the same measures, so it is also the check that the
+  switch gives one number. The dashboard's long-range figures (net energy of the day, the
+  day's average price) are checked as columns of the daily tables (`LONG_RANGE`).
+  **2026-10-05, deploy run 37285256636: 25,737 values equal, none different** (30 Sep to
+  4 Oct; August and September by hour), slowest model query 0.6 s. Known and not compared:
+  rooftop's capture price, half-hourly in the model and 5-minute in the dashboard (mean
+  1.14 $/MWh apart). Compared to within a cent or five: capture prices and revenue, because
+  `fct_summary` keeps MW to 4 decimals and the dashboard's files a REAL.
+- **Three things that cost a deploy each, 2026-10-05:** a variable in a measure named
+  `before`, `after` or `step` did not parse (the names are now `_mwBefore`...); dividing a
+  fixed-decimal column gives a fixed decimal, 4 places (`SUMX(...) / 12` on `mw`: hence
+  `CONVERT(..., DOUBLE)`); and a filter set inside `CALCULATE` on one column of a dimension
+  does not remove the query's filter on another column of it (`[Rooftop MW]` removes the
+  filters on `dim_time` and `dim_calendar` first). And Fabric takes some minutes to show a
+  recreated Iceberg table to Direct Lake: a refresh 2.5 and 5 minutes after a
+  `rebuild=fct_summary_daily` answered `DirectLake_TableNotFound`, at 7 minutes it passed.
 
-## Models (16)
+## Models (22)
 | Model | Schema | Materialization |
 |-------|--------|-----------------|
 | stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
@@ -474,6 +523,12 @@ still `semantic/model.bim` and its data the old tables through `cache_catalog.py
 | fct_interconnector | mart | incremental insert-only merge on (interconnector, date, time) — for Power BI: `MWFLOW` and the two limits, the pricing run, one row per interval |
 | fct_curtailment | mart | incremental insert-only merge on (DUID, date) — for Power BI: curtailed and available MWh per semi-scheduled unit and day. A day is written once `fct_scada` holds its 288 intervals, `process_limit` days per run, newest first |
 | dim_region | mart | incremental insert-only merge on Region — for Power BI: the regions of `dim_duid`, the one filter that reaches units, regional data and rooftop |
+| dim_time | mart | incremental insert-only merge on time — the 288 5-minute times of a day (`time` HHMM, `minute`, `hour`): the time axis of the 5-minute facts, and what the measures look at to choose a table |
+| fct_region_daily | mart | incremental insert-only merge on (REGIONID, date) — the plain average of a day's 288 intervals of `fct_region` (price, demand, net interchange); a day is written once it has all 288 |
+| fct_summary_daily | mart | incremental insert-only merge on (DUID, date) — `fct_summary` per unit and day, written once `fct_scada` holds the day whole (`macros/whole_days.sql`), `process_limit` days per run, newest first: `output_mwh`, `charging_mwh`, `revenue` (the sums the measures switch to) and `mwh` net with the region's daily `price` (the dashboard's long-range figures). Inner join to `fct_region_daily` |
+| dim_month | mart | incremental insert-only merge on month — the whole months of `fct_summary_daily` with their number of days |
+| fct_summary_hourly | mart | incremental insert-only merge on (DUID, month, hour) — output energy per unit, whole month and hour of day (`time // 100`), 12 months per run |
+| fct_region_hourly | mart | incremental insert-only merge on (REGIONID, month, hour) — average price per region, whole month and hour of day, with the number of intervals averaged |
 | fct_rooftop_pv | landing | incremental insert-only merge (by file) — rooftop solar per region and half hour, AEMO's `ROOFTOP_PV_ACTUAL` estimate **kept as published**: the current folder, the monthly MMSDM archive 2018-01 → 2026-08 and the weekly archives after it. The monthly files from 2024-08 swap `QI` and `LASTCHANGED`; the model reads each file's `I` row to tell |
 
 **Rooftop solar reaches the dashboard as pseudo-units, built in the export, not in Iceberg.**
