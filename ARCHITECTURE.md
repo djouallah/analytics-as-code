@@ -6,15 +6,15 @@ The entire analytics stack — ingestion, transformation, storage, and visualiza
 
 ## Architecture
 
-| Source Data | → | dbt-duckdb | → | Iceberg Catalog | → | Import | → | Dashboard |
+| Source Data | → | dbt-duckdb | → | Iceberg Catalog | → | Semantic model | → | Clients |
 |:-----------:|---|:----------:|---|:---------------:|---|:------:|---|:---------:|
-| *external*  |   | *ephemeral, in-memory* | | *persistent, only state* | | *Iceberg → native DuckDB files* | | *DuckDB-WASM queries native files in browser* |
+| *external*  |   | *ephemeral, in-memory* | | *persistent, only state* | | *one Power BI `model.bim`: tables, relationships, measures* | | *two DuckDB-WASM pages and a Power BI report* |
 
 - **dbt-duckdb** — transformation engine that runs entirely in-memory. No database server, no cluster. A Python model handles data ingestion; SQL models handle transformation.
 - **Iceberg REST catalog** — the single persistent layer. All warehouse state lives here as Iceberg tables, and the gzipped source CSVs are archived next to them in object storage, so nothing depends on the ephemeral CI runner's disk.
 - **GitHub Actions** — orchestrates everything. Scheduled workflows replace traditional schedulers (Airflow, Dagster, etc.).
-- **DuckDB-WASM dashboard** — a static HTML page that loads compact DuckDB files in the browser and queries them client-side. No backend API.
-- **Two hosts, one dashboard** — the same page is deployed to GitHub Pages (public) and as a Microsoft Fabric app (sign-in, data in a lakehouse). See [Two Deploy Targets](#two-deploy-targets).
+- **One semantic model** — a Power BI model (`semantic_model/model.bim`) over the Iceberg tables: what a table is, how tables relate, and every measure, in DAX. Every client reads the data through it.
+- **Three clients** — a static HTML page that queries a cached copy of the tables in the browser (DuckDB-WASM, no backend API), deployed to GitHub Pages (public) and as a Microsoft Fabric app (sign-in, data in a lakehouse); and a Power BI report on the same model in Direct Lake. See [Three Clients](#three-clients).
 
 ## Design Principles
 
@@ -29,9 +29,10 @@ The entire analytics stack — ingestion, transformation, storage, and visualiza
 
 ## Grain Reduction
 
-Source data arrives at 5-minute resolution (rooftop solar every half hour). The Iceberg tables store everything at the grain it arrives in — no data is lost. Aggregation only happens downstream for the dashboard. To give a sense of scale: ~1 billion raw records, ~300 million rows in the largest Iceberg table, ~13 million 5-minute rows in one half-year dashboard file.
+Source data arrives at 5-minute resolution (rooftop solar every half hour). The raw Iceberg tables store everything at the grain it arrives in — no data is lost. What the clients read is a second set of tables built from them (`mart`): one row per unit and 5 minutes with its price on it, and the aggregates, per day and per hour of day by month. To give a sense of scale: ~1 billion raw records, ~300 million rows in the largest raw table, ~13 million 5-minute rows in one half-year dashboard file.
 
-- **At import time:** The script writes the 5-minute history as one DuckDB file per half-year (each under GitHub's 100 MB per-file limit; for the Fabric app, where there is no limit, as one file), the last 14 days as a small file refreshed every 30 minutes, and one aggregate file: per unit and day, plus hour-of-day × month (SUM for energy, AVG for prices). Rows at 0 MW are left out, and types are compressed — `REAL` instead of `DOUBLE`, `SMALLINT` for time keys.
+- **In dbt:** every table a chart reads is a dbt model, the aggregates included. Rooftop solar is stored half-hourly, as published; the 5-minute values a chart draws are worked out when it asks.
+- **At import time:** `scripts/cache_catalog.py` copies those tables as they are into DuckDB files for the browser, with no rule of its own. It only decides the split: the 5-minute history as one file per half-year (each under GitHub's 100 MB per-file limit), the last 14 days as a small file refreshed every 30 minutes, the aggregates in one file.
 - **At query time:** The dashboard adapts granularity to the selected date range: 5-minute resolution up to 30 days (downloading only the half-years the range touches, and none for the default last 3 days), daily and hour-of-day aggregates beyond. This keeps queries fast in single-threaded DuckDB-WASM.
 - **Dashboard CSV download uses one consistent grain** — when users export data from the dashboard, it always uses a single time resolution, no mixing.
 
@@ -39,14 +40,21 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 
 1. **Ingest** — A dbt Python model downloads source data and archives it as gzipped CSVs in the lakehouse's `Files/`, alongside a durable log of what has been fetched
 2. **Transform** — dbt SQL models read those archived CSVs, apply transformations, and write incrementally to Iceberg tables as insert-only merges (one append snapshot per commit)
-3. **Import to dashboard** — A script reads from the Iceberg catalog and builds compact DuckDB files optimized for the browser
-4. **Visualize** — The dashboard loads DuckDB-WASM, fetches the exported files, and joins/aggregates at query time in the browser
+3. **Model** — more dbt SQL models turn the raw tables into the ones a reader wants (`mart`), and one semantic model describes those: relationships and measures
+4. **Cache** — A script copies the `mart` tables from the Iceberg catalog into DuckDB files, as they are
+5. **Visualize** — The page loads DuckDB-WASM, fetches the files and asks its questions in DAX, which a small compiler turns into SQL; Power BI reads the same tables through the same model, with no copy (Direct Lake)
 
-## Two Deploy Targets
+## Three Clients
 
-The dashboard is one page (`dashboard/github/index.html`) over one semantic model
-(`semantic_model/model.bim`). A target only decides where the data files live and how the
-browser gets them (`storage/data.js`), so a chart or a measure is written once and reaches both.
+One semantic model (`semantic_model/model.bim`), three clients under `dashboard/`:
+
+- `github/` and `fabric_app/` are one page (`dashboard/github/index.html`) on two hosts. A
+  host only decides where the data files live and how the browser gets them
+  (`storage/data.js`), so a chart is written once and reaches both.
+- `powerbi/` is a Power BI report on the model as deployed to Fabric (`deploy_model.yml`),
+  which reads the Iceberg tables in Direct Lake.
+
+A measure is written once, in the model, and reaches all three.
 
 | | GitHub Pages | Microsoft Fabric app |
 |---|---|---|
@@ -72,16 +80,17 @@ on purpose: the point is the layers, not their maturity.
 | Storage | `dashboard/github/storage/` | the lakehouse or warehouse connection |
 
 - **The semantic model** describes the tables, their relationships and the measures, each
-  with a description, in the format of a Power BI model (`model.bim`). It is the only place
-  a view or a measure is defined.
+  with a description. It is a real Power BI model (`model.bim`), the same file that is
+  deployed to Fabric: it holds DAX only, and nothing in it is written for the page.
 - **The compiler** turns it into DuckDB views, and turns the page's DAX queries
-  into SQL over them. It is a proof of concept, not a DAX engine: it knows the constructs
-  this page uses and nothing else.
+  into SQL over them. It is a toy, on purpose: this is the one layer with no open-source
+  equivalent, and the file is there to show where it sits. It knows the constructs this
+  page uses and nothing else.
 - **The query language** is where the layers show. SQL asks for tables, while a semantic
-  model offers tables that know how they relate; the page asks in DAX for `scada[mw]` by
-  `unit[fuel]` and the compiler works out that the two have to be joined, and writes the
-  SQL. Which grain to read and MW to MWh are still the page's to say. The Analyze tab is the
-  exception: it is SQL, written against the same views.
+  model offers tables that know how they relate; the page asks in DAX for `fct_summary[mw]`
+  by `dim_duid[FuelSourceDescriptor]` and the compiler works out that the two have to be
+  joined, and writes the SQL. Which grain to read is still the page's to say. The Analyze
+  tab is the exception: it is SQL, written against the same views.
 
 ### The Fabric app
 
@@ -110,7 +119,7 @@ no query service.
 │   ├── dimensions/       # Dimension tables (calendar, reference data)
 │   └── marts/            # Incremental fact tables
 ├── macros/               # Iceberg compatibility overrides, helpers
-├── scripts/              # Iceberg → DuckDB import, table maintenance, deploy
+├── scripts/              # The cache (Iceberg → DuckDB files), table maintenance, deploy
 ├── semantic_model/       # The one semantic model (model.bim): what every dashboard reads, and a Fabric item
 ├── dashboard/            # Its three clients
 │   ├── github/           # The page, and a folder per layer: frontend/, semantic/ (the compiler), storage/ (the GitHub Pages host)
@@ -125,7 +134,7 @@ no query service.
 ## Limitations
 
 - **GitHub Pages limits: 100 MB per file, about 1 GB per site.** The first is why the history is split into half-year files; the second is the one that binds now (the data files are close to it) and constrains how much more history the dashboard can hold.
-- **The deployed files are state too.** A daily import rebuilds only the latest two half-years; older half-year files, and the aggregate's rows before the cutoff, are kept as deployed. A change to older data needs an import of every period (`all_periods=true`).
+- **The deployed files are state too.** A daily import rebuilds the aggregates and only the latest two half-years; older half-year files are kept as deployed. A change to older data needs an import of every period (`all_periods=true`).
 - **DuckDB-WASM runs single-threaded.** Its multi-threaded build can't load extensions such as ICU yet and can't share OPFS file handles with its threads, and it only gained ~1.4x on 4 threads when tried (2026-09-30). We use the native DuckDB file format (not Parquet) because DuckDB-WASM can query its own format efficiently even under this constraint — range requests, predicate pushdown, and columnar reads all work without needing to load the entire file into memory.
 - **Limited by the browser.** A tab gets about 4 GB of memory; a query that needs more fails. Phones and old laptops will struggle.
 
