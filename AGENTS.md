@@ -414,31 +414,51 @@ those days lighter and leaves them out when units are picked. Only units on the 
 registration list have a classification, so semi-scheduled farms that have left the list are
 not counted. The Insights page reads both for any range.
 
-## The Power BI model (in progress, 2026-10-05)
+## The Power BI model (2026-10-05)
 The core of the project is the Iceberg catalog and a semantic model. Three consumers are
 meant to read it: the two DuckDB-WASM hosts above, and Power BI in Direct Lake. The owner's
 order: keep the existing tables and the dashboard as they are, add the tables Power BI needs
 next to them, deploy the model and check it, and only then port `compiler.js` and the cache
-to it (`cache_catalog.py` ends as a copy with no rule of its own).
+to it (`cache_catalog.py` ends as a copy with no rule of its own). **The first three are
+done; the port is not started.** Until it is, the dashboard reads none of this: its model is
+still `semantic/model.bim` and its data the old tables through `cache_catalog.py`.
+- **The tables** are dbt models in schema `mart`, tagged `powerbi`: `fct_summary`,
+  `fct_region`, `fct_rooftop`, `fct_interconnector`, `fct_curtailment`, `dim_region`
+  (and the existing `dim_duid`, `dim_calendar`). Each of the new ones is a query that
+  `cache_catalog.py` runs at export, written as a model: the raw facts cannot be read by
+  Direct Lake as they are (both dispatch runs, an interval under two `file`s, regional data
+  split over three tables, no curtailment table at all), and Direct Lake has no view to fix
+  that in. `process_data.yml` builds them in a second step, after the tables the dashboard
+  reads; that step cannot fail the job, **and it stays in that workflow**: DuckDB will read
+  these tables too, so the import has to find them built (the owner refused a workflow of
+  its own for them, 2026-10-05).
+- **What the owner decided about their shape:** MW and price sit on one row at 5 minutes
+  (`fct_summary`), because joining two facts at query time is too slow; rooftop is its own
+  table, never units; a value that is only held, carried forward or interpolated for drawing
+  is the reader's to work out and is never stored; the logic is measures.
 - `dashboard/semantic/nem.SemanticModel/` is the model, a Fabric item (`model.bim`,
-  `definition.pbism`, `.platform`): every table is one Direct Lake partition on a table of
-  the `nem` lakehouse, reached through OneLake (no SQL endpoint). Fabric shows Direct Lake
-  the Iceberg tables as Delta on its own. `{WS_ID}`/`{LH_ID}` in the `DirectLake` expression
-  are placeholders. It is **not** the dashboard's model: that is still `semantic/model.bim`.
-  For now it holds `dim_calendar` and `dim_duid` only.
+  `definition.pbism`, `.platform`): eight tables, each one Direct Lake partition on a `mart`
+  table of the `nem` lakehouse, reached through OneLake (no SQL endpoint; Fabric shows
+  Direct Lake the Iceberg tables as Delta on its own), single-column relationships, and the
+  measures. `{WS_ID}`/`{LH_ID}` in the `DirectLake` expression are placeholders. A measure
+  cannot have the name of a column of its table, in any case (`Price` on `fct_region` was
+  refused). Rooftop has no unit, so a filter on `dim_duid` does not reach it:
+  `[Total generation MWh]` and `[Renewable share]` are for slicing by region or date.
 - `deploy_model.yml` (dispatch only) publishes it into the catalog's workspace with
-  `scripts/deploy_model.py` (fabric-cicd, as the sibling does) and then runs
-  `scripts/check_model.py`: a refresh, and a row count per table in DAX. First run,
-  2026-10-05: published, refresh completed; the DAX call (`executeQueries`) answered 401
-  `PowerBINotAuthorizedException` to the service principal that owns the model. Cause not
-  established.
-- `fct_summary` (schema `mart`, tag `powerbi`) is what Power BI reads for generation: one
-  row per unit and 5 minutes with `mw` and the `price` of the unit's region, so a report
-  joins no two facts. `process_data.yml` builds it in a second step that cannot fail the
-  job. Rooftop solar gets a table of its own there, not pseudo-units; a value that is only
-  held or interpolated for drawing is the client's, never stored.
+  `scripts/deploy_model.py` (fabric-cicd; the owner asked for it, not duckrun) and runs
+  `scripts/check_model.py`: a refresh, then a row count per table and each measure per day
+  for the newest week. A table the model names has to exist before a deploy.
+- **The check asks its DAX over XMLA** (ADOMD.NET under pythonnet), not the REST
+  `executeQueries` call: that one answers 401 `PowerBINotAuthorizedException` to a service
+  principal on this model, as Contributor and as Admin. Its reference page says service
+  principals are not supported on a model with single sign-on. The same token is accepted
+  over XMLA.
+- **Checked against the dashboard, 2026-10-05:** for 29 Sep to 3 Oct, per day, the model
+  and the dashboard's deployed files give the same generation, charging, unit count, rooftop
+  energy, renewable share, capture price, average price, demand, net interchange,
+  interconnector flow, and curtailed and available energy (to the last digit compared).
 
-## Models (11)
+## Models (16)
 | Model | Schema | Materialization |
 |-------|--------|-----------------|
 | stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
@@ -449,6 +469,11 @@ to it (`cache_catalog.py` ends as a copy with no rule of its own).
 | fct_interconnector_today | landing | incremental insert-only merge (by file) — the INTERCONNECTORRES rows of the same archived DispatchIS files as fct_price_today **and, despite the name, the whole history**: AEMO's monthly MMSDM archive of the same record, 2018-01 → 2026-08 (source_type `interconnector_monthly`, a finite backfill; read with `strict_mode = false`, which the files from 2024-08 need). August 2026 is in both sources, so readers take `ANY_VALUE … GROUP BY`. Exported as `interconnector` in the half-year files; the Flows page plays any range ≤ 30 days |
 | fct_regionsum_today | landing | incremental insert-only merge (by file) — the REGIONSUM rows (v9) of the same files: demand, net interchange (positive = export), regional semi-scheduled UIGF/availability/cleared MW. History's demand/net interchange come from fct_price's DREGION rows |
 | fct_summary | mart | incremental insert-only merge on (date, time, DUID) — the Power BI fact: `fct_scada` joined to `dim_duid` and `fct_price` (inner joins), then the intraday feed after the newest daily interval, for the units the daily files know (`dispatch_duids`). Every run recomputes the dates still in flux; missing keys are added, a stored value is never revised. Dates it has never seen are taken newest first, `process_limit` per run (the one difference from the example's file: uncapped, the first build ran the runner out of memory). `rebuild=fct_summary` resets it |
+| fct_region | mart | incremental insert-only merge on (REGIONID, date, time) — for Power BI: price, demand, net interchange and the regional semi-scheduled wind and solar. The intraday record where `fct_price_today` and `fct_regionsum_today` both have the interval, else `fct_price`'s. Recomputed whole every run (4.5M rows); the merge adds what is missing |
+| fct_rooftop | mart | incremental insert-only merge on (REGIONID, date, time) — for Power BI: the `MEASUREMENT` estimate per region and half hour as published (zeros kept, blanks out), with the half hour's average price from `fct_region`; written once its six prices exist |
+| fct_interconnector | mart | incremental insert-only merge on (interconnector, date, time) — for Power BI: `MWFLOW` and the two limits, the pricing run, one row per interval |
+| fct_curtailment | mart | incremental insert-only merge on (DUID, date) — for Power BI: curtailed and available MWh per semi-scheduled unit and day. A day is written once `fct_scada` holds its 288 intervals, `process_limit` days per run, newest first |
+| dim_region | mart | incremental insert-only merge on Region — for Power BI: the regions of `dim_duid`, the one filter that reaches units, regional data and rooftop |
 | fct_rooftop_pv | landing | incremental insert-only merge (by file) — rooftop solar per region and half hour, AEMO's `ROOFTOP_PV_ACTUAL` estimate **kept as published**: the current folder, the monthly MMSDM archive 2018-01 → 2026-08 and the weekly archives after it. The monthly files from 2024-08 swap `QI` and `LASTCHANGED`; the model reads each file's `I` row to tell |
 
 **Rooftop solar reaches the dashboard as pseudo-units, built in the export, not in Iceberg.**
