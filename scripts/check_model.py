@@ -6,7 +6,7 @@ A Direct Lake model holds no data: a refresh only points it at the tables' curre
 and the query is what makes VertiPaq read them. So a row count per table, answered, says the
 whole chain works: the model was published, OneLake shows it the Iceberg tables, and the
 columns it names are there with the types it expects. Then every measure, per day, over the
-newest week of fct_summary.
+newest week of fct_summary, a query each.
 
 THE QUERIES GO OVER XMLA (ADOMD.NET, loaded through pythonnet), not the REST executeQueries
 call: that call answers 401 PowerBINotAuthorizedException to a service principal on this
@@ -118,16 +118,14 @@ def main():
         return 1
 
     queries = [f"EVALUATE ROW(\"table\", \"{table}\", \"rows\", COUNTROWS('{table}'))" for table in TABLES]
-    if MEASURES:
-        # Every measure, per day, over the newest week the fact holds: the numbers to hold
-        # against the dashboard's.
-        measures = ", ".join(f'"{m}", [{m}]' for m in MEASURES)
-        queries.append(f"""EVALUATE
+    # Every measure, per day, over the newest week fct_summary holds: the numbers to hold
+    # against the dashboard's. A query each, so that one wrong measure fails alone.
+    queries += [f"""EVALUATE
             VAR newest = MAX(fct_summary[date])
             RETURN CALCULATETABLE(
-                SUMMARIZECOLUMNS(fct_summary[date], {measures}),
-                fct_summary[date] > newest - 7)
-            ORDER BY fct_summary[date]""")
+                SUMMARIZECOLUMNS(dim_calendar[date], "{m}", [{m}]),
+                dim_calendar[date] > newest - 7, dim_calendar[date] <= newest)
+            ORDER BY dim_calendar[date]""" for m in MEASURES]
 
     conn, bad = None, 0
     for n, dax in enumerate(queries):

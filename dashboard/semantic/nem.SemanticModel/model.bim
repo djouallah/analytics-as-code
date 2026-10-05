@@ -267,17 +267,6 @@
             "description": "Energy the batteries took, negative."
           },
           {
-            "name": "Renewable share",
-            "formatString": "0.0",
-            "expression": [
-              "DIVIDE(",
-              "    100 * CALCULATE([Generation MWh], dim_duid[Renewable] = TRUE()),",
-              "    CALCULATE([Generation MWh], dim_duid[FuelSourceDescriptor] <> \"Grid\")",
-              ")"
-            ],
-            "description": "Renewable share of the output, %. Batteries (fuel Grid) are in neither the renewables nor the total. Rooftop solar is not in it yet: it gets its own table."
-          },
-          {
             "name": "Capture price",
             "formatString": "$#,##0.00",
             "expression": "DIVIDE(SUMX(fct_summary, MAX(fct_summary[mw], 0) * fct_summary[price]), SUMX(fct_summary, MAX(fct_summary[mw], 0)))",
@@ -294,6 +283,33 @@
             "formatString": "yyyy-MM-dd HH:mm",
             "expression": "CALCULATE(MAX(fct_summary[cutoff]), REMOVEFILTERS())",
             "description": "The newest interval the table had seen at its last write, whatever is filtered."
+          },
+          {
+            "name": "Total generation MWh",
+            "formatString": "#,##0",
+            "expression": "[Generation MWh] + [Rooftop MWh]",
+            "description": "Units and rooftop solar together. Slice it by region or date, not by a unit's attribute: rooftop has none, so it would be added to every slice."
+          },
+          {
+            "name": "Renewable share",
+            "formatString": "0.0",
+            "expression": [
+              "DIVIDE(",
+              "    100 * (CALCULATE([Generation MWh], dim_duid[Renewable] = TRUE()) + [Rooftop MWh]),",
+              "    CALCULATE([Generation MWh], dim_duid[FuelSourceDescriptor] <> \"Grid\") + [Rooftop MWh]",
+              ")"
+            ],
+            "description": "Renewable share of the output, %, rooftop solar included. Batteries (fuel Grid) are in neither the renewables nor the total. Slice it by region or date."
+          },
+          {
+            "name": "Capacity factor",
+            "formatString": "0.0",
+            "expression": [
+              "VAR hours = COUNTROWS(SUMMARIZE(fct_region, fct_region[date], fct_region[time])) / 12",
+              "VAR capacity = SUMX(SUMMARIZE(fct_summary, dim_duid[DUID], dim_duid[RegCapMW]), dim_duid[RegCapMW])",
+              "RETURN DIVIDE(100 * CALCULATE([Generation MWh], dim_duid[RegCapMW] > 0), capacity * hours)"
+            ],
+            "description": "Energy over what the registered capacity could make in the hours of the selection, %. The capacity is that of the units with output in the selection; a unit without a registered capacity is left out. The hours are counted in fct_region."
           }
         ],
         "partitions": [
@@ -303,6 +319,422 @@
             "source": {
               "type": "entity",
               "entityName": "fct_summary",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "dim_region",
+        "description": "One row per region: what the units, the regional table and rooftop are all filtered by.",
+        "sourceLineageTag": "[mart].[dim_region]",
+        "columns": [
+          {
+            "name": "Region",
+            "dataType": "string",
+            "description": "NSW1, QLD1, SA1, TAS1, VIC1; WA1 is Western Australia, another market (units, no prices).",
+            "sourceColumn": "Region",
+            "sourceLineageTag": "Region",
+            "summarizeBy": "none",
+            "isKey": true
+          },
+          {
+            "name": "State",
+            "dataType": "string",
+            "description": "The region's name.",
+            "sourceColumn": "State",
+            "sourceLineageTag": "State",
+            "summarizeBy": "none"
+          }
+        ],
+        "partitions": [
+          {
+            "name": "dim_region",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "dim_region",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "fct_region",
+        "description": "Price, demand and net interchange per region and 5 minutes, with the region's semi-scheduled wind and solar. The intraday record where it exists (2026-08 on), the next-day record before it.",
+        "sourceLineageTag": "[mart].[fct_region]",
+        "columns": [
+          {
+            "name": "REGIONID",
+            "dataType": "string",
+            "description": "The region.",
+            "sourceColumn": "REGIONID",
+            "sourceLineageTag": "REGIONID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "date",
+            "dataType": "dateTime",
+            "description": "Date of the interval, NEM time (AEST all year).",
+            "sourceColumn": "date",
+            "sourceLineageTag": "date",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM-dd"
+          },
+          {
+            "name": "time",
+            "dataType": "int64",
+            "description": "Time of day as HHMM: 1435 is 14:35. The interval ends at it.",
+            "sourceColumn": "time",
+            "sourceLineageTag": "time",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "price",
+            "dataType": "decimal",
+            "description": "The regional reference price (AEMO's RRP), $/MWh.",
+            "sourceColumn": "price",
+            "sourceLineageTag": "price",
+            "summarizeBy": "none",
+            "formatString": "$#,##0.00"
+          },
+          {
+            "name": "demand",
+            "dataType": "decimal",
+            "description": "Operational demand, MW: rooftop solar is not in it.",
+            "sourceColumn": "demand",
+            "sourceLineageTag": "demand",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "net_interchange",
+            "dataType": "decimal",
+            "description": "MW, positive when the region exports.",
+            "sourceColumn": "net_interchange",
+            "sourceLineageTag": "net_interchange",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "wind_available",
+            "dataType": "decimal",
+            "description": "MW the region's semi-scheduled wind could make. Blank before 2026-08.",
+            "sourceColumn": "wind_available",
+            "sourceLineageTag": "wind_available",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "wind_curtailed",
+            "dataType": "decimal",
+            "description": "MW of it that was not dispatched.",
+            "sourceColumn": "wind_curtailed",
+            "sourceLineageTag": "wind_curtailed",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "solar_available",
+            "dataType": "decimal",
+            "description": "MW the region's semi-scheduled solar could make. Blank before 2026-08.",
+            "sourceColumn": "solar_available",
+            "sourceLineageTag": "solar_available",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "solar_curtailed",
+            "dataType": "decimal",
+            "description": "MW of it that was not dispatched.",
+            "sourceColumn": "solar_curtailed",
+            "sourceLineageTag": "solar_curtailed",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          }
+        ],
+        "measures": [
+          {
+            "name": "Price",
+            "formatString": "$#,##0.00",
+            "expression": "AVERAGE(fct_region[price])",
+            "description": "The plain average of the regional prices in the selection, $/MWh."
+          },
+          {
+            "name": "Demand MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_region[demand]) / 12",
+            "description": "Operational demand as energy; rooftop solar is not in it."
+          },
+          {
+            "name": "Net interchange MW",
+            "formatString": "#,##0",
+            "expression": "AVERAGE(fct_region[net_interchange])",
+            "description": "Average net flow out of a region, MW; positive is exporting. Read it per region."
+          },
+          {
+            "name": "Regional wind curtailed MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_region[wind_curtailed]) / 12",
+            "description": "Semi-scheduled wind not dispatched, from AEMO's regional figures (2026-08 on, up to the newest interval)."
+          },
+          {
+            "name": "Regional wind available MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_region[wind_available]) / 12",
+            "description": "What the region's semi-scheduled wind could have made."
+          },
+          {
+            "name": "Regional solar curtailed MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_region[solar_curtailed]) / 12",
+            "description": "Semi-scheduled solar not dispatched, from AEMO's regional figures (2026-08 on, up to the newest interval)."
+          },
+          {
+            "name": "Regional solar available MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_region[solar_available]) / 12",
+            "description": "What the region's semi-scheduled solar could have made."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_region",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_region",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "fct_rooftop",
+        "description": "Rooftop solar per region and half hour: AEMO's estimate, as published, with the half hour's average price. Not units: it has no DUID, and a unit filter does not reach it. A value between two half hours, or after the newest one, is the reader's to work out.",
+        "sourceLineageTag": "[mart].[fct_rooftop]",
+        "columns": [
+          {
+            "name": "REGIONID",
+            "dataType": "string",
+            "description": "The region.",
+            "sourceColumn": "REGIONID",
+            "sourceLineageTag": "REGIONID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "date",
+            "dataType": "dateTime",
+            "description": "Date of the interval, NEM time (AEST all year).",
+            "sourceColumn": "date",
+            "sourceLineageTag": "date",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM-dd"
+          },
+          {
+            "name": "time",
+            "dataType": "int64",
+            "description": "Time of day as HHMM: 1435 is 14:35. The half hour ends at it.",
+            "sourceColumn": "time",
+            "sourceLineageTag": "time",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "mw",
+            "dataType": "decimal",
+            "description": "Estimated rooftop output at the end of the half hour, MW.",
+            "sourceColumn": "mw",
+            "sourceLineageTag": "mw",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "price",
+            "dataType": "decimal",
+            "description": "The average of the region's six 5-minute prices in the half hour, $/MWh.",
+            "sourceColumn": "price",
+            "sourceLineageTag": "price",
+            "summarizeBy": "none",
+            "formatString": "$#,##0.00"
+          }
+        ],
+        "measures": [
+          {
+            "name": "Rooftop MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_rooftop[mw]) / 2",
+            "description": "Rooftop solar energy: a row is half an hour, so MW / 2 is MWh."
+          },
+          {
+            "name": "Rooftop capture price",
+            "formatString": "$#,##0.00",
+            "expression": "DIVIDE(SUMX(fct_rooftop, fct_rooftop[mw] * fct_rooftop[price]), SUM(fct_rooftop[mw]))",
+            "description": "The price rooftop solar earned, $/MWh: the half-hour prices weighted by its output."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_rooftop",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_rooftop",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "fct_interconnector",
+        "description": "Flow on each link between regions, per 5 minutes, back to 2018. Positive from the first region in the id to the second (T-V-MNSP1 > 0: Tasmania to Victoria); the limits bound it in the same sign.",
+        "sourceLineageTag": "[mart].[fct_interconnector]",
+        "columns": [
+          {
+            "name": "interconnector",
+            "dataType": "string",
+            "description": "AEMO's id of the link.",
+            "sourceColumn": "interconnector",
+            "sourceLineageTag": "interconnector",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "date",
+            "dataType": "dateTime",
+            "description": "Date of the interval, NEM time (AEST all year).",
+            "sourceColumn": "date",
+            "sourceLineageTag": "date",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM-dd"
+          },
+          {
+            "name": "time",
+            "dataType": "int64",
+            "description": "Time of day as HHMM: 1435 is 14:35. The interval ends at it.",
+            "sourceColumn": "time",
+            "sourceLineageTag": "time",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "mw",
+            "dataType": "decimal",
+            "description": "The dispatch target flow, MW.",
+            "sourceColumn": "mw",
+            "sourceLineageTag": "mw",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "export_limit",
+            "dataType": "decimal",
+            "description": "Limit in the positive direction, MW.",
+            "sourceColumn": "export_limit",
+            "sourceLineageTag": "export_limit",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "import_limit",
+            "dataType": "decimal",
+            "description": "Limit in the negative direction, MW.",
+            "sourceColumn": "import_limit",
+            "sourceLineageTag": "import_limit",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          }
+        ],
+        "measures": [
+          {
+            "name": "Flow MW",
+            "formatString": "#,##0",
+            "expression": "AVERAGE(fct_interconnector[mw])",
+            "description": "Average flow on a link, MW. Read it per link."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_interconnector",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_interconnector",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "fct_curtailment",
+        "description": "Curtailment per semi-scheduled unit (wind and solar farms) and day, up to the newest whole day of the next-day files.",
+        "sourceLineageTag": "[mart].[fct_curtailment]",
+        "columns": [
+          {
+            "name": "DUID",
+            "dataType": "string",
+            "description": "The unit.",
+            "sourceColumn": "DUID",
+            "sourceLineageTag": "DUID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "date",
+            "dataType": "dateTime",
+            "description": "Date of the interval, NEM time (AEST all year).",
+            "sourceColumn": "date",
+            "sourceLineageTag": "date",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM-dd"
+          },
+          {
+            "name": "curtailed_mwh",
+            "dataType": "decimal",
+            "description": "What the unit could have made and was not dispatched for: sum of max(availability - target, 0) / 12.",
+            "sourceColumn": "curtailed_mwh",
+            "sourceLineageTag": "curtailed_mwh",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "available_mwh",
+            "dataType": "decimal",
+            "description": "What the unit could have made.",
+            "sourceColumn": "available_mwh",
+            "sourceLineageTag": "available_mwh",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          }
+        ],
+        "measures": [
+          {
+            "name": "Curtailed MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_curtailment[curtailed_mwh])",
+            "description": "Energy semi-scheduled wind and solar farms could have made and were not dispatched for."
+          },
+          {
+            "name": "Available MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_curtailment[available_mwh])",
+            "description": "Energy those farms could have made."
+          },
+          {
+            "name": "Curtailment rate",
+            "formatString": "0.0",
+            "expression": "DIVIDE(100 * [Curtailed MWh], [Available MWh])",
+            "description": "Curtailed energy over available energy, %."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_curtailment",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_curtailment",
               "expressionSource": "DirectLake",
               "schemaName": "mart"
             }
@@ -326,6 +758,62 @@
         "toTable": "dim_calendar",
         "toColumn": "date",
         "relyOnReferentialIntegrity": true
+      },
+      {
+        "name": "dim_duid_to_dim_region",
+        "fromTable": "dim_duid",
+        "fromColumn": "Region",
+        "toTable": "dim_region",
+        "toColumn": "Region"
+      },
+      {
+        "name": "fct_region_to_dim_region",
+        "fromTable": "fct_region",
+        "fromColumn": "REGIONID",
+        "toTable": "dim_region",
+        "toColumn": "Region"
+      },
+      {
+        "name": "fct_region_to_dim_calendar",
+        "fromTable": "fct_region",
+        "fromColumn": "date",
+        "toTable": "dim_calendar",
+        "toColumn": "date"
+      },
+      {
+        "name": "fct_rooftop_to_dim_region",
+        "fromTable": "fct_rooftop",
+        "fromColumn": "REGIONID",
+        "toTable": "dim_region",
+        "toColumn": "Region"
+      },
+      {
+        "name": "fct_rooftop_to_dim_calendar",
+        "fromTable": "fct_rooftop",
+        "fromColumn": "date",
+        "toTable": "dim_calendar",
+        "toColumn": "date"
+      },
+      {
+        "name": "fct_interconnector_to_dim_calendar",
+        "fromTable": "fct_interconnector",
+        "fromColumn": "date",
+        "toTable": "dim_calendar",
+        "toColumn": "date"
+      },
+      {
+        "name": "fct_curtailment_to_dim_duid",
+        "fromTable": "fct_curtailment",
+        "fromColumn": "DUID",
+        "toTable": "dim_duid",
+        "toColumn": "DUID"
+      },
+      {
+        "name": "fct_curtailment_to_dim_calendar",
+        "fromTable": "fct_curtailment",
+        "fromColumn": "date",
+        "toTable": "dim_calendar",
+        "toColumn": "date"
       }
     ]
   }
