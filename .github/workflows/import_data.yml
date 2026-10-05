@@ -130,13 +130,24 @@ jobs:
         if: steps.mode.outputs.is_daily == 'true'
         run: .venv-write/bin/python scripts/cache_catalog.py build_dim
 
+      # The same data as a plain copy of the mart tables (scripts/copy_catalog.py): what the
+      # dashboard reads once it is ported to them. Published next to the files above until then.
+      - name: Copy the mart tables (today, and the dimensions daily)
+        run: |
+          for group in today ${{ steps.mode.outputs.is_daily == 'true' && 'dim' || '' }}; do
+            .venv-read/bin/python scripts/copy_catalog.py export $group
+            .venv-write/bin/python scripts/copy_catalog.py build $group
+          done
+
       - name: Stage data for deploy
         run: |
           mkdir -p deploy_data/data
           cp dashboard/energy_today.duckdb deploy_data/data/
           cp dashboard/metadata.json deploy_data/data/
+          cp mart_data/mart_today.duckdb deploy_data/data/
           if [ "${{ steps.mode.outputs.is_daily }}" = "true" ]; then
             cp dashboard/energy_dim.duckdb deploy_data/data/
+            cp mart_data/mart_dim.duckdb deploy_data/data/
           fi
       - name: Deploy to nemtracker (today + dims)
         env:
@@ -169,12 +180,22 @@ jobs:
         if: steps.mode.outputs.is_daily == 'true'
         run: .venv-write/bin/python scripts/cache_catalog.py build_daily_agg
 
+      - name: Copy the mart tables (the aggregates and the history)
+        if: steps.mode.outputs.is_daily == 'true'
+        run: |
+          for group in agg history; do
+            .venv-read/bin/python scripts/copy_catalog.py export $group
+            .venv-write/bin/python scripts/copy_catalog.py build $group
+          done
+          ls -l mart_data
+
       - name: Stage data for deploy (daily)
         if: steps.mode.outputs.is_daily == 'true'
         run: |
           mkdir -p deploy_daily/data
           cp dashboard/energy_data_*.duckdb deploy_daily/data/
           cp dashboard/energy_daily_agg.duckdb deploy_daily/data/
+          cp mart_data/mart_agg.duckdb mart_data/mart_[0-9]*_h[12].duckdb deploy_daily/data/
           # NOTE: daily_manifest.json is intentionally NOT deployed here. It is
           # published last (step below) from the period files actually present in
           # the deploy repo, so the manifest can never advertise a file whose
@@ -215,6 +236,15 @@ jobs:
               json.dump({"periods": tags}, f)
           print("Manifest:", tags)
           PY
+          # The same for the mart files.
+          gh api repos/NemTracker/nemtracker.github.io/contents/data --paginate \
+            --jq '.[].name | select(test("^mart_[0-9]{4}_h[12]\\.duckdb$")) | capture("^mart_(?<tag>[0-9]{4}_h[12])\\.duckdb$").tag' \
+            | sort -u > mart_tags.txt
+          if [ ! -s mart_tags.txt ]; then
+            echo "::error::No mart_*_h*.duckdb found in the deploy repo; not publishing an empty manifest"
+            exit 1
+          fi
+          python -c "import json; tags = open('mart_tags.txt').read().split(); json.dump({'periods': tags}, open('deploy_manifest/data/mart_manifest.json', 'w')); print('Mart manifest:', tags)"
       - name: Deploy manifest to nemtracker
         if: steps.mode.outputs.is_daily == 'true'
         env:
