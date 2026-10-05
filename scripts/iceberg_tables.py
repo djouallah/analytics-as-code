@@ -7,8 +7,8 @@ Hand-ordered. We know the tables; discovering them costs a metadata scan each an
 nothing. A new model just gets added here.
 
 Order by expected MANIFEST count, not data size — compaction's prime() enumerates
-manifests, so that's the cost driver. The dashboard tables go first because they matter
-most.
+manifests, so that's the cost driver. The intraday facts go first; the mart tables, which
+the semantic model and the dashboard read, follow the landing facts, fct_summary last.
 """
 
 TABLES = [

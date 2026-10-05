@@ -38,7 +38,7 @@ ENDPOINT = os.environ["ONELAKE_ENDPOINT"]
 TOKEN = os.environ["ONELAKE_TOKEN"]
 WAREHOUSE = os.environ["WAREHOUSE_PATH"]      # "{workspace_id}/{lakehouse_id}"
 
-# Nothing in this repo time-travels: the dashboard export and every dbt model read the
+# Nothing in this repo time-travels: the dashboard's copy and every dbt model read the
 # current snapshot. A day of history is a rollback window, not a feature.
 DAYS = float(os.environ.get("EXPIRE_OLDER_THAN_DAYS", "1"))
 

@@ -9,10 +9,11 @@
 //      ({"ts": "<ts>", "periods": ["2018_h1", ...]}),
 //   2. download the files of that import whole (parallel Range fetches, cached in OPFS by
 //      name — names are immutable) and ATTACH them:
-//        dim_<ts>.duckdb          as `dim`          dim_calendar, dim_duid
-//        today_<ts>.duckdb        as `today`        scada_today, price_today, interconnector_today (last 14 days, 5-min)
-//        agg_<ts>.duckdb          as `agg`          daily and hour-of-day rollups — attachAgg(), after first paint
-//        <YYYY>_h<N>_<ts>.duckdb  as `p<YYYY>_h<N>` scada, price, interconnector, 5-min — ensureHistory(),
+//        dim_<ts>.duckdb          as `dim`          the dimensions
+//        today_<ts>.duckdb        as `today`        fct_summary, fct_region, fct_interconnector, fct_rooftop (last 14 days)
+//        agg_<ts>.duckdb          as `agg`          the per-day and per-month tables, fct_curtailment, fct_rooftop whole
+//                                                   — attachAgg(), after first paint
+//        <YYYY>_h<N>_<ts>.duckdb  as `p<YYYY>_h<N>` the same four tables as `today`, by half-year — ensureHistory(),
 //                                                   only the half-years a range needs
 //      The history is downloaded, not read in place over HTTP: OneLake answers each Range read
 //      in ~700 ms whatever its size, so whole files in parallel beat a block at a time.
@@ -138,7 +139,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
 
   const _attachedPeriods = new Set();
 
-  // The rollups only feed ranges over 30 days: attached after the first paint. One attach,
+  // The aggregates: attached after the first paint, which does not wait for them. One attach,
   // whoever asks; a failed one can be asked for again.
   let _agg = null;
   function attachAgg() {

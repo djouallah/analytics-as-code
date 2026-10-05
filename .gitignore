@@ -6,6 +6,7 @@ logs/
 *.db.wal
 *.duckdb
 *.duckdb.wal
+mart_data/
 __pycache__/
 *.py[cod]
 .venv/

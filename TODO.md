@@ -21,7 +21,7 @@ only: a finished item is removed, not ticked.
   (`deploy_fabric.yml`, dispatch-only, into its own item `nemtracker`), but Fabric answers
   500 to every function call on an item owned by a service principal, and only an item's
   owner can deploy to it. When it is fixed: dispatch the workflow and open `nemtracker`.
-  Until then the app is deployed from the laptop (`cd fabric && npx rayfin up`).
+  Until then the app is deployed from the laptop (`cd dashboard/fabric_app && npx rayfin up`).
 - [ ] **DAX in the Logs tab** — a query the page wrote in DAX is logged as the SQL it became.
   Show the DAX as written, with its timing, and the SQL under it; a query written as SQL
   (the Analyze tab) stays SQL alone. `query()` in the two `data.js` takes a label next to
@@ -36,23 +36,25 @@ only: a finished item is removed, not ticked.
 - [ ] **Interconnectors from the data** — the Flows page types each link's two regions and
   its name (`INTERCONNECTORS` in `dashboard/github/index.html`); the facts carry only the id. AEMO's
   MMSDM `INTERCONNECTOR` table should have them (`REGIONFROM`, `REGIONTO`, a description;
-  not checked against the archive): a small `dim_interconnector`, exported with the dims.
-- [ ] **Site size** — the deployed data files total about 984 MB against GitHub Pages' 1 GB
-  limit, and grow by about 140 MB a year (a half-year file is 65-75 MB). Measured on the
-  2026 H1 file (13.0M scada rows): `mw` is 38.5 MB, `time` 26.8 MB, `DUID` 5.5 MB, `date`
-  0.8 MB. Storing `time` as hour and minute (two UTINYINT, `data.js` rebuilding HHMM) saves
-  13% losslessly; rounding `mw` to 0.1 MW saves a further ~25% but changes the data. Neither
-  is enough against the growth: the real choice is where the 5-minute history lives (another
-  host for the half-year files, or only recent years at 5 minutes and the rest from the
-  daily aggregate). A decision for the owner, not a code change.
+  not checked against the archive): a small `dim_interconnector`, a table of `model.bim`,
+  copied with the dims.
+- [ ] **Site size** — the deployed data files total about 880 MB (2026-10-05) against GitHub
+  Pages' 1 GB limit, and grow by about 125 MB a year (a whole half-year file is about
+  60 MB). The column sizes measured before the port were of the old files and have not been
+  measured again on `fct_summary`. A smaller column (`time` as hour and minute, `mw` rounded
+  to 0.1 MW, which changes the data) would now be a change to the `mart` model and to
+  `model.bim`, and would not be enough against the growth: the real choice is where the
+  5-minute history lives (another host for the half-year files, or only recent years at
+  5 minutes and the rest from the daily aggregate). A decision for the owner, not a code
+  change.
 - [ ] **Emissions** — AEMO MMSDM `GENUNITS` has a CO2 factor per genset (`DUALLOC` maps it to
   a DUID): an emissions-intensity KPI and chart. A unit without a factor stays out; no
   guessed factor.
 
 ## Waiting on upstream
 
-- [ ] duckdb-wasm build on DuckDB 2.0 → move the dashboard and `import_data.yml`'s write venv
-  together.
+- [ ] duckdb-wasm build on DuckDB 2.0 → move the dashboard and the write venv of
+  `import_data.yml` and `import_onelake.yml` together.
 - [ ] duckdb-iceberg#1341 (snapshot expiry) merged → replace pyiceberg in
   `scripts/expire_snapshots.py`.
 - [ ] AEMO publishes `ROOFTOP_PV_ACTUAL_PRED`/`_RUN` (5-minute rooftop estimate) → move

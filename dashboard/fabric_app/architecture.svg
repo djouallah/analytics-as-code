@@ -23,17 +23,17 @@
 <rect x="40" y="120" width="280" height="130" rx="10" fill="#0c2540" stroke="#58a6ff" stroke-width="1.6"/>
 <text x="180.0" y="170.0" font-size="16" font-weight="600" fill="#58a6ff" text-anchor="middle">Apache Iceberg catalog</text>
 <text x="180.0" y="194.0" font-size="14" fill="#e6edf3" text-anchor="middle">OneLake, source tenant</text>
-<text x="180.0" y="214.0" font-size="14" fill="#e6edf3" text-anchor="middle">scada, price, dims</text>
+<text x="180.0" y="214.0" font-size="14" fill="#e6edf3" text-anchor="middle">the mart tables</text>
 <rect x="520" y="120" width="300" height="130" rx="10" fill="#2d2208" stroke="#d29922" stroke-width="1.6"/>
 <text x="670.0" y="160.0" font-size="16" font-weight="600" fill="#d29922" text-anchor="middle">GitHub Actions (daily)</text>
 <text x="670.0" y="184.0" font-size="14" fill="#e6edf3" text-anchor="middle">import_onelake.yml</text>
-<text x="670.0" y="204.0" font-size="14" fill="#e6edf3" text-anchor="middle">DuckDB builds 4 .duckdb files</text>
+<text x="670.0" y="204.0" font-size="14" fill="#e6edf3" text-anchor="middle">DuckDB copies them to .duckdb</text>
 <text x="670.0" y="224.0" font-size="14" fill="#e6edf3" text-anchor="middle">OIDC to both tenants, no secrets</text>
 <rect x="1020" y="120" width="300" height="130" rx="10" fill="#0f2a17" stroke="#3fb950" stroke-width="1.6"/>
 <text x="1170.0" y="160.0" font-size="16" font-weight="600" fill="#3fb950" text-anchor="middle">OneLake lakehouse</text>
 <text x="1170.0" y="184.0" font-size="14" fill="#e6edf3" text-anchor="middle">Fabric tenant, Files/data</text>
 <text x="1170.0" y="204.0" font-size="14" fill="#e6edf3" text-anchor="middle">dim / today / agg: small files</text>
-<text x="1170.0" y="224.0" font-size="14" fill="#e6edf3" text-anchor="middle">data: all 5-min history, 1.5 GB</text>
+<text x="1170.0" y="224.0" font-size="14" fill="#e6edf3" text-anchor="middle">history: a file per half-year</text>
 <rect x="40" y="420" width="280" height="130" rx="10" fill="#161b22" stroke="#8b949e" stroke-width="1.6"/>
 <text x="180.0" y="470.0" font-size="16" font-weight="600" fill="#8b949e" text-anchor="middle">User</text>
 <text x="180.0" y="494.0" font-size="14" fill="#e6edf3" text-anchor="middle">opens the app in Fabric</text>
@@ -47,5 +47,5 @@
 <text x="1170.0" y="460.0" font-size="16" font-weight="600" fill="#8b949e" text-anchor="middle">Browser</text>
 <text x="1170.0" y="484.0" font-size="14" fill="#e6edf3" text-anchor="middle">dashboard: DuckDB-WASM + ECharts</text>
 <text x="1170.0" y="504.0" font-size="14" fill="#e6edf3" text-anchor="middle">small files downloaded whole</text>
-<text x="1170.0" y="524.0" font-size="14" fill="#e6edf3" text-anchor="middle">history read by HTTP Range</text>
+<text x="1170.0" y="524.0" font-size="14" fill="#e6edf3" text-anchor="middle">half-years fetched as needed</text>
 </svg>

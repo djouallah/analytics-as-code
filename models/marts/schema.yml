@@ -49,7 +49,7 @@ models:
         tests:
           - not_null
       - name: INITIALMW
-        description: Metered output of the unit at the start of the interval (MW); negative when a battery charges. Rows at 0 MW are kept here and left out by the export
+        description: Metered output of the unit at the start of the interval (MW); negative when a battery charges. Rows at 0 MW are kept here and left out by fct_summary
       - name: TOTALCLEARED
         description: Dispatch target for the end of the interval (MW)
       - name: AVAILABILITY
@@ -66,7 +66,7 @@ models:
           - not_null
 
   - name: fct_price_today
-    description: Regional spot prices from the PRICE rows of AEMO's 5-minute DispatchIS files, minutes after each interval. Never trimmed - it holds every file loaded since 2026-08; the export takes the last 14 days
+    description: Regional spot prices from the PRICE rows of AEMO's 5-minute DispatchIS files, minutes after each interval. Never trimmed - it holds every file loaded since 2026-08; fct_region and fct_summary read it
     columns:
       - name: REGIONID
         description: NEM region (QLD1, NSW1, VIC1, SA1, TAS1); the files carry no WA prices
@@ -108,7 +108,7 @@ models:
       - name: MWFLOW
         description: Dispatch target flow (MW); the flow the dashboard shows
       - name: METEREDMWFLOW
-        description: Metered flow at the start of the interval (MW); not exported
+        description: Metered flow at the start of the interval (MW); not in fct_interconnector
       - name: INTERVENTION
         description: AEMO intervention flag (0 = the pricing run, which every reader filters on); part of the merge key
         tests:
@@ -186,7 +186,7 @@ models:
           - not_null
 
   - name: fct_scada_today
-    description: SCADA reading per unit from AEMO's 5-minute Dispatch_SCADA files, minutes after each interval. Never trimmed - it holds every file loaded; the export takes the last 14 days. Rows at 0 MW are not loaded, and there is no INTERVENTION column
+    description: SCADA reading per unit from AEMO's 5-minute Dispatch_SCADA files, minutes after each interval. Never trimmed - it holds every file loaded; fct_summary reads the intervals after the newest next-day file. Rows at 0 MW are not loaded, and there is no INTERVENTION column
     columns:
       # Same reasoning as fct_scada above -- no relationships test to dim_duid.
       - name: DUID
@@ -198,7 +198,7 @@ models:
         tests:
           - not_null
       - name: INITIALMW
-        description: The file's SCADAVALUE (MW), under fct_scada's column name so the exports read both alike. Not the same AEMO column as fct_scada.INITIALMW - a small step where the two meet is expected
+        description: The file's SCADAVALUE (MW), under fct_scada's column name so fct_summary reads both alike. Not the same AEMO column as fct_scada.INITIALMW - a small step where the two meet is expected
       - name: file
         description: Source CSV filename the row was ingested from (part of the merge key)
         tests:

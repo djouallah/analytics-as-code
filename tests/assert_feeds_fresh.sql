@@ -1,5 +1,5 @@
--- Every feed must keep up, not only the two the dashboard reads first
--- (assert_today_facts_fresh). A download that stalls without failing leaves the
+-- Every feed must keep up, not only the two intraday facts of
+-- assert_today_facts_fresh. A download that stalls without failing leaves the
 -- files-processed tests green: they only compare against what was logged.
 --   - next-day files (fct_scada, fct_price): AEMO publishes one a day, early morning; the
 --     newest DATE more than 3 days old means the daily feed has stopped

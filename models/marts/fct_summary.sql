@@ -29,8 +29,8 @@
 -- 2026-10-05). So the dates never seen before are taken newest first, process_limit of them
 -- per run (a daily file is about a date), the first build included, until none is left.
 --
--- Tagged `powerbi`: process_data.yml builds it in a step of its own, after the tables the
--- dashboard reads, so a failure here cannot hold those back.
+-- Tagged `powerbi`: process_data.yml builds the mart tables in a step of their own, after
+-- the landing facts they read, so a failure here cannot fail the load of those.
 {{ config(
     materialized='incremental',
     incremental_strategy='merge',

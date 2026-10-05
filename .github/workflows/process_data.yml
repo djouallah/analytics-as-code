@@ -100,12 +100,15 @@ jobs:
           REBUILD_TABLE: ${{ inputs.rebuild }}
         run: python scripts/rebuild_table.py
       - name: Process data
-        # Everything the dashboard reads. The Power BI tables are the next step.
+        # The download, the landing facts and the two dimensions the mart tables are built
+        # from. The mart tables are the next step.
         run: dbt run --target prod --profiles-dir . --exclude tag:powerbi
       - name: Build the Power BI tables
-        # fct_summary, built from the facts above. A step of its own that cannot fail the
-        # job: Import Data only runs after a green Process Data, and the dashboard does not
-        # read these tables. A failure shows as a warning on the run, and in this step's log.
+        # The mart tables (tag powerbi), built from the facts above: what the semantic model
+        # reads, and so Power BI and the dashboard. A step of its own that cannot fail the
+        # job: a failure shows as a warning on the run and in this step's log, and Import
+        # Data, which only runs after a green Process Data, then copies the tables as they
+        # were.
         continue-on-error: true
         timeout-minutes: 45
         run: dbt run --target prod --profiles-dir . --select tag:powerbi || { echo "::warning::the Power BI tables failed to build"; exit 1; }

@@ -10,7 +10,8 @@
   vars below). **`dev` is `prod`**: same catalog, same `landing`/`mart` tables, there is no
   separate dev schema. It refuses to run without `FILES_PATH` (`dbt_project.yml`
   `on-run-start`): the archive would go to the local `/tmp` and its paths into the shared log.
-- **Schemas:** `mart` (dim_calendar, dim_duid) / `landing` (facts, staging)
+- **Schemas:** `mart` (the dimensions and the tables the semantic model reads) / `landing`
+  (the raw facts, staging)
 - **Writes are insert-only merges** (`WHEN MATCHED DO NOTHING`): the OneLake catalog accepts
   one add-snapshot per commit and rejects commits mixing delete files + data files
   (BadRequest 400). Same pattern as the sibling repo (dbt-fabric). `dim_calendar` is a plain
@@ -419,10 +420,11 @@ they are what these tables are built from.
   the export used to run when it still held rules, written as a model: the raw facts cannot be read by
   Direct Lake as they are (both dispatch runs, an interval under two `file`s, regional data
   split over three tables, no curtailment table at all), and Direct Lake has no view to fix
-  that in. `process_data.yml` builds them in a second step, after the tables the dashboard
-  reads; that step cannot fail the job, **and it stays in that workflow**: DuckDB will read
-  these tables too, so the import has to find them built (the owner refused a workflow of
-  its own for them, 2026-10-05).
+  that in. `process_data.yml` builds them in a second step, after the landing facts they are
+  built from; that step cannot fail the job, **and it stays in that workflow**: the
+  dashboard's files are a copy of these tables, so the import has to find them built (the
+  owner refused a workflow of its own for them, 2026-10-05). A failure of that step shows
+  as a warning on a green run, and the import then copies the tables as they were.
 - **The import is a copy** (the owner, 2026-10-05: "python import for duckdb native file is
   a simple import and has zero logic to it beside maybe splitting per size"). So every table
   the dashboard reads is a dbt model here and a table of the semantic model, its aggregates
@@ -515,7 +517,7 @@ they are what these tables are built from.
 | dim_duid | mart | incremental insert-only merge on DUID; NEM units from the registration list, then `duid_unregistered.csv`; registered capacity (RegCapMW etc.); `Renewable` — **the list of renewable fuels lives in this model** (an inline CTE next to `states`), nowhere else; `Classification` from the list (Scheduled / Semi-Scheduled / Non-Scheduled, stars stripped; NULL off the list): curtailment is measured on Semi-Scheduled, not on a fuel, because HPR1 (a battery) is registered with fuel "Wind". A new column or a changed rule reaches the existing rows with a `rebuild=dim_duid` |
 | fct_scada, fct_price | landing | incremental insert-only merge (by file) |
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
-| fct_interconnector_today | landing | incremental insert-only merge (by file) — the INTERCONNECTORRES rows of the same archived DispatchIS files as fct_price_today **and, despite the name, the whole history**: AEMO's monthly MMSDM archive of the same record, 2018-01 → 2026-08 (source_type `interconnector_monthly`, a finite backfill; read with `strict_mode = false`, which the files from 2024-08 need). August 2026 is in both sources, so readers take `ANY_VALUE … GROUP BY`. Exported as `interconnector` in the half-year files; the Flows page plays any range ≤ 30 days |
+| fct_interconnector_today | landing | incremental insert-only merge (by file) — the INTERCONNECTORRES rows of the same archived DispatchIS files as fct_price_today **and, despite the name, the whole history**: AEMO's monthly MMSDM archive of the same record, 2018-01 → 2026-08 (source_type `interconnector_monthly`, a finite backfill; read with `strict_mode = false`, which the files from 2024-08 need). August 2026 is in both sources, so `fct_interconnector` takes one row per interval (`MAX … GROUP BY`); the Flows page plays any range ≤ 30 days |
 | fct_regionsum_today | landing | incremental insert-only merge (by file) — the REGIONSUM rows (v9) of the same files: demand, net interchange (positive = export), regional semi-scheduled UIGF/availability/cleared MW. History's demand/net interchange come from fct_price's DREGION rows |
 | fct_summary | mart | incremental insert-only merge on (date, time, DUID) — the Power BI fact: `fct_scada` joined to `dim_duid` and `fct_price` (inner joins), then the intraday feed after the newest daily interval, for the units the daily files know (`dispatch_duids`). Every run recomputes the dates still in flux; missing keys are added, a stored value is never revised. Dates it has never seen are taken newest first, `process_limit` per run (the one difference from the example's file: uncapped, the first build ran the runner out of memory). `rebuild=fct_summary` resets it |
 | fct_region | mart | incremental insert-only merge on (REGIONID, date, time) — for Power BI: price, demand, net interchange and the regional semi-scheduled wind and solar. The intraday record where `fct_price_today` and `fct_regionsum_today` both have the interval, else `fct_price`'s. Recomputed whole every run (4.5M rows); the merge adds what is missing |
@@ -550,7 +552,7 @@ files per run. It also works on a table the catalog can no longer serve (the pre
 is best-effort). Do not use `dbt run --full-refresh`: dbt-duckdb builds `<table>__dbt_tmp` and
 RENAMEs it into place, and RENAME has never been probed against this catalog. A model change
 that adds a column to an existing table goes out together with its rebuild, not ahead of it:
-the export would ask for a column the catalog doesn't have, and dbt would try an ALTER TABLE
+the semantic model would name a column the catalog doesn't have, and dbt would try an ALTER TABLE
 that has never been probed either.
 
 ## Profiles: ci (plain DuckDB, no Iceberg), dev/prod (OneLake Iceberg REST catalog, the same one)

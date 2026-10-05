@@ -2458,8 +2458,7 @@
     }
 
     // AEMO's net interchange per region: positive = exporting. 5-minute values up to 30 days,
-    // daily averages beyond. Intervals without it (files deployed before it was exported,
-    // fct_regionsum_today still filling) are gaps in the line.
+    // daily averages beyond. Intervals without it are gaps in the line.
     async function renderNetExports(seq) {
       const intraday = isIntradayMode();
       const p = grain().price;
@@ -3543,8 +3542,8 @@ ORDER BY ALL`;
       await populateFilters();
       _ready = true;
       await renderAll();
-      // Load year databases in background, then silently refresh
-      // agg only feeds the daily-grain views (ranges over 30 days); don't redraw an intraday view.
+      // Attach the aggregates (agg) in the background, then refresh what reads them: a range
+      // over 30 days whole; on an intraday view only the parts below, not its charts.
       loadDailyAggDatabase().then(() => {
         if (!isIntradayMode()) return renderAll();
         setConnected();   // clear "Downloading..."
