@@ -70,3 +70,18 @@ models:
           - not_null
       - name: State
         description: The region's name
+
+  - name: dim_time
+    description: For Power BI - the 288 five-minute times of a day, the time axis every 5-minute fact is read against, and what a measure reads rooftop solar against between two half hours
+    columns:
+      - name: time
+        description: Time of day as an HHMM integer (1435 is 14:35), as the facts carry it
+        tests:
+          - unique
+          - not_null
+      - name: minute
+        description: The same time as minutes since midnight, 0 to 1435
+        tests:
+          - not_null
+      - name: hour
+        description: Hour of day, 0 to 23

@@ -7,7 +7,9 @@ Two readers of the same catalog have to say the same thing. One side is the Powe
 is what the dashboard shows: the .duckdb files published at DEPLOYED_DATA_URL, read here
 with DuckDB and the dashboard's own rules (model.bim, compiler.js, the page). Every measure
 is compared per day and region, per day and fuel, or per day and link, over the newest
-settled days (PARITY_DAYS, 5) that the dashboard's newest history file holds.
+settled days (PARITY_DAYS, 5) that the dashboard's newest history file holds; and, for the
+newest of those days, by 5-minute time as well, which is the grain the dashboard draws:
+rooftop there comes from [Rooftop MW], the measure that works it out between half hours.
 
 The files store REAL and the tables DECIMAL(18,4), so numbers are equal within TOLERANCE.
 
@@ -24,6 +26,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import urllib.request
 
 import duckdb
@@ -124,6 +127,29 @@ EXPECTED = {
         SELECT date, interconnector AS link, avg(mw) AS "Flow MW"
         FROM h.interconnector WHERE date IN ({days}) GROUP BY ALL"""],
 }
+# The same slices by 5-minute time, which is what the dashboard draws up to 30 days: for the
+# newest settled day only (a day is 288 times). The slice and the time come back as one key,
+# `slice|HHMM`. [Rooftop MW] is the measure that works rooftop out between its half hours;
+# the dashboard's files hold those 5-minute points, interpolated by the export.
+EXPECTED_5MIN = {
+    "region": ["""
+        SELECT date, REGIONID || '|' || time AS part, avg(price) AS "Average price", sum(demand) / 12 AS "Demand MWh",
+          avg(net_interchange) AS "Net interchange MW"
+        FROM h.price WHERE date IN ({days}) GROUP BY ALL""", f"""
+        SELECT date, region || '|' || time AS part, sum(mw) AS "Rooftop MW" FROM ({ROOFTOP}) GROUP BY ALL""", f"""
+        SELECT date, region || '|' || time AS part, sum(greatest(mw, 0)) AS "Generation MW" FROM ({UNITS}) GROUP BY ALL""", f"""
+        SELECT date, region || '|' || time AS part, sum(v) AS "Total generation MW"
+        FROM (SELECT date, region, time, greatest(mw, 0) AS v FROM ({UNITS})
+              UNION ALL SELECT date, region, time, mw FROM ({ROOFTOP}))
+        GROUP BY ALL"""],
+    "fuel": [f"""
+        SELECT date, coalesce(fuel, '') || '|' || time AS part, sum(greatest(mw, 0)) AS "Generation MW",
+          sum(greatest(mw, 0) * price) / nullif(sum(greatest(mw, 0)), 0) AS "Capture price"
+        FROM ({UNITS}) GROUP BY ALL"""],
+    "link": ["""
+        SELECT date, interconnector || '|' || time AS part, avg(mw) AS "Flow MW"
+        FROM h.interconnector WHERE date IN ({days}) GROUP BY ALL"""],
+}
 SLICE = {"region": "dim_region[Region]", "fuel": "dim_duid[FuelSourceDescriptor]", "link": "fct_interconnector[interconnector]"}
 # The dashboard's 5-minute figure for the one measure that differs by method.
 ROOFTOP_CAPTURE_5MIN = f"""
@@ -149,10 +175,15 @@ def main():
     days_sql = ", ".join(f"DATE '{d}'" for d in days)
     print(f"dashboard files from {DATA}, history {period}, days {days[-1]} to {days[0]}")
 
+    # Each grain: its name, the slice, whether it is by 5-minute time, its queries, its days.
+    grains = ([(g, g, False, q, days) for g, q in EXPECTED.items()]
+              + [(f"{g}, 5 min", g, True, q, days[:1]) for g, q in EXPECTED_5MIN.items()])
+
     expected = {}   # (grain, date, slice, measure) -> value
-    for grain, queries in EXPECTED.items():
+    for grain, _, _, queries, its_days in grains:
+        its_days_sql = ", ".join(f"DATE '{d}'" for d in its_days)
         for sql in queries:
-            cur = con.execute(sql.format(days=days_sql))
+            cur = con.execute(sql.format(days=its_days_sql))
             names = [d[0] for d in cur.description]
             for row in cur.fetchall():
                 for name, value in zip(names[2:], row[2:]):
@@ -164,18 +195,25 @@ def main():
         print(f"cannot read the workspace's name ({status}): {body}")
         return 1
     conn = model.connect(body["value"][0]["name"])
-    first, last = (d.split("-") for d in (days[-1], days[0]))
-    dates = (f"dim_calendar[date] >= DATE({int(first[0])}, {int(first[1])}, {int(first[2])}), "
-             f"dim_calendar[date] <= DATE({int(last[0])}, {int(last[1])}, {int(last[2])})")
-    got = {}
-    for grain in EXPECTED:
+
+    def day(d):
+        y, m, dd = (int(x) for x in d.split("-"))
+        return f"DATE({y}, {m}, {dd})"
+
+    got, slow = {}, []
+    for grain, by, five, _, its_days in grains:
+        columns = f"dim_calendar[date], {SLICE[by]}" + (", dim_time[time]" if five else "")
+        dates = f"dim_calendar[date] >= {day(its_days[-1])}, dim_calendar[date] <= {day(its_days[0])}"
         for measure in sorted({k[3] for k in expected if k[0] == grain}):
-            dax = (f'EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS(dim_calendar[date], {SLICE[grain]}, '
-                   f'"v", [{measure}]), {dates})')
-            for row in model.query(conn, dax):
+            dax = f'EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS({columns}, "v", [{measure}]), {dates})'
+            started = time.perf_counter()
+            rows = model.query(conn, dax)
+            slow.append((time.perf_counter() - started, grain, measure, len(rows)))
+            for row in rows:
                 value = number(row["[v]"])
                 if value is not None:
-                    got[(grain, row["dim_calendar[date]"][:10], row[SLICE[grain]], measure)] = value
+                    part = row[SLICE[by]] + (f"|{row['dim_time[time]']}" if five else "")
+                    got[(grain, row["dim_calendar[date]"][:10], part, measure)] = value
 
     # A value one side does not have counts as 0 there: a blank and a zero are the same answer
     # (no charging in a region), and a figure that is really missing shows as its whole size.
@@ -190,9 +228,12 @@ def main():
     for key, _, _ in bad:
         by_measure[(key[0], key[3])][1] += 1
     for (grain, measure), (n, wrong) in sorted(by_measure.items()):
-        print(f"{'DIFF' if wrong else 'same'}  per day and {grain:<6} {measure:<30} {n - wrong}/{n}")
+        print(f"{'DIFF' if wrong else 'same'}  per day and {grain:<14} {measure:<30} {n - wrong}/{n}")
     for (grain, date, part, measure), e, g in bad[:60]:
         print(f"  {date} {part or '(blank)'} [{measure}]: dashboard {e}, model {g}")
+    print("slowest queries of the model:")
+    for seconds, grain, measure, n in sorted(slow, reverse=True)[:5]:
+        print(f"  {seconds:6.1f} s  [{measure}] per day and {grain}, {n} rows")
 
     # Not a failure: how far the dashboard's 5-minute rooftop capture price is from the model's.
     five = {(str(r[0]), r[1]): r[2] for r in con.execute(ROOFTOP_CAPTURE_5MIN.format(days=days_sql)).fetchall()}

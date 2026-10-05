@@ -310,6 +310,18 @@
               "RETURN DIVIDE(100 * CALCULATE([Generation MWh], dim_duid[RegCapMW] > 0), capacity * hours)"
             ],
             "description": "Energy over what the registered capacity could make in the hours of the selection, %. The capacity is that of the units with output in the selection; a unit without a registered capacity is left out. The hours are counted in fct_region."
+          },
+          {
+            "name": "Generation MW",
+            "formatString": "#,##0",
+            "expression": "SUMX(fct_summary, MAX(fct_summary[mw], 0))",
+            "description": "Output of the units in MW at a 5-minute time: read it at one time, it is a sum over the intervals in the selection. For energy use [Generation MWh]."
+          },
+          {
+            "name": "Total generation MW",
+            "formatString": "#,##0",
+            "expression": "[Generation MW] + [Rooftop MW]",
+            "description": "Units and rooftop solar together, in MW at a 5-minute time; rooftop is worked out between its half hours by [Rooftop MW]. Slice it by region, date and time, not by a unit's attribute: rooftop has none."
           }
         ],
         "partitions": [
@@ -355,6 +367,50 @@
             "source": {
               "type": "entity",
               "entityName": "dim_region",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "dim_time",
+        "description": "The 5-minute times of a day, 288 rows: the time axis of every fact, and what a measure reads rooftop solar against between two half hours.",
+        "sourceLineageTag": "[mart].[dim_time]",
+        "columns": [
+          {
+            "name": "time",
+            "dataType": "int64",
+            "description": "Time of day as HHMM: 1435 is 14:35. An interval ends at it.",
+            "sourceColumn": "time",
+            "sourceLineageTag": "time",
+            "summarizeBy": "none",
+            "isKey": true
+          },
+          {
+            "name": "minute",
+            "dataType": "int64",
+            "description": "The same time as minutes since midnight, 0 to 1435.",
+            "sourceColumn": "minute",
+            "sourceLineageTag": "minute",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "hour",
+            "dataType": "int64",
+            "description": "Hour of day, 0 to 23.",
+            "sourceColumn": "hour",
+            "sourceLineageTag": "hour",
+            "summarizeBy": "none"
+          }
+        ],
+        "partitions": [
+          {
+            "name": "dim_time",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "dim_time",
               "expressionSource": "DirectLake",
               "schemaName": "mart"
             }
@@ -573,6 +629,29 @@
             "formatString": "$#,##0.00",
             "expression": "DIVIDE(SUMX(fct_rooftop, fct_rooftop[mw] * fct_rooftop[price]), SUM(fct_rooftop[mw]))",
             "description": "The price rooftop solar earned, $/MWh: the half-hour prices weighted by its output."
+          },
+          {
+            "name": "Rooftop MW",
+            "formatString": "#,##0",
+            "expression": [
+              "SUMX(",
+              "    CROSSJOIN(VALUES(dim_calendar[date]), VALUES(dim_time[minute]), VALUES(dim_region[Region])),",
+              "    VAR d = dim_calendar[date]",
+              "    VAR m = dim_time[minute]",
+              "    VAR r = dim_region[Region]",
+              "    VAR step = MOD(m, 30)",
+              "    VAR before = CALCULATE(SUM(fct_rooftop[mw]), dim_calendar[date] = d, dim_time[minute] = m - step, dim_region[Region] = r)",
+              "    VAR after =",
+              "        IF(step > 0,",
+              "            IF(m - step + 30 < 1440,",
+              "                CALCULATE(SUM(fct_rooftop[mw]), dim_calendar[date] = d, dim_time[minute] = m - step + 30, dim_region[Region] = r),",
+              "                CALCULATE(SUM(fct_rooftop[mw]), dim_calendar[date] = d + 1, dim_time[minute] = 0, dim_region[Region] = r)))",
+              "    RETURN",
+              "        IF(step = 0, before,",
+              "            IF(NOT ISBLANK(before) && NOT ISBLANK(after), before + (after - before) * step / 30))",
+              ")"
+            ],
+            "description": "Rooftop solar in MW at a 5-minute time, worked out from the half-hourly estimate: on a half hour the estimate itself, between two consecutive half hours the straight line between them, and nothing across a missing half hour. Nothing of it is stored. Summed over the dates, times and regions in the selection, so read it at one time; for energy use [Rooftop MWh]. The newest value is not carried forward: that is the chart's choice."
           }
         ],
         "partitions": [
@@ -814,6 +893,34 @@
         "fromColumn": "date",
         "toTable": "dim_calendar",
         "toColumn": "date"
+      },
+      {
+        "name": "fct_summary_to_dim_time",
+        "fromTable": "fct_summary",
+        "fromColumn": "time",
+        "toTable": "dim_time",
+        "toColumn": "time"
+      },
+      {
+        "name": "fct_region_to_dim_time",
+        "fromTable": "fct_region",
+        "fromColumn": "time",
+        "toTable": "dim_time",
+        "toColumn": "time"
+      },
+      {
+        "name": "fct_rooftop_to_dim_time",
+        "fromTable": "fct_rooftop",
+        "fromColumn": "time",
+        "toTable": "dim_time",
+        "toColumn": "time"
+      },
+      {
+        "name": "fct_interconnector_to_dim_time",
+        "fromTable": "fct_interconnector",
+        "fromColumn": "time",
+        "toTable": "dim_time",
+        "toColumn": "time"
       }
     ]
   }

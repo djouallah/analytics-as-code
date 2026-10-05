@@ -23,6 +23,7 @@ TABLES = [
     "landing.fct_price",
     "landing.fct_scada",
     "mart.dim_region",
+    "mart.dim_time",
     "mart.fct_region",
     "mart.fct_rooftop",
     "mart.fct_interconnector",
