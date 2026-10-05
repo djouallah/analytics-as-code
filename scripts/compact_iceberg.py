@@ -141,10 +141,22 @@ def prime(con, fq):
 
     It is expensive — it enumerates every manifest — so it is the one and only metadata
     call here. Don't add more, and don't "optimise" this one away. Since we're paying for
-    it, keep the row count: it is the only independent read on how fragmented the table
+    it, keep what it counts: it is the only independent read on how fragmented the table
     actually is.
+
+    Returns (entries, by status). The row count alone is NOT the number of files a query
+    opens: it has gone up by exactly the number of files rewritten at every run and never
+    down (stg_csv_archive_log: 713, 752, 772, 810 over four runs that each folded all its
+    small files into one, 2026-10-02 to 05). So the rows are counted per `status`, which is
+    what says how many are still live. If this build has no such column, by status is None
+    and the count is printed for what it is.
     """
-    return con.execute(f"SELECT count(*) FROM iceberg_metadata('{fq}')").fetchone()[0]
+    try:
+        rows = con.execute(f"SELECT CAST(status AS VARCHAR), count(*) FROM iceberg_metadata('{fq}') "
+                           "GROUP BY 1 ORDER BY 1").fetchall()
+        return sum(n for _, n in rows), ", ".join(f"{status} {n}" for status, n in rows)
+    except duckdb.Error:
+        return con.execute(f"SELECT count(*) FROM iceberg_metadata('{fq}')").fetchone()[0], None
 
 
 def compact(con, table, say):
@@ -153,11 +165,12 @@ def compact(con, table, say):
 
     say("priming credentials")
     try:
-        files = prime(con, fq)
+        files, by_status = prime(con, fq)
     except Exception as e:
         # Keep it to one line — the full multi-line duckdb error is already on stdout above.
         return (table, f"ERROR priming: {type(e).__name__}: {oneline(e)}")
-    say(f"{files} data files")
+    files = f"{files} manifest entries" + (f": {by_status}" if by_status else "")
+    say(files)
 
     say("rewriting")
     try:
@@ -174,19 +187,17 @@ def compact(con, table, say):
     # are different failure modes and both look like a tidy table if collapsed into one
     # "skipped".
     if row is None:
-        return (table, f"NO ROW returned ({files} data files)")
+        return (table, f"NO ROW returned ({files})")
 
     rewritten, added, rewritten_bytes = row
     if not rewritten:
-        # Two different innocent reasons, worth telling apart. Under the file threshold
-        # means we declined to look; at or over it means we looked and every file was
-        # already at or above the target size, so folding them would buy nothing.
-        note = (f"under the {MIN_INPUT_FILES}-file threshold" if files < MIN_INPUT_FILES
-                else f"nothing below the {TARGET_FILE_SIZE} target")
-        return (table, f"0 rewritten ({files} data files) — {note}")
+        # What the function's own rule says, no more: it folds a group of at least
+        # MIN_INPUT_FILES files that are below the target size. Which of the two fell short
+        # is not something the entries' count can tell (it holds the replaced files too).
+        return (table, f"0 rewritten ({files}) — fewer than {MIN_INPUT_FILES} files below the {TARGET_FILE_SIZE} target")
 
     mb = (rewritten_bytes or 0) / 1048576.0
-    return (table, f"OK ({rewritten} -> {added} files, {mb:.1f} MB, {files} data files)")
+    return (table, f"OK ({rewritten} -> {added} files, {mb:.1f} MB, {files})")
 
 
 def report(lines, duckdb_version):
