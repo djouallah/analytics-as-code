@@ -67,13 +67,6 @@
 const MODEL = (await (await fetch(new URL('./model.bim' + new URL(import.meta.url).search, import.meta.url))).json()).model;
 
 const text = s => Array.isArray(s) ? s.join(' ') : s;
-const ann = (o, name) => text(o.annotations?.find(a => a.name === name)?.value);
-// A constant is a parameter expression: its value, then ` meta [...]`.
-const C = Object.fromEntries(MODEL.expressions.map(e => [e.name, JSON.parse(e.expression.split(' meta ')[0])]));
-const fill = s => text(s).replace(/\{(\w+)\}/g, (m, k) => C[k] ?? m);
-
-export const UNREGISTERED = C.unregistered;
-export const ROOFTOP = C.rooftop;
 
 // =============================================================================
 // DAX: text -> tree
@@ -181,17 +174,30 @@ const lit = v => `'${String(v).replace(/'/g, "''")}'`;
 const isCall = (e, fn) => e.k === 'call' && e.fn.toUpperCase() === fn;
 const TYPES = { string: 'string', int64: 'int', double: 'double', decimal: 'double', dateTime: 'date', boolean: 'bool' };
 
-// The model as DAX sees it: tables and their columns, the measures, and which view holds
-// the columns of which tables.
-const TABLES = new Map(MODEL.tables.map(t => [t.name, new Map((t.columns || []).map(c => [c.name,
-  { name: c.name, type: TYPES[c.dataType], dax: c.type === 'calculated' ? parse(fill(c.expression)).expr() : null }]))]));
-const MEASURES = new Map(MODEL.tables.flatMap(t => (t.measures || []).map(m => [m.name, parse(fill(m.expression)).expr()])));
-const JOINS = [];
-for (const r of MODEL.relationships) {
-  const from = JOINS.find(j => j.view === ann(r, 'from'));
-  JOINS.push({ view: r.name, tables: new Set([...(from?.tables || []), r.fromTable, r.toTable]) });
+// The model as DAX sees it: tables and their columns, the measures (parsed when a query
+// first names one), and the relationships.
+const TABLES = new Map(MODEL.tables.map(t => [t.name, new Map(t.columns.map(c => [c.name,
+  { name: c.name, type: TYPES[c.dataType] }]))]));
+const MEASURE_DAX = new Map(MODEL.tables.flatMap(t => (t.measures || []).map(m => [m.name, text(m.expression)])));
+const _measures = new Map();
+function measure(name) {
+  if (!_measures.has(name)) _measures.set(name, parse(MEASURE_DAX.get(name)).expr());
+  return _measures.get(name);
 }
-JOINS.sort((a, b) => a.tables.size - b.tables.size);
+const RELS = MODEL.relationships.map(r => ({ view: r.name, from: r.fromTable, fromColumn: r.fromColumn, to: r.toTable, toColumn: r.toColumn }));
+// Rooftop solar at 5 minutes. The model stores the half-hourly estimate (fct_rooftop) and
+// [Rooftop MW] works out the times between two half hours, by looking up its neighbours row
+// by row. That DAX is not translated: v_fct_rooftop_5min (below) is the same thing in SQL,
+// and [Rooftop MW] is the sum of its mw. It is related to what fct_rooftop is.
+const ROOFTOP_5MIN = 'fct_rooftop_5min';
+TABLES.set(ROOFTOP_5MIN, new Map(['REGIONID', 'date', 'time', 'mw'].map(n => [n, TABLES.get('fct_rooftop').get(n)])));
+RELS.push(...RELS.filter(r => r.from === 'fct_rooftop').map(r => ({ ...r, view: null, from: ROOFTOP_5MIN })));
+// A measure whose DAX picks its table: IF([Reads 5 minutes], the 5-minute table, the daily
+// one). Here it is the first: the page filters the fact's own date column, which is what
+// makes [Reads 5 minutes] true in DAX, and names the daily table itself when it wants it.
+const READS_5_MINUTES = /^Reads 5 minutes/;
+
+const JOINS = RELS.filter(r => r.view).map(r => ({ view: r.view, tables: new Set([r.from, r.to]) }));
 function viewOf(tables) {
   const names = [...tables];
   if (names.length === 1) return `v_${names[0]}`;
@@ -203,6 +209,20 @@ function column(table, name) {
   const c = TABLES.get(table)?.get(name);
   if (!c) throw new Error(`DAX: the model has no ${table}[${name}]`);
   return c;
+}
+// The key of a dimension (dim_calendar[date], dim_time[time], dim_region[Region],
+// dim_duid[DUID]) is the fact's own column: no join for it. Which column is known once the
+// query's tables are, so it is written as KEY$dim$column and settled in select(). Reached
+// through another dimension (the region of a unit's fact), that dimension is joined.
+const isKey = (table, name) => RELS.some(r => r.to === table && r.toColumn === name);
+function keyColumn(r, dim, name) {
+  const direct = RELS.find(x => x.to === dim && x.toColumn === name && r.tables.has(x.from));
+  if (direct) return direct.fromColumn;
+  if (r.tables.has(dim) || !r.tables.size) { r.tables.add(dim); return name; }
+  const via = RELS.find(x => x.to === dim && x.toColumn === name && RELS.some(y => y.to === x.from && r.tables.has(y.from)));
+  if (!via) throw new Error(`DAX: nothing relates ${[...r.tables].join(', ')} to ${dim}`);
+  r.tables.add(via.from);
+  return via.fromColumn;
 }
 
 // One expression. `cx` says what a name means here: `col` a model column, `ref` a [column] of
@@ -226,13 +246,26 @@ function scalar(e, cx) {
     case 'ref': {
       const c = cx.ref?.(e.name);
       if (c) return c;
-      if (!MEASURES.has(e.name)) throw new Error(`DAX: there is no column or measure [${e.name}] here`);
-      return scalar(MEASURES.get(e.name), cx);
+      if (!MEASURE_DAX.has(e.name)) throw new Error(`DAX: there is no column or measure [${e.name}] here`);
+      if (e.name === 'Rooftop MW') {
+        cx.touch(ROOFTOP_5MIN);
+        cx.state.agg = true;
+        return atom(cx.filter ? `SUM(t.mw) FILTER (WHERE ${cx.filter})` : 'SUM(t.mw)', 'double');
+      }
+      return scalar(measure(e.name), cx);
     }
     case 'name': {
       const n = cx.names.get(e.name);
+      if (n?.lazy) return scalar(n.lazy, cx);
       if (n?.s == null) throw new Error(`DAX: ${e.name} is not a value here`);
       return n;
+    }
+    // The variables of a measure, translated where they are used: one that is not used (the
+    // days the daily table lacks, in a measure read at 5 minutes) is never looked at.
+    case 'var': {
+      const names = new Map(cx.names);
+      for (const d of e.defs) names.set(d.name, { lazy: d.e });
+      return scalar(e.body, { ...cx, names });
     }
     case 'bin': {
       const l = go(e.l), r = go(e.r);
@@ -283,6 +316,7 @@ function call(e, cx) {
     }
     case 'DIVIDE': return { s: `${par(arg(0), P.mul)} / NULLIF(${arg(1).s}, 0)`, t: 'double', p: P.mul };
     case 'IF': {
+      if (a[0].k === 'ref' && READS_5_MINUTES.test(a[0].name)) return arg(1);
       const v = arg(1);
       return atom(`${when([[arg(0).s, v.s]])}${a[2] ? ` ELSE ${arg(2).s}` : ''} END`, v.t);
     }
@@ -298,8 +332,9 @@ function call(e, cx) {
     case 'ABS': { const x = arg(0); return atom(`abs(${x.s})`, x.t); }
     case 'ROUND': return a[1].v === '0' ? atom(`CAST(ROUND(${arg(0).s}) AS INTEGER)`, 'int') : atom(`ROUND(${arg(0).s}, ${arg(1).s})`, 'double');
     case 'CONVERT': {
-      if (a[1].name?.toUpperCase() !== 'INTEGER') throw new Error('DAX: CONVERT is supported to INTEGER');
-      return atom(`CAST(${arg(0).s} AS INTEGER)`, 'int');
+      const to = a[1].name?.toUpperCase();
+      if (to !== 'INTEGER' && to !== 'DOUBLE') throw new Error('DAX: CONVERT is supported to INTEGER and DOUBLE');
+      return atom(`CAST(${arg(0).s} AS ${to})`, to === 'INTEGER' ? 'int' : 'double');
     }
     case 'QUOTIENT': return { s: `${par(arg(0), P.mul)} // ${par(arg(1), P.mul + 1)}`, t: 'int', p: P.mul };
     case 'DATE': {
@@ -314,14 +349,6 @@ function call(e, cx) {
     }
   }
   throw new Error(`DAX: ${e.fn} is not supported`);
-}
-
-// A calculated column, as SQL over its table read as `alias`. Another calculated column it
-// names is written out in its place: a view cannot name its own columns.
-function calculated(table, name, alias) {
-  const cx = { state: {}, filter: null, names: new Map(), touch() {},
-    col(t, n) { const c = column(t, n); return c.dax ? scalar(c.dax, cx) : atom(`${alias}.${n}`, c.type); } };
-  return cx.col(table, name).s;
 }
 
 // A table expression, as the parts of one SELECT read as `t`. `cols` are its columns in
@@ -341,6 +368,7 @@ function emit(e, r, q, names = q.names) {
     col(table, name) {
       const c = column(table, name);
       if (r.from) throw new Error(`DAX: ${table}[${name}] cannot be read from a derived table; name its column`);
+      if (isKey(table, name)) return atom(`t.KEY$${table}$${name}`, c.type);
       r.tables.add(table);
       return atom(`t.${name}`, c.type);
     },
@@ -420,11 +448,12 @@ function table(e, q) {
         else if (isCall(a[i], 'ROLLUPADDISSUBTOTAL')) {
           const [g, flag] = a[i].args, cols = isCall(g, 'ROLLUPGROUP') ? g.args : [g];
           rolled.push(...cols);
-          flags.push({ name: flag.v, sql: `GROUPING(t.${cols[0].name}) = 1`, type: 'bool', p: P.cmp, agg: true });
+          flags.push({ name: flag.v, first: cols[0], type: 'bool', p: P.cmp, agg: true });
         } else throw new Error('DAX: SUMMARIZECOLUMNS groups by columns; filters go in CALCULATETABLE');
       }
       const key = c => ({ ...named(c.name, emit(c, r, q)), agg: false });
       const keys = plain.map(key), rollup = rolled.map(key);
+      for (const f of flags) f.sql = `GROUPING(${key(f.first).sql}) = 1`;
       r.group = [...keys, ...rollup].map(c => c.sql);
       if (rollup.length) r.sets = `(${r.group.join(', ')}), (${keys.map(c => c.sql).join(', ')})`;
       r.cols = [...keys, ...rollup, ...flags, ...pairs(i).map(([n, x]) => named(n, emit(x, r, q)))];
@@ -492,15 +521,19 @@ function select(r, raw) {
       : c.type === 'double' ? `${/^t\.\w+$/.test(c.sql) ? c.sql : `(${c.sql})`}::DOUBLE` : c.sql;
     return !c.name || s === `t.${c.name}` ? s : `${s} AS ${c.name}`;
   };
-  return [
+  const parts = [
     `SELECT ${r.distinct ? 'DISTINCT ' : ''}${r.cols.map(out).join(', ')}`,
-    `FROM ${r.from ?? viewOf(r.tables)} t`,
     r.where.length && `WHERE ${r.where.join(' AND ')}`,
     r.group?.length && (r.sets ? `GROUP BY GROUPING SETS (${r.sets})` : `GROUP BY ${r.group.join(', ')}`),
     r.having.length && `HAVING ${r.having.join(' AND ')}`,
     r.order.length && `ORDER BY ${r.order.map(o => o.name + (o.desc ? ' DESC' : '')).join(', ')}`,
     r.limit != null && `LIMIT ${r.limit}`,
-  ].filter(Boolean).join(' ');
+  ].filter(Boolean);
+  // The keys of dimensions first: one of them can add a table, and the tables pick the view.
+  const settled = new Map();
+  for (const k of new Set(parts.join(' ').match(/KEY\$\w+\$\w+/g) || [])) settled.set(k, keyColumn(r, ...k.split('$').slice(1)));
+  parts.splice(1, 0, `FROM ${r.from ?? viewOf(r.tables)} t`);
+  return parts.join(' ').replace(/KEY\$\w+\$\w+/g, k => settled.get(k));
 }
 
 // A DAX query as SQL. The same text is translated once.
@@ -523,55 +556,37 @@ const isDax = q => /^\s*EVALUATE\b/i.test(q);
 // The model -> views
 // =============================================================================
 
-// SQL date: rows from this day on are read from `today`, older ones from history / agg.
-const CUT = `CURRENT_DATE - INTERVAL ${C.recent_days} DAY`;
-const OLD = `date < ${CUT}`, RECENT = `date >= ${CUT}`;
-
-// A table as the view builder reads it. A column's SQL is its `sql` annotation, else its
-// sourceColumn; `column` is the source column an optional one needs.
-const entity = s => `${s.schemaName}.${s.entityName}`;
-const DATASETS = MODEL.tables.map(t => {
-  const fields = (t.columns || []).filter(c => c.type !== 'calculated').map(c => {
-    const own = ann(c, 'sql'), renamed = c.sourceColumn !== c.name;
-    return { name: c.name, expression: own ?? (renamed ? c.sourceColumn : undefined), column: own && renamed ? c.sourceColumn : undefined,
-      optional: ann(c, 'optional') === 'true', datatype: c.sourceProviderType, rollup: ann(c, 'rollup') };
-  });
-  const item = { name: `v_${t.name}`, fields }, [first, recent] = t.partitions, s = first.source;
-  if (s.type === 'query') return { ...item, sql: fill(s.query), when: ann(t, 'when')?.split(/,\s*/) };
-  if (recent) return { ...item, partitions: { history: entity(s), recent: entity(recent.source), stitch: ann(t, 'stitch') } };
-  if (s.schemaName) return { ...item, table: entity(s) };
-  const alias = ann(t, 'alias');
-  return { ...item, from: `v_${s.entityName}`, alias,
-    calculated: t.columns.filter(c => c.type === 'calculated').map(c => ({ name: c.name, expression: calculated(t.name, c.name, alias) })) };
-});
-const RELATIONSHIPS = MODEL.relationships.map(r => ({
-  name: r.name, from: ann(r, 'from') ?? `v_${r.fromTable}`, to: `v_${r.toTable}`,
-  on: ann(r, 'on') ? Object.fromEntries(ann(r, 'on').split(/,\s*/).map(p => p.split(/\s*=\s*/))) : { [r.fromColumn]: r.toColumn },
-  fields: ann(r, 'columns')?.split(/,\s*/),
-}));
-const dataset = name => DATASETS.find(d => d.name === name);
+// A table of the model is a table of the lakehouse, copied into the files as it is
+// (scripts/copy_catalog.py): whole in `dim` or `agg`, or split by date over `today` (the
+// newest days, refreshed every 30 minutes) and the half-year files. v_<table> is that table
+// over what is attached; where two files hold a day, `today` has it. One split table is also
+// whole in `agg` (fct_rooftop: the daily charts read it over any range, with no half-year
+// attached): its older days are then read from there.
+const ENTITIES = MODEL.tables.map(t => ({ name: `v_${t.name}`, table: t.partitions[0].source.entityName }));
+const RELATIONSHIPS = RELS.filter(r => r.view).map(r => ({ name: r.view, from: `v_${r.from}`, to: `v_${r.to}`, on: [r.fromColumn, r.toColumn] }));
+// [Rooftop MW] in SQL: a half hour and the five times after it, on the straight line to the
+// next half hour. A time between two half hours exists only if both do; nothing is carried
+// forward. A half hour and its five times are on one date, so a filter on date reaches the scan.
+const MINUTE = '(time // 100) * 60 + time % 100', HHMM = m => `CAST((${m}) // 60 * 100 + (${m}) % 60 AS INTEGER)`;
+const ROOFTOP = { name: `v_${ROOFTOP_5MIN}`, reads: 'v_fct_rooftop', sql: `
+  SELECT a.REGIONID, a.date, ${HHMM('a.minute + 5 * s.step')} AS time,
+    CAST(CASE WHEN s.step = 0 THEN a.mw ELSE a.mw + (b.mw - a.mw) * s.step / 6.0 END AS DOUBLE) AS mw
+  FROM (SELECT *, ${MINUTE} AS minute FROM v_fct_rooftop) a
+  CROSS JOIN range(6) s(step)
+  LEFT JOIN v_fct_rooftop b ON b.REGIONID = a.REGIONID
+    AND b.date = CASE WHEN a.minute = 1410 THEN a.date + 1 ELSE a.date END
+    AND b.time = CASE WHEN a.minute = 1410 THEN 0 ELSE ${HHMM('a.minute + 30')} END
+  WHERE s.step = 0 OR b.mw IS NOT NULL` };
 // In the order they are created: every view after the ones it reads.
-const ITEMS = [...DATASETS.filter(d => !d.sql), ...RELATIONSHIPS, ...DATASETS.filter(d => d.sql)];
+const ITEMS = [...ENTITIES, ...RELATIONSHIPS, ROOFTOP];
+const PERIOD = /^p\d{4}_h[12]$/;
 const mentions = (s, name) => new RegExp(`\\b${name}\\b`, 'i').test(s);
 
-// The views a view reads, and what has to be attached for it to hold all its rows: the
-// half-year files of a date range (`history`) and/or the daily aggregate (`agg`).
-const READS = new Map(), REQUIRES = new Map();
-for (const i of ITEMS) {
-  const source = i.table || i.partitions?.history || '';
-  READS.set(i.name, i.sql ? ITEMS.filter(o => o !== i && mentions(i.sql, o.name)).map(o => o.name)
-    : [i.from, i.to].filter(Boolean));
-  REQUIRES.set(i.name, new Set([
-    ...(source.startsWith('p*.') ? ['history'] : source.startsWith('agg.') ? ['agg'] : []),
-    ...READS.get(i.name).flatMap(r => [...(REQUIRES.get(r) || [])]),
-  ]));
-}
-
 export function createModel(data) {
-  // The views that exist by now: name -> { cols, missing }. `cols` is null where the model
-  // does not say (a query partition); `missing` are the optional columns the deployed files
-  // lack: such a column is still there, reading NULL, and has() says it is not.
-  let _views = new Map();
+  // The views that exist by now, name -> { cols }, and what each needs attached to hold all
+  // its rows: the half-year files of a date range (`history`) or the aggregates (`agg`).
+  let _views = new Map(), _requires = new Map();
+  let _recentFrom = null;    // the first day `today` holds
   const _sent = new Map();   // statement name -> the SQL last run for it
 
   // Columns of every attached table, by `<db>.<table>`.
@@ -588,69 +603,27 @@ export function createModel(data) {
 
   // The SELECT of one view over what is attached, or null if it cannot exist yet.
   function build(item, tables, views) {
-    const none = new Set();
     if (item.table) {
-      return tables.has(item.table) && { sql: `SELECT * FROM ${item.table}`, cols: tables.get(item.table), missing: none };
+      const dbs = [...tables.keys()].filter(t => t.endsWith(`.${item.table}`)).map(t => t.split('.')[0]);
+      const read = db => `SELECT * FROM ${db}.${item.table}`;
+      const periods = dbs.filter(db => PERIOD.test(db)).sort(), recent = dbs.includes('today');
+      const requires = new Set(recent ? ['history'] : dbs.includes('dim') ? [] : ['agg']);
+      if (!dbs.length) return { requires };
+      const older = recent && dbs.includes('agg') ? ['agg'] : periods;
+      const sql = recent && older.length
+        ? `SELECT * FROM (${older.map(read).join(' UNION ALL ')}) WHERE date < DATE '${_recentFrom}' UNION ALL ${read('today')}`
+        : dbs.sort().map(read).join(' UNION ALL ');
+      return { sql, cols: tables.get(`${dbs[0]}.${item.table}`), requires };
     }
-
-    if (item.partitions) {
-      const { history, recent, stitch = 'cut' } = item.partitions;
-      const typed = f => `NULL::${f.datatype ?? 'REAL'} AS ${f.name}`;
-      const select = (table, rolled) => `SELECT ${item.fields.map(f => {
-        const expr = (rolled && f.rollup) || f.expression || f.name;
-        if (f.optional && !tables.get(table).has(f.column ?? f.name)) return typed(f);
-        return f.optional || expr !== f.name ? `${expr} AS ${f.name}` : f.name;
-      }).join(', ')} FROM ${table}`;
-      const periods = [...new Set([...tables.keys()].map(t => t.split('.')[0]))].filter(db => /^p\d{4}_h[12]$/.test(db)).sort();
-      const old = (history.startsWith('p*.') ? periods.map(db => db + history.slice(2)) : [history])
-        .filter(t => tables.has(t)).map(t => `${select(t)} WHERE ${OLD}`).join(' UNION ALL ');
-      const grouped = item.fields.some(f => f.rollup) ? ' GROUP BY ALL' : '';
-      // A recent table a deployed file lacks: no rows, the same columns.
-      const fresh = where => tables.has(recent) ? `${select(recent, true)}${where}${grouped}`
-        : `SELECT ${item.fields.map(typed).join(', ')} WHERE false`;
-      const view = !old ? fresh(stitch === 'cut' ? ` WHERE ${RECENT}` : '')
-        : stitch === 'after_history'
-          ? `${old} UNION ALL SELECT * FROM (${fresh('')})
-              WHERE date > (SELECT COALESCE(MAX(date), DATE '1900-01-01') FROM (${old}))`
-          : `${old} UNION ALL ${fresh(` WHERE ${RECENT}`)}`;
-      return { sql: view, cols: new Set(item.fields.map(f => f.name)), missing: none };
-    }
-
-    if (item.from && !item.to) {
-      const source = views.get(item.from);
-      if (!source) return null;
-      const missing = new Set(), a = item.alias;
-      const fields = item.fields.map(f => {
-        const expr = f.expression || f.name;
-        if (f.optional && !source.cols.has(f.column ?? expr)) { missing.add(f.name); return `NULL::${f.datatype} AS ${f.name}`; }
-        return expr === f.name ? f.name : `${expr} AS ${f.name}`;
-      });
-      const calculated = item.calculated.map(c => `${c.expression} AS ${c.name}`);
-      return {
-        sql: `SELECT ${[`${a}.*`, ...calculated].join(', ')} FROM (SELECT ${fields.join(', ')} FROM ${item.from}) ${a}`,
-        cols: new Set([...item.fields, ...item.calculated].map(f => f.name)), missing,
-      };
-    }
-
     if (item.to) {
-      const from = views.get(item.from), to = views.get(item.to), d = dataset(item.to);
-      if (!from || !to) return null;
-      const a = d.alias || 't', keys = Object.values(item.on);
-      const fields = item.fields || d.fields.map(f => f.name).filter(n => !keys.includes(n));
-      // Worked out again on the joined row: a row with no match gets a value too.
-      const calculated = item.fields ? [] : (d.calculated || []);
-      return {
-        sql: `SELECT f.*, ${[...fields.map(n => `${a}.${n}`), ...calculated.map(c => `${c.expression} AS ${c.name}`)].join(', ')}
-          FROM ${item.from} f LEFT JOIN ${item.to} ${a} ON ${Object.entries(item.on).map(([l, r]) => `f.${l} = ${a}.${r}`).join(' AND ')}`,
-        cols: from.cols && new Set([...from.cols, ...fields, ...calculated.map(c => c.name)]),
-        missing: new Set([...from.missing, ...fields.filter(n => to.missing.has(n))]),
-      };
+      const from = views.get(item.from), to = views.get(item.to);
+      const requires = new Set([..._requires.get(item.from), ..._requires.get(item.to)]);
+      if (!from || !to) return { requires };
+      const [l, r] = item.on, fields = [...to.cols].filter(c => c !== r && !from.cols.has(c));
+      return { sql: `SELECT f.*, ${fields.map(c => `d.${c}`).join(', ')} FROM ${item.from} f LEFT JOIN ${item.to} d ON f.${l} = d.${r}`,
+        cols: new Set([...from.cols, ...fields]), requires };
     }
-
-    const reads = READS.get(item.name).map(r => views.get(r));
-    const met = (item.when || []).every(w => { const [v, c] = w.split('.'); return views.get(v)?.cols?.has(c); });
-    return reads.every(Boolean) && met
-      && { sql: item.sql, cols: null, missing: new Set(reads.flatMap(r => [...r.missing])) };
+    return { sql: views.has(item.reads) && item.sql, cols: null, requires: _requires.get(item.reads) };
   }
 
   // Creates what the model describes over what is attached by now: the statements that are
@@ -658,11 +631,16 @@ export function createModel(data) {
   let _compiling = Promise.resolve();
   const compile = () => _compiling = _compiling.catch(() => {}).then(async () => {
     const tables = await catalog();
+    // A literal in the views, not a subquery: a query inside `today`'s days then reads no
+    // half-year at all (40 ms against 98 for three days of one region).
+    _recentFrom ??= (await data.query(`SELECT CAST(MIN(date) AS VARCHAR) AS d FROM today.fct_region`)).toArray()[0].d;
     const views = new Map();
     const statements = [];
+    _requires = new Map();
     for (const item of ITEMS) {
       const view = build(item, tables, views);
-      if (!view) continue;
+      _requires.set(item.name, view.requires);
+      if (!view.sql) continue;
       views.set(item.name, view);
       statements.push([item.name, `CREATE OR REPLACE VIEW ${item.name} AS ${view.sql}`]);
     }
@@ -683,27 +661,26 @@ export function createModel(data) {
       await compile();
     },
     // True if more history was attached: results the caller cached are stale. A range that
-    // starts on or after the cut is read from `today` alone, so nothing is attached for it:
-    // that is the default "Last 3 days" view.
+    // starts inside the days `today` holds is read from it alone, so nothing is attached for
+    // it: that is the default "Last 3 days" view.
     async ensureHistory(from, to, msg) {
-      const cut = (await data.query(`SELECT CAST(CAST(${CUT} AS DATE) AS VARCHAR) AS d`)).toArray()[0].d;
-      if (from >= cut) return false;
+      if (from >= _recentFrom) return false;
       const changed = await data.ensureHistory(from, to, msg);
       if (changed) await compile();
       return changed;
     },
-    // Whether a view exists and, given a column, whether the deployed files carry it.
+    // Whether a view exists and, given a column, whether it has it.
     has: (view, column) => {
       const v = _views.get(view);
-      return !!v && (!column || (!v.missing.has(column) && (!v.cols || v.cols.has(column))));
+      return !!v && (!column || !v.cols || v.cols.has(column));
     },
     // A DAX query (it starts with EVALUATE) is translated; SQL goes as it is.
     query: async q => data.query(isDax(q) ? toSQL(q) : q),
     toSQL,
     // What a SQL query reads, by the views it names: the 5-minute history of a date range
-    // (ensureHistory) and/or the daily and hourly rollups (attachAgg).
+    // (ensureHistory) and/or the aggregates (attachAgg).
     needs: q => {
-      const reads = kind => ITEMS.some(i => REQUIRES.get(i.name).has(kind) && mentions(q, i.name));
+      const reads = kind => ITEMS.some(i => _requires.get(i.name)?.has(kind) && mentions(q, i.name));
       return { history: reads('history'), agg: reads('agg') };
     },
   };

@@ -3,13 +3,13 @@
     python deploy_onelake.py
 
 The counterpart of deploy_pages.sh for the Fabric app (fabric/), which reads the same files
-from OneLake instead of GitHub Pages. Run after cache_catalog.py's build_* steps with
+from OneLake instead of GitHub Pages. Run after copy_catalog.py's builds with
 ALL_PERIODS=true.
 
-    energy_dim.duckdb                ->  dim_<ts>.duckdb
-    energy_today.duckdb              ->  today_<ts>.duckdb
-    energy_daily_agg.duckdb          ->  agg_<ts>.duckdb
-    energy_data_<YYYY>_h<N>.duckdb   ->  <YYYY>_h<N>_<ts>.duckdb
+    mart_dim.duckdb                  ->  dim_<ts>.duckdb
+    mart_today.duckdb                ->  today_<ts>.duckdb
+    mart_agg.duckdb                  ->  agg_<ts>.duckdb
+    mart_<YYYY>_h<N>.duckdb          ->  <YYYY>_h<N>_<ts>.duckdb
     latest.json                          {"ts": "<ts>", "periods": ["<YYYY>_h<N>", ...]}
 
 The files are immutable and named by timestamp, and two versions are kept: a page opened
@@ -26,14 +26,14 @@ from datetime import datetime, timezone
 from azure.identity import ClientAssertionCredential
 from azure.storage.filedatalake import DataLakeServiceClient
 
-DASHBOARD_DIR = os.path.join(os.path.dirname(__file__), "..", "dashboard")
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "mart_data")
 # Where the app reads: workspace `app`, lakehouse `data`, in another tenant than the catalog's.
 LAKE = "https://onelake.dfs.fabric.microsoft.com"
 WORKSPACE, FOLDER = "app", "data.Lakehouse/Files/data"
 FILES = {
-    "dim": "energy_dim.duckdb",
-    "today": "energy_today.duckdb",
-    "agg": "energy_daily_agg.duckdb",
+    "dim": "mart_dim.duckdb",
+    "today": "mart_today.duckdb",
+    "agg": "mart_agg.duckdb",
 }
 
 
@@ -59,15 +59,15 @@ def publish():
         return lake.get_file_client(f"{FOLDER}/{name}")
 
     # The half-year files of the 5-minute history, as built.
-    periods = sorted(re.fullmatch(r"energy_data_(\d{4}_h[12])\.duckdb", os.path.basename(p)).group(1)
-                     for p in glob.glob(os.path.join(DASHBOARD_DIR, "energy_data_*_h*.duckdb")))
+    periods = sorted(re.fullmatch(r"mart_(\d{4}_h[12])\.duckdb", os.path.basename(p)).group(1)
+                     for p in glob.glob(os.path.join(DATA_DIR, "mart_*_h*.duckdb")))
     if not periods:
-        raise SystemExit("no energy_data_<YYYY>_h<N>.duckdb to publish")
-    files = {**FILES, **{p: f"energy_data_{p}.duckdb" for p in periods}}
+        raise SystemExit("no mart_<YYYY>_h<N>.duckdb to publish")
+    files = {**FILES, **{p: f"mart_{p}.duckdb" for p in periods}}
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
     for prefix, local in files.items():
-        path = os.path.join(DASHBOARD_DIR, local)
+        path = os.path.join(DATA_DIR, local)
         name = f"{prefix}_{ts}.duckdb"
         with open(path, "rb") as f:
             lake_file(name).upload_data(f, overwrite=True, max_concurrency=8)

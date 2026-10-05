@@ -2,14 +2,14 @@ name: Import Data
 
 on:
   schedule:
-    - cron: '0 20 * * *'  # 6am AEST (UTC+10) — daily: dims, the latest two half-years, the aggregate
+    - cron: '0 20 * * *'  # 6am AEST (UTC+10) — daily: dims, the aggregates, the latest two half-years
   workflow_run:
     workflows: ["Process Data"]
     types: [completed]
   workflow_dispatch:  # manual = daily; everything with all_periods
     inputs:
       all_periods:
-        description: 'Export, rebuild and redeploy ALL history, not just the latest two half-years (after a backfill of old data)'
+        description: 'Copy, rebuild and redeploy ALL history, not just the latest two half-years (after a backfill of old data)'
         type: boolean
         default: false
 
@@ -35,15 +35,15 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
     env:
-      # OneLake Iceberg REST catalog — only the .venv-read (export_*) steps touch it.
+      # OneLake Iceberg REST catalog — only the .venv-read (export) steps touch it.
       # Workspace/lakehouse ids come from repo VARIABLES; ONELAKE_TOKEN is minted per run.
       ONELAKE_ENDPOINT: https://onelake.table.fabric.microsoft.com/iceberg
       WAREHOUSE_PATH: ${{ vars.WS_ID }}/${{ vars.LH_ID }}
       AZURE_TRANSPORT_OPTION_TYPE: curl
       CURL_CA_INFO: /etc/ssl/certs/ca-certificates.crt
-      # Daily runs export and rebuild only the latest two half-years and splice them into the
-      # deployed history (scripts/cache_catalog.py export_cutoff, #2). Dispatch with
-      # all_periods=true to export and rebuild everything.
+      # Daily runs copy and rebuild only the latest two half-years (scripts/copy_catalog.py
+      # export_cutoff); the older files stay as deployed. Dispatch with all_periods=true to
+      # copy and rebuild everything.
       ALL_PERIODS: ${{ inputs.all_periods && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
@@ -89,15 +89,14 @@ jobs:
         run: |
           # TWO duckdbs, because this job does two different jobs:
           #
-          #   read  -> reads the Iceberg catalog and writes parquet (export_* steps)
-          #   write -> reads that parquet and writes .duckdb (build_* steps)
+          #   read  -> reads the Iceberg catalog and writes parquet (export)
+          #   write -> reads that parquet and writes .duckdb (build)
           #
           # The .duckdb files are read client-side by the DuckDB-WASM reader already
           # deployed to the NemTracker dashboard, so their on-disk format must stay
           # on the 1.5 line. But 1.5.1 SEGFAULTED reading tables that compaction rewrote
-          # with the 1.6/2.0 dev build -- export_scada_today died with exit 139 as soon as
-          # fct_scada_today had been compacted. Reading the catalog with the same
-          # duckdb that wrote it (requirements.txt's pin) fixes that.
+          # with the 1.6/2.0 dev build. Reading the catalog with the same duckdb that
+          # wrote it (requirements.txt's pin) fixes that.
           #
           # Parquet is the handoff between them, so the dashboard format is untouched.
           python -m venv .venv-read
@@ -105,34 +104,11 @@ jobs:
           python -m venv .venv-write
           .venv-write/bin/pip install -q "duckdb==1.5.6"
 
-      # --- Phase 1: Intraday (always) + dims (daily only) -> deploy immediately ---
-      - name: Export fct_scada_today
-        run: .venv-read/bin/python scripts/cache_catalog.py export_scada_today
+      # The files are a copy of the mart tables, with no rule of their own
+      # (scripts/copy_catalog.py). Which file a table goes into is all that is decided here.
 
-      - name: Export fct_price_today
-        run: .venv-read/bin/python scripts/cache_catalog.py export_price_today
-
-      - name: Export fct_interconnector_today
-        run: .venv-read/bin/python scripts/cache_catalog.py export_interconnector_today
-
-      - name: Build energy_today.duckdb
-        run: .venv-write/bin/python scripts/cache_catalog.py build_today
-
-      - name: Export dim_duid
-        if: steps.mode.outputs.is_daily == 'true'
-        run: .venv-read/bin/python scripts/cache_catalog.py export_dim_duid
-
-      - name: Export dim_calendar
-        if: steps.mode.outputs.is_daily == 'true'
-        run: .venv-read/bin/python scripts/cache_catalog.py export_dim_calendar
-
-      - name: Build energy_dim.duckdb
-        if: steps.mode.outputs.is_daily == 'true'
-        run: .venv-write/bin/python scripts/cache_catalog.py build_dim
-
-      # The same data as a plain copy of the mart tables (scripts/copy_catalog.py): what the
-      # dashboard reads once it is ported to them. Published next to the files above until then.
-      - name: Copy the mart tables (today, and the dimensions daily)
+      # --- Phase 1: the newest days (always) + the dimensions (daily only) -> deploy at once ---
+      - name: Copy the newest days (and the dimensions, daily)
         run: |
           for group in today ${{ steps.mode.outputs.is_daily == 'true' && 'dim' || '' }}; do
             .venv-read/bin/python scripts/copy_catalog.py export $group
@@ -142,11 +118,8 @@ jobs:
       - name: Stage data for deploy
         run: |
           mkdir -p deploy_data/data
-          cp dashboard/energy_today.duckdb deploy_data/data/
-          cp dashboard/metadata.json deploy_data/data/
           cp mart_data/mart_today.duckdb deploy_data/data/
           if [ "${{ steps.mode.outputs.is_daily }}" = "true" ]; then
-            cp dashboard/energy_dim.duckdb deploy_data/data/
             cp mart_data/mart_dim.duckdb deploy_data/data/
           fi
       - name: Deploy to nemtracker (today + dims)
@@ -154,33 +127,9 @@ jobs:
           NEMTRACKER_TOKEN: ${{ secrets.NEMTRACKER_TOKEN }}
         run: bash scripts/deploy_pages.sh ./deploy_data "deploy from ${{ github.repository }}@${{ github.sha }}"
 
-      # --- Phase 2: Daily only (slow): history since the cutoff, or all of it with all_periods ---
-      - name: Export fct_scada
-        if: steps.mode.outputs.is_daily == 'true'
-        run: .venv-read/bin/python scripts/cache_catalog.py export_scada
-
-      - name: Export fct_price
-        if: steps.mode.outputs.is_daily == 'true'
-        run: .venv-read/bin/python scripts/cache_catalog.py export_price
-
-      - name: Export fct_interconnector_today (history)
-        if: steps.mode.outputs.is_daily == 'true'
-        run: .venv-read/bin/python scripts/cache_catalog.py export_interconnector
-
-      - name: Export curtailment
-        if: steps.mode.outputs.is_daily == 'true'
-        run: .venv-read/bin/python scripts/cache_catalog.py export_curtailment
-
-      - name: Build daily databases
-        # Only the half-years export_scada exported; older files stay as deployed.
-        if: steps.mode.outputs.is_daily == 'true'
-        run: .venv-write/bin/python scripts/cache_catalog.py build_daily
-
-      - name: Build daily aggregate database
-        if: steps.mode.outputs.is_daily == 'true'
-        run: .venv-write/bin/python scripts/cache_catalog.py build_daily_agg
-
-      - name: Copy the mart tables (the aggregates and the history)
+      # --- Phase 2: daily only (slow): the aggregates, and the history since the cutoff or all of it ---
+      - name: Copy the aggregates and the history
+        # Only the half-years since the cutoff; older files stay as deployed.
         if: steps.mode.outputs.is_daily == 'true'
         run: |
           for group in agg history; do
@@ -193,10 +142,8 @@ jobs:
         if: steps.mode.outputs.is_daily == 'true'
         run: |
           mkdir -p deploy_daily/data
-          cp dashboard/energy_data_*.duckdb deploy_daily/data/
-          cp dashboard/energy_daily_agg.duckdb deploy_daily/data/
           cp mart_data/mart_agg.duckdb mart_data/mart_[0-9]*_h[12].duckdb deploy_daily/data/
-          # NOTE: daily_manifest.json is intentionally NOT deployed here. It is
+          # NOTE: mart_manifest.json is intentionally NOT deployed here. It is
           # published last (step below) from the period files actually present in
           # the deploy repo, so the manifest can never advertise a file whose
           # .duckdb failed to land in the gh-pages commit. Cause of the 2026-07 H1->H2
@@ -207,6 +154,8 @@ jobs:
         if: steps.mode.outputs.is_daily == 'true'
         env:
           NEMTRACKER_TOKEN: ${{ secrets.NEMTRACKER_TOKEN }}
+          # The files of the export this copy replaced (2026-10-05): removed once, a no-op after.
+          DEPLOY_REMOVE: data/energy_*.duckdb data/daily_manifest.json data/metadata.json
         run: bash scripts/deploy_pages.sh ./deploy_daily "deploy from ${{ github.repository }}@${{ github.sha }}"
 
       # --- Phase 3: Publish manifest LAST, from files actually deployed ---
@@ -219,32 +168,23 @@ jobs:
           # the manifest published below tells the page there is no 5-minute history at all.
           set -o pipefail
           mkdir -p deploy_manifest/data
-          # List energy_data_<YYYY>_h<H>.duckdb actually committed in the deploy
+          # List mart_<YYYY>_h<H>.duckdb actually committed in the deploy
           # repo, derive the period tags, and write a manifest of exactly those.
           gh api repos/NemTracker/nemtracker.github.io/contents/data --paginate \
-            --jq '.[].name | select(test("^energy_data_[0-9]{4}_h[12]\\.duckdb$")) | capture("^energy_data_(?<tag>[0-9]{4}_h[12])\\.duckdb$").tag' \
+            --jq '.[].name | select(test("^mart_[0-9]{4}_h[12]\\.duckdb$")) | capture("^mart_(?<tag>[0-9]{4}_h[12])\\.duckdb$").tag' \
             | sort -u > tags.txt
           if [ ! -s tags.txt ]; then
-            echo "::error::No energy_data_*.duckdb found in the deploy repo; not publishing an empty manifest"
+            echo "::error::No mart_*_h*.duckdb found in the deploy repo; not publishing an empty manifest"
             exit 1
           fi
           python - <<'PY'
           import json
           with open("tags.txt") as f:
               tags = [t.strip() for t in f if t.strip()]
-          with open("deploy_manifest/data/daily_manifest.json", "w") as f:
+          with open("deploy_manifest/data/mart_manifest.json", "w") as f:
               json.dump({"periods": tags}, f)
           print("Manifest:", tags)
           PY
-          # The same for the mart files.
-          gh api repos/NemTracker/nemtracker.github.io/contents/data --paginate \
-            --jq '.[].name | select(test("^mart_[0-9]{4}_h[12]\\.duckdb$")) | capture("^mart_(?<tag>[0-9]{4}_h[12])\\.duckdb$").tag' \
-            | sort -u > mart_tags.txt
-          if [ ! -s mart_tags.txt ]; then
-            echo "::error::No mart_*_h*.duckdb found in the deploy repo; not publishing an empty manifest"
-            exit 1
-          fi
-          python -c "import json; tags = open('mart_tags.txt').read().split(); json.dump({'periods': tags}, open('deploy_manifest/data/mart_manifest.json', 'w')); print('Mart manifest:', tags)"
       - name: Deploy manifest to nemtracker
         if: steps.mode.outputs.is_daily == 'true'
         env:

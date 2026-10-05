@@ -429,16 +429,21 @@ models:
 exposures:
   - name: dashboard_summary
     type: application
-    description: "The NemTracker dashboard. scripts/cache_catalog.py exports every fact and both dimensions into its .duckdb files (energy_dim / energy_today / energy_daily_agg / energy_data_<year>_h<n>): generation, prices and demand, interconnector flows, and rooftop solar as one pseudo-unit per region"
+    description: "The NemTracker dashboard, and the Power BI model: both read these tables through one semantic model (dashboard/semantic/model.bim). scripts/copy_catalog.py copies them as they are into the dashboard's .duckdb files (mart_dim / mart_today / mart_agg / mart_<year>_h<n>)"
     depends_on:
-      - ref('fct_rooftop_pv')
-      - ref('fct_scada')
-      - ref('fct_price')
-      - ref('fct_scada_today')
-      - ref('fct_price_today')
-      - ref('fct_regionsum_today')
-      - ref('fct_interconnector_today')
+      - ref('fct_summary')
+      - ref('fct_region')
+      - ref('fct_rooftop')
+      - ref('fct_interconnector')
+      - ref('fct_curtailment')
+      - ref('fct_summary_daily')
+      - ref('fct_region_daily')
+      - ref('fct_summary_hourly')
+      - ref('fct_region_hourly')
       - ref('dim_duid')
+      - ref('dim_region')
       - ref('dim_calendar')
+      - ref('dim_time')
+      - ref('dim_month')
     owner:
       name: team

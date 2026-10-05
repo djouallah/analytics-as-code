@@ -459,13 +459,14 @@
       </div>
     </div>
     <details class="notes"><summary>How to read these charts</summary><p>
-      Rooftop solar is included, as one unit per region (QLD_PV, NSW_PV, VIC_PV, SA_PV, TAS_PV)
-      from 6 March 2018. It is not metered: AEMO estimates it every half hour, and the 5-minute
-      values here are a straight line between two estimates, the newest one held for up to 55
-      minutes until the next arrives. Deselect "Rooftop solar" in the fuel filter for the
-      utility-scale picture. Renewables = solar, wind, hydro and bioenergy; batteries
+      Rooftop solar is included, per region, from 6 March 2018. It is not a unit (no DUID: it
+      is not in the unit picker, the map or the unit count) and it is not metered: AEMO estimates
+      it every half hour, and the 5-minute values here are a straight line between two
+      estimates, the newest one held for up to 55 minutes until the next arrives. Deselect
+      "Rooftop solar" in the fuel filter for the utility-scale picture. Renewables = solar, wind, hydro and bioenergy; batteries
       ("Grid") are storage and count on neither side. Capture price = generation-weighted price the
-      fuel earned in its region (5-minute prices for ranges up to 30 days, daily averages beyond).
+      fuel earned in its region (5-minute prices for ranges up to 30 days, daily averages beyond;
+      rooftop solar's is weighted by its half hours).
       Capacity factor = energy / (registered capacity &times; hours), over units that generated in
       the range. Net exports = AEMO's net interconnector flow out of each region. Beyond 30 days
       the price heatmap and the average day are hourly, over the whole months the range touches.
@@ -565,7 +566,7 @@
 
   <script type="module">
     import { createDataSource } from "./storage/data.js";
-    import { createModel, UNREGISTERED, ROOFTOP } from "./semantic/compiler.js";
+    import { createModel } from "./semantic/compiler.js";
     import { renderLogs } from "./frontend/logs.js";
 
     // =========================================================================
@@ -617,6 +618,16 @@
     const CHARGING = ' (charging)';
     // The demand line drawn over the generation stack (not a fuel, never stacked or clicked).
     const DEMAND = 'Demand';
+    // Rooftop solar is not a unit of the model: it has its own table, and the page lists it
+    // next to the fuels under this name (section 5, `rooftop`).
+    const ROOFTOP = 'Rooftop solar';
+    // Where units are listed by station or by owner, rooftop is one "station" per region
+    // ("Rooftop solar QLD") under one owner.
+    const ROOFTOP_OWNER = 'Rooftop solar (AEMO estimate)';
+    const rooftopIn = region => `${ROOFTOP} ${region.replace('1', '')}`;
+    // A unit the model gives no fuel.
+    const UNKNOWN = 'Unknown';
+    const fuelName = fuel => fuel ?? UNKNOWN;
     // Every colour of the data is a pair: [on the dark card, on the light card].
     const themed = pair => pair[isLight() ? 1 : 0];
     // Series with no colour of their own (the units of a drilled fuel, an unknown fuel).
@@ -635,7 +646,7 @@
       'Natural gas': ['#d05848', '#da4130'],
       'Wind': ['#5b93e6', '#3d84ea'],
       'Solar': ['#bb8a00', '#c49a0b'],
-      'Rooftop solar': ['#dfc662', '#f1e344'],
+      [ROOFTOP]: ['#dfc662', '#f1e344'],
       'Water': ['#00a795', '#038c6e'],
       'Grid': ['#9749b0', '#8a3190'],
       // The small ones, in the shade of their family.
@@ -648,8 +659,7 @@
       'Kerosene': ['#e0a1bd', '#d98aa9'],
       'Other': ['#8b93a1', '#8a909a'],
       '-': ['#8b93a1', '#8a909a'],
-      [UNREGISTERED]: ['#7d8491', '#9aa0a8'],
-      'Unknown': ['#a3a9b4', '#b4b8be'],
+      [UNKNOWN]: ['#a3a9b4', '#b4b8be'],
     };
     function fuelColor(name) {
       if (name.endsWith(CHARGING)) name = name.slice(0, -CHARGING.length);
@@ -673,7 +683,7 @@
     const crossFilter = { fuel: null, region: null, duids: [] };
     // The header dropdowns win over a chart click-filter (updateFilterTags says so).
     const activeRegion = () => document.getElementById("regionFilter").value || crossFilter.region;
-    // Display names for the AEMO region codes (#1), read from the units' `state` at startup
+    // Display names for the AEMO region codes (#1), read from dim_region at startup
     // (populateFilters); a code without one shows as the code. Display only: filters, SQL and
     // joins keep using the codes, and every UI element maps back to them.
     const REGION_NAMES = {};
@@ -715,9 +725,9 @@
 
     // Where the .duckdb files live and how they are fetched and attached is data.js's business
     // (a host that stores the files differently ships its own). What the data means is the
-    // semantic model's (semantic/model.bim, a Tabular model in TMSL: the tables, the
-    // relationships, the unit's attributes, the measures), which compiler.js turns into
-    // views. The page queries the model in DAX, which compiler.js turns into SQL over
+    // semantic model's (semantic/model.bim, the Tabular model Power BI reads in Direct Lake:
+    // the tables of the lakehouse, the relationships, the measures), which compiler.js turns
+    // into views. The page queries the model in DAX, which compiler.js turns into SQL over
     // those views: it names no attached table and writes no join. The Analyze tab alone is
     // SQL, over the same views.
     const data = createModel(createDataSource({ onStatus: setStatus }));
@@ -917,21 +927,42 @@
     // =========================================================================
 
     // The tables and the measures are the model's (semantic/model.bim), and the queries are
-    // DAX: `scada` is the generation per unit, `unit` the units, `price` the prices. A query
-    // that names a column of `unit` next to `scada` reads the two joined; one that does not
-    // reads the fact alone. That is the compiler's doing (semantic/compiler.js), as is the SQL.
-    // What a date range reads: the 5-minute tables up to 30 days, the daily ones beyond. A
-    // measure belongs to one table, so each grain has its own.
+    // DAX: `fct_summary` is the generation per unit, with the price of its region on the row,
+    // `dim_duid` the units, `fct_region` the regions' price and demand. A query that names a
+    // column of `dim_duid` next to a fact reads the two joined; one that does not reads the
+    // fact alone. That is the compiler's doing (semantic/compiler.js), as is the SQL.
+    // What a date range reads: the 5-minute tables up to 30 days, the daily ones beyond (they
+    // hold the whole days: the day still filling is in the 5-minute tables only). `output` is
+    // what the units made in the grain's unit (MW, or MWh a day), `energy` the same in MWh
+    // and `capture` the price it earned.
+    // A day's energy in the daily table is net of charging, and its price the day's average
+    // in the unit's region: the daily capture price is weighted by days, not by intervals.
+    const DAILY_OUTPUT = 'SUMX(fct_summary_daily, MAX(fct_summary_daily[mwh], 0))';
     function grain() {
       return isIntradayMode()
-        ? { fact: 'scada', price: 'price', val: 'scada[mw]', energy: '[Generation MWh]', share: '[Renewable share]', capture: '[Capture price]' }
-        : { fact: 'scada_daily', price: 'price_daily', val: 'scada_daily[mwh]', energy: '[Generation MWh daily]', share: '[Renewable share daily]', capture: '[Capture price daily]' };
+        ? { fact: 'fct_summary', price: 'fct_region', val: 'fct_summary[mw]',
+            output: '[Generation MW]', energy: '[Generation MWh]', capture: '[Capture price]' }
+        : { fact: 'fct_summary_daily', price: 'fct_region_daily', val: 'fct_summary_daily[mwh]',
+            output: DAILY_OUTPUT, energy: DAILY_OUTPUT,
+            capture: `DIVIDE(SUMX(fct_summary_daily, MAX(fct_summary_daily[mwh], 0) * fct_summary_daily[price]), ${DAILY_OUTPUT})` };
     }
     const daxStr = v => `"${String(v).replace(/"/g, '""')}"`;
     const daxDate = d => `dt"${d}"`;
     const daxDuids = () => `{${crossFilter.duids.map(daxStr).join(', ')}}`;
     // A table under filters: CALCULATETABLE, or the table as it is when there are none.
     const filtered = (table, filters) => filters.length ? `CALCULATETABLE(${table}, ${filters.join(', ')})` : table;
+    // The unit's fuel, and the rules on a unit the charts filter by. Storage is a rule on the
+    // fuel: batteries are "Grid". A unit with no fuel is a generator, which GENERATOR has to
+    // say: in DAX a blank is not "Grid", in SQL a NULL is not unequal to anything.
+    // A chart that leaves storage out under the header's fuel filter uses generatorUnits():
+    // with a fuel picked, the bare rule is the same thing, and with the filter on Grid the
+    // engine then sees fuel = 'Grid' AND fuel <> 'Grid' and reads nothing. It is never
+    // written NOT STORAGE, which the engine does not see through.
+    const FUEL = 'dim_duid[FuelSourceDescriptor]';
+    const STORAGE = `${FUEL} = "Grid"`, RENEWABLE = 'dim_duid[Renewable] = TRUE()';
+    const GENERATOR = `(${FUEL} <> "Grid" || ISBLANK(${FUEL}))`;
+    const generatorUnits = () => activeFuel() && activeFuel() !== UNKNOWN ? `${FUEL} <> "Grid"` : GENERATOR;
+    const fuelIs = fuel => fuel === UNKNOWN ? `ISBLANK(${FUEL})` : `${FUEL} = ${daxStr(fuel)}`;
 
     const dax = {
       // --- Filters: the arguments of a CALCULATETABLE ---
@@ -942,12 +973,13 @@
         return [...dax.dates(fact, from, to), ...dax.unitFilters(fact, withFuel)];
       },
 
-      // Region / fuel / unit filters on `unit` or on a fact related to it.
+      // Region / fuel / unit filters on `dim_duid` or on a fact related to it. Under the fuel
+      // ROOFTOP no unit is left: rooftop solar is not one (see `rooftop` below).
       unitFilters(fact, withFuel = true) {
         const region = activeRegion(), fuel = withFuel ? activeFuel() : null;
         const filters = [];
-        if (region) filters.push(`unit[region] = ${daxStr(region)}`);
-        if (fuel) filters.push(`unit[fuel] = ${daxStr(fuel)}`);
+        if (region) filters.push(`dim_duid[Region] = ${daxStr(region)}`);
+        if (fuel) filters.push(fuelIs(fuel));
         if (crossFilter.duids.length) filters.push(`${fact}[DUID] IN ${daxDuids()}`);
         return filters;
       },
@@ -957,41 +989,81 @@
         return [...dax.dates(table, from, to), ...dax.priceFilters(`${table}[REGIONID]`)];
       },
 
-      // The region filter on a price table; a fuel or unit pick narrows it to their regions.
+      // The region filter on a regional table; a fuel or unit pick narrows it to their regions.
       // The fuel is matched under the name the charts give it, whether it came from the
-      // dropdown or a click. Units missing from dim_duid have no region to narrow to.
+      // dropdown or a click. Rooftop solar is in every region.
       priceFilters(regionCol) {
         const region = activeRegion(), fuel = activeFuel();
-        const regionsOf = filter => [`TREATAS(CALCULATETABLE(VALUES(unit[region]), ${filter}), ${regionCol})`];
+        const regionsOf = filter => [`TREATAS(CALCULATETABLE(VALUES(dim_duid[Region]), ${filter}), ${regionCol})`];
         if (region) return [`${regionCol} = ${daxStr(region)}`];
-        if (crossFilter.duids.length) return regionsOf(`unit[DUID] IN ${daxDuids()}`);
-        if (fuel && fuel !== UNREGISTERED) return regionsOf(`unit[fuel] = ${daxStr(fuel)}`);
+        if (crossFilter.duids.length) return regionsOf(`dim_duid[DUID] IN ${daxDuids()}`);
+        if (fuel && fuel !== ROOFTOP) return regionsOf(fuelIs(fuel));
         return [];
       },
 
+      // --- Rooftop solar ---
+      // It is not a unit. The model keeps AEMO's estimate per region and half hour in a table
+      // of its own (fct_rooftop), which no filter on the units reaches, so a query that lists
+      // the units by fuel or by region adds it itself: one more branch of a UNION, under the
+      // fuel ROOFTOP. `rooftop` is that branch's table, the measure in a column "v": per 5
+      // minutes [Rooftop MW] (the straight line between two half hours), per day
+      // [Rooftop MWh]. It follows the region filter, and is left out when units are picked or
+      // another fuel is (`hasRooftop`). What the model does not hold is the page's to add
+      // where it draws: the newest half hour carried forward (`heldRooftop`, section 6).
+      hasRooftop: ({ withFuel = true } = {}) =>
+        !crossFilter.duids.length && (!withFuel || !activeFuel() || activeFuel() === ROOFTOP),
+      rooftop(keys, measure, filters, region = activeRegion()) {
+        const measures = typeof measure === 'string' ? { v: measure } : measure;
+        return `CALCULATETABLE(SUMMARIZECOLUMNS(${[...keys, ...Object.entries(measures).map(([name, x]) => `"${name}", ${x}`)].join(', ')}), ${
+          [...filters, ...(region ? [`dim_region[Region] = ${daxStr(region)}`] : [])].join(', ')})`;
+      },
+      // Over the header's date range, at its grain: per date (and time), and per region if asked.
+      // Without its 0 MW times (the night): a unit at 0 MW has no row either, and an average
+      // over the intervals would count the nights for rooftop alone.
+      rooftopInRange(intraday, { byRegion = false } = {}) {
+        const { from, to } = getDateRange();
+        return `FILTER(${dax.rooftop(
+          ['dim_calendar[date]', ...(intraday ? ['dim_time[time]'] : []), ...(byRegion ? ['dim_region[Region]'] : [])],
+          intraday ? '[Rooftop MW]' : '[Rooftop MWh]',
+          [...dax.dates('dim_calendar', from, to), ...(intraday ? [] : [dax.wholeDays])])}, [v] <> 0)`;
+      },
+      // At the daily grain, rooftop on the days the units' table holds, and no other.
+      wholeDays: 'TREATAS(VALUES(fct_summary_daily[date]), dim_calendar[date])',
+      // The units' rows and rooftop's, as one table: both sides name the same columns.
+      withRooftop: (units, roof) => roof ? `UNION(${units}, ${roof})` : units,
+
       // --- Filter population ---
-      regions: 'EVALUATE SELECTCOLUMNS(region, "Region", region[region]) ORDER BY [Region]',
-      regionNames: `EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS(unit[region], "state", SELECTEDVALUE(unit[state])),
-        NOT ISBLANK(unit[region]), NOT ISBLANK(unit[state]))`,
-      fuels: `EVALUATE CALCULATETABLE(SELECTCOLUMNS(VALUES(unit[fuel_source]), "fuel", [fuel_source]),
-        NOT ISBLANK(unit[fuel_source])) ORDER BY [fuel]`,
-      allDuids: `EVALUATE CALCULATETABLE(SELECTCOLUMNS(unit, "DUID", unit[DUID], "Region", unit[region], "fuel", unit[fuel]),
-        NOT ISBLANK(unit[DUID])) ORDER BY [DUID]`,
+      // The regions of the market: the ones that have a price (dim_region also holds
+      // Western Australia, another market).
+      regions: 'EVALUATE SELECTCOLUMNS(VALUES(fct_region[REGIONID]), "Region", [REGIONID]) ORDER BY [Region]',
+      regionNames: `EVALUATE CALCULATETABLE(SELECTCOLUMNS(dim_region, "region", dim_region[Region], "state", dim_region[State]),
+        NOT ISBLANK(dim_region[State]))`,
+      fuels: `EVALUATE CALCULATETABLE(SELECTCOLUMNS(VALUES(${FUEL}), "fuel", [FuelSourceDescriptor]),
+        NOT ISBLANK(${FUEL})) ORDER BY [fuel]`,
+      allDuids: `EVALUATE SELECTCOLUMNS(dim_duid, "DUID", dim_duid[DUID], "Region", dim_duid[Region], "fuel", ${FUEL})
+        ORDER BY [DUID]`,
 
       // --- Generation chart ---
-      // Rows with negative output (charging) form their own "<series> (charging)" series, so
-      // they sit below the axis instead of being netted into, and cutting into, the stack.
+      // One row per series and interval (day), and the rows with negative output (charging)
+      // apart: they form their own "<series> (charging)" series, so they sit below the axis
+      // instead of being netted into, and cutting into, the stack. Rooftop is one series, or
+      // one per region when it is the fuel drilled into.
       generation(series, intraday) {
         const { fact, val } = grain();
-        const keys = intraday ? '[date], [time], [series]' : '[date], [series]';
-        return `
-          EVALUATE GROUPBY(
+        const keys = `[date]${intraday ? ', [time]' : ''}`;
+        const units = `GROUPBY(
             CALCULATETABLE(
               SELECTCOLUMNS(${fact}, "date", ${fact}[date]${intraday ? `, "time", ${fact}[time]` : ''},
-                "series", IF(${val} < 0, ${series} & ${daxStr(CHARGING)}, ${series}), "v", ${val}),
+                "series", ${series}, "charging", ${val} < 0, "v", ${val}),
               ${dax.whereGen(fact).join(', ')}),
-            ${keys}, "total_mw", SUMX(CURRENTGROUP(), [v]))
-          ORDER BY ${keys}`;
+            ${keys}, [series], [charging], "total_mw", SUMX(CURRENTGROUP(), [v]))`;
+        const byRegion = activeFuel() === ROOFTOP;
+        const roof = dax.hasRooftop() && `SELECTCOLUMNS(${dax.rooftopInRange(intraday, { byRegion })},
+            "date", [date]${intraday ? ', "time", [time]' : ''}, "series", ${byRegion ? '[Region]' : daxStr(ROOFTOP)},
+            "charging", FALSE(), "total_mw", [v])`;
+        return `
+          EVALUATE ${dax.withRooftop(units, roof)}
+          ORDER BY ${keys}, [series]`;
       },
 
       // --- Price chart ---
@@ -1006,17 +1078,17 @@
 
       // --- Demand line over the generation chart ---
       // Operational demand of the filtered region, or the sum of all regions: MW per interval,
-      // MWh per day. An interval (day) where a region has no demand yet is left out, not
-      // undercounted.
+      // MWh per day (the daily table holds the day's average MW). An interval (day) where a
+      // region has no demand yet is left out, not undercounted.
       demand(intraday) {
         const region = activeRegion();
         const { from, to } = getDateRange();
-        const [t, val] = intraday ? ['price', 'price[demand]'] : ['price_daily', 'price_daily[demand_mwh]'];
+        const [t, hours] = intraday ? ['fct_region', ''] : ['fct_region_daily', '24 * '];
         const keys = `${t}[date]${intraday ? `, ${t}[time]` : ''}`;
         return `
           EVALUATE FILTER(
             CALCULATETABLE(
-              SUMMARIZECOLUMNS(${keys}, "demand", SUM(${val}), "known", COUNT(${val}), "rows", COUNTROWS(${t})),
+              SUMMARIZECOLUMNS(${keys}, "demand", ${hours}SUM(${t}[demand]), "known", COUNT(${t}[demand]), "rows", COUNTROWS(${t})),
               ${[...dax.dates(t, from, to), ...(region ? [`${t}[REGIONID] = ${daxStr(region)}`] : [])].join(', ')}),
             [known] = [rows])
           ORDER BY ${keys}`;
@@ -1028,9 +1100,9 @@
         return `
           EVALUATE SELECTCOLUMNS(
             CALCULATETABLE(
-              SUMMARIZECOLUMNS(${fact}[DUID], unit[fuel], unit[region], unit[lat], unit[lon], "mw", AVERAGE(${val})),
-              ${[...dax.whereGen(fact), 'NOT ISBLANK(unit[lat])'].join(', ')}),
-            "DUID", [DUID], "fuel", [fuel], "Region", [region], "lat", [lat], "lon", [lon], "mw", [mw])`;
+              SUMMARIZECOLUMNS(${fact}[DUID], ${FUEL}, dim_duid[Region], dim_duid[latitude], dim_duid[longitude], "mw", AVERAGE(${val})),
+              ${[...dax.whereGen(fact), 'NOT ISBLANK(dim_duid[latitude])'].join(', ')}),
+            "DUID", [DUID], "fuel", [FuelSourceDescriptor], "Region", [Region], "lat", [latitude], "lon", [longitude], "mw", [mw])`;
       },
 
       generatorCount() {
@@ -1038,24 +1110,38 @@
         return `EVALUATE CALCULATETABLE(ROW("cnt", DISTINCTCOUNT(${fact}[DUID])), ${dax.whereGen(fact).join(', ')})`;
       },
 
-      // --- Cutoff: the newest interval, as a date and a time ---
-      cutoff: `EVALUATE VAR newest = MAX(scada_today[date])
-        RETURN CALCULATETABLE(ROW("date", MAX(scada_today[date]), "time", MAX(scada_today[time])), scada_today[date] = newest)`,
+      // --- Cutoff: the newest interval of the units, as a date and a time ---
+      // On the newest date, which the date inputs know (populateFilters): a constant, so only
+      // that day is read.
+      cutoff: () => `EVALUATE CALCULATETABLE(ROW("date", MAX(fct_summary[date]), "time", MAX(fct_summary[time])),
+        fct_summary[date] = ${daxDate(document.getElementById('dateTo').max)})`,
+
+      // The newest half hour of rooftop solar: its estimate in each region.
+      rooftopNewest: `EVALUATE VAR newestDate = MAX(fct_rooftop[date])
+        VAR newestTime = CALCULATE(MAX(fct_rooftop[time]), fct_rooftop[date] = newestDate)
+        RETURN CALCULATETABLE(
+          SELECTCOLUMNS(fct_rooftop, "region", fct_rooftop[REGIONID], "date", fct_rooftop[date], "time", fct_rooftop[time], "mw", fct_rooftop[mw]),
+          fct_rooftop[date] = newestDate, fct_rooftop[time] = newestTime)`,
     };
 
     // The same filters in SQL, for the Analyze tab: its queries are SQL over the model's views
-    // (v_gen* read as `g`, v_price* as `p`), shown to the user and edited by hand.
+    // (a unit fact joined to dim_duid read as `g`, a regional table as `p`), shown to the user
+    // and edited by hand. They list units, so rooftop solar is not in them.
     const sql = {
       whereGen({ withFuel = true } = {}) {
         const { from, to } = getDateRange();
         return [`g.date >= ${sqlStr(from)} AND g.date <= ${sqlStr(to)}`, ...sql.unitFilters('g', withFuel)].join(" AND ");
       },
 
+      // A unit without a fuel is under UNKNOWN, as in the charts.
+      fuel: `COALESCE(g.FuelSourceDescriptor, ${sqlStr(UNKNOWN)}) AS fuel`,
+      fuelIs: (col, fuel) => fuel === UNKNOWN ? `${col} IS NULL` : `${col} = ${sqlStr(fuel)}`,
+
       unitFilters(a, withFuel = true) {
         const region = activeRegion(), fuel = withFuel ? activeFuel() : null;
         const clauses = [];
-        if (region) clauses.push(`${a}.region = ${sqlStr(region)}`);
-        if (fuel) clauses.push(`${a}.fuel = ${sqlStr(fuel)}`);
+        if (region) clauses.push(`${a}.Region = ${sqlStr(region)}`);
+        if (fuel) clauses.push(sql.fuelIs(`${a}.FuelSourceDescriptor`, fuel));
         if (crossFilter.duids.length) clauses.push(`${a}.DUID IN (${duidList()})`);
         return clauses;
       },
@@ -1068,8 +1154,8 @@
       priceFilters(regionCol) {
         const region = activeRegion(), fuel = activeFuel();
         if (region) return [`${regionCol} = ${sqlStr(region)}`];
-        if (crossFilter.duids.length) return [`${regionCol} IN (SELECT region FROM v_unit WHERE DUID IN (${duidList()}))`];
-        if (fuel && fuel !== UNREGISTERED) return [`${regionCol} IN (SELECT region FROM v_unit WHERE fuel = ${sqlStr(fuel)})`];
+        if (crossFilter.duids.length) return [`${regionCol} IN (SELECT Region FROM v_dim_duid WHERE DUID IN (${duidList()}))`];
+        if (fuel && fuel !== ROOFTOP) return [`${regionCol} IN (SELECT Region FROM v_dim_duid WHERE ${sql.fuelIs('FuelSourceDescriptor', fuel)})`];
         return [];
       },
     };
@@ -1173,6 +1259,35 @@
         + `<polyline points="${line}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
     }
 
+    // --- Rooftop solar past its newest half hour ---
+    // AEMO's estimate lands 30 to 60 minutes after its half hour, so the units' newest
+    // intervals have no rooftop yet and a stack would end in a cliff. Where the page draws 5
+    // minutes it carries the newest estimate forward, for up to 55 minutes and never past the
+    // units' newest interval. These are the rows to add to [Rooftop MW]'s for a date range:
+    // one per interval, summed over the regions the filter leaves (or one per region). The
+    // model stores none of this: a value that is only held is the reader's to work out.
+    const newestInterval = async () => (await runQuery(dax.cutoff()))[0];
+    async function heldRooftop(from, to, { byRegion = false, region = activeRegion() } = {}) {
+      const [estimates, newest] = await Promise.all([runQuery(dax.rooftopNewest), newestInterval()]);
+      if (!newest?.date) return [];
+      const held = new Map();
+      for (const e of estimates) {
+        if (e.mw == null || (region && e.region !== region)) continue;
+        let date = e.date, minute = Math.floor(e.time / 100) * 60 + e.time % 100;
+        for (let step = 1; step < 12; step++) {
+          minute += 5;
+          if (minute >= 1440) { minute -= 1440; date = shiftDate(date, 1); }
+          const time = Math.floor(minute / 60) * 100 + minute % 60;
+          if (date > newest.date || (date === newest.date && time > newest.time)) break;
+          if (date < from || date > to) continue;
+          const key = `${date}|${time}|${byRegion ? e.region : ''}`;
+          const row = held.get(key) ?? held.set(key, { date, time, region: byRegion ? e.region : null, mw: 0 }).get(key);
+          row.mw += e.mw;
+        }
+      }
+      return [...held.values()];
+    }
+
     // --- Generation by Fuel Type (stacked area) ---
     // In drill mode the chart shows the top `drillShown` series; clicking "Other units" shows
     // 15 more. Back to 15 whenever the drill (fuel, region, dates) changes.
@@ -1182,30 +1297,38 @@
       const intraday = isIntradayMode();
       const unit = intraday ? 'MW' : 'MWh';
       // A fuel chosen in the dropdown drills into its units exactly like clicking the fuel.
-      const drillFuel = activeFuel();
+      // Rooftop solar has no units: its drill is by region.
+      const drillFuel = activeFuel(), rooftopDrill = drillFuel === ROOFTOP;
 
       // In a drill, units can be grouped by power station (units without one stay on their own).
-      const stationsAvailable = drillFuel ? hasCapacity() : false;
+      const stationsAvailable = drillFuel && !rooftopDrill ? hasCapacity() : false;
       document.getElementById('drillLevelWrap').hidden = !stationsAvailable;
       const byStation = stationsAvailable && document.getElementById('drillLevel').value === 'station';
       document.getElementById("title-generation").textContent = drillFuel
-        ? `${drillFuel} by ${byStation ? 'station' : 'DUID'} (${unit})`
+        ? `${drillFuel} by ${byStation ? 'station' : rooftopDrill ? 'region' : 'DUID'} (${unit})`
         : `Generation by Fuel Type (${unit})`;
 
       const { fact } = grain();
       const seriesCol = drillFuel
-        ? (byStation ? `COALESCE(RELATED(unit[station]), ${fact}[DUID])` : `${fact}[DUID]`)
-        : 'RELATED(unit[fuel])';
-      const key = [drillFuel, byStation, activeRegion(), ...Object.values(getDateRange())].join('|');
+        ? (byStation ? `COALESCE(RELATED(dim_duid[StationName]), ${fact}[DUID])` : `${fact}[DUID]`)
+        : `RELATED(${FUEL})`;
+      const { from, to } = getDateRange();
+      const key = [drillFuel, byStation, activeRegion(), from, to].join('|');
       if (key !== drillKey) { drillKey = key; drillShown = DRILL_STEP; }
 
       // Demand is regional, so it only sits over the fuel view, not over a drill or a unit pick.
       const withDemand = !drillFuel && !crossFilter.duids.length;
-      const [data, demandRows] = await Promise.all([
+      const [rows, demandRows, held] = await Promise.all([
         runQuery(dax.generation(seriesCol, intraday)),
         withDemand ? runQuery(dax.demand(intraday)) : [],
+        intraday && dax.hasRooftop() ? heldRooftop(from, to, { byRegion: rooftopDrill }) : [],
       ]);
       if (seq !== _renderSeq) return;
+      // The series under the names the chart gives them: a unit without a fuel, a region of
+      // the rooftop drill, what is charging.
+      const named = name => rooftopDrill ? rooftopIn(name) : fuelName(name);
+      const data = rows.map(r => ({ date: r.date, time: r.time, series: named(r.series) + (r.charging ? CHARGING : ''), total_mw: r.total_mw }));
+      for (const h of held) data.push({ date: h.date, time: h.time, series: rooftopDrill ? rooftopIn(h.region) : ROOFTOP, total_mw: h.mw });
       if (!data.length) {
         showEmpty('chart-generation');
         setKpi('kpiGen', '--'); setKpi('kpiTopFuel', '--');
@@ -1311,10 +1434,13 @@
         if (!params.seriesName || params.seriesName === DEMAND) return;
         if (isOther(params.seriesName)) { drillShown += DRILL_STEP; renderAll(); return; }
         const name = params.seriesName.endsWith(CHARGING) ? params.seriesName.slice(0, -CHARGING.length) : params.seriesName;
-        if (drillFuel) {
+        if (rooftopDrill) {
+          const code = Object.keys(REGION_NAMES).find(c => rooftopIn(c) === name) ?? name;
+          crossFilter.region = crossFilter.region === code ? null : code;
+        } else if (drillFuel) {
           // A station toggles all its units as a group; a unit toggles itself.
           const duids = byStation
-            ? (await runQuery(`EVALUATE CALCULATETABLE(VALUES(unit[DUID]), unit[station] = ${daxStr(name)})`)).map(r => r.DUID)
+            ? (await runQuery(`EVALUATE CALCULATETABLE(VALUES(dim_duid[DUID]), dim_duid[StationName] = ${daxStr(name)})`)).map(r => r.DUID)
             : [];
           const group = duids.length ? duids : [name];
           const allOn = group.every(d => crossFilter.duids.includes(d));
@@ -1349,35 +1475,58 @@
     // --- Right now: the newest interval, whatever the date range ---
     // The page's lead: the renewable share of the output, the output by fuel as one bar, and
     // each region's price, demand and net flow. It follows the region filter only (the fuel,
-    // unit and date filters are about the charts below). The share is the same measure as the
-    // Renewables KPI; the bar is the stack of the generation chart at its last interval, so
-    // batteries discharging are in it, and what is charging is said beside it.
+    // unit and date filters are about the charts below). The share is worked out like the
+    // Renewables KPI's; the bar is the stack of the generation chart at its last interval, so
+    // batteries discharging are in it, and what is charging is said beside it. Rooftop solar
+    // is in both: its estimate for that interval or, as the estimate trails the units, the
+    // newest one carried forward (heldRooftop).
     const MIX_MIN_SHARE = 0.01;   // fuels below this share of the output are drawn as one "Other"
     async function renderNow(seq) {
       const region = activeRegion();
-      const [mix, prices] = await Promise.all([
-        // Per fuel, and the row without a fuel: all of them.
-        runQuery(`EVALUATE ${filtered(`
-          SUMMARIZECOLUMNS(ROLLUPADDISSUBTOTAL(gen_latest[fuel], "all"),
-            "mw", [Generation MW latest], "charging", [Charging MW latest], "share", [Renewable share latest],
-            "date", MAX(gen_latest[date]), "time", MAX(gen_latest[time]))`,
-          region ? [`gen_latest[region] = ${daxStr(region)}`] : [])}`),
+      const now = await newestInterval();
+      const regionIs = column => region ? [`${column} = ${daxStr(region)}`] : [];
+      const [units, held, prices] = await Promise.all([
+        // Per fuel: its output, and what of it is charging, renewable and a generator's.
+        now?.date ? runQuery(`
+          EVALUATE UNION(
+            SELECTCOLUMNS(
+              CALCULATETABLE(
+                SUMMARIZECOLUMNS(${FUEL}, "mw", [Generation MW], "charging", SUMX(fct_summary, MIN(fct_summary[mw], 0)),
+                  "renewable", CALCULATE([Generation MW], ${RENEWABLE}), "generator", CALCULATE([Generation MW], ${GENERATOR})),
+                ${[`fct_summary[date] = ${daxDate(now.date)}`, `fct_summary[time] = ${now.time}`, ...regionIs('dim_duid[Region]')].join(', ')}),
+              "fuel", [FuelSourceDescriptor], "mw", [mw], "charging", [charging], "renewable", [renewable], "generator", [generator]),
+            SELECTCOLUMNS(
+              CALCULATETABLE(ROW("v", [Rooftop MW]),
+                ${[`dim_calendar[date] = ${daxDate(now.date)}`, `dim_time[time] = ${now.time}`, ...regionIs('dim_region[Region]')].join(', ')}),
+              "fuel", ${daxStr(ROOFTOP)}, "mw", [v], "charging", 0, "renewable", [v], "generator", [v]))`) : [],
+        now?.date ? heldRooftop(now.date, now.date) : [],
+        // Each region at the newest interval of the regional table, which can be ahead of the units'.
         runQuery(`
-          EVALUATE SELECTCOLUMNS(price_latest, "region", price_latest[REGIONID], "price", price_latest[price],
-            "demand", price_latest[demand], "net", price_latest[net_interchange])
+          EVALUATE VAR newestDate = MAX(fct_region[date])
+          VAR newestTime = CALCULATE(MAX(fct_region[time]), fct_region[date] = newestDate)
+          RETURN CALCULATETABLE(
+            SELECTCOLUMNS(fct_region, "region", fct_region[REGIONID], "price", fct_region[price],
+              "demand", fct_region[demand], "net", fct_region[net_interchange]),
+            fct_region[date] = newestDate, fct_region[time] = newestTime)
           ORDER BY [region]`),
       ]);
       if (seq !== _renderSeq) return;
-      const all = mix.find(r => r.fuel == null), total = all?.mw ?? 0;
+      const mix = units.filter(r => r.mw != null).map(r => ({ ...r, fuel: fuelName(r.fuel) }));
+      const heldNow = held.find(h => h.time === now.time);
+      if (heldNow && !mix.some(r => r.fuel === ROOFTOP)) {
+        mix.push({ fuel: ROOFTOP, mw: heldNow.mw, charging: 0, renewable: heldNow.mw, generator: heldNow.mw });
+      }
+      const sum = column => mix.reduce((s, r) => s + (r[column] ?? 0), 0);
+      const total = sum('mw'), renewable = sum('generator') ? 100 * sum('renewable') / sum('generator') : null;
       const figure = document.getElementById('heroFigure');
       figure.classList.remove('skeleton');
-      document.getElementById('heroAsOf').textContent = all?.date
-        ? `as of ${formatDate(all.date).replace(/ \d{4}$/, '')}, ${formatTime(all.time)} AEST` : '';
+      document.getElementById('heroAsOf').textContent = now?.date
+        ? `as of ${formatDate(now.date).replace(/ \d{4}$/, '')}, ${formatTime(now.time)} AEST` : '';
       const where = region ? `in ${regionName(region)}` : 'across the NEM';
       const mwText = v => `${Math.round(v).toLocaleString()} MW`;
-      // The share leads; a dim_duid that doesn't say what is renewable leaves the output to.
-      if (all?.share != null) {
-        setKpiNumber('heroValue', all.share, v => v.toFixed(0));
+      // The share leads; with no generator's output there is none, and the output does.
+      if (renewable != null) {
+        setKpiNumber('heroValue', renewable, v => v.toFixed(0));
         document.getElementById('heroUnit').textContent = '%';
         document.getElementById('heroCaption').textContent = `renewable ${where}`;
         document.getElementById('heroSub').textContent = `${mwText(total)} generating`;
@@ -1389,7 +1538,7 @@
       }
 
       // --- the mix bar and its legend ---
-      const fuels = mix.filter(r => r.fuel != null && r.mw > 0).sort((a, b) => b.mw - a.mw);
+      const fuels = mix.filter(r => r.mw > 0).sort((a, b) => b.mw - a.mw);
       const shown = fuels.filter(r => r.mw >= MIX_MIN_SHARE * total), rest = fuels.filter(r => r.mw < MIX_MIN_SHARE * total);
       const label = fuel => fuel === 'Grid' ? 'Battery' : fuel;
       const share = v => total ? `${(100 * v / total).toFixed(v >= 0.1 * total ? 0 : 1)}%` : '';
@@ -1404,7 +1553,7 @@
       document.getElementById('mixTitle').textContent = `Generation by fuel ${where} (MW)`;
       document.getElementById('mixBar').innerHTML = items.map(it =>
         `<button type="button" class="mix-seg${it.fuel ? '' : ' static'}" style="flex-grow:${Math.round(it.mw)};background:${it.color}" ${attrs(it)} aria-label="${escapeHtml(it.name)} ${mwText(it.mw)}"></button>`).join('');
-      const charging = -(all?.charging ?? 0);
+      const charging = -sum('charging');
       document.getElementById('mixLegend').innerHTML = items.map(it =>
         `<button type="button" class="mix-chip${it.fuel ? '' : ' static'}${it.fuel && it.fuel === picked ? ' active' : ''}" ${attrs(it)}>
           <span class="sw" style="background:${it.color}"></span>${escapeHtml(it.name)} <b>${Math.round(it.mw).toLocaleString()}</b> <i>${share(it.mw)}</i></button>`).join('')
@@ -1528,20 +1677,46 @@
     //     negative prices, capacity factor)
     // =========================================================================
 
-    // Renewable share (%) per interval (or day), and of the whole range: the one measure at
-    // two grains, the range's row being the one without a date. The fuel filter is ignored on
-    // purpose.
+    // The renewable share is the ratio of two sums: "re", what the renewable units made, and
+    // "gen", what the generators made (storage is on neither side). Rooftop solar is in both.
+    const shareParts = output => ({ re: `CALCULATE(${output}, ${RENEWABLE})`, gen: `CALCULATE(${output}, ${GENERATOR})` });
+    const shareOf = sums => sums?.gen ? 100 * sums.re / sums.gen : null;
+
+    // Renewable share (%) per interval (or day), and of the whole range. The query adds up
+    // the units' two sums and rooftop's per interval; the newest rooftop estimate is carried
+    // forward here (heldRooftop), which is why the division is here too. The fuel filter is
+    // ignored on purpose.
     async function renewableShare() {
       const intraday = isIntradayMode();
-      const { fact, share } = grain();
-      const keys = `${fact}[date]${intraday ? `, ${fact}[time]` : ''}`;
-      const rows = await runQuery(`
-        EVALUATE CALCULATETABLE(
-          SUMMARIZECOLUMNS(ROLLUPADDISSUBTOTAL(${intraday ? `ROLLUPGROUP(${keys})` : keys}, "range"),
-            "share", ${share}),
-          ${dax.whereGen(fact, { withFuel: false }).join(', ')})
-        ORDER BY ${keys}`);
-      return { rows: rows.filter(r => r.date != null), overall: rows.find(r => r.date == null)?.share };
+      const { fact, output } = grain();
+      const { from, to } = getDateRange();
+      const keys = `[date]${intraday ? ', [time]' : ''}`, named = `"date", [date]${intraday ? ', "time", [time]' : ''}`;
+      const parts = shareParts(output);
+      const units = `SELECTCOLUMNS(
+            CALCULATETABLE(
+              SUMMARIZECOLUMNS(${fact}[date]${intraday ? `, ${fact}[time]` : ''}, "re", ${parts.re}, "gen", ${parts.gen}),
+              ${dax.whereGen(fact, { withFuel: false }).join(', ')}),
+            ${named}, "re", [re], "gen", [gen])`;
+      const withRooftop = dax.hasRooftop({ withFuel: false });
+      const [rows, held] = await Promise.all([
+        runQuery(withRooftop ? `
+          EVALUATE GROUPBY(
+            UNION(${units},
+              SELECTCOLUMNS(${dax.rooftopInRange(intraday)}, ${named}, "re", [v], "gen", [v])),
+            ${keys}, "re", SUMX(CURRENTGROUP(), [re]), "gen", SUMX(CURRENTGROUP(), [gen]))
+          ORDER BY ${keys}` : `
+          EVALUATE ${units}
+          ORDER BY ${keys}`),
+        intraday && withRooftop ? heldRooftop(from, to) : [],
+      ]);
+      const heldAt = new Map(held.map(h => [`${h.date}|${h.time}`, h.mw]));
+      const range = { re: 0, gen: 0 };
+      const shares = rows.map(r => {
+        const more = heldAt.get(`${r.date}|${r.time}`) ?? 0, re = (r.re ?? 0) + more, gen = (r.gen ?? 0) + more;
+        range.re += re; range.gen += gen;
+        return { date: r.date, time: r.time, share: shareOf({ re, gen }) };
+      });
+      return { rows: shares, overall: shareOf(range) };
     }
 
     async function updateRenewablesKpi(seq) {
@@ -1555,7 +1730,7 @@
     }
 
     // Change against the days just before the range, as many as the range has. Both sides come
-    // from the daily views in one query each, so this never opens the 5-minute history. The
+    // from the daily tables in one query each, so this never opens the 5-minute history. The
     // newest day in the data is still filling and is left out of both sides.
     async function updateKpiDeltas(seq) {
       const show = (id, text = '', cls = '') => {
@@ -1569,8 +1744,28 @@
       const last = to >= maxDate ? shiftDate(maxDate, -1) : to;
       const days = Math.round((new Date(last) - new Date(from)) / 86400000) + 1;
       const prevFrom = shiftDate(from, -days);
-      if (!(days >= 1) || prevFrom < minDate) return ids.forEach(id => show(id));
+      // The daily tables come with agg; init draws this again once it is attached.
+      if (!aggLoaded || !(days >= 1) || prevFrom < minDate) return ids.forEach(id => show(id));
 
+      // The units' output, as two rows: the range ("now") and the days before it, each with
+      // the days it holds and its sums (name -> DAX). Rooftop is added to every sum; its days
+      // count only when it is all there is, under its own fuel.
+      const pass = names => names.map(n => `"${n}", [${n}]`).join(', ');
+      const periods = (sums, withFuel) => {
+        const names = Object.keys(sums);
+        const units = `SELECTCOLUMNS(
+            CALCULATETABLE(
+              SUMMARIZECOLUMNS(fct_summary_daily[date], ${names.map(n => `"${n}", ${sums[n]}`).join(', ')}),
+              ${[...dax.dates('fct_summary_daily', prevFrom, last), ...dax.unitFilters('fct_summary_daily', withFuel)].join(', ')}),
+            "date", [date], "days", 1, ${pass(names)})`;
+        const roof = dax.hasRooftop({ withFuel }) && `SELECTCOLUMNS(
+            ${dax.rooftop(['dim_calendar[date]'], '[Rooftop MWh]', [...dax.dates('dim_calendar', prevFrom, last), dax.wholeDays])},
+            "date", [date], "days", ${withFuel && activeFuel() === ROOFTOP ? 1 : 0}, ${names.map(n => `"${n}", [v]`).join(', ')})`;
+        return `
+          EVALUATE GROUPBY(
+            SELECTCOLUMNS(${dax.withRooftop(units, roof)}, "now", [date] >= ${daxDate(from)}, "days", [days], ${pass(names)}),
+            [now], "days", SUMX(CURRENTGROUP(), [days]), ${names.map(n => `"${n}", SUMX(CURRENTGROUP(), [${n}])`).join(', ')})`;
+      };
       // One row: a measure and its days over the range (n1, v1) and over the days before (n0, v0).
       const both = (t, measure, filters) => {
         const side = (i, cmp) => `"n${i}", CALCULATE(DISTINCTCOUNT(${t}[date]), ${t}[date] ${cmp} ${daxDate(from)}), `
@@ -1579,16 +1774,15 @@
       };
       // Generation with no region or fuel filter names nothing of the unit: the plain fact.
       const [gen, price, re] = await Promise.all([
-        runQuery(both('scada_daily', '[Generation MWh daily] / DISTINCTCOUNT(scada_daily[date])',
-          dax.unitFilters('scada_daily'))),
-        runQuery(both('price_daily', 'AVERAGE(price_daily[price])', dax.priceFilters('price_daily[REGIONID]'))),
-        runQuery(both('scada_daily', '[Renewable share daily]',
-          dax.unitFilters('scada_daily', false))),
+        runQuery(periods({ mwh: DAILY_OUTPUT }, true)),
+        runQuery(both('fct_region_daily', 'AVERAGE(fct_region_daily[price])', dax.priceFilters('fct_region_daily[REGIONID]'))),
+        runQuery(periods(shareParts(DAILY_OUTPUT), false)),
       ]);
       if (seq !== _renderSeq) return;
       const vs = days === 1 ? 'vs the day before' : `vs previous ${days} days`;
-      // A side that doesn't hold every day of its period (the daily history not attached yet,
-      // a gap in the data) gives no comparison.
+      // A side that doesn't hold every day of its period (a gap in the data, a daily table
+      // that is behind) gives no comparison.
+      const sides = rows => [true, false].map(now => rows.find(r => r.now === now && r.days === days));
       const pair = ([r]) => [1, 0].map(i => r?.[`n${i}`] === days ? r[`v${i}`] : undefined);
       // A change that rounds to zero reads "unchanged", not as an arrow on 0.0.
       const delta = (id, d, fmt, cls = '') => {
@@ -1596,7 +1790,7 @@
         if (+size === 0) show(id, `unchanged ${vs}`);
         else show(id, `${d > 0 ? '▲' : '▼'} ${fmt(size)} ${vs}`, cls && (d > 0 ? 'up' : 'down'));
       };
-      const [g1, g0] = pair(gen), [p1, p0] = pair(price), [r1, r0] = pair(re);
+      const [g1, g0] = sides(gen).map(r => r && r.mwh / days), [p1, p0] = pair(price), [r1, r0] = sides(re).map(shareOf);
       if (g1 == null || !g0) show(ids[0]);
       else delta(ids[0], 100 * (g1 - g0) / g0, s => `${s}%`);
       if (p1 == null || p0 == null) show(ids[1]);
@@ -1604,7 +1798,6 @@
       if (r1 == null || r0 == null) show(ids[2]);
       else delta(ids[2], r1 - r0, s => `${s} pts`, 'coloured');
     }
-
     async function renderInsights(seq) {
       await Promise.all([renderRenewables(seq), renderHeatmap(seq),
         renderProfile(seq), renderCapture(seq), renderNegative(seq), renderNetExports(seq), renderCapacityFactor(seq),
@@ -1656,28 +1849,42 @@
     const priceColor = v => v == null ? '#888' : PRICE_BANDS.find(b => (b.gte == null || v >= b.gte) && (b.lt == null || v < b.lt)).color;
 
     const icState = { frames: [], flows: new Map(), prices: new Map(), frame: 0, timer: null, ids: [],
-      gens: new Map(), gensLoading: new Set(), idle: new Map(), events: [] };
+      gens: new Map(), rooftop: new Map(), gensLoading: new Set(), idle: new Map(), events: [] };
 
     // Generators on the flow map. Every unit's fuel, region and position once; their output one
-    // day at a time, one row per interval ("DUID:mw,DUID:mw,...").
+    // day at a time, one row per interval ("DUID:mw,DUID:mw,..."). Rooftop solar has no
+    // position, so it is not drawn, but it is in the readout of what is generating: per
+    // interval and region, with its newest estimate carried forward (heldRooftop).
     const GEN_FULL_MW = 750;   // output drawn at the largest bubble size
     const GEN_LEGEND = ['Black coal', 'Brown coal', 'Natural gas', 'Water', 'Wind', 'Solar', 'Grid'];
     let _genUnits = null;
     async function genUnits() {
-      _genUnits ??= new Map((await runQuery(`EVALUATE SELECTCOLUMNS(unit, "DUID", unit[DUID], "fuel", unit[fuel],
-        "Region", unit[region], "renewable", unit[renewable], "generator", unit[generator],
-        "lat", unit[lat], "lon", unit[lon])`)).map(u => [u.DUID, u]));
+      _genUnits ??= new Map((await runQuery(`EVALUATE SELECTCOLUMNS(dim_duid, "DUID", dim_duid[DUID], "fuel", ${FUEL},
+        "Region", dim_duid[Region], "renewable", dim_duid[Renewable], "generator", ${GENERATOR},
+        "lat", dim_duid[latitude], "lon", dim_duid[longitude])`)).map(u => [u.DUID, { ...u, fuel: fuelName(u.fuel) }]));
       return _genUnits;
     }
     async function ensureGens(date) {
       if (icState.gens.has(date) || icState.gensLoading.has(date)) return;
       icState.gensLoading.add(date);
       try {
-        const [rows] = await Promise.all([runQuery(`
+        const [rows, roof, held] = await Promise.all([runQuery(`
           EVALUATE CALCULATETABLE(
-            SUMMARIZECOLUMNS(scada[time], "g", CONCATENATEX(scada, scada[DUID] & ":" & ROUND(scada[mw], 0), ",")),
-            scada[date] = ${daxDate(date)}, ABS(scada[mw]) >= 1)`), genUnits()]);
+            SUMMARIZECOLUMNS(fct_summary[time], "g", CONCATENATEX(fct_summary, fct_summary[DUID] & ":" & ROUND(fct_summary[mw], 0), ",")),
+            fct_summary[date] = ${daxDate(date)}, ABS(fct_summary[mw]) >= 1)`),
+          runQuery(`
+          EVALUATE SELECTCOLUMNS(
+            ${dax.rooftop(['dim_time[time]', 'dim_region[Region]'], '[Rooftop MW]', [`dim_calendar[date] = ${daxDate(date)}`], null)},
+            "time", [time], "region", [Region], "mw", [v])`),
+          heldRooftop(date, date, { byRegion: true, region: null }), genUnits()]);
         icState.gens.set(date, new Map(rows.map(r => [padTime(r.time), r.g])));
+        const rooftop = new Map();
+        for (const r of [...roof, ...held]) {
+          const time = padTime(r.time);
+          if (!rooftop.has(time)) rooftop.set(time, []);
+          rooftop.get(time).push(r);
+        }
+        icState.rooftop.set(date, rooftop);
       } catch (e) {
         console.warn('[Flows] generators unavailable:', e);
         icState.gens.set(date, new Map());
@@ -1723,15 +1930,15 @@
       const [flows, prices] = await Promise.all([
         runQuery(`
           EVALUATE CALCULATETABLE(
-            SELECTCOLUMNS(interconnector, "id", interconnector[interconnector], "date", interconnector[date],
-              "time", interconnector[time], "mw", interconnector[mw],
-              "export_limit", interconnector[export_limit], "import_limit", interconnector[import_limit]),
-            ${dax.dates('interconnector', from, to).join(', ')})
+            SELECTCOLUMNS(fct_interconnector, "id", fct_interconnector[interconnector], "date", fct_interconnector[date],
+              "time", fct_interconnector[time], "mw", fct_interconnector[mw],
+              "export_limit", fct_interconnector[export_limit], "import_limit", fct_interconnector[import_limit]),
+            ${dax.dates('fct_interconnector', from, to).join(', ')})
           ORDER BY [date], [time]`).catch(() => []),
         runQuery(`
           EVALUATE CALCULATETABLE(
-            SELECTCOLUMNS(price, "region", price[REGIONID], "date", price[date], "time", price[time], "price", price[price]),
-            ${dax.dates('price', from, to).join(', ')})`),
+            SELECTCOLUMNS(fct_region, "region", fct_region[REGIONID], "date", fct_region[date], "time", fct_region[time], "price", fct_region[price]),
+            ${dax.dates('fct_region', from, to).join(', ')})`),
       ]);
       const mapReady = await registerAustraliaMap();
       if (seq !== _renderSeq) return;
@@ -1870,15 +2077,22 @@
         } else ensureGens(day);
         ensureGens(icState.frames[Math.min(icState.frame + 288, icState.frames.length - 1)].key.split('|')[0]);
       }
-      // Same definition as the Renewables KPI: output only, batteries on neither side. No
-      // share when the deployed dim_duid doesn't say what is renewable.
+      // Same definition as the Renewables KPI: output only, batteries on neither side, and
+      // rooftop solar on both (rounded to the MW, like the units). No share when the deployed
+      // dim_duid doesn't say what is renewable.
       let genMw = 0, reMw = 0;
       for (const g of gens) {
         if (g.mw <= 0 || g.unit?.generator === false) continue;
         genMw += g.mw;
         if (g.unit?.renewable) reMw += g.mw;
       }
-      const share = data.has('v_unit', 'renewable') ? ` &middot; <b>${Math.round(100 * reMw / genMw)}%</b> renewable` : '';
+      const region = activeRegion();
+      for (const r of (gens.length && icState.rooftop.get(day)?.get(gensTime)) || []) {
+        if (r.mw < 1 || (region && r.region !== region)) continue;
+        genMw += Math.round(r.mw);
+        reMw += Math.round(r.mw);
+      }
+      const share = data.has('v_dim_duid', 'Renewable') ? ` &middot; <b>${Math.round(100 * reMw / genMw)}%</b> renewable` : '';
       document.getElementById('flowsNow').innerHTML = genMw
         ? `${Math.round(genMw).toLocaleString()} MW generating${share}`
           + (gensTime === hhmm ? '' :` <span style="color:var(--muted);font-weight:500">(generators at ${formatTime(+gensTime)})</span>`)
@@ -2045,14 +2259,20 @@
       }, true);
     }
 
-    // Ranges over 30 days read the hour-of-day x month tables of agg (scripts/cache_catalog.py
-    // build_daily_agg): whole months, the ones the range touches. Until agg is attached, or
-    // while the deployed agg predates those tables, the chart says so instead of guessing.
+    // Ranges over 30 days read the hour-of-day x month tables of agg: whole months, the ones
+    // the range touches (dim_month has them). Until agg is attached, or while it lacks those
+    // tables, the chart says so instead of guessing.
     const monthsOf = table => {
       const { from, to } = getDateRange();
       return [`${table}[month] >= ${daxDate(from.slice(0, 8) + '01')}`, `${table}[month] <= ${daxDate(to)}`];
     };
     const formatMonth = str => formatDate(str).replace(/^\d+ /, '');
+    // The last day of a month, given its first.
+    const monthEnd = month => {
+      const d = new Date(`${month}T00:00:00Z`);
+      d.setUTCMonth(d.getUTCMonth() + 1, 0);
+      return d.toISOString().slice(0, 10);
+    };
     function hourlyMissing(id, view) {
       if (data.has(view)) return false;
       showEmpty(id, aggLoaded ? 'Hourly history not deployed yet' : 'Loading history...');
@@ -2064,19 +2284,18 @@
       const intraday = isIntradayMode();
       document.getElementById('title-heat').textContent = intraday
         ? 'Price by hour of day ($/MWh)' : 'Price by hour of day and month ($/MWh)';
-      if (!intraday && hourlyMissing('chart-heat', 'v_price_hourly')) return;
+      if (!intraday && hourlyMissing('chart-heat', 'v_fct_region_hourly')) return;
       const rows = await runQuery(intraday ? `
           EVALUATE GROUPBY(
             CALCULATETABLE(
-              SELECTCOLUMNS(price, "date", price[date], "y", QUOTIENT(price[time], 100), "p", price[price]),
-              ${dax.wherePrice('price').join(', ')}),
+              SELECTCOLUMNS(fct_region, "date", fct_region[date], "y", QUOTIENT(fct_region[time], 100), "p", fct_region[price]),
+              ${dax.wherePrice('fct_region').join(', ')}),
             [date], [y], "price", AVERAGEX(CURRENTGROUP(), [p]))
           ORDER BY [date], [y]` : `
           EVALUATE SELECTCOLUMNS(
             CALCULATETABLE(
-              SUMMARIZECOLUMNS(price_hourly[month], price_hourly[hour],
-                "price", SUMX(price_hourly, price_hourly[price] * price_hourly[n]) / SUM(price_hourly[n])),
-              ${[...monthsOf('price_hourly'), ...dax.priceFilters('price_hourly[REGIONID]')].join(', ')}),
+              SUMMARIZECOLUMNS(fct_region_hourly[month], fct_region_hourly[hour], "price", [Price at hour]),
+              ${[...monthsOf('fct_region_hourly'), ...dax.priceFilters('fct_region_hourly[REGIONID]')].join(', ')}),
             "date", [month], "y", [hour], "price", [price])
           ORDER BY [date], [y]`);
       if (seq !== _renderSeq) return;
@@ -2102,36 +2321,65 @@
     }
 
     // Average MW at each time of day, by fuel: the "duck curve" when solar is in the mix.
-    // 5-minute steps up to 30 days; beyond, hourly over the whole months the range touches
-    // (energy in each hour / days in those months).
+    // 5-minute steps up to 30 days; beyond, hourly over the whole months the range touches.
+    // Every row is a sum and the days to divide it by: at 5 minutes the output added up and
+    // the days that had some at that time, beyond 30 days the energy in that hour and the days
+    // of those months. Rooftop solar is one more fuel: its 5-minute line, added up the same
+    // way (per hour, the twelve intervals of the hour), and at 5 minutes its newest estimate
+    // carried forward, which is why the division is here.
     async function renderProfile(seq) {
       const intraday = isIntradayMode();
       document.getElementById('title-profile').textContent = 'Average day by fuel (MW)';
-      if (!intraday && hourlyMissing('chart-profile', 'v_gen_hourly')) return;
-      const months = monthsOf('month_days').join(', ');
-      const [rows, span] = await Promise.all([runQuery(intraday ? `
-        EVALUATE CALCULATETABLE(
-          SUMMARIZECOLUMNS(unit[fuel], scada[time], "mw", SUMX(scada, MAX(scada[mw], 0)) / DISTINCTCOUNT(scada[date])),
-          ${[...dax.whereGen('scada'), 'unit[generator]'].join(', ')})
-        ORDER BY unit[fuel], scada[time]` : `
-        EVALUATE VAR days = CALCULATE(SUM(month_days[days]), ${months})
-        RETURN SELECTCOLUMNS(
-          CALCULATETABLE(
-            SUMMARIZECOLUMNS(unit[fuel], scada_hourly[hour], "mw", SUM(scada_hourly[mwh]) / days),
-            ${[`TREATAS(CALCULATETABLE(VALUES(month_days[month]), ${months}), scada_hourly[month])`,
-              ...dax.unitFilters('scada_hourly'), 'unit[generator]'].join(', ')}),
-          "fuel", [fuel], "time", CONVERT([hour], INTEGER) * 100, "mw", [mw])
+      if (!intraday && hourlyMissing('chart-profile', 'v_fct_summary_hourly')) return;
+      const { from, to } = getDateRange();
+      const withRooftop = dax.hasRooftop();
+      const months = monthsOf('dim_month').join(', ');
+      const span = intraday ? null
+        : (await runQuery(`EVALUATE CALCULATETABLE(ROW("first", MIN(dim_month[month]), "last", MAX(dim_month[month])), ${months})`))[0];
+      const named = fuel => `"fuel", ${fuel}, "time", [time], "mw", [mw], "days", [days]`;
+      const [rows, held] = await Promise.all([runQuery(intraday ? `
+        EVALUATE ${dax.withRooftop(`SELECTCOLUMNS(
+            CALCULATETABLE(
+              SUMMARIZECOLUMNS(${FUEL}, fct_summary[time], "mw", [Generation MW], "days", DISTINCTCOUNT(fct_summary[date])),
+              ${[...dax.whereGen('fct_summary'), generatorUnits()].join(', ')}),
+            ${named('[FuelSourceDescriptor]')})`, withRooftop && `SELECTCOLUMNS(
+            GROUPBY(
+              FILTER(SELECTCOLUMNS(${dax.rooftopInRange(true)}, "time", [time], "mw", [v]), [mw] <> 0),
+              [time], "mw", SUMX(CURRENTGROUP(), [mw]), "days", SUMX(CURRENTGROUP(), 1)),
+            ${named(daxStr(ROOFTOP))})`)}
+        ORDER BY [fuel], [time]` : `
+        EVALUATE VAR days = CALCULATE(SUM(dim_month[days]), ${months})
+        RETURN ${dax.withRooftop(`SELECTCOLUMNS(
+            CALCULATETABLE(
+              SUMMARIZECOLUMNS(${FUEL}, fct_summary_hourly[hour], "mwh", [Output MWh hourly]),
+              ${[`TREATAS(CALCULATETABLE(VALUES(dim_month[month]), ${months}), fct_summary_hourly[month])`,
+                ...dax.unitFilters('fct_summary_hourly'), generatorUnits()].join(', ')}),
+            "fuel", [FuelSourceDescriptor], "time", [hour] * 100, "mw", [mwh], "days", days)`, withRooftop && span?.first && `SELECTCOLUMNS(
+            GROUPBY(
+              SELECTCOLUMNS(${dax.rooftop(['dim_time[time]'], '[Rooftop MW]', dax.dates('dim_calendar', span.first, monthEnd(span.last)))},
+                "hour", QUOTIENT([time], 100), "mw", [v]),
+              [hour], "mwh", SUMX(CURRENTGROUP(), [mw]) / 12),
+            "fuel", ${daxStr(ROOFTOP)}, "time", [hour] * 100, "mw", [mwh], "days", days)`)}
         ORDER BY [fuel], [time]`),
-        intraday ? [] : runQuery(`EVALUATE CALCULATETABLE(ROW("first", MIN(month_days[month]), "last", MAX(month_days[month])), ${months})`)]);
+        intraday && withRooftop ? heldRooftop(from, to) : []]);
       if (seq !== _renderSeq) return;
-      if (!rows.length) return showEmpty('chart-profile');
-      if (span[0]?.first) document.getElementById('title-profile').textContent =
-        `Average day by fuel (MW, hourly, ${formatMonth(span[0].first)}${span[0].last !== span[0].first ? ` – ${formatMonth(span[0].last)}` : ''})`;
-      const times = [...new Set(rows.map(r => r.time))].sort((a, b) => a - b);
+      const sums = new Map(rows.map(r => [`${r.fuel}|${r.time}`, { fuel: fuelName(r.fuel), time: r.time, mw: r.mw ?? 0, days: r.days }]));
+      for (const h of held) {
+        if (!h.mw) continue;
+        const key = `${ROOFTOP}|${h.time}`;
+        const sum = sums.get(key) ?? sums.set(key, { fuel: ROOFTOP, time: h.time, mw: 0, days: 0 }).get(key);
+        sum.mw += h.mw;
+        sum.days++;
+      }
+      if (!sums.size) return showEmpty('chart-profile');
+      if (span?.first) document.getElementById('title-profile').textContent =
+        `Average day by fuel (MW, hourly, ${formatMonth(span.first)}${span.last !== span.first ? ` – ${formatMonth(span.last)}` : ''})`;
+      const profile = [...sums.values()].map(r => ({ ...r, mw: r.days ? r.mw / r.days : 0 }));
+      const times = [...new Set(profile.map(r => r.time))].sort((a, b) => a - b);
       const totals = {};
-      for (const r of rows) totals[r.fuel] = (totals[r.fuel] || 0) + r.mw;
+      for (const r of profile) totals[r.fuel] = (totals[r.fuel] || 0) + r.mw;
       const fuels = Object.keys(totals).sort((a, b) => totals[b] - totals[a]);
-      const lookup = buildLookup(rows, r => `${r.fuel}|${r.time}`, r => r.mw);
+      const lookup = buildLookup(profile, r => `${r.fuel}|${r.time}`, r => r.mw);
       getChart('chart-profile').setOption({
         tooltip: { trigger: 'axis', valueFormatter: v => `${Math.round(v).toLocaleString()} MW` },
         legend: { type: 'scroll', top: 0 },
@@ -2143,25 +2391,32 @@
           data: times.map(t => lookup.get(`${f}|${t}`) || 0) })),
       }, true);
     }
-
     // Generation-weighted price each fuel earned in its own region, against the plain average.
+    // Rooftop solar's is the model's own measure: weighted by its half hours, whatever the
+    // range, as that is what its table holds.
     async function renderCapture(seq) {
       const intraday = isIntradayMode();
       const { fact, price, energy, capture } = grain();
-      // Only where the region has a price.
-      const rows = await runQuery(`
-        EVALUATE FILTER(
-          CALCULATETABLE(
-            SUMMARIZECOLUMNS(unit[fuel],
-              "capture", ${capture}, "volume", ${energy}),
-            ${[...dax.whereGen(fact, { withFuel: false }), 'unit[generator]', `NOT ISBLANK(${price}[price])`].join(', ')}),
-          [volume] > 0)
+      const { from, to } = getDateRange();
+      const named = fuel => `"fuel", ${fuel}, "capture", [capture], "volume", [volume]`;
+      const units = `SELECTCOLUMNS(
+            CALCULATETABLE(
+              SUMMARIZECOLUMNS(${FUEL}, "capture", ${capture}, "volume", ${energy}),
+              ${[...dax.whereGen(fact, { withFuel: false }), GENERATOR].join(', ')}),
+            ${named('[FuelSourceDescriptor]')})`;
+      const roof = dax.hasRooftop({ withFuel: false }) && `SELECTCOLUMNS(
+            ${dax.rooftop([], { capture: '[Rooftop capture price]', volume: '[Rooftop MWh]' },
+              [...dax.dates('dim_calendar', from, to), ...(intraday ? [] : [dax.wholeDays])])},
+            ${named(daxStr(ROOFTOP))})`;
+      const found = await runQuery(`
+        EVALUATE FILTER(${dax.withRooftop(units, roof)}, [volume] > 0)
         ORDER BY [capture]`);
       const avg = await runQuery(`EVALUATE ${filtered(`ROW("avg", AVERAGE(${price}[price]))`, dax.wherePrice(price))}`);
       if (seq !== _renderSeq) return;
       document.getElementById('title-capture').textContent =
         `Capture price by fuel ($/MWh${intraday ? '' : ', from daily prices'})`;
       // Fuels with a sliver of output make noisy bars; keep those above 0.5% of the volume.
+      const rows = found.map(r => ({ ...r, fuel: fuelName(r.fuel) }));
       const total = rows.reduce((s, r) => s + r.volume, 0);
       const shown = rows.filter(r => r.volume >= 0.005 * total);
       if (!shown.length) return showEmpty('chart-capture');
@@ -2233,8 +2488,8 @@
       }, true);
     }
 
-    // Older energy_dim files (cached, or deployed before 2026-10-01) have no capacity columns.
-    const hasCapacity = () => data.has('v_unit', 'cap_mw');
+    // A dim_duid without the capacity columns (a cached file from before they were added).
+    const hasCapacity = () => data.has('v_dim_duid', 'RegCapMW');
 
     async function renderCapacityFactor(seq) {
       if (!hasCapacity()) {
@@ -2256,15 +2511,17 @@
       const rows = (await runQuery(`
         EVALUATE
         VAR hours = CALCULATE(${hours}, ${dax.wherePrice(price).join(', ')})
-        VAR u = CALCULATETABLE(
-          SUMMARIZECOLUMNS(${fact}[DUID], unit[fuel],
-            "station", SELECTEDVALUE(unit[station]), "cap", SELECTEDVALUE(unit[cap_mw]), "mwh", ${energy}),
-          ${[...dax.whereGen(fact), 'unit[cap_mw] > 0', 'unit[generator]'].join(', ')})
+        VAR u = SELECTCOLUMNS(
+          CALCULATETABLE(
+            SUMMARIZECOLUMNS(${fact}[DUID], ${FUEL},
+              "station", SELECTEDVALUE(dim_duid[StationName]), "cap", SELECTEDVALUE(dim_duid[RegCapMW]), "mwh", ${energy}),
+            ${[...dax.whereGen(fact), 'dim_duid[RegCapMW] > 0', generatorUnits()].join(', ')}),
+          "DUID", [DUID], "fuel", [FuelSourceDescriptor], "station", [station], "cap", [cap], "mwh", [mwh])
         RETURN UNION(
           ${factor('[DUID], [fuel]')},
           SELECTCOLUMNS(${factor('[fuel]')},
             "DUID", BLANK(), "fuel", [fuel], "station", [station], "cap", [cap], "cf", [cf]))
-        ORDER BY [cf]`)).filter(r => r.cf != null);
+        ORDER BY [cf]`)).filter(r => r.cf != null).map(r => ({ ...r, fuel: fuelName(r.fuel) }));
       if (seq !== _renderSeq) return;
       const byFuel = rows.filter(r => r.DUID == null);
       const topAsc = rows.filter(r => r.DUID != null).slice(-15);
@@ -2302,7 +2559,7 @@
       });
     }
 
-    // Curtailment of the semi-scheduled wind and solar farms (v_curtailment, from agg): energy
+    // Curtailment of the semi-scheduled wind and solar farms (fct_curtailment, from agg): energy
     // they could have made and were not dispatched for, per day (per month beyond 120 days),
     // and the farms that lost the most. The rate (of what they could have made) is in the
     // titles and tooltips, not on a second axis. Whatever the range's grain elsewhere, this
@@ -2316,7 +2573,7 @@
       const titles = { curtail: document.getElementById('title-curtail'), units: document.getElementById('title-curtailunits') };
       titles.curtail.textContent = 'Wind and solar curtailment (MWh)';
       titles.units.textContent = 'Most curtailed farms (MWh)';
-      if (!data.has('v_curtailment')) return ids.forEach(id => showEmpty(id, aggLoaded ? 'Curtailment not deployed yet' : 'Loading history...'));
+      if (!data.has('v_fct_curtailment')) return ids.forEach(id => showEmpty(id, aggLoaded ? 'Curtailment not deployed yet' : 'Loading history...'));
       const fuel = activeFuel();
       if (fuel && !CURTAIL_FUELS.includes(fuel)) return ids.forEach(id => showEmpty(id, 'Curtailment is measured on wind and solar farms'));
       const { from, to } = getDateRange();
@@ -2324,39 +2581,47 @@
       const period = byMonth ? 'DATE(YEAR([date]), MONTH([date]), 1)' : '[date]';
       // Past the newest next-day file, AEMO's regional figures carry it on: per region, so not
       // when units are picked.
-      const recent = data.has('v_curtailment_recent') && !crossFilter.duids.length;
+      const recent = data.has('v_fct_region', 'wind_curtailed') && !crossFilter.duids.length;
       // The farms' days under the names the regional figures have; the two are then one table.
-      const farms = `SELECTCOLUMNS(curtailment_daily, "DUID", curtailment_daily[DUID], "region", RELATED(unit[region]),
-            "fuel", RELATED(unit[fuel]), "date", curtailment_daily[date],
-            "curtailed_mwh", curtailment_daily[curtailed_mwh], "available_mwh", curtailment_daily[available_mwh])`;
-      const regional = `SELECTCOLUMNS(curtailment_recent, "DUID", BLANK(), "region", curtailment_recent[region],
-            "fuel", curtailment_recent[fuel], "date", curtailment_recent[date],
-            "curtailed_mwh", curtailment_recent[curtailed_mwh], "available_mwh", curtailment_recent[available_mwh])`;
+      const farms = `SELECTCOLUMNS(fct_curtailment, "DUID", fct_curtailment[DUID], "region", RELATED(dim_duid[Region]),
+            "fuel", RELATED(${FUEL}), "date", fct_curtailment[date],
+            "curtailed_mwh", fct_curtailment[curtailed_mwh], "available_mwh", fct_curtailment[available_mwh])`;
+      // The regional figures: a region's semi-scheduled wind, or solar, on the days after the
+      // farms' newest (the model's measures, per region and day).
+      const regional = of => `SELECTCOLUMNS(
+            CALCULATETABLE(
+              SUMMARIZECOLUMNS(fct_region[REGIONID], fct_region[date],
+                "c", [Regional ${of.toLowerCase()} curtailed MWh], "a", [Regional ${of.toLowerCase()} available MWh]),
+              fct_region[date] > lastFarmDay, ${dax.dates('fct_region', from, to).join(', ')}),
+            "DUID", BLANK(), "region", [REGIONID], "fuel", ${daxStr(of)}, "date", [date], "curtailed_mwh", [c], "available_mwh", [a])`;
       const region = activeRegion();
       const where = [`[date] >= ${daxDate(from)}`, `[date] <= ${daxDate(to)}`,
         ...(region ? [`[region] = ${daxStr(region)}`] : []), ...(fuel ? [`[fuel] = ${daxStr(fuel)}`] : []),
         ...(crossFilter.duids.length ? [`[DUID] IN ${daxDuids()}`] : [])].join(' && ');
-      const [rows, units, last] = await Promise.all([
+      const [rows, found, last] = await Promise.all([
         runQuery(`
-          EVALUATE GROUPBY(
+          EVALUATE ${recent ? 'VAR lastFarmDay = MAX(fct_curtailment[date]) RETURN ' : ''}GROUPBY(
             SELECTCOLUMNS(
-              FILTER(${recent ? `UNION(${farms}, ${regional})` : farms}, ${where}),
+              FILTER(${recent ? `UNION(${farms}, ${CURTAIL_FUELS.map(regional).join(', ')})` : farms}, ${where}),
               "period", ${period}, "fuel", [fuel], "c", [curtailed_mwh], "a", [available_mwh]),
             [period], [fuel], "cur", SUMX(CURRENTGROUP(), [c]), "avail", SUMX(CURRENTGROUP(), [a]))
           ORDER BY [period], [fuel]`),
         runQuery(`
           EVALUATE TOPN(15,
             FILTER(
-              CALCULATETABLE(
-                SUMMARIZECOLUMNS(curtailment_daily[DUID], unit[fuel], "station", SELECTEDVALUE(unit[station]),
-                  "cur", SUM(curtailment_daily[curtailed_mwh]), "avail", SUM(curtailment_daily[available_mwh])),
-                ${[...dax.dates('curtailment_daily', from, to), ...dax.unitFilters('curtailment_daily')].join(', ')}),
+              SELECTCOLUMNS(
+                CALCULATETABLE(
+                  SUMMARIZECOLUMNS(fct_curtailment[DUID], ${FUEL}, "station", SELECTEDVALUE(dim_duid[StationName]),
+                    "cur", [Curtailed MWh], "avail", [Available MWh]),
+                  ${[...dax.dates('fct_curtailment', from, to), ...dax.unitFilters('fct_curtailment')].join(', ')}),
+                "DUID", [DUID], "fuel", [FuelSourceDescriptor], "station", [station], "cur", [cur], "avail", [avail]),
               [cur] > 0),
             [cur], DESC)
           ORDER BY [cur] DESC`),
-        runQuery(`EVALUATE ROW("d", MAX(curtailment_daily[date]))`),
+        runQuery(`EVALUATE ROW("d", MAX(fct_curtailment[date]))`),
       ]);
       if (seq !== _renderSeq) return;
+      const units = found.map(r => ({ ...r, fuel: fuelName(r.fuel) }));
       const lastDay = last[0]?.d;
       const note = !lastDay ? '' : recent
         ? ` <span class="chart-note">per farm to ${formatDate(lastDay)}, AEMO's regional figures after (lighter)</span>`
@@ -2427,18 +2692,18 @@
       const [rows, fleet] = await Promise.all([
         runQuery(`
           EVALUATE CALCULATETABLE(
-            SUMMARIZECOLUMNS(scada[time],
-              "discharge", SUMX(scada, MAX(scada[mw], 0)) / DISTINCTCOUNT(scada[date]),
-              "charge", SUMX(scada, MIN(scada[mw], 0)) / DISTINCTCOUNT(scada[date]),
-              "price", AVERAGEX(scada, RELATED(price[price])),
-              "sold", SUMX(scada, MAX(scada[mw], 0) * RELATED(price[price])), "sold_mw", SUMX(scada, MAX(scada[mw], 0)),
-              "bought", SUMX(scada, MIN(scada[mw], 0) * RELATED(price[price])), "bought_mw", SUMX(scada, MIN(scada[mw], 0))),
-            ${[...dax.whereGen('scada', { withFuel: false }), 'unit[storage]', 'NOT ISBLANK(price[price])'].join(', ')})
-          ORDER BY scada[time]`),
+            SUMMARIZECOLUMNS(fct_summary[time],
+              "discharge", SUMX(fct_summary, MAX(fct_summary[mw], 0)) / DISTINCTCOUNT(fct_summary[date]),
+              "charge", SUMX(fct_summary, MIN(fct_summary[mw], 0)) / DISTINCTCOUNT(fct_summary[date]),
+              "price", AVERAGE(fct_summary[price]),
+              "sold", SUMX(fct_summary, MAX(fct_summary[mw], 0) * fct_summary[price]), "sold_mw", SUMX(fct_summary, MAX(fct_summary[mw], 0)),
+              "bought", SUMX(fct_summary, MIN(fct_summary[mw], 0) * fct_summary[price]), "bought_mw", SUMX(fct_summary, MIN(fct_summary[mw], 0))),
+            ${[...dax.whereGen('fct_summary', { withFuel: false }), STORAGE].join(', ')})
+          ORDER BY fct_summary[time]`),
         runQuery(`
           EVALUATE CALCULATETABLE(
-            ROW("units", COUNTROWS(unit), "mw", SUM(unit[cap_mw]), "mwh", SUM(unit[storage_mwh])),
-            ${['unit[storage]', ...dax.unitFilters('unit', false)].join(', ')})`),
+            ROW("units", COUNTROWS(dim_duid), "mw", SUM(dim_duid[RegCapMW]), "mwh", SUM(dim_duid[StorageMWh])),
+            ${[STORAGE, ...dax.unitFilters('dim_duid', false)].join(', ')})`),
       ]);
       if (seq !== _renderSeq) return;
       if (!rows.length) return showEmpty('chart-battery', 'No battery output for the selected filters');
@@ -2471,23 +2736,40 @@
       }, true);
     }
 
-    // Energy by owner and power station, coloured by fuel. Units that are not in dim_duid, or
-    // have no owner there, are grouped as "Unknown".
+    // Energy by owner and power station, coloured by fuel. Units that have no owner in
+    // dim_duid are grouped as "Unknown". Rooftop solar is its own owner, with one "station"
+    // per region.
     async function renderOwners(seq) {
-      if (!data.has('v_unit', 'owner')) return showEmpty('chart-owners', 'Ownership data not deployed yet');
+      if (!data.has('v_dim_duid', 'Participant')) return showEmpty('chart-owners', 'Ownership data not deployed yet');
+      const intraday = isIntradayMode();
       const { fact, val } = grain();
-      const rows = await runQuery(`
-        EVALUATE FILTER(
-          GROUPBY(
+      const { from, to } = getDateRange();
+      const withRooftop = dax.hasRooftop();
+      const units = `GROUPBY(
             CALCULATETABLE(
-              SELECTCOLUMNS(${fact}, "owner", COALESCE(RELATED(unit[owner]), "Unknown"),
-                "station", COALESCE(RELATED(unit[station]), ${fact}[DUID]), "fuel", RELATED(unit[fuel]),
+              SELECTCOLUMNS(${fact}, "owner", COALESCE(RELATED(dim_duid[Participant]), "Unknown"),
+                "station", COALESCE(RELATED(dim_duid[StationName]), ${fact}[DUID]), "fuel", RELATED(${FUEL}),
                 "v", MAX(${val}, 0)),
               ${dax.whereGen(fact).join(', ')}),
-            [owner], [station], [fuel], "mwh", SUMX(CURRENTGROUP(), [v])${isIntradayMode() ? ' / 12.0' : ''}),
-          [mwh] > 0)
-        ORDER BY [mwh] DESC`);
+            [owner], [station], [fuel], "mwh", SUMX(CURRENTGROUP(), [v])${intraday ? ' / 12.0' : ''})`;
+      const roof = withRooftop && `SELECTCOLUMNS(
+            ${dax.rooftop(['dim_region[Region]'], intraday ? '[Rooftop MW]' : '[Rooftop MWh]',
+              [...dax.dates('dim_calendar', from, to), ...(intraday ? [] : [dax.wholeDays])])},
+            "owner", ${daxStr(ROOFTOP_OWNER)}, "station", [Region], "fuel", ${daxStr(ROOFTOP)}, "mwh", [v]${intraday ? ' / 12.0' : ''})`;
+      const [found, held] = await Promise.all([
+        runQuery(`
+          EVALUATE FILTER(${dax.withRooftop(units, roof)}, [mwh] > 0)
+          ORDER BY [mwh] DESC`),
+        intraday && withRooftop ? heldRooftop(from, to, { byRegion: true }) : [],
+      ]);
       if (seq !== _renderSeq) return;
+      const rows = found.map(r => ({ ...r, fuel: fuelName(r.fuel) }));
+      // Rooftop's rows under the name of their region, with the estimate carried forward.
+      for (const r of rows.filter(r => r.owner === ROOFTOP_OWNER)) {
+        r.mwh += held.filter(h => h.region === r.station).reduce((s, h) => s + h.mw, 0) / 12;
+        r.station = rooftopIn(r.station);
+      }
+      rows.sort((a, b) => b.mwh - a.mwh);
       if (!rows.length) return showEmpty('chart-owners');
       const total = rows.reduce((s, r) => s + r.mwh, 0);
       const owners = new Map();
@@ -2555,24 +2837,35 @@
       const region = activeRegion();
       // The newest day is still filling: its energy and its share are not a day's yet.
       const before = `< ${daxDate(document.getElementById('dateTo').max)}`;
-      const only = fuels => `CALCULATE([Generation MWh daily], ${fuels})`;
-      const [gen, price] = await Promise.all([
+      const only = fuel => `CALCULATE(${DAILY_OUTPUT}, ${fuelIs(fuel)})`;
+      const parts = shareParts(DAILY_OUTPUT);
+      const sums = ['re', 'gen', 'solar', 'wind'];
+      // Per day, the units' sums and rooftop's added up: rooftop is renewable, a generator's,
+      // and solar.
+      const [found, price] = await Promise.all([
+        runQuery(`
+          EVALUATE GROUPBY(
+            UNION(
+              SELECTCOLUMNS(
+                CALCULATETABLE(
+                  SUMMARIZECOLUMNS(fct_summary_daily[date], "re", ${parts.re}, "gen", ${parts.gen},
+                    "solar", ${only('Solar')}, "wind", ${only('Wind')}),
+                  fct_summary_daily[date] ${before}${region ? `, dim_duid[Region] = ${daxStr(region)}` : ''}),
+                "date", [date], ${sums.map(s => `"${s}", [${s}]`).join(', ')}),
+              SELECTCOLUMNS(
+                ${dax.rooftop(['dim_calendar[date]'], '[Rooftop MWh]', [`dim_calendar[date] ${before}`, dax.wholeDays])},
+                "date", [date], "re", [v], "gen", [v], "solar", [v], "wind", 0)),
+            [date], ${sums.map(s => `"${s}", SUMX(CURRENTGROUP(), [${s}])`).join(', ')})
+          ORDER BY [date]`),
         runQuery(`
           EVALUATE CALCULATETABLE(
-            SUMMARIZECOLUMNS(scada_daily[date],
-              "re", [Renewable share daily],
-              "solar", ${only(`unit[fuel] IN {"Solar", ${daxStr(ROOFTOP)}}`)},
-              "wind", ${only('unit[fuel] = "Wind"')}),
-            scada_daily[date] ${before}${region ? `, unit[region] = ${daxStr(region)}` : ''})
-          ORDER BY scada_daily[date]`),
-        runQuery(`
-          EVALUATE CALCULATETABLE(
-            SUMMARIZECOLUMNS(price_daily[date], "price", AVERAGE(price_daily[price]),
-              "demand", IF(COUNT(price_daily[demand]) = COUNTROWS(price_daily), SUM(price_daily[demand]))),
-            price_daily[date] ${before}${region ? `, price_daily[REGIONID] = ${daxStr(region)}` : ''})
-          ORDER BY price_daily[date]`),
+            SUMMARIZECOLUMNS(fct_region_daily[date], "price", AVERAGE(fct_region_daily[price]),
+              "demand", IF(COUNT(fct_region_daily[demand]) = COUNTROWS(fct_region_daily), SUM(fct_region_daily[demand]))),
+            fct_region_daily[date] ${before}${region ? `, fct_region_daily[REGIONID] = ${daxStr(region)}` : ''})
+          ORDER BY fct_region_daily[date]`),
       ]);
       if (seq !== _renderSeq) return;
+      const gen = found.map(r => ({ ...r, re: shareOf(r) }));
       const days = {
         re: gen.filter(r => r.re != null).map(r => [r.date, r.re]),
         solar: gen.filter(r => r.solar > 0).map(r => [r.date, r.solar]),
@@ -2660,7 +2953,7 @@
       const unit = intraday ? 'MW' : 'MWh';
       document.getElementById('title-map').textContent = `Generators (average ${intraday ? 'MW' : 'MWh/day'}, sized by output)`;
 
-      const data = await runQuery(dax.mapScatter());
+      const data = (await runQuery(dax.mapScatter())).map(d => ({ ...d, fuel: fuelName(d.fuel) }));
       if (seq !== _renderSeq) return;
 
       const fuels = [...new Set(data.map(d => d.fuel))].sort();
@@ -2872,7 +3165,7 @@
       const raw = dimensions.time; // time dimension = 5-min raw, else daily
       if (hasGen && hasPrice) return buildGenPriceSQL(dimensions, raw);
 
-      // Generation reads a v_gen* view as g, price alone a v_price* view as p.
+      // Generation reads a unit fact joined to dim_duid as g, price alone a regional table as p.
       const a = hasGen ? 'g' : 'p';
       const sel = [`CAST(${a}.date AS VARCHAR) AS date`];
       const grp = [`${a}.date`];
@@ -2885,9 +3178,9 @@
       }
 
       if (dimensions.duid && hasGen) { sel.push('g.DUID'); grp.push('g.DUID'); ord.push('g.DUID'); }
-      if (dimensions.fuel && hasGen) { sel.push('g.fuel'); grp.push('g.fuel'); }
+      if (dimensions.fuel && hasGen) { sel.push(sql.fuel); grp.push('g.FuelSourceDescriptor'); }
       if (dimensions.region) {
-        if (hasGen) { sel.push('g.region'); grp.push('g.region'); }
+        if (hasGen) { sel.push('g.Region AS region'); grp.push('g.Region'); }
         else { sel.push('p.REGIONID AS region'); grp.push('p.REGIONID'); }
       }
 
@@ -2900,28 +3193,29 @@
         sel.push('ROUND(AVG(p.price)::DOUBLE, 2) AS price');
       }
 
-      const from = hasGen ? `${raw ? 'v_gen' : 'v_gen_daily'} g` : `${raw ? 'v_price' : 'v_price_daily'} p`;
+      const from = hasGen ? `${raw ? 'fct_summary_to_dim_duid' : 'fct_summary_daily_to_dim_duid'} g`
+        : `${raw ? 'v_fct_region' : 'v_fct_region_daily'} p`;
       const where = hasGen ? sql.whereGen() : sql.wherePrice();
 
       return `SELECT ${sel.join(', ')}\nFROM ${from}\nWHERE ${where}\nGROUP BY ${grp.join(', ')}\nORDER BY ${ord.join(', ')}`;
     }
 
-    // Generation and price together. A price is one value per region and interval (day), so
-    // generation is summed to that grain first and a row's price is then the plain average of
-    // its regions' prices. Averaging over the unit rows instead would weight each region by
-    // how many units it has.
+    // Generation and price together: the price of the unit's region is on the unit's row. A
+    // price is one value per region and interval (day), so generation is summed to that grain
+    // first and a row's price is then the plain average of its regions' prices. Averaging over
+    // the unit rows instead would weight each region by how many units it has.
     function buildGenPriceSQL(dimensions, raw) {
       const val = raw ? 'mw' : 'mwh';
       const inner = ['CAST(g.date AS VARCHAR) AS date'], outer = ['date'];
       if (raw) { inner.push(`lpad(CAST(g.time AS VARCHAR), 4, '0') AS time`); outer.push('time'); }
       if (dimensions.duid) { inner.push('g.DUID'); outer.push('DUID'); }
-      if (dimensions.fuel) { inner.push('g.fuel'); outer.push('fuel'); }
-      inner.push('g.region');
+      if (dimensions.fuel) { inner.push(sql.fuel); outer.push('fuel'); }
+      inner.push('g.Region AS region');
       if (dimensions.region) outer.push('region');
       return `SELECT ${outer.join(', ')}, ROUND(SUM(${val}), 2) AS ${val}, ROUND(AVG(price), 2) AS price
 FROM (
   SELECT ${inner.join(', ')}, SUM(g.${val})::DOUBLE AS ${val}, AVG(g.price)::DOUBLE AS price
-  FROM ${raw ? 'v_gen_price' : 'v_gen_price_daily'} g
+  FROM ${raw ? 'fct_summary_to_dim_duid' : 'fct_summary_daily_to_dim_duid'} g
   WHERE ${sql.whereGen()}
   GROUP BY ALL
 )
@@ -3103,12 +3397,13 @@ ORDER BY ALL`;
       const regionSelect = document.getElementById("regionFilter");
       for (const r of regions) regionSelect.add(new Option(regionName(r.Region), r.Region));
       const fuelSelect = document.getElementById("fuelFilter");
-      for (const f of fuels) fuelSelect.add(new Option(f.fuel, f.fuel));
-      allDuids = await runQuery(dax.allDuids);
+      // The units' fuels, and rooftop solar, which is not a unit's.
+      for (const fuel of [...fuels.map(f => f.fuel), ROOFTOP].sort()) fuelSelect.add(new Option(fuel, fuel));
+      allDuids = (await runQuery(dax.allDuids)).map(d => ({ ...d, fuel: fuelName(d.fuel) }));
 
       // Set date range defaults: last 3 days up to max date in data
-      const maxDateResult = await runQuery('EVALUATE ROW("d", MAX(scada_today[date]))');
-      const minDateResult = await runQuery('EVALUATE ROW("d", MIN(calendar[date]))');
+      const maxDateResult = await runQuery('EVALUATE ROW("d", MAX(fct_summary[date]))');
+      const minDateResult = await runQuery('EVALUATE ROW("d", MIN(dim_calendar[date]))');
       const maxDate = maxDateResult[0].d;
       const minDate = minDateResult[0].d;
       const fromDate = new Date(`${maxDate}T00:00:00Z`);
@@ -3206,6 +3501,9 @@ ORDER BY ALL`;
         if (isIntradayMode()) {
           const { from, to } = getDateRange();
           await ensureHistory(from, to, "Downloading detailed data...");
+        } else {
+          // The daily tables are in agg, which init loads after the first paint.
+          await loadDailyAggDatabase();
         }
         const visible = id => document.getElementById(id).style.display !== 'none';
         await Promise.all([renderNow(seq), renderGeneration(seq), renderPrice(seq), renderMap(seq), updateRenewablesKpi(seq),
@@ -3218,13 +3516,12 @@ ORDER BY ALL`;
         if (seq !== _renderSeq) return;
         dim(false);
         if (!window._cutoffCached) {
-          const cutoffResult = await runQuery(dax.cutoff);
+          const newest = await newestInterval();
           if (seq !== _renderSeq) return;
-          if (cutoffResult.length && cutoffResult[0].date) {
+          if (newest?.date) {
             // Already AEST wall clock: format the date and the HHMM as they are. new Date()
             // would read them in the viewer's zone (wrong outside Brisbane).
-            const { date, time } = cutoffResult[0];
-            window._cutoffCached = `${formatDate(date)} ${formatTime(time)} AEST`;
+            window._cutoffCached = `${formatDate(newest.date)} ${formatTime(newest.time)} AEST`;
           }
         }
         // What this render cost: queries that ran (a cached view runs none) and wall time.

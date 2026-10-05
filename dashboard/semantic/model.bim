@@ -1,430 +1,1376 @@
 {
-  "name": "nem",
   "compatibilityLevel": 1604,
   "model": {
-    "description": [
-      "Australia's National Electricity Market as the dashboard reads it: what each unit generated, what each region paid, what flowed between regions, and what wind and solar were curtailed.",
-      "This file is the semantic model, in TMSL (a Tabular model.bim): the tables, how they relate, and the measures. compiler.js turns it into DuckDB views (v_<table> per table, and one per relationship, under the relationship's name), and translates the page's DAX queries into SQL over those views; a measure is written out where a query names it.",
-      "What TMSL has no property for is an annotation: `stitch` on a table of two partitions, `optional`, `since`, `sql` and `rollup` on a column, `from`, `on` and `columns` on a relationship. In an expression, {name} is one of the model's `expressions` (its constants).",
-      "A table only holds what is attached. The 5-minute tables hold the last 5 days (interconnector 14) until the half-year files of a date range are attached; the daily ones hold the last 14 days, and the hourly ones do not exist, until the daily aggregate is. A query over the rest runs and returns the newest days alone, with no error: the compiler's needs(sql) says what a SQL query reads.",
-      "A fact table stays readable as it is: a query that names nothing of the unit reads v_<fact>, not the relationship's view, and pays for no join. The compiler decides that from the tables a query names."
-    ],
-
+    "culture": "en-US",
+    "defaultPowerBIDataSourceVersion": "powerBI_V3",
+    "description": "Australia's National Electricity Market, over the Iceberg tables of the nem lakehouse, in Direct Lake: nothing is imported and no SQL endpoint is involved. Deployed by scripts/deploy_model.py, which writes the workspace and the lakehouse into the DirectLake expression. A quantity is one measure whatever the grain: the measures of fct_summary and fct_region pick the daily table or the 5-minute one themselves, by whether a time of day is asked for.",
     "expressions": [
       {
-        "name": "recent_days", "kind": "m",
-        "expression": "5 meta [IsParameterQuery=true, Type=\"Number\", IsParameterQueryRequired=true]",
-        "description": "Rows from this many days back are read from `today` (refreshed every 30 minutes), older ones from the half-year history files or the daily aggregate. CURRENT_DATE is the NEM's day: the host sets the session to Brisbane time for it."
-      },
-      {
-        "name": "unregistered", "kind": "m",
-        "expression": "\"Unregistered\" meta [IsParameterQuery=true, Type=\"Text\", IsParameterQueryRequired=true]",
-        "description": "The fuel of a unit that is in the data and not in dim_duid, e.g. one the registration list hasn't caught up with yet. Its rows are kept, so it still counts toward totals. A unit that is in dim_duid without a fuel is 'Unknown'."
-      },
-      {
-        "name": "rooftop", "kind": "m",
-        "expression": "\"Rooftop solar\" meta [IsParameterQuery=true, Type=\"Text\", IsParameterQueryRequired=true]",
-        "description": "The fuel of the rooftop pseudo-units (QLD_PV, NSW_PV, VIC_PV, SA_PV, TAS_PV): AEMO's regional estimate, one unit per region, with no capacity and no coordinates. The estimate is half-hourly, drawn as a straight line onto the 5-minute intervals (scripts/cache_catalog.py rooftop_units)."
-      },
-      {
-        "name": "storage_fuel", "kind": "m",
-        "expression": "\"Grid\" meta [IsParameterQuery=true, Type=\"Text\", IsParameterQueryRequired=true]",
-        "description": "The fuel of batteries. Storage is on neither side of the renewable share."
+        "name": "DirectLake",
+        "kind": "m",
+        "description": "The nem lakehouse in OneLake. {WS_ID} and {LH_ID} are filled in at deploy.",
+        "expression": [
+          "let",
+          "    Source = AzureStorage.DataLake(\"https://onelake.dfs.fabric.microsoft.com/{WS_ID}/{LH_ID}\", [HierarchicalNavigation=true])",
+          "in",
+          "    Source"
+        ]
       }
     ],
-
-    "annotations": [
-      { "name": "glossary.date", "value": "NEM time (AEST all year)." },
-      { "name": "glossary.time", "value": "HHMM as a number, NEM time: 1435 is 14:35, and the hour is time // 100." },
-      { "name": "glossary.mw", "value": "MW in that 5 minutes; a battery charging is negative. Energy in MWh is SUM(mw) / 12. An interval at 0 MW is not stored, so AVG(mw) and COUNT(*) only see the others: the intervals of a range are counted in price." },
-      { "name": "glossary.mwh", "value": "Energy. Daily: the day's, net of charging. Hourly: that hour of the day over the month, output only (charging is left out)." },
-      { "name": "glossary.month", "value": "The month's first day." },
-      { "name": "glossary.hour", "value": "Hour of day, 0-23. The average MW at an hour over a range is SUM(mwh) / SUM(month_days.days) over its months." },
-      { "name": "glossary.price", "value": "The regional reference price (AEMO's RRP), $/MWh. In the daily and hourly tables, the plain average of the intervals." },
-      { "name": "glossary.demand", "value": "Operational demand in MW: rooftop solar is not in it. Daily: the average MW." },
-      { "name": "glossary.demand_mwh", "value": "The day's operational demand as energy: a whole day from the aggregate, the intervals so far today." },
-      { "name": "glossary.net_interchange", "value": "MW, positive when the region exports." },
-      { "name": "glossary.region", "value": "NSW1, QLD1, SA1, TAS1, VIC1. unit also holds the units of WA1 (Western Australia, another market), which region leaves out." },
-      { "name": "glossary.REGIONID", "value": "The region, under AEMO's name for the column: NSW1, QLD1, SA1, TAS1, VIC1." },
-      { "name": "glossary.DUID", "value": "AEMO's id of a dispatchable unit." },
-      { "name": "stitch.cut", "value": "The `history` partition before the cut (recent_days), the `recent` one from the cut on. The default." },
-      { "name": "stitch.cut_when_history", "value": "The same once the history is attached; until then the recent table as it is, all its days." },
-      { "name": "stitch.after_history", "value": "History before the cut, and from recent whatever is newer than the attached history holds: a file without the table, or a daily import that is behind, leaves no hole." }
-    ],
-
     "tables": [
       {
-        "name": "duid",
-        "isHidden": true,
-        "description": "dim_duid under the names the export gives its columns: the units on AEMO's registration list plus the ones in the data that are not on it (retired plant, replaced DUIDs), and the rooftop pseudo-units. Queries read unit.",
-        "partitions": [{ "name": "duid", "source": { "type": "entity", "schemaName": "dim", "entityName": "dim_duid" } }]
-      },
-      {
-        "name": "calendar",
-        "description": "dim_calendar. The first date is where the history starts.",
-        "partitions": [{ "name": "calendar", "source": { "type": "entity", "schemaName": "dim", "entityName": "dim_calendar" } }],
+        "name": "dim_calendar",
+        "description": "One row per day, from 2018-03-06 (where the history starts) to two years ahead.",
+        "sourceLineageTag": "[mart].[dim_calendar]",
         "columns": [
-          { "name": "date", "dataType": "dateTime", "sourceColumn": "date", "isKey": true },
-          { "name": "year", "dataType": "int64", "sourceColumn": "year" },
-          { "name": "month", "dataType": "int64", "sourceColumn": "month" }
-        ]
-      },
-      {
-        "name": "scada_today",
-        "description": "Generation per unit and 5 minutes, the newest 14 days: where the latest interval is read.",
-        "annotations": [{ "name": "grain", "value": "DUID, date, time" }],
-        "partitions": [{ "name": "scada_today", "source": { "type": "entity", "schemaName": "today", "entityName": "scada_today" } }],
-        "columns": [
-          { "name": "DUID", "dataType": "string", "sourceColumn": "DUID" },
-          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
-          { "name": "time", "dataType": "int64", "sourceColumn": "time" },
-          { "name": "mw", "dataType": "double", "sourceColumn": "mw" }
-        ]
-      },
-      {
-        "name": "price_today",
-        "description": "Price and demand per region and 5 minutes, the newest 14 days, with the region's semi-scheduled wind and solar.",
-        "annotations": [{ "name": "grain", "value": "REGIONID, date, time" }],
-        "partitions": [{ "name": "price_today", "source": { "type": "entity", "schemaName": "today", "entityName": "price_today" } }],
-        "columns": [
-          { "name": "REGIONID", "dataType": "string", "sourceColumn": "REGIONID" },
-          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
-          { "name": "time", "dataType": "int64", "sourceColumn": "time" },
-          { "name": "price", "dataType": "double", "sourceColumn": "price" },
-          { "name": "demand", "dataType": "double", "sourceColumn": "demand" },
-          { "name": "net_interchange", "dataType": "double", "sourceColumn": "net_interchange" },
-          { "name": "wind_available", "dataType": "double", "sourceColumn": "wind_available", "description": "MW the region's semi-scheduled wind could make." },
-          { "name": "wind_curtailed", "dataType": "double", "sourceColumn": "wind_curtailed", "description": "MW of it that was not dispatched." },
-          { "name": "solar_available", "dataType": "double", "sourceColumn": "solar_available", "description": "MW the region's semi-scheduled solar could make." },
-          { "name": "solar_curtailed", "dataType": "double", "sourceColumn": "solar_curtailed", "description": "MW of it that was not dispatched." }
-        ]
-      },
-      {
-        "name": "scada",
-        "description": "Generation per unit and 5 minutes.",
-        "annotations": [{ "name": "grain", "value": "DUID, date, time" }],
-        "partitions": [
-          { "name": "history", "source": { "type": "entity", "schemaName": "p*", "entityName": "scada" } },
-          { "name": "recent", "source": { "type": "entity", "schemaName": "today", "entityName": "scada_today" } }
+          {
+            "name": "date",
+            "dataType": "dateTime",
+            "description": "Calendar date, NEM time (AEST all year).",
+            "sourceColumn": "date",
+            "sourceLineageTag": "date",
+            "summarizeBy": "none",
+            "isKey": true,
+            "formatString": "yyyy-MM-dd"
+          },
+          {
+            "name": "year",
+            "dataType": "int64",
+            "description": "Calendar year.",
+            "sourceColumn": "year",
+            "sourceLineageTag": "year",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "month",
+            "dataType": "int64",
+            "description": "Month of the year, 1-12.",
+            "sourceColumn": "month",
+            "sourceLineageTag": "month",
+            "summarizeBy": "none"
+          }
         ],
+        "partitions": [
+          {
+            "name": "dim_calendar",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "dim_calendar",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "dim_duid",
+        "description": "One row per unit: the units on AEMO's registration list, the ones in the data that are not on it (retired plant, replaced DUIDs), and the WA facilities.",
+        "sourceLineageTag": "[mart].[dim_duid]",
         "columns": [
-          { "name": "DUID", "dataType": "string", "sourceColumn": "DUID" },
-          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
-          { "name": "time", "dataType": "int64", "sourceColumn": "time" },
-          { "name": "mw", "dataType": "double", "sourceColumn": "mw" }
+          {
+            "name": "DUID",
+            "dataType": "string",
+            "description": "AEMO's id of a dispatchable unit.",
+            "sourceColumn": "DUID",
+            "sourceLineageTag": "DUID",
+            "summarizeBy": "none",
+            "isKey": true
+          },
+          {
+            "name": "Region",
+            "dataType": "string",
+            "description": "NSW1, QLD1, SA1, TAS1, VIC1; WA1 for Western Australia, another market.",
+            "sourceColumn": "Region",
+            "sourceLineageTag": "Region",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "State",
+            "dataType": "string",
+            "description": "The region's name.",
+            "sourceColumn": "State",
+            "sourceLineageTag": "State",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "FuelSourceDescriptor",
+            "dataType": "string",
+            "description": "The fuel as registered; blank for the loads AEMO gives no energy source for.",
+            "sourceColumn": "FuelSourceDescriptor",
+            "sourceLineageTag": "FuelSourceDescriptor",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "Participant",
+            "dataType": "string",
+            "description": "The registered participant that operates the unit.",
+            "sourceColumn": "Participant",
+            "sourceLineageTag": "Participant",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "StationName",
+            "dataType": "string",
+            "description": "The power station the unit belongs to; blank for WA.",
+            "sourceColumn": "StationName",
+            "sourceLineageTag": "StationName",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "TechnologyType",
+            "dataType": "string",
+            "description": "AEMO's technology descriptor; blank off the registration list.",
+            "sourceColumn": "TechnologyType",
+            "sourceLineageTag": "TechnologyType",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "Classification",
+            "dataType": "string",
+            "description": "Scheduled, Semi-Scheduled (wind and solar farms that can be capped) or Non-Scheduled; blank off the registration list.",
+            "sourceColumn": "Classification",
+            "sourceLineageTag": "Classification",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "Renewable",
+            "dataType": "boolean",
+            "description": "Whether the unit's fuel is renewable; the list of fuels is in dim_duid.sql.",
+            "sourceColumn": "Renewable",
+            "sourceLineageTag": "Renewable",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "RegCapMW",
+            "dataType": "double",
+            "description": "Registered generating capacity, MW.",
+            "sourceColumn": "RegCapMW",
+            "sourceLineageTag": "RegCapMW",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "MaxCapMW",
+            "dataType": "double",
+            "description": "Maximum generating capacity, MW.",
+            "sourceColumn": "MaxCapMW",
+            "sourceLineageTag": "MaxCapMW",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "StorageMWh",
+            "dataType": "double",
+            "description": "A battery's storage, MWh.",
+            "sourceColumn": "StorageMWh",
+            "sourceLineageTag": "StorageMWh",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "latitude",
+            "dataType": "double",
+            "description": "Latitude; blank when unknown.",
+            "sourceColumn": "latitude",
+            "sourceLineageTag": "latitude",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "longitude",
+            "dataType": "double",
+            "description": "Longitude; blank when unknown.",
+            "sourceColumn": "longitude",
+            "sourceLineageTag": "longitude",
+            "summarizeBy": "none"
+          }
+        ],
+        "partitions": [
+          {
+            "name": "dim_duid",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "dim_duid",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "fct_summary",
+        "description": "Output and price per unit and 5 minutes: the daily files where they have landed, the intraday feed after them. A unit's row carries the price of its region, so no measure joins two facts. An interval at 0 MW is not stored.",
+        "sourceLineageTag": "[mart].[fct_summary]",
+        "columns": [
+          {
+            "name": "date",
+            "dataType": "dateTime",
+            "description": "Date of the dispatch interval, NEM time (AEST all year).",
+            "sourceColumn": "date",
+            "sourceLineageTag": "date",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM-dd"
+          },
+          {
+            "name": "time",
+            "dataType": "int64",
+            "description": "Time of day as HHMM: 1435 is 14:35. The interval ends at it.",
+            "sourceColumn": "time",
+            "sourceLineageTag": "time",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "DUID",
+            "dataType": "string",
+            "description": "The unit.",
+            "sourceColumn": "DUID",
+            "sourceLineageTag": "DUID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "mw",
+            "dataType": "decimal",
+            "description": "MW in that 5 minutes; a battery charging is negative.",
+            "sourceColumn": "mw",
+            "sourceLineageTag": "mw",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "price",
+            "dataType": "decimal",
+            "description": "The regional reference price of the unit's region in that interval, $/MWh.",
+            "sourceColumn": "price",
+            "sourceLineageTag": "price",
+            "summarizeBy": "none",
+            "formatString": "$#,##0.00"
+          },
+          {
+            "name": "cutoff",
+            "dataType": "dateTime",
+            "description": "The newest interval in the facts when the row was written. Provenance only.",
+            "sourceColumn": "cutoff",
+            "sourceLineageTag": "cutoff",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM-dd HH:mm"
+          }
         ],
         "measures": [
-          { "name": "Generation MWh", "formatString": "#,0",
-            "expression": "SUMX(scada, MAX(scada[mw], 0)) / 12.0",
-            "description": "Energy generated. Output only: a unit that is charging (negative) generates nothing." },
-          { "name": "Renewable share", "formatString": "0.0",
+          {
+            "name": "Reads 5 minutes",
+            "isHidden": true,
+            "expression": "ISCROSSFILTERED(dim_time[time]) || ISFILTERED(fct_summary[date]) || ISFILTERED(fct_summary[time]) || ISFILTERED(fct_summary[DUID]) || ISFILTERED(fct_summary[mw]) || ISFILTERED(fct_summary[price])",
+            "description": "Whether the measures of fct_summary have to read it rather than its daily table: a time of day is asked for (any column of dim_time is filtered or grouped), or a column of fct_summary itself is filtered. Hidden: it is the one place the rule is written."
+          },
+          {
+            "name": "Generation MWh",
+            "formatString": "#,##0",
             "expression": [
-              "DIVIDE(100 * SUMX(scada, SWITCH(TRUE(), RELATED(unit[renewable]), MAX(scada[mw], 0), NOT RELATED(unit[renewable]), 0)),",
-              "SUMX(scada, IF(RELATED(unit[generator]), MAX(scada[mw], 0), 0)))"
+              "VAR late = EXCEPT(VALUES(dim_calendar[date]), CALCULATETABLE(VALUES(fct_summary_daily[date]), REMOVEFILTERS(dim_duid), REMOVEFILTERS(dim_region)))",
+              "RETURN",
+              "    IF([Reads 5 minutes],",
+              "        CONVERT(SUMX(fct_summary, MAX(fct_summary[mw], 0)), DOUBLE) / 12,",
+              "        SUM(fct_summary_daily[output_mwh]) + CONVERT(CALCULATE(SUMX(fct_summary, MAX(fct_summary[mw], 0)), late), DOUBLE) / 12)"
             ],
-            "description": "Renewable share of the output, %. Batteries are in neither the renewables nor the total, and a unit that is charging generates nothing. A unit missing from dim_duid (renewable blank) is in the total only. Blank, not 0, when nothing says what is renewable: a dim_duid deployed before the column existed." },
-          { "name": "Capture price", "formatString": "#,0.00",
-            "expression": "DIVIDE(SUMX(scada, MAX(scada[mw], 0) * RELATED(price[price])), SUMX(scada, MAX(scada[mw], 0)))",
-            "description": "The price the output earned, $/MWh: the prices of the unit's region weighted by the output. Read where the price is not blank: that join is LEFT, and output without a price would count below the line only." }
+            "description": "Energy generated. Output only: a unit that is charging (negative) generates nothing. A 5-minute row is MW / 12. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days the daily table does not hold yet. The number is the same from either. CONVERT is there because MW is a fixed decimal: divided as one, the energy of a small unit at one 5-minute time is rounded to 4 decimals."
+          },
+          {
+            "name": "Charging MWh",
+            "formatString": "#,##0",
+            "expression": [
+              "VAR late = EXCEPT(VALUES(dim_calendar[date]), CALCULATETABLE(VALUES(fct_summary_daily[date]), REMOVEFILTERS(dim_duid), REMOVEFILTERS(dim_region)))",
+              "RETURN",
+              "    IF([Reads 5 minutes],",
+              "        CONVERT(SUMX(fct_summary, MIN(fct_summary[mw], 0)), DOUBLE) / 12,",
+              "        SUM(fct_summary_daily[charging_mwh]) + CONVERT(CALCULATE(SUMX(fct_summary, MIN(fct_summary[mw], 0)), late), DOUBLE) / 12)"
+            ],
+            "description": "Energy the batteries took, negative. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days the daily table does not hold yet. The number is the same from either. CONVERT is there because MW is a fixed decimal: divided as one, the energy of a small unit at one 5-minute time is rounded to 4 decimals."
+          },
+          {
+            "name": "Revenue",
+            "formatString": "$#,##0",
+            "expression": [
+              "VAR late = EXCEPT(VALUES(dim_calendar[date]), CALCULATETABLE(VALUES(fct_summary_daily[date]), REMOVEFILTERS(dim_duid), REMOVEFILTERS(dim_region)))",
+              "RETURN",
+              "    IF([Reads 5 minutes],",
+              "        SUMX(fct_summary, MAX(fct_summary[mw], 0) * fct_summary[price]) / 12,",
+              "        SUM(fct_summary_daily[revenue]) + CALCULATE(SUMX(fct_summary, MAX(fct_summary[mw], 0) * fct_summary[price]), late) / 12)"
+            ],
+            "description": "What the output earned at the spot price, $: each 5 minutes of output at the price of the unit's region in that interval. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days the daily table does not hold yet. The number is the same from either."
+          },
+          {
+            "name": "Capture price",
+            "formatString": "$#,##0.00",
+            "expression": "DIVIDE([Revenue], [Generation MWh])",
+            "description": "The price the output earned, $/MWh: the 5-minute prices of the unit's region weighted by the output. From [Revenue] and [Generation MWh], so it reads the table they read."
+          },
+          {
+            "name": "Units",
+            "formatString": "#,##0",
+            "expression": [
+              "VAR late = EXCEPT(VALUES(dim_calendar[date]), CALCULATETABLE(VALUES(fct_summary_daily[date]), REMOVEFILTERS(dim_duid), REMOVEFILTERS(dim_region)))",
+              "RETURN",
+              "    IF([Reads 5 minutes],",
+              "        DISTINCTCOUNT(fct_summary[DUID]),",
+              "        COUNTROWS(DISTINCT(UNION(VALUES(fct_summary_daily[DUID]), CALCULATETABLE(VALUES(fct_summary[DUID]), late)))))"
+            ],
+            "description": "Units with output or charging in the selection. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days the daily table does not hold yet. The number is the same from either."
+          },
+          {
+            "name": "Latest update",
+            "formatString": "yyyy-MM-dd HH:mm",
+            "expression": "CALCULATE(MAX(fct_summary[cutoff]), REMOVEFILTERS())",
+            "description": "The newest interval the table had seen at its last write, whatever is filtered."
+          },
+          {
+            "name": "Total generation MWh",
+            "formatString": "#,##0",
+            "expression": "[Generation MWh] + [Rooftop MWh]",
+            "description": "Units and rooftop solar together. Slice it by region or date, not by a unit's attribute: rooftop has none, so it would be added to every slice."
+          },
+          {
+            "name": "Renewable share",
+            "formatString": "0.0",
+            "expression": [
+              "DIVIDE(",
+              "    100 * (CALCULATE([Generation MWh], dim_duid[Renewable] = TRUE()) + [Rooftop MWh]),",
+              "    CALCULATE([Generation MWh], dim_duid[FuelSourceDescriptor] <> \"Grid\") + [Rooftop MWh]",
+              ")"
+            ],
+            "description": "Renewable share of the output, %, rooftop solar included. Batteries (fuel Grid) are in neither the renewables nor the total. Slice it by region or date."
+          },
+          {
+            "name": "Capacity factor",
+            "formatString": "0.0",
+            "expression": [
+              "VAR late = EXCEPT(VALUES(dim_calendar[date]), CALCULATETABLE(VALUES(fct_summary_daily[date]), REMOVEFILTERS(dim_duid), REMOVEFILTERS(dim_region)))",
+              "VAR hours = COUNTROWS(SUMMARIZE(fct_region, fct_region[date], fct_region[time])) / 12",
+              "VAR capacity =",
+              "    IF([Reads 5 minutes],",
+              "        CALCULATE(SUM(dim_duid[RegCapMW]), SUMMARIZE(fct_summary, dim_duid[DUID])),",
+              "        CALCULATE(SUM(dim_duid[RegCapMW]),",
+              "            DISTINCT(UNION(SUMMARIZE(fct_summary_daily, dim_duid[DUID]), CALCULATETABLE(SUMMARIZE(fct_summary, dim_duid[DUID]), late)))))",
+              "RETURN DIVIDE(100 * CALCULATE([Generation MWh], dim_duid[RegCapMW] > 0), capacity * hours)"
+            ],
+            "description": "Energy over what the registered capacity could make in the hours of the selection, %. The capacity is that of the units with output or charging in the selection (found in the daily table when no time of day is asked for); a unit without a registered capacity is left out. The hours are counted in fct_region."
+          },
+          {
+            "name": "Generation MW",
+            "formatString": "#,##0",
+            "expression": "SUMX(fct_summary, MAX(fct_summary[mw], 0))",
+            "description": "Output of the units in MW at a 5-minute time, always from fct_summary: read it at one time, it is a sum over the intervals in the selection. For energy use [Generation MWh]."
+          },
+          {
+            "name": "Total generation MW",
+            "formatString": "#,##0",
+            "expression": "[Generation MW] + [Rooftop MW]",
+            "description": "Units and rooftop solar together, in MW at a 5-minute time; rooftop is worked out between its half hours by [Rooftop MW]. Slice it by region, date and time, not by a unit's attribute: rooftop has none."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_summary",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_summary",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
         ]
       },
       {
-        "name": "price",
-        "description": "Price and demand per region and 5 minutes.",
-        "annotations": [{ "name": "grain", "value": "REGIONID, date, time" }],
-        "partitions": [
-          { "name": "history", "source": { "type": "entity", "schemaName": "p*", "entityName": "price" } },
-          { "name": "recent", "source": { "type": "entity", "schemaName": "today", "entityName": "price_today" } }
-        ],
+        "name": "dim_region",
+        "description": "One row per region: what the units, the regional table and rooftop are all filtered by.",
+        "sourceLineageTag": "[mart].[dim_region]",
         "columns": [
-          { "name": "REGIONID", "dataType": "string", "sourceColumn": "REGIONID" },
-          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
-          { "name": "time", "dataType": "int64", "sourceColumn": "time" },
-          { "name": "price", "dataType": "double", "sourceColumn": "price" },
-          { "name": "demand", "dataType": "double", "sourceColumn": "demand", "sourceProviderType": "REAL",
-            "annotations": [{ "name": "optional", "value": "true" }, { "name": "since", "value": "2026-10-02" }] },
-          { "name": "net_interchange", "dataType": "double", "sourceColumn": "net_interchange", "sourceProviderType": "REAL",
-            "annotations": [{ "name": "optional", "value": "true" }, { "name": "since", "value": "2026-10-02" }] }
+          {
+            "name": "Region",
+            "dataType": "string",
+            "description": "NSW1, QLD1, SA1, TAS1, VIC1; WA1 is Western Australia, another market (units, no prices).",
+            "sourceColumn": "Region",
+            "sourceLineageTag": "Region",
+            "summarizeBy": "none",
+            "isKey": true
+          },
+          {
+            "name": "State",
+            "dataType": "string",
+            "description": "The region's name.",
+            "sourceColumn": "State",
+            "sourceLineageTag": "State",
+            "summarizeBy": "none"
+          }
+        ],
+        "partitions": [
+          {
+            "name": "dim_region",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "dim_region",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
         ]
       },
       {
-        "name": "scada_daily",
-        "description": "Energy per unit and day.",
-        "annotations": [{ "name": "grain", "value": "DUID, date" }, { "name": "stitch", "value": "cut_when_history" }],
-        "partitions": [
-          { "name": "history", "source": { "type": "entity", "schemaName": "agg", "entityName": "scada_daily" } },
-          { "name": "recent", "source": { "type": "entity", "schemaName": "today", "entityName": "scada_today" } }
-        ],
+        "name": "dim_time",
+        "description": "The 5-minute times of a day, 288 rows: the time axis of every fact, and what a measure reads rooftop solar against between two half hours.",
+        "sourceLineageTag": "[mart].[dim_time]",
         "columns": [
-          { "name": "DUID", "dataType": "string", "sourceColumn": "DUID" },
-          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
-          { "name": "mwh", "dataType": "double", "sourceColumn": "mwh",
-            "annotations": [{ "name": "rollup", "value": "CAST(SUM(mw) / 12.0 AS REAL)" }] }
+          {
+            "name": "time",
+            "dataType": "int64",
+            "description": "Time of day as HHMM: 1435 is 14:35. An interval ends at it.",
+            "sourceColumn": "time",
+            "sourceLineageTag": "time",
+            "summarizeBy": "none",
+            "isKey": true
+          },
+          {
+            "name": "minute",
+            "dataType": "int64",
+            "description": "The same time as minutes since midnight, 0 to 1435.",
+            "sourceColumn": "minute",
+            "sourceLineageTag": "minute",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "hour",
+            "dataType": "int64",
+            "description": "Hour of day, 0 to 23.",
+            "sourceColumn": "hour",
+            "sourceLineageTag": "hour",
+            "summarizeBy": "none"
+          }
+        ],
+        "partitions": [
+          {
+            "name": "dim_time",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "dim_time",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "fct_region",
+        "description": "Price, demand and net interchange per region and 5 minutes, with the region's semi-scheduled wind and solar. The intraday record where it exists (2026-08 on), the next-day record before it.",
+        "sourceLineageTag": "[mart].[fct_region]",
+        "columns": [
+          {
+            "name": "REGIONID",
+            "dataType": "string",
+            "description": "The region.",
+            "sourceColumn": "REGIONID",
+            "sourceLineageTag": "REGIONID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "date",
+            "dataType": "dateTime",
+            "description": "Date of the interval, NEM time (AEST all year).",
+            "sourceColumn": "date",
+            "sourceLineageTag": "date",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM-dd"
+          },
+          {
+            "name": "time",
+            "dataType": "int64",
+            "description": "Time of day as HHMM: 1435 is 14:35. The interval ends at it.",
+            "sourceColumn": "time",
+            "sourceLineageTag": "time",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "price",
+            "dataType": "decimal",
+            "description": "The regional reference price (AEMO's RRP), $/MWh.",
+            "sourceColumn": "price",
+            "sourceLineageTag": "price",
+            "summarizeBy": "none",
+            "formatString": "$#,##0.00"
+          },
+          {
+            "name": "demand",
+            "dataType": "decimal",
+            "description": "Operational demand, MW: rooftop solar is not in it.",
+            "sourceColumn": "demand",
+            "sourceLineageTag": "demand",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "net_interchange",
+            "dataType": "decimal",
+            "description": "MW, positive when the region exports.",
+            "sourceColumn": "net_interchange",
+            "sourceLineageTag": "net_interchange",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "wind_available",
+            "dataType": "decimal",
+            "description": "MW the region's semi-scheduled wind could make. Blank before 2026-08.",
+            "sourceColumn": "wind_available",
+            "sourceLineageTag": "wind_available",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "wind_curtailed",
+            "dataType": "decimal",
+            "description": "MW of it that was not dispatched.",
+            "sourceColumn": "wind_curtailed",
+            "sourceLineageTag": "wind_curtailed",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "solar_available",
+            "dataType": "decimal",
+            "description": "MW the region's semi-scheduled solar could make. Blank before 2026-08.",
+            "sourceColumn": "solar_available",
+            "sourceLineageTag": "solar_available",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "solar_curtailed",
+            "dataType": "decimal",
+            "description": "MW of it that was not dispatched.",
+            "sourceColumn": "solar_curtailed",
+            "sourceLineageTag": "solar_curtailed",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          }
         ],
         "measures": [
-          { "name": "Generation MWh daily", "formatString": "#,0",
-            "expression": "SUMX(scada_daily, MAX(scada_daily[mwh], 0))",
-            "description": "Energy generated, from the daily table. It clips the day's net: a battery counts for its output less its charging, never below 0." },
-          { "name": "Renewable share daily", "formatString": "0.0",
+          {
+            "name": "Reads 5 minutes regional",
+            "isHidden": true,
+            "expression": "ISCROSSFILTERED(dim_time[time]) || ISFILTERED(fct_region[REGIONID]) || ISFILTERED(fct_region[date]) || ISFILTERED(fct_region[time]) || ISFILTERED(fct_region[price]) || ISFILTERED(fct_region[demand]) || ISFILTERED(fct_region[net_interchange])",
+            "description": "Whether the measures of fct_region have to read it rather than its daily table: a time of day is asked for (any column of dim_time is filtered or grouped), or a column of fct_region itself is filtered. Hidden: it is the one place the rule is written."
+          },
+          {
+            "name": "Average price",
+            "formatString": "$#,##0.00",
             "expression": [
-              "DIVIDE(100 * SUMX(scada_daily, SWITCH(TRUE(), RELATED(unit[renewable]), MAX(scada_daily[mwh], 0), NOT RELATED(unit[renewable]), 0)),",
-              "SUMX(scada_daily, IF(RELATED(unit[generator]), MAX(scada_daily[mwh], 0), 0)))"
+              "VAR late = EXCEPT(CROSSJOIN(VALUES(dim_calendar[date]), VALUES(dim_region[Region])), SUMMARIZE(fct_region_daily, dim_calendar[date], dim_region[Region]))",
+              "RETURN",
+              "    IF([Reads 5 minutes regional],",
+              "        AVERAGE(fct_region[price]),",
+              "        DIVIDE(",
+              "            288 * SUM(fct_region_daily[price]) + CALCULATE(SUM(fct_region[price]), late),",
+              "            288 * COUNT(fct_region_daily[price]) + CALCULATE(COUNT(fct_region[price]), late)))"
             ],
-            "description": "Renewable share, from the daily table: as [Renewable share], on each unit's net energy of the day." },
-          { "name": "Capture price daily", "formatString": "#,0.00",
-            "expression": "DIVIDE(SUMX(scada_daily, MAX(scada_daily[mwh], 0) * RELATED(price_daily[price])), SUMX(scada_daily, MAX(scada_daily[mwh], 0)))",
-            "description": "Capture price, from the daily tables: the day's average price of the unit's region weighted by the day's energy." }
-        ]
-      },
-      {
-        "name": "price_daily",
-        "description": "Price and demand per region and day. A day from `today` with any interval missing demand (fct_regionsum_today still filling) keeps demand NULL.",
-        "annotations": [{ "name": "grain", "value": "REGIONID, date" }, { "name": "stitch", "value": "cut_when_history" }],
-        "partitions": [
-          { "name": "history", "source": { "type": "entity", "schemaName": "agg", "entityName": "price_daily" } },
-          { "name": "recent", "source": { "type": "entity", "schemaName": "today", "entityName": "price_today" } }
+            "description": "The plain average of the 5-minute regional prices in the selection, $/MWh. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise fct_region_daily (a day there is 288 intervals), plus fct_region for the days it does not hold yet."
+          },
+          {
+            "name": "Demand MWh",
+            "formatString": "#,##0",
+            "expression": [
+              "VAR late = EXCEPT(CROSSJOIN(VALUES(dim_calendar[date]), VALUES(dim_region[Region])), SUMMARIZE(fct_region_daily, dim_calendar[date], dim_region[Region]))",
+              "RETURN",
+              "    IF([Reads 5 minutes regional],",
+              "        SUM(fct_region[demand]) / 12,",
+              "        24 * SUM(fct_region_daily[demand]) + CALCULATE(SUM(fct_region[demand]), late) / 12)"
+            ],
+            "description": "Operational demand as energy; rooftop solar is not in it. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise fct_region_daily (a day there is 288 intervals), plus fct_region for the days it does not hold yet."
+          },
+          {
+            "name": "Net interchange MW",
+            "formatString": "#,##0",
+            "expression": [
+              "VAR late = EXCEPT(CROSSJOIN(VALUES(dim_calendar[date]), VALUES(dim_region[Region])), SUMMARIZE(fct_region_daily, dim_calendar[date], dim_region[Region]))",
+              "RETURN",
+              "    IF([Reads 5 minutes regional],",
+              "        AVERAGE(fct_region[net_interchange]),",
+              "        DIVIDE(",
+              "            288 * SUM(fct_region_daily[net_interchange]) + CALCULATE(SUM(fct_region[net_interchange]), late),",
+              "            288 * COUNT(fct_region_daily[net_interchange]) + CALCULATE(COUNT(fct_region[net_interchange]), late)))"
+            ],
+            "description": "Average net flow out of a region, MW; positive is exporting. Read it per region. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise fct_region_daily (a day there is 288 intervals), plus fct_region for the days it does not hold yet."
+          },
+          {
+            "name": "Regional wind curtailed MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_region[wind_curtailed]) / 12",
+            "description": "Semi-scheduled wind not dispatched, from AEMO's regional figures (2026-08 on, up to the newest interval)."
+          },
+          {
+            "name": "Regional wind available MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_region[wind_available]) / 12",
+            "description": "What the region's semi-scheduled wind could have made."
+          },
+          {
+            "name": "Regional solar curtailed MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_region[solar_curtailed]) / 12",
+            "description": "Semi-scheduled solar not dispatched, from AEMO's regional figures (2026-08 on, up to the newest interval)."
+          },
+          {
+            "name": "Regional solar available MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_region[solar_available]) / 12",
+            "description": "What the region's semi-scheduled solar could have made."
+          }
         ],
-        "columns": [
-          { "name": "REGIONID", "dataType": "string", "sourceColumn": "REGIONID" },
-          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
-          { "name": "price", "dataType": "double", "sourceColumn": "price",
-            "annotations": [{ "name": "rollup", "value": "CAST(AVG(price) AS REAL)" }] },
-          { "name": "demand", "dataType": "double", "sourceColumn": "demand", "sourceProviderType": "REAL",
-            "annotations": [
-              { "name": "optional", "value": "true" }, { "name": "since", "value": "2026-10-02" },
-              { "name": "rollup", "value": "CAST(CASE WHEN COUNT(demand) = COUNT(*) THEN AVG(demand) END AS REAL)" }] },
-          { "name": "net_interchange", "dataType": "double", "sourceColumn": "net_interchange", "sourceProviderType": "REAL",
-            "annotations": [
-              { "name": "optional", "value": "true" }, { "name": "since", "value": "2026-10-02" },
-              { "name": "rollup", "value": "CAST(CASE WHEN COUNT(net_interchange) = COUNT(*) THEN AVG(net_interchange) END AS REAL)" }] },
-          { "name": "demand_mwh", "dataType": "double", "sourceColumn": "demand", "sourceProviderType": "REAL",
-            "annotations": [
-              { "name": "optional", "value": "true" }, { "name": "since", "value": "2026-10-02" },
-              { "name": "sql", "value": "demand * 24" },
-              { "name": "rollup", "value": "CASE WHEN COUNT(demand) = COUNT(*) THEN SUM(demand) / 12.0 END" }] }
-        ]
-      },
-      {
-        "name": "interconnector",
-        "description": "Flow on each link between regions, per 5 minutes, back to 2018. mw is the dispatch target, positive from the first region in the name to the second (T-V-MNSP1 > 0: Tasmania to Victoria); export_limit and import_limit bound it, in the same sign. History files built before 2026-10-03 have no such table.",
-        "annotations": [{ "name": "grain", "value": "interconnector, date, time" }, { "name": "stitch", "value": "after_history" }],
         "partitions": [
-          { "name": "history", "source": { "type": "entity", "schemaName": "p*", "entityName": "interconnector" } },
-          { "name": "recent", "source": { "type": "entity", "schemaName": "today", "entityName": "interconnector_today" } }
-        ],
-        "columns": [
-          { "name": "interconnector", "dataType": "string", "sourceColumn": "interconnector", "sourceProviderType": "VARCHAR" },
-          { "name": "date", "dataType": "dateTime", "sourceColumn": "date", "sourceProviderType": "DATE" },
-          { "name": "time", "dataType": "int64", "sourceColumn": "time", "sourceProviderType": "SMALLINT" },
-          { "name": "mw", "dataType": "double", "sourceColumn": "mw", "sourceProviderType": "REAL" },
-          { "name": "export_limit", "dataType": "double", "sourceColumn": "export_limit", "sourceProviderType": "REAL" },
-          { "name": "import_limit", "dataType": "double", "sourceColumn": "import_limit", "sourceProviderType": "REAL" }
+          {
+            "name": "fct_region",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_region",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
         ]
       },
       {
-        "name": "scada_hourly",
-        "description": "Energy per unit, month and hour of day: what the daily profile reads for ranges over 30 days. It leaves out the newest date of the export.",
-        "annotations": [{ "name": "grain", "value": "DUID, month, hour" }],
-        "partitions": [{ "name": "scada_hourly", "source": { "type": "entity", "schemaName": "agg", "entityName": "scada_hourly" } }],
+        "name": "fct_rooftop",
+        "description": "Rooftop solar per region and half hour: AEMO's estimate, as published, with the half hour's average price. Not units: it has no DUID, and a unit filter does not reach it. A value between two half hours, or after the newest one, is the reader's to work out.",
+        "sourceLineageTag": "[mart].[fct_rooftop]",
         "columns": [
-          { "name": "DUID", "dataType": "string", "sourceColumn": "DUID" },
-          { "name": "month", "dataType": "dateTime", "sourceColumn": "month" },
-          { "name": "hour", "dataType": "int64", "sourceColumn": "hour" },
-          { "name": "mwh", "dataType": "double", "sourceColumn": "mwh" }
-        ]
-      },
-      {
-        "name": "price_hourly",
-        "description": "Price per region, month and hour of day: what the price heatmap reads for ranges over 30 days.",
-        "annotations": [{ "name": "grain", "value": "REGIONID, month, hour" }],
-        "partitions": [{ "name": "price_hourly", "source": { "type": "entity", "schemaName": "agg", "entityName": "price_hourly" } }],
-        "columns": [
-          { "name": "REGIONID", "dataType": "string", "sourceColumn": "REGIONID" },
-          { "name": "month", "dataType": "dateTime", "sourceColumn": "month" },
-          { "name": "hour", "dataType": "int64", "sourceColumn": "hour" },
-          { "name": "price", "dataType": "double", "sourceColumn": "price" },
-          { "name": "n", "dataType": "int64", "sourceColumn": "n", "description": "The intervals averaged." }
-        ]
-      },
-      {
-        "name": "month_days",
-        "description": "The days of each month that have data: the divisor of the hourly tables.",
-        "partitions": [{ "name": "month_days", "source": { "type": "entity", "schemaName": "agg", "entityName": "month_days" } }],
-        "columns": [
-          { "name": "month", "dataType": "dateTime", "sourceColumn": "month", "isKey": true },
-          { "name": "days", "dataType": "int64", "sourceColumn": "days" }
-        ]
-      },
-      {
-        "name": "curtailment_daily",
-        "description": "Curtailment per semi-scheduled unit and day, up to the newest complete next-day file.",
-        "annotations": [{ "name": "grain", "value": "DUID, date" }],
-        "partitions": [{ "name": "curtailment_daily", "source": { "type": "entity", "schemaName": "agg", "entityName": "curtailment_daily" } }],
-        "columns": [
-          { "name": "DUID", "dataType": "string", "sourceColumn": "DUID" },
-          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
-          { "name": "curtailed_mwh", "dataType": "double", "sourceColumn": "curtailed_mwh", "description": "Sum of max(availability - cleared, 0) / 12." },
-          { "name": "available_mwh", "dataType": "double", "sourceColumn": "available_mwh", "description": "What the unit could have made." }
-        ]
-      },
-      {
-        "name": "unit",
-        "description": "A unit and its attributes, under the names the page uses. One row per unit.",
-        "annotations": [{ "name": "alias", "value": "u" }],
-        "partitions": [{ "name": "unit", "source": { "type": "entity", "entityName": "duid" } }],
-        "columns": [
-          { "name": "DUID", "dataType": "string", "sourceColumn": "DUID", "isKey": true },
-          { "name": "fuel_source", "dataType": "string", "sourceColumn": "FuelSourceDescriptor", "description": "The fuel as registered; may be NULL." },
-          { "name": "region", "dataType": "string", "sourceColumn": "Region" },
-          { "name": "state", "dataType": "string", "sourceColumn": "State", "sourceProviderType": "VARCHAR", "description": "The region's name.",
-            "annotations": [{ "name": "optional", "value": "true" }] },
-          { "name": "station", "dataType": "string", "sourceColumn": "StationName", "sourceProviderType": "VARCHAR",
-            "annotations": [{ "name": "optional", "value": "true" }] },
-          { "name": "owner", "dataType": "string", "sourceColumn": "Participant", "sourceProviderType": "VARCHAR",
-            "annotations": [{ "name": "optional", "value": "true" }] },
-          { "name": "cap_mw", "dataType": "double", "sourceColumn": "RegCapMW", "sourceProviderType": "REAL", "description": "Registered capacity, MW.",
-            "annotations": [{ "name": "optional", "value": "true" }, { "name": "since", "value": "2026-10-01" }] },
-          { "name": "storage_mwh", "dataType": "double", "sourceColumn": "StorageMWh", "sourceProviderType": "REAL", "description": "A battery's storage, MWh.",
-            "annotations": [{ "name": "optional", "value": "true" }, { "name": "since", "value": "2026-10-01" }] },
-          { "name": "renewable", "dataType": "boolean", "sourceColumn": "Renewable", "sourceProviderType": "BOOLEAN",
-            "description": "As dim_duid says: the list of renewable fuels is in the dbt model, and the rooftop units get it in the export.",
-            "annotations": [{ "name": "optional", "value": "true" }, { "name": "since", "value": "2026-10-04" }] },
-          { "name": "lat", "dataType": "double", "sourceColumn": "latitude", "annotations": [{ "name": "sql", "value": "latitude::DOUBLE" }] },
-          { "name": "lon", "dataType": "double", "sourceColumn": "longitude", "annotations": [{ "name": "sql", "value": "longitude::DOUBLE" }] },
-          { "name": "fuel", "type": "calculated", "dataType": "string",
-            "expression": "IF(ISBLANK(unit[DUID]), \"{unregistered}\", COALESCE(unit[fuel_source], \"Unknown\"))",
-            "description": "The name the charts use. On a fact row whose unit is not in dim_duid there is no DUID on the unit's side: that row gets the fuel `unregistered` names." },
-          { "name": "storage", "type": "calculated", "dataType": "boolean",
-            "expression": "unit[fuel] = \"{storage_fuel}\"",
-            "description": "A battery." },
-          { "name": "generator", "type": "calculated", "dataType": "boolean",
-            "expression": "unit[fuel] <> \"{storage_fuel}\"",
-            "description": "Anything that is not storage. Its own column, for speed (EXPLAIN, 2026-10-04): the charts that leave storage out filter on it, not on NOT storage. With the fuel filter on Grid the optimizer then sees fuel = 'Grid' AND fuel <> 'Grid' and reads nothing; it does not see through NOT (fuel = 'Grid'). That is why storage is a rule on the fuel here and not a column of dim_duid like renewable: a rule written as an IN list in a view runs as a hash join in every query, read or not." }
-        ]
-      },
-      {
-        "name": "region",
-        "description": "The NEM regions.",
-        "partitions": [{ "name": "region", "source": { "type": "query",
-          "query": "SELECT DISTINCT Region AS region FROM v_duid WHERE Region IS NOT NULL AND Region != 'WA1'" } }],
-        "columns": [{ "name": "region", "dataType": "string", "sourceColumn": "region", "isKey": true }]
-      },
-      {
-        "name": "gen_latest",
-        "description": "v_gen_today, the newest interval only: the generation of that interval with the unit's attributes on every row. The interval is found in v_scada_today, not in the joined view.",
-        "partitions": [{ "name": "gen_latest", "source": { "type": "query", "query": [
-          "SELECT * FROM v_gen_today WHERE date = (SELECT MAX(date) FROM v_scada_today)",
-          "AND time = (SELECT MAX(time) FROM v_scada_today WHERE date = (SELECT MAX(date) FROM v_scada_today))"
-        ] } }],
-        "columns": [
-          { "name": "DUID", "dataType": "string", "sourceColumn": "DUID" },
-          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
-          { "name": "time", "dataType": "int64", "sourceColumn": "time" },
-          { "name": "mw", "dataType": "double", "sourceColumn": "mw" },
-          { "name": "region", "dataType": "string", "sourceColumn": "region" },
-          { "name": "fuel", "dataType": "string", "sourceColumn": "fuel" },
-          { "name": "renewable", "dataType": "boolean", "sourceColumn": "renewable" },
-          { "name": "generator", "dataType": "boolean", "sourceColumn": "generator" }
+          {
+            "name": "REGIONID",
+            "dataType": "string",
+            "description": "The region.",
+            "sourceColumn": "REGIONID",
+            "sourceLineageTag": "REGIONID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "date",
+            "dataType": "dateTime",
+            "description": "Date of the interval, NEM time (AEST all year).",
+            "sourceColumn": "date",
+            "sourceLineageTag": "date",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM-dd"
+          },
+          {
+            "name": "time",
+            "dataType": "int64",
+            "description": "Time of day as HHMM: 1435 is 14:35. The half hour ends at it.",
+            "sourceColumn": "time",
+            "sourceLineageTag": "time",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "mw",
+            "dataType": "decimal",
+            "description": "Estimated rooftop output at the end of the half hour, MW.",
+            "sourceColumn": "mw",
+            "sourceLineageTag": "mw",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "price",
+            "dataType": "decimal",
+            "description": "The average of the region's six 5-minute prices in the half hour, $/MWh.",
+            "sourceColumn": "price",
+            "sourceLineageTag": "price",
+            "summarizeBy": "none",
+            "formatString": "$#,##0.00"
+          }
         ],
         "measures": [
-          { "name": "Generation MW latest", "formatString": "#,0",
-            "expression": "SUMX(gen_latest, MAX(gen_latest[mw], 0))",
-            "description": "MW generated in the newest interval. Output only." },
-          { "name": "Charging MW latest", "formatString": "#,0",
-            "expression": "SUMX(gen_latest, MIN(gen_latest[mw], 0))",
-            "description": "MW the batteries are charging at in the newest interval, negative." },
-          { "name": "Renewable share latest", "formatString": "0.0",
+          {
+            "name": "Rooftop MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_rooftop[mw]) / 2",
+            "description": "Rooftop solar energy: a row is half an hour, so MW / 2 is MWh."
+          },
+          {
+            "name": "Rooftop capture price",
+            "formatString": "$#,##0.00",
+            "expression": "DIVIDE(SUMX(fct_rooftop, fct_rooftop[mw] * fct_rooftop[price]), SUM(fct_rooftop[mw]))",
+            "description": "The price rooftop solar earned, $/MWh: the half-hour prices weighted by its output."
+          },
+          {
+            "name": "Rooftop MW",
+            "formatString": "#,##0",
             "expression": [
-              "DIVIDE(100 * SUMX(gen_latest, SWITCH(TRUE(), gen_latest[renewable], MAX(gen_latest[mw], 0), NOT gen_latest[renewable], 0)),",
-              "SUMX(gen_latest, IF(gen_latest[generator], MAX(gen_latest[mw], 0), 0)))"
+              "SUMX(",
+              "    CROSSJOIN(VALUES(dim_calendar[date]), VALUES(dim_time[minute]), VALUES(dim_region[Region])),",
+              "    VAR _date = dim_calendar[date]",
+              "    VAR _minute = dim_time[minute]",
+              "    VAR _region = dim_region[Region]",
+              "    VAR _past = MOD(_minute, 30)",
+              "    VAR _mwBefore = CALCULATE(SUM(fct_rooftop[mw]), REMOVEFILTERS(dim_calendar), REMOVEFILTERS(dim_time), dim_calendar[date] = _date, dim_time[minute] = _minute - _past, dim_region[Region] = _region)",
+              "    VAR _mwAfter =",
+              "        IF(_past > 0,",
+              "            IF(_minute - _past + 30 < 1440,",
+              "                CALCULATE(SUM(fct_rooftop[mw]), REMOVEFILTERS(dim_calendar), REMOVEFILTERS(dim_time), dim_calendar[date] = _date, dim_time[minute] = _minute - _past + 30, dim_region[Region] = _region),",
+              "                CALCULATE(SUM(fct_rooftop[mw]), REMOVEFILTERS(dim_calendar), REMOVEFILTERS(dim_time), dim_calendar[date] = _date + 1, dim_time[minute] = 0, dim_region[Region] = _region)))",
+              "    RETURN",
+              "        IF(_past = 0, _mwBefore,",
+              "            IF(NOT ISBLANK(_mwBefore) && NOT ISBLANK(_mwAfter), _mwBefore + (_mwAfter - _mwBefore) * _past / 30))",
+              ")"
             ],
-            "description": "Renewable share of the newest interval: as [Renewable share]." }
+            "description": "Rooftop solar in MW at a 5-minute time, worked out from the half-hourly estimate: on a half hour the estimate itself, between two consecutive half hours the straight line between them, and nothing across a missing half hour. Nothing of it is stored. Summed over the dates, times and regions in the selection, so read it at one time; for energy use [Rooftop MWh]. The newest value is not carried forward: that is the chart's choice. The half hours on either side are read with the filters on dim_time and dim_calendar removed: the query's own filter is on the 5-minute time, which has no row in fct_rooftop."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_rooftop",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_rooftop",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
         ]
       },
       {
-        "name": "price_latest",
-        "description": "v_price_today, the newest interval only.",
-        "partitions": [{ "name": "price_latest", "source": { "type": "query", "query": [
-          "SELECT * FROM v_price_today WHERE date = (SELECT MAX(date) FROM v_price_today)",
-          "AND time = (SELECT MAX(time) FROM v_price_today WHERE date = (SELECT MAX(date) FROM v_price_today))"
-        ] } }],
+        "name": "fct_interconnector",
+        "description": "Flow on each link between regions, per 5 minutes, back to 2018. Positive from the first region in the id to the second (T-V-MNSP1 > 0: Tasmania to Victoria); the limits bound it in the same sign.",
+        "sourceLineageTag": "[mart].[fct_interconnector]",
         "columns": [
-          { "name": "REGIONID", "dataType": "string", "sourceColumn": "REGIONID" },
-          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
-          { "name": "time", "dataType": "int64", "sourceColumn": "time" },
-          { "name": "price", "dataType": "double", "sourceColumn": "price" },
-          { "name": "demand", "dataType": "double", "sourceColumn": "demand" },
-          { "name": "net_interchange", "dataType": "double", "sourceColumn": "net_interchange" }
+          {
+            "name": "interconnector",
+            "dataType": "string",
+            "description": "AEMO's id of the link.",
+            "sourceColumn": "interconnector",
+            "sourceLineageTag": "interconnector",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "date",
+            "dataType": "dateTime",
+            "description": "Date of the interval, NEM time (AEST all year).",
+            "sourceColumn": "date",
+            "sourceLineageTag": "date",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM-dd"
+          },
+          {
+            "name": "time",
+            "dataType": "int64",
+            "description": "Time of day as HHMM: 1435 is 14:35. The interval ends at it.",
+            "sourceColumn": "time",
+            "sourceLineageTag": "time",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "mw",
+            "dataType": "decimal",
+            "description": "The dispatch target flow, MW.",
+            "sourceColumn": "mw",
+            "sourceLineageTag": "mw",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "export_limit",
+            "dataType": "decimal",
+            "description": "Limit in the positive direction, MW.",
+            "sourceColumn": "export_limit",
+            "sourceLineageTag": "export_limit",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "import_limit",
+            "dataType": "decimal",
+            "description": "Limit in the negative direction, MW.",
+            "sourceColumn": "import_limit",
+            "sourceLineageTag": "import_limit",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          }
+        ],
+        "measures": [
+          {
+            "name": "Flow MW",
+            "formatString": "#,##0",
+            "expression": "AVERAGE(fct_interconnector[mw])",
+            "description": "Average flow on a link, MW. Read it per link."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_interconnector",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_interconnector",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
         ]
       },
       {
-        "name": "curtailment_recent",
-        "description": "Curtailment for the days after curtailment_daily's newest, per region and fuel, from AEMO's regional 5-minute figures in `today`: the same two measures. No unit, so no DUID.",
-        "annotations": [{ "name": "grain", "value": "region, date, fuel" }, { "name": "when", "value": "v_price_today.wind_curtailed" }],
-        "partitions": [{ "name": "curtailment_recent", "source": { "type": "query", "query": [
-          "SELECT REGIONID AS region, date, 'Wind' AS fuel,",
-          "SUM(wind_curtailed) / 12.0 AS curtailed_mwh, SUM(wind_available) / 12.0 AS available_mwh",
-          "FROM v_price_today WHERE date > (SELECT MAX(date) FROM v_curtailment_daily) GROUP BY ALL",
-          "UNION ALL",
-          "SELECT REGIONID AS region, date, 'Solar' AS fuel,",
-          "SUM(solar_curtailed) / 12.0 AS curtailed_mwh, SUM(solar_available) / 12.0 AS available_mwh",
-          "FROM v_price_today WHERE date > (SELECT MAX(date) FROM v_curtailment_daily) GROUP BY ALL"
-        ] } }],
+        "name": "fct_curtailment",
+        "description": "Curtailment per semi-scheduled unit (wind and solar farms) and day, up to the newest whole day of the next-day files.",
+        "sourceLineageTag": "[mart].[fct_curtailment]",
         "columns": [
-          { "name": "region", "dataType": "string", "sourceColumn": "region" },
-          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
-          { "name": "fuel", "dataType": "string", "sourceColumn": "fuel" },
-          { "name": "curtailed_mwh", "dataType": "double", "sourceColumn": "curtailed_mwh" },
-          { "name": "available_mwh", "dataType": "double", "sourceColumn": "available_mwh" }
+          {
+            "name": "DUID",
+            "dataType": "string",
+            "description": "The unit.",
+            "sourceColumn": "DUID",
+            "sourceLineageTag": "DUID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "date",
+            "dataType": "dateTime",
+            "description": "Date of the interval, NEM time (AEST all year).",
+            "sourceColumn": "date",
+            "sourceLineageTag": "date",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM-dd"
+          },
+          {
+            "name": "curtailed_mwh",
+            "dataType": "decimal",
+            "description": "What the unit could have made and was not dispatched for: sum of max(availability - target, 0) / 12.",
+            "sourceColumn": "curtailed_mwh",
+            "sourceLineageTag": "curtailed_mwh",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "available_mwh",
+            "dataType": "decimal",
+            "description": "What the unit could have made.",
+            "sourceColumn": "available_mwh",
+            "sourceLineageTag": "available_mwh",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          }
+        ],
+        "measures": [
+          {
+            "name": "Curtailed MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_curtailment[curtailed_mwh])",
+            "description": "Energy semi-scheduled wind and solar farms could have made and were not dispatched for."
+          },
+          {
+            "name": "Available MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_curtailment[available_mwh])",
+            "description": "Energy those farms could have made."
+          },
+          {
+            "name": "Curtailment rate",
+            "formatString": "0.0",
+            "expression": "DIVIDE(100 * [Curtailed MWh], [Available MWh])",
+            "description": "Curtailed energy over available energy, %."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_curtailment",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_curtailment",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "fct_summary_daily",
+        "description": "Energy per unit and day: fct_summary one grain up, whole days only (a day is written once the next-day files hold all of it). The measures of fct_summary read this table when no time of day is asked for: output_mwh, charging_mwh and revenue are the day's sums of what they sum at 5 minutes, so the answer is the same. mwh (net) and price (the day's average) are the dashboard's own long-range figures.",
+        "sourceLineageTag": "[mart].[fct_summary_daily]",
+        "columns": [
+          {
+            "name": "DUID",
+            "dataType": "string",
+            "description": "The unit.",
+            "sourceColumn": "DUID",
+            "sourceLineageTag": "DUID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "date",
+            "dataType": "dateTime",
+            "description": "Calendar date, NEM time (AEST all year).",
+            "sourceColumn": "date",
+            "sourceLineageTag": "date",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM-dd"
+          },
+          {
+            "name": "mwh",
+            "dataType": "decimal",
+            "description": "The day's net energy, MWh: a battery's charging is taken off its output.",
+            "sourceColumn": "mwh",
+            "sourceLineageTag": "mwh",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "price",
+            "dataType": "decimal",
+            "description": "The day's average price of the unit's region, $/MWh.",
+            "sourceColumn": "price",
+            "sourceLineageTag": "price",
+            "summarizeBy": "none",
+            "formatString": "$#,##0.00"
+          },
+          {
+            "name": "output_mwh",
+            "dataType": "double",
+            "description": "The day's output, MWh: the 5-minute intervals above 0 MW. What [Generation MWh] sums.",
+            "sourceColumn": "output_mwh",
+            "sourceLineageTag": "output_mwh",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "charging_mwh",
+            "dataType": "double",
+            "description": "The day's charging, MWh, negative: the 5-minute intervals below 0 MW.",
+            "sourceColumn": "charging_mwh",
+            "sourceLineageTag": "charging_mwh",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "revenue",
+            "dataType": "double",
+            "description": "What the day's output earned, $: each interval's output at its own 5-minute price.",
+            "sourceColumn": "revenue",
+            "sourceLineageTag": "revenue",
+            "summarizeBy": "none",
+            "formatString": "$#,##0.00"
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_summary_daily",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_summary_daily",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "fct_region_daily",
+        "description": "Price, demand and net interchange per region and day: the plain average of the day's 288 intervals, whole days only. The measures of fct_region read this table when no time of day is asked for.",
+        "sourceLineageTag": "[mart].[fct_region_daily]",
+        "columns": [
+          {
+            "name": "REGIONID",
+            "dataType": "string",
+            "description": "The region.",
+            "sourceColumn": "REGIONID",
+            "sourceLineageTag": "REGIONID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "date",
+            "dataType": "dateTime",
+            "description": "Calendar date, NEM time (AEST all year).",
+            "sourceColumn": "date",
+            "sourceLineageTag": "date",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM-dd"
+          },
+          {
+            "name": "price",
+            "dataType": "decimal",
+            "description": "Average regional reference price of the day, $/MWh.",
+            "sourceColumn": "price",
+            "sourceLineageTag": "price",
+            "summarizeBy": "none",
+            "formatString": "$#,##0.00"
+          },
+          {
+            "name": "demand",
+            "dataType": "decimal",
+            "description": "Average operational demand of the day, MW.",
+            "sourceColumn": "demand",
+            "sourceLineageTag": "demand",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "net_interchange",
+            "dataType": "decimal",
+            "description": "Average net flow out of the region, MW; positive is exporting.",
+            "sourceColumn": "net_interchange",
+            "sourceLineageTag": "net_interchange",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_region_daily",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_region_daily",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "dim_month",
+        "description": "The whole months the hour-of-day tables hold, with their number of days: the divisor that turns a month's energy at an hour into an average MW.",
+        "sourceLineageTag": "[mart].[dim_month]",
+        "columns": [
+          {
+            "name": "month",
+            "dataType": "dateTime",
+            "description": "The month's first day.",
+            "sourceColumn": "month",
+            "sourceLineageTag": "month",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM",
+            "isKey": true
+          },
+          {
+            "name": "days",
+            "dataType": "int64",
+            "description": "Days in the month.",
+            "sourceColumn": "days",
+            "sourceLineageTag": "days",
+            "summarizeBy": "none"
+          }
+        ],
+        "measures": [
+          {
+            "name": "Month days",
+            "formatString": "#,##0",
+            "expression": "SUM(dim_month[days])",
+            "description": "Days of the months in the selection."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "dim_month",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "dim_month",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "fct_summary_hourly",
+        "description": "Output energy per unit, month and hour of day, whole months only: what an average-day chart reads over a long range.",
+        "sourceLineageTag": "[mart].[fct_summary_hourly]",
+        "columns": [
+          {
+            "name": "DUID",
+            "dataType": "string",
+            "description": "The unit.",
+            "sourceColumn": "DUID",
+            "sourceLineageTag": "DUID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "month",
+            "dataType": "dateTime",
+            "description": "The month's first day.",
+            "sourceColumn": "month",
+            "sourceLineageTag": "month",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM"
+          },
+          {
+            "name": "hour",
+            "dataType": "int64",
+            "description": "Hour of day, 0 to 23, as time // 100: the interval ending 14:00 is hour 14.",
+            "sourceColumn": "hour",
+            "sourceLineageTag": "hour",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "mwh",
+            "dataType": "decimal",
+            "description": "Output energy at that hour over the month, MWh; charging is left out.",
+            "sourceColumn": "mwh",
+            "sourceLineageTag": "mwh",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          }
+        ],
+        "measures": [
+          {
+            "name": "Output MWh hourly",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_summary_hourly[mwh])",
+            "description": "Output energy at an hour of day over the months in the selection."
+          },
+          {
+            "name": "Average MW at hour",
+            "formatString": "#,##0",
+            "expression": "DIVIDE([Output MWh hourly], [Month days])",
+            "description": "Average output at an hour of day over the months in the selection, MW: the energy at that hour over the days of those months. Read it per hour."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_summary_hourly",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_summary_hourly",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "fct_region_hourly",
+        "description": "Average price per region, month and hour of day, whole months only: what a price-by-hour chart reads over a long range.",
+        "sourceLineageTag": "[mart].[fct_region_hourly]",
+        "columns": [
+          {
+            "name": "REGIONID",
+            "dataType": "string",
+            "description": "The region.",
+            "sourceColumn": "REGIONID",
+            "sourceLineageTag": "REGIONID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "month",
+            "dataType": "dateTime",
+            "description": "The month's first day.",
+            "sourceColumn": "month",
+            "sourceLineageTag": "month",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM"
+          },
+          {
+            "name": "hour",
+            "dataType": "int64",
+            "description": "Hour of day, 0 to 23, as time // 100: the interval ending 14:00 is hour 14.",
+            "sourceColumn": "hour",
+            "sourceLineageTag": "hour",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "price",
+            "dataType": "decimal",
+            "description": "Plain average of the month's prices at that hour, $/MWh.",
+            "sourceColumn": "price",
+            "sourceLineageTag": "price",
+            "summarizeBy": "none",
+            "formatString": "$#,##0.00"
+          },
+          {
+            "name": "intervals",
+            "dataType": "int64",
+            "description": "How many intervals were averaged.",
+            "sourceColumn": "intervals",
+            "sourceLineageTag": "intervals",
+            "summarizeBy": "none"
+          }
+        ],
+        "measures": [
+          {
+            "name": "Price at hour",
+            "formatString": "$#,##0.00",
+            "expression": "DIVIDE(SUMX(fct_region_hourly, fct_region_hourly[price] * fct_region_hourly[intervals]), SUM(fct_region_hourly[intervals]))",
+            "description": "Average price at an hour of day over the months in the selection: the monthly averages weighted by their intervals."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_region_hourly",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_region_hourly",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
         ]
       }
     ],
-
     "relationships": [
       {
-        "name": "v_gen",
-        "fromTable": "scada", "fromColumn": "DUID", "toTable": "unit", "toColumn": "DUID",
-        "annotations": [{ "name": "description", "value": "Generation per unit and 5 minutes, with the unit's attributes on every row. A unit missing from unit keeps its rows, under the fuel `unregistered` names." }]
+        "name": "fct_summary_to_dim_duid",
+        "fromTable": "fct_summary",
+        "fromColumn": "DUID",
+        "toTable": "dim_duid",
+        "toColumn": "DUID",
+        "relyOnReferentialIntegrity": true
       },
       {
-        "name": "v_gen_daily",
-        "fromTable": "scada_daily", "fromColumn": "DUID", "toTable": "unit", "toColumn": "DUID",
-        "annotations": [{ "name": "description", "value": "Energy per unit and day, with the unit's attributes." }]
+        "name": "fct_summary_to_dim_calendar",
+        "fromTable": "fct_summary",
+        "fromColumn": "date",
+        "toTable": "dim_calendar",
+        "toColumn": "date",
+        "relyOnReferentialIntegrity": true
       },
       {
-        "name": "v_gen_today",
-        "fromTable": "scada_today", "fromColumn": "DUID", "toTable": "unit", "toColumn": "DUID",
-        "annotations": [{ "name": "description", "value": "As v_gen, the newest 14 days." }]
+        "name": "dim_duid_to_dim_region",
+        "fromTable": "dim_duid",
+        "fromColumn": "Region",
+        "toTable": "dim_region",
+        "toColumn": "Region"
       },
       {
-        "name": "v_gen_hourly",
-        "fromTable": "scada_hourly", "fromColumn": "DUID", "toTable": "unit", "toColumn": "DUID",
-        "annotations": [{ "name": "description", "value": "Energy per unit, month and hour of day, with the unit's attributes." }]
+        "name": "fct_region_to_dim_region",
+        "fromTable": "fct_region",
+        "fromColumn": "REGIONID",
+        "toTable": "dim_region",
+        "toColumn": "Region"
       },
       {
-        "name": "v_curtailment",
-        "fromTable": "curtailment_daily", "fromColumn": "DUID", "toTable": "unit", "toColumn": "DUID",
-        "annotations": [{ "name": "description", "value": "Curtailment per wind or solar farm and day, with the unit's attributes." }]
+        "name": "fct_region_to_dim_calendar",
+        "fromTable": "fct_region",
+        "fromColumn": "date",
+        "toTable": "dim_calendar",
+        "toColumn": "date"
       },
       {
-        "name": "v_gen_price",
-        "fromTable": "scada", "fromColumn": "date", "toTable": "price", "toColumn": "date",
-        "annotations": [
-          { "name": "description", "value": "v_gen plus the price of the unit's region in that interval. A row without a price is kept: capture price and the battery chart add price IS NOT NULL. A TMSL relationship is one column to one column; this one has three, and starts from v_gen (the region is the unit's), so the rest is in `from` and `on`." },
-          { "name": "from", "value": "v_gen" },
-          { "name": "on", "value": "date = date, time = time, region = REGIONID" },
-          { "name": "columns", "value": "price" }
-        ]
+        "name": "fct_rooftop_to_dim_region",
+        "fromTable": "fct_rooftop",
+        "fromColumn": "REGIONID",
+        "toTable": "dim_region",
+        "toColumn": "Region"
       },
       {
-        "name": "v_gen_price_daily",
-        "fromTable": "scada_daily", "fromColumn": "date", "toTable": "price_daily", "toColumn": "date",
-        "annotations": [
-          { "name": "description", "value": "v_gen_daily plus the day's price of the unit's region." },
-          { "name": "from", "value": "v_gen_daily" },
-          { "name": "on", "value": "date = date, region = REGIONID" },
-          { "name": "columns", "value": "price" }
-        ]
+        "name": "fct_rooftop_to_dim_calendar",
+        "fromTable": "fct_rooftop",
+        "fromColumn": "date",
+        "toTable": "dim_calendar",
+        "toColumn": "date"
+      },
+      {
+        "name": "fct_interconnector_to_dim_calendar",
+        "fromTable": "fct_interconnector",
+        "fromColumn": "date",
+        "toTable": "dim_calendar",
+        "toColumn": "date"
+      },
+      {
+        "name": "fct_curtailment_to_dim_duid",
+        "fromTable": "fct_curtailment",
+        "fromColumn": "DUID",
+        "toTable": "dim_duid",
+        "toColumn": "DUID"
+      },
+      {
+        "name": "fct_curtailment_to_dim_calendar",
+        "fromTable": "fct_curtailment",
+        "fromColumn": "date",
+        "toTable": "dim_calendar",
+        "toColumn": "date"
+      },
+      {
+        "name": "fct_summary_to_dim_time",
+        "fromTable": "fct_summary",
+        "fromColumn": "time",
+        "toTable": "dim_time",
+        "toColumn": "time"
+      },
+      {
+        "name": "fct_region_to_dim_time",
+        "fromTable": "fct_region",
+        "fromColumn": "time",
+        "toTable": "dim_time",
+        "toColumn": "time"
+      },
+      {
+        "name": "fct_rooftop_to_dim_time",
+        "fromTable": "fct_rooftop",
+        "fromColumn": "time",
+        "toTable": "dim_time",
+        "toColumn": "time"
+      },
+      {
+        "name": "fct_interconnector_to_dim_time",
+        "fromTable": "fct_interconnector",
+        "fromColumn": "time",
+        "toTable": "dim_time",
+        "toColumn": "time"
+      },
+      {
+        "name": "fct_summary_daily_to_dim_duid",
+        "fromTable": "fct_summary_daily",
+        "fromColumn": "DUID",
+        "toTable": "dim_duid",
+        "toColumn": "DUID"
+      },
+      {
+        "name": "fct_summary_daily_to_dim_calendar",
+        "fromTable": "fct_summary_daily",
+        "fromColumn": "date",
+        "toTable": "dim_calendar",
+        "toColumn": "date"
+      },
+      {
+        "name": "fct_region_daily_to_dim_region",
+        "fromTable": "fct_region_daily",
+        "fromColumn": "REGIONID",
+        "toTable": "dim_region",
+        "toColumn": "Region"
+      },
+      {
+        "name": "fct_region_daily_to_dim_calendar",
+        "fromTable": "fct_region_daily",
+        "fromColumn": "date",
+        "toTable": "dim_calendar",
+        "toColumn": "date"
+      },
+      {
+        "name": "fct_summary_hourly_to_dim_duid",
+        "fromTable": "fct_summary_hourly",
+        "fromColumn": "DUID",
+        "toTable": "dim_duid",
+        "toColumn": "DUID"
+      },
+      {
+        "name": "fct_summary_hourly_to_dim_month",
+        "fromTable": "fct_summary_hourly",
+        "fromColumn": "month",
+        "toTable": "dim_month",
+        "toColumn": "month"
+      },
+      {
+        "name": "fct_region_hourly_to_dim_region",
+        "fromTable": "fct_region_hourly",
+        "fromColumn": "REGIONID",
+        "toTable": "dim_region",
+        "toColumn": "Region"
+      },
+      {
+        "name": "fct_region_hourly_to_dim_month",
+        "fromTable": "fct_region_hourly",
+        "fromColumn": "month",
+        "toTable": "dim_month",
+        "toColumn": "month"
       }
     ]
   }

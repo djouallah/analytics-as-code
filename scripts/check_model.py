@@ -35,7 +35,7 @@ from pathlib import Path
 API = "https://api.powerbi.com/v1.0/myorg"
 TOKEN = os.environ["POWERBI_TOKEN"]
 WORKSPACE = os.environ["WS_ID"]
-ITEM = Path(__file__).resolve().parent.parent / "dashboard" / "semantic" / "nem.SemanticModel"
+ITEM = Path(__file__).resolve().parent.parent / "dashboard" / "semantic"
 NAME = json.loads((ITEM / ".platform").read_text(encoding="utf-8"))["metadata"]["displayName"]
 MODEL = json.loads((ITEM / "model.bim").read_text(encoding="utf-8"))["model"]
 TABLES = [t["name"] for t in MODEL["tables"]]

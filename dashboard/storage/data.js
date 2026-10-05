@@ -3,11 +3,13 @@
 // =============================================================================
 // The GitHub Pages version. The files sit next to the page in data/ and are downloaded whole
 // into OPFS; GitHub caps a file at 100 MB, hence the half-year split of the 5-minute history:
-//   energy_dim.duckdb               as `dim`          dim_calendar, dim_duid
-//   energy_today.duckdb             as `today`        scada_today, price_today, interconnector_today (last 14 days, 5-min)
-//   energy_daily_agg.duckdb         as `agg`          daily and hour-of-day rollups: attachAgg(), after first paint
-//   energy_data_<YYYY>_h<N>.duckdb  as `p<YYYY>_h<N>` scada, price, interconnector: ensureHistory(), only the
-//                                                     half-years a 5-minute range needs
+// They are the tables of the semantic model, copied as they are (scripts/copy_catalog.py):
+//   mart_dim.duckdb            as `dim`          the dimensions
+//   mart_today.duckdb          as `today`        the 5-minute tables and rooftop, the newest 14 days
+//   mart_agg.duckdb            as `agg`          the per-day and per-month tables, and rooftop whole:
+//                                                attachAgg(), after first paint
+//   mart_<YYYY>_h<N>.duckdb    as `p<YYYY>_h<N>` the 5-minute tables by half-year: ensureHistory(), only
+//                                                the half-years a 5-minute range needs
 // The model and index.html know none of this: ../semantic/compiler.js wraps the members
 // createDataSource returns and builds its views over the attached databases, which it finds
 // in the engine's catalog. A host that stores the files differently (the Fabric app,
@@ -132,13 +134,13 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     _baseUrl = window.location.href.replace(/\/[^/]*$/, "");
 
     onStatus("Loading today's data...");
-    await Promise.all([loadDb('energy_dim.duckdb', 'dim'), loadDb('energy_today.duckdb', 'today')]);
+    await Promise.all([loadDb('mart_dim.duckdb', 'dim'), loadDb('mart_today.duckdb', 'today')]);
     await conn.query("SET TimeZone = 'Australia/Brisbane';");
     await conn.query("SET preserve_insertion_order = false;");
     return { db: _db };
   }
 
-  const attachAgg = () => loadDb('energy_daily_agg.duckdb', 'agg');
+  const attachAgg = () => loadDb('mart_agg.duckdb', 'agg');
 
   let _manifest = null;
   const _attachedPeriods = new Set();
@@ -152,7 +154,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   // query: recent days still come from `today` and the other periods still load.
   async function attachPeriod(p) {
     try {
-      await loadDb(`energy_data_${p}.duckdb`, `p${p}`);
+      await loadDb(`mart_${p}.duckdb`, `p${p}`);
       _attachedPeriods.add(p);
       _failedPeriods.delete(p);
       return true;
@@ -169,8 +171,8 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   async function ensureHistory(from, to, msg) {
     if (!_manifest) {
       // no-store: a manifest from the HTTP cache can predate a half-year rollover.
-      const resp = await fetch(`${_baseUrl}/data/daily_manifest.json`, { cache: 'no-store' });
-      if (!resp.ok) throw new Error(`Failed to fetch daily_manifest.json: HTTP ${resp.status}`);
+      const resp = await fetch(`${_baseUrl}/data/mart_manifest.json`, { cache: 'no-store' });
+      if (!resp.ok) throw new Error(`Failed to fetch mart_manifest.json: HTTP ${resp.status}`);
       _manifest = await resp.json();
     }
     const needed = periodsForRange(from, to).filter(p => _manifest.periods.includes(p)

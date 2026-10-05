@@ -1,8 +1,8 @@
 name: Import OneLake
 
 # The same .duckdb files import_data.yml builds for GitHub Pages, published to the lakehouse
-# the Fabric app (fabric/) reads. Every run exports all of the history (ALL_PERIODS): there is
-# no deployed copy on OneLake to splice the older half-years from.
+# the Fabric app (fabric/) reads. Every run copies all of the history (ALL_PERIODS): there is
+# no deployed copy on OneLake to add the newer half-years to.
 on:
   schedule:
     - cron: '30 22 * * *'  # 8:30am AEST, after the daily refresh and maintenance
@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      # OneLake Iceberg REST catalog — only the .venv-read (export_*) steps touch it.
+      # OneLake Iceberg REST catalog — only the .venv-read (export) steps touch it.
       ONELAKE_ENDPOINT: https://onelake.table.fabric.microsoft.com/iceberg
       WAREHOUSE_PATH: ${{ vars.WS_ID }}/${{ vars.LH_ID }}
       AZURE_TRANSPORT_OPTION_TYPE: curl
@@ -70,21 +70,14 @@ jobs:
           .venv-write/bin/pip install -q "duckdb==1.5.6"
           pip install -q "azure-identity==1.26.0" "azure-storage-file-datalake==12.26.0"
 
-      - name: Export from the catalog
+      - name: Copy the mart tables
+        # A plain copy, with no rule of its own (scripts/copy_catalog.py).
         run: |
-          for step in export_scada_today export_price_today export_interconnector_today \
-                      export_dim_duid export_dim_calendar \
-                      export_scada export_price export_interconnector export_curtailment; do
-            echo "::group::$step"
-            .venv-read/bin/python scripts/cache_catalog.py "$step"
+          for group in dim agg today history; do
+            echo "::group::$group"
+            .venv-read/bin/python scripts/copy_catalog.py export $group
+            .venv-write/bin/python scripts/copy_catalog.py build $group
             echo "::endgroup::"
-          done
-
-      - name: Build the .duckdb files
-        run: |
-          # build_daily_agg last: it removes the parquet exports build_daily reads.
-          for step in build_today build_dim build_daily build_daily_agg; do
-            .venv-write/bin/python scripts/cache_catalog.py "$step"
           done
 
       - name: Publish to the app's lakehouse
