@@ -2,7 +2,8 @@ name: Deploy Semantic Model
 
 # Publishes dashboard/semantic/nem.SemanticModel (a Direct Lake model over the catalog's
 # Iceberg tables) to the workspace that holds the lakehouse, then refreshes it and asks it,
-# in DAX over XMLA, a row count per table and its measures (scripts/check_model.py).
+# in DAX over XMLA, a row count per table and its measures (scripts/check_model.py), and
+# holds every measure against the dashboard's deployed files (scripts/parity_model.py).
 #
 # Manual only: it creates or updates a Fabric item. It touches no table and no dashboard
 # file. The identity is the catalog's (the same OIDC login as Process Data), so the model
@@ -35,7 +36,9 @@ jobs:
         with:
           python-version: "3.11"
       # Pinned exactly, like every other version here (AGENTS.md, version policy).
-      - run: pip install -q "fabric-cicd==1.3.0" "pythonnet==3.1.0"
+      # duckdb is the 1.5 line: parity_model.py reads the dashboard's deployed .duckdb files,
+      # which import_data.yml writes with that line.
+      - run: pip install -q "fabric-cicd==1.3.0" "pythonnet==3.1.0" "duckdb==1.5.6"
       - name: Install the ADOMD.NET client
         # What scripts/check_model.py asks its DAX through (XMLA). The .NET Core build runs on
         # Linux under pythonnet; publishing a throwaway project that references it puts the
@@ -57,10 +60,18 @@ jobs:
           allow-no-subscriptions: true
       - name: Publish the model
         run: python scripts/deploy_model.py
-      - name: Refresh it and query it
-        env:
-          PYTHONNET_RUNTIME: coreclr
+      - name: Mint Power BI token
         run: |
           TOKEN=$(az account get-access-token --resource https://analysis.windows.net/powerbi/api --query accessToken -o tsv)
           echo "::add-mask::$TOKEN"
-          POWERBI_TOKEN="$TOKEN" python scripts/check_model.py
+          echo "POWERBI_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+      - name: Refresh it and query it
+        env:
+          PYTHONNET_RUNTIME: coreclr
+        run: python scripts/check_model.py
+      - name: Parity with the dashboard's files
+        # The model against what the dashboard shows, measure by measure, for the newest
+        # settled days. Fails on any difference.
+        env:
+          PYTHONNET_RUNTIME: coreclr
+        run: python scripts/parity_model.py

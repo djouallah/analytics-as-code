@@ -77,15 +77,22 @@ def connect(workspace_name):
 
 
 def query(conn, dax):
-    """The rows of a DAX query, as dicts of text."""
+    """The rows of a DAX query, as dicts of text: a date as yyyy-MM-dd HH:mm:ss whatever the
+    machine's culture, a blank as the empty string."""
     from Microsoft.AnalysisServices.AdomdClient import AdomdCommand
+
+    def text(value):
+        kind = type(value).__name__
+        if kind == "DateTime":
+            return value.ToString("yyyy-MM-dd HH:mm:ss")
+        return "" if value is None or kind == "DBNull" else str(value)
 
     reader = AdomdCommand(dax, conn).ExecuteReader()
     try:
         names = [reader.GetName(i) for i in range(reader.FieldCount)]
         rows = []
         while reader.Read():
-            rows.append({name: str(reader.GetValue(i)) for i, name in enumerate(names)})
+            rows.append({name: text(reader.GetValue(i)) for i, name in enumerate(names)})
         return rows
     finally:
         reader.Close()
