@@ -1,0 +1,324 @@
+{
+  "name": "nem",
+  "description": [
+    "Australia's National Electricity Market as the dashboard reads it: what each unit generated, what each region paid, what flowed between regions, and what wind and solar were curtailed.",
+    "This file is the semantic model: the datasets, how they relate, and the measures. compiler.js turns it into DuckDB views (one per dataset and per relationship) and macros (one per function and metric). The page then queries those in SQL, written by hand.",
+    "In an expression, {name} is one of the constants below.",
+    "A dataset only holds what is attached. The 5-minute datasets hold the last 5 days (v_interconnector 14) until the half-year files of a date range are attached; the daily ones hold the last 14 days, and the hourly ones do not exist, until the daily aggregate is. A query over the rest runs and returns the newest days alone, with no error: the compiler's needs(sql) says what a query reads.",
+    "A fact dataset stays readable as it is: a query that needs nothing about the unit reads it, not the relationship's view, and pays for no join."
+  ],
+
+  "constants": {
+    "recent_days": {
+      "value": 5,
+      "description": "Rows from this many days back are read from `today` (refreshed every 30 minutes), older ones from the half-year history files or the daily aggregate. CURRENT_DATE is the NEM's day: the host sets the session to Brisbane time for it."
+    },
+    "unregistered": {
+      "value": "Unregistered",
+      "description": "The fuel of a unit that is in the data and not in dim_duid, e.g. one the registration list hasn't caught up with yet. Its rows are kept, so it still counts toward totals. A unit that is in dim_duid without a fuel is 'Unknown'."
+    },
+    "rooftop": {
+      "value": "Rooftop solar",
+      "description": "The fuel of the rooftop pseudo-units (QLD_PV, NSW_PV, VIC_PV, SA_PV, TAS_PV): AEMO's regional estimate, one unit per region, with no capacity and no coordinates. The estimate is half-hourly, drawn as a straight line onto the 5-minute intervals (scripts/cache_catalog.py rooftop_units)."
+    },
+    "storage_fuel": {
+      "value": "Grid",
+      "description": "The fuel of batteries. Storage is on neither side of the renewable share."
+    }
+  },
+
+  "glossary": {
+    "date": "NEM time (AEST all year).",
+    "time": "HHMM as a number, NEM time: 1435 is 14:35, and the hour is time // 100.",
+    "mw": "MW in that 5 minutes; a battery charging is negative. Energy in MWh is SUM(mw) / 12. An interval at 0 MW is not stored, so AVG(mw) and COUNT(*) only see the others: the intervals of a range are counted in v_price.",
+    "mwh": "Energy. Daily: the day's, net of charging. Hourly: that hour of the day over the month, output only (charging is left out).",
+    "month": "The month's first day.",
+    "hour": "Hour of day, 0-23. The average MW at an hour over a range is SUM(mwh) / SUM(v_month_days.days) over its months.",
+    "price": "The regional reference price (AEMO's RRP), $/MWh. In the daily and hourly datasets, the plain average of the intervals.",
+    "demand": "Operational demand in MW: rooftop solar is not in it. Daily: the average MW.",
+    "demand_mwh": "The day's operational demand as energy: a whole day from the aggregate, the intervals so far today.",
+    "net_interchange": "MW, positive when the region exports.",
+    "region": "NSW1, QLD1, SA1, TAS1, VIC1. v_unit also holds the units of WA1 (Western Australia, another market), which v_region leaves out.",
+    "REGIONID": "The region, under AEMO's name for the column: NSW1, QLD1, SA1, TAS1, VIC1.",
+    "DUID": "AEMO's id of a dispatchable unit."
+  },
+
+  "stitching": {
+    "cut": "History before the cut (constants.recent_days), recent from the cut on. The default.",
+    "cut_when_history": "The same once the history is attached; until then the recent table as it is, all its days.",
+    "after_history": "History before the cut, and from recent whatever is newer than the attached history holds: a file without the table, or a daily import that is behind, leaves no hole."
+  },
+
+  "datasets": [
+    {
+      "name": "v_duid",
+      "table": "dim.dim_duid",
+      "description": "dim_duid under the names the export gives its columns: the units on AEMO's registration list plus the ones in the data that are not on it (retired plant, replaced DUIDs), and the rooftop pseudo-units. Queries read v_unit."
+    },
+    {
+      "name": "v_calendar",
+      "table": "dim.dim_calendar",
+      "primary_key": ["date"],
+      "description": "dim_calendar. The first date is where the history starts.",
+      "fields": ["date", "year", "month"]
+    },
+    {
+      "name": "v_scada_today",
+      "table": "today.scada_today",
+      "grain": ["DUID", "date", "time"],
+      "description": "Generation per unit and 5 minutes, the newest 14 days: where the latest interval is read.",
+      "fields": ["DUID", "date", "time", "mw"]
+    },
+    {
+      "name": "v_price_today",
+      "table": "today.price_today",
+      "grain": ["REGIONID", "date", "time"],
+      "description": "Price and demand per region and 5 minutes, the newest 14 days, with the region's semi-scheduled wind and solar.",
+      "fields": [
+        "REGIONID", "date", "time", "price", "demand", "net_interchange",
+        { "name": "wind_available", "description": "MW the region's semi-scheduled wind could make." },
+        { "name": "wind_curtailed", "description": "MW of it that was not dispatched." },
+        { "name": "solar_available", "description": "MW the region's semi-scheduled solar could make." },
+        { "name": "solar_curtailed", "description": "MW of it that was not dispatched." }
+      ]
+    },
+    {
+      "name": "v_scada",
+      "grain": ["DUID", "date", "time"],
+      "description": "Generation per unit and 5 minutes.",
+      "partitions": { "history": "p*.scada", "recent": "today.scada_today" },
+      "fields": ["DUID", "date", "time", "mw"]
+    },
+    {
+      "name": "v_price",
+      "grain": ["REGIONID", "date", "time"],
+      "description": "Price and demand per region and 5 minutes.",
+      "partitions": { "history": "p*.price", "recent": "today.price_today" },
+      "fields": [
+        "REGIONID", "date", "time", "price",
+        { "name": "demand", "optional": true, "since": "2026-10-02" },
+        { "name": "net_interchange", "optional": true, "since": "2026-10-02" }
+      ]
+    },
+    {
+      "name": "v_scada_daily",
+      "grain": ["DUID", "date"],
+      "description": "Energy per unit and day.",
+      "partitions": { "history": "agg.scada_daily", "recent": "today.scada_today", "stitch": "cut_when_history" },
+      "fields": [
+        "DUID", "date",
+        { "name": "mwh", "rollup": "CAST(SUM(mw) / 12.0 AS REAL)" }
+      ]
+    },
+    {
+      "name": "v_price_daily",
+      "grain": ["REGIONID", "date"],
+      "description": "Price and demand per region and day. A day from `today` with any interval missing demand (fct_regionsum_today still filling) keeps demand NULL.",
+      "partitions": { "history": "agg.price_daily", "recent": "today.price_today", "stitch": "cut_when_history" },
+      "fields": [
+        "REGIONID", "date",
+        { "name": "price", "rollup": "CAST(AVG(price) AS REAL)" },
+        { "name": "demand", "optional": true, "since": "2026-10-02",
+          "rollup": "CAST(CASE WHEN COUNT(demand) = COUNT(*) THEN AVG(demand) END AS REAL)" },
+        { "name": "net_interchange", "optional": true, "since": "2026-10-02",
+          "rollup": "CAST(CASE WHEN COUNT(net_interchange) = COUNT(*) THEN AVG(net_interchange) END AS REAL)" },
+        { "name": "demand_mwh", "optional": true, "column": "demand", "since": "2026-10-02",
+          "expression": "demand * 24",
+          "rollup": "CASE WHEN COUNT(demand) = COUNT(*) THEN SUM(demand) / 12.0 END" }
+      ]
+    },
+    {
+      "name": "v_interconnector",
+      "grain": ["interconnector", "date", "time"],
+      "description": "Flow on each link between regions, per 5 minutes, back to 2018. mw is the dispatch target, positive from the first region in the name to the second (T-V-MNSP1 > 0: Tasmania to Victoria); export_limit and import_limit bound it, in the same sign. History files built before 2026-10-03 have no such table.",
+      "partitions": { "history": "p*.interconnector", "recent": "today.interconnector_today", "stitch": "after_history" },
+      "fields": [
+        { "name": "interconnector", "datatype": "VARCHAR" },
+        { "name": "date", "datatype": "DATE" },
+        { "name": "time", "datatype": "SMALLINT" },
+        { "name": "mw", "datatype": "REAL" },
+        { "name": "export_limit", "datatype": "REAL" },
+        { "name": "import_limit", "datatype": "REAL" }
+      ]
+    },
+    {
+      "name": "v_scada_hourly",
+      "table": "agg.scada_hourly",
+      "grain": ["DUID", "month", "hour"],
+      "description": "Energy per unit, month and hour of day: what the daily profile reads for ranges over 30 days. It leaves out the newest date of the export.",
+      "fields": ["DUID", "month", "hour", "mwh"]
+    },
+    {
+      "name": "v_price_hourly",
+      "table": "agg.price_hourly",
+      "grain": ["REGIONID", "month", "hour"],
+      "description": "Price per region, month and hour of day: what the price heatmap reads for ranges over 30 days.",
+      "fields": [
+        "REGIONID", "month", "hour", "price",
+        { "name": "n", "description": "The intervals averaged." }
+      ]
+    },
+    {
+      "name": "v_month_days",
+      "table": "agg.month_days",
+      "primary_key": ["month"],
+      "description": "The days of each month that have data: the divisor of the hourly datasets.",
+      "fields": ["month", "days"]
+    },
+    {
+      "name": "v_curtailment_daily",
+      "table": "agg.curtailment_daily",
+      "grain": ["DUID", "date"],
+      "description": "Curtailment per semi-scheduled unit and day, up to the newest complete next-day file.",
+      "fields": [
+        "DUID", "date",
+        { "name": "curtailed_mwh", "description": "Sum of max(availability - cleared, 0) / 12." },
+        { "name": "available_mwh", "description": "What the unit could have made." }
+      ]
+    },
+    {
+      "name": "v_unit",
+      "from": "v_duid",
+      "alias": "u",
+      "primary_key": ["DUID"],
+      "description": "A unit and its attributes, under the names the page uses. One row per unit.",
+      "fields": [
+        "DUID",
+        { "name": "fuel_source", "expression": "FuelSourceDescriptor", "description": "The fuel as registered; may be NULL." },
+        { "name": "region", "expression": "Region" },
+        { "name": "state", "expression": "State", "datatype": "VARCHAR", "optional": true, "description": "The region's name." },
+        { "name": "station", "expression": "StationName", "datatype": "VARCHAR", "optional": true },
+        { "name": "owner", "expression": "Participant", "datatype": "VARCHAR", "optional": true },
+        { "name": "cap_mw", "expression": "RegCapMW", "datatype": "REAL", "optional": true, "since": "2026-10-01", "description": "Registered capacity, MW." },
+        { "name": "storage_mwh", "expression": "StorageMWh", "datatype": "REAL", "optional": true, "since": "2026-10-01", "description": "A battery's storage, MWh." },
+        { "name": "renewable", "expression": "Renewable", "datatype": "BOOLEAN", "optional": true, "since": "2026-10-04", "description": "As dim_duid says: the list of renewable fuels is in the dbt model, and the rooftop units get it in the export." },
+        { "name": "lat", "expression": "latitude::DOUBLE" },
+        { "name": "lon", "expression": "longitude::DOUBLE" }
+      ],
+      "calculated": [
+        { "name": "fuel", "expression": "fuel_name(u.DUID, u.fuel_source)", "description": "The name the charts use." },
+        { "name": "storage", "expression": "fuel_name(u.DUID, u.fuel_source) = '{storage_fuel}'", "description": "A battery." },
+        { "name": "generator", "expression": "fuel_name(u.DUID, u.fuel_source) <> '{storage_fuel}'",
+          "description": "Anything that is not storage. Its own column, for speed (EXPLAIN, 2026-10-04): the charts that leave storage out filter on it, not on NOT storage. With the fuel filter on Grid the optimizer then sees fuel = 'Grid' AND fuel <> 'Grid' and reads nothing; it does not see through NOT (fuel = 'Grid'). That is why storage is a rule on the fuel here and not a column of dim_duid like renewable: a rule written as an IN list in a view runs as a hash join in every query, read or not." }
+      ]
+    },
+    {
+      "name": "v_region",
+      "description": "The NEM regions.",
+      "sql": "SELECT DISTINCT Region AS region FROM v_duid WHERE Region IS NOT NULL AND Region != 'WA1'"
+    },
+    {
+      "name": "v_gen_latest",
+      "description": "v_gen_today, the newest interval only. The interval is found in v_scada_today, not in the joined view.",
+      "sql": [
+        "SELECT * FROM v_gen_today WHERE date = (SELECT MAX(date) FROM v_scada_today)",
+        "AND time = (SELECT MAX(time) FROM v_scada_today WHERE date = (SELECT MAX(date) FROM v_scada_today))"
+      ]
+    },
+    {
+      "name": "v_price_latest",
+      "description": "v_price_today, the newest interval only.",
+      "sql": [
+        "SELECT * FROM v_price_today WHERE date = (SELECT MAX(date) FROM v_price_today)",
+        "AND time = (SELECT MAX(time) FROM v_price_today WHERE date = (SELECT MAX(date) FROM v_price_today))"
+      ]
+    },
+    {
+      "name": "v_curtailment_recent",
+      "grain": ["region", "date", "fuel"],
+      "description": "Curtailment for the days after v_curtailment_daily's newest, per region and fuel, from AEMO's regional 5-minute figures in `today`: the same two measures. No unit, so no DUID.",
+      "when": ["v_price_today.wind_curtailed"],
+      "sql": [
+        "SELECT REGIONID AS region, date, 'Wind' AS fuel,",
+        "SUM(wind_curtailed) / 12.0 AS curtailed_mwh, SUM(wind_available) / 12.0 AS available_mwh",
+        "FROM v_price_today WHERE date > (SELECT MAX(date) FROM v_curtailment_daily) GROUP BY ALL",
+        "UNION ALL",
+        "SELECT REGIONID AS region, date, 'Solar' AS fuel,",
+        "SUM(solar_curtailed) / 12.0 AS curtailed_mwh, SUM(solar_available) / 12.0 AS available_mwh",
+        "FROM v_price_today WHERE date > (SELECT MAX(date) FROM v_curtailment_daily) GROUP BY ALL"
+      ]
+    }
+  ],
+
+  "relationships": [
+    {
+      "name": "v_gen",
+      "from": "v_scada", "to": "v_unit", "on": { "DUID": "DUID" },
+      "description": "Generation per unit and 5 minutes, with the unit's attributes on every row. A unit missing from v_unit keeps its rows, under the fuel constants.unregistered names."
+    },
+    {
+      "name": "v_gen_daily",
+      "from": "v_scada_daily", "to": "v_unit", "on": { "DUID": "DUID" },
+      "description": "Energy per unit and day, with the unit's attributes."
+    },
+    {
+      "name": "v_gen_today",
+      "from": "v_scada_today", "to": "v_unit", "on": { "DUID": "DUID" },
+      "description": "As v_gen, the newest 14 days."
+    },
+    {
+      "name": "v_gen_hourly",
+      "from": "v_scada_hourly", "to": "v_unit", "on": { "DUID": "DUID" },
+      "description": "Energy per unit, month and hour of day, with the unit's attributes."
+    },
+    {
+      "name": "v_curtailment",
+      "from": "v_curtailment_daily", "to": "v_unit", "on": { "DUID": "DUID" },
+      "description": "Curtailment per wind or solar farm and day, with the unit's attributes."
+    },
+    {
+      "name": "v_gen_price",
+      "from": "v_gen", "to": "v_price", "on": { "date": "date", "time": "time", "region": "REGIONID" },
+      "fields": ["price"],
+      "description": "v_gen plus the price of the unit's region in that interval. A row without a price is kept: capture price and the battery chart add price IS NOT NULL."
+    },
+    {
+      "name": "v_gen_price_daily",
+      "from": "v_gen_daily", "to": "v_price_daily", "on": { "date": "date", "region": "REGIONID" },
+      "fields": ["price"],
+      "description": "v_gen_daily plus the day's price of the unit's region."
+    }
+  ],
+
+  "functions": [
+    {
+      "name": "fuel_name",
+      "args": ["duid", "descr"],
+      "expression": "CASE WHEN duid IS NULL THEN '{unregistered}' ELSE COALESCE(descr, 'Unknown') END",
+      "description": "The name a unit's fuel goes by on the page. The model's own: it names v_unit.fuel."
+    },
+    {
+      "name": "generated",
+      "args": ["v"],
+      "expression": "GREATEST(v, 0)",
+      "description": "Output only: a unit that is charging (negative) generates nothing. Given a daily mwh it clips the day's net: a battery counts for its output less its charging, never below 0."
+    }
+  ],
+
+  "metrics": [
+    {
+      "name": "renewable_share",
+      "args": ["v", "renewable", "generator"],
+      "unit": "%",
+      "expression": [
+        "100 * SUM(CASE WHEN renewable THEN generated(v) WHEN NOT renewable THEN 0 END)",
+        "/ NULLIF(SUM(CASE WHEN generator THEN generated(v) ELSE 0 END), 0)"
+      ],
+      "description": "Renewable share of the output. Takes the raw mw or mwh and the renewable and generator columns; batteries are in neither the renewables nor the total. A unit missing from dim_duid (renewable NULL) is in the total only. NULL, not 0, when nothing says what is renewable: a dim_duid deployed before the column existed."
+    },
+    {
+      "name": "capture_price",
+      "args": ["v", "price"],
+      "unit": "$/MWh",
+      "expression": "SUM(v * price) / NULLIF(SUM(v), 0)",
+      "description": "The price a volume earned: the prices weighted by it. Takes generated(mw) or generated(mwh), over v_gen_price or v_gen_price_daily with price IS NOT NULL: the join there is LEFT, and a volume without a price would count below the line only."
+    },
+    {
+      "name": "capacity_factor",
+      "args": ["mwh", "cap", "hours"],
+      "unit": "%",
+      "expression": "100 * SUM(mwh) / NULLIF(SUM(cap) * hours, 0)",
+      "description": "Energy over what the registered capacity could make in the hours. Takes one row per unit (its energy in the range, its cap_mw once) and the hours of the range; a unit without a capacity (cap_mw NULL or 0, the rooftop ones) is filtered out first, or its energy counts against no capacity. NULL when the range has no hours."
+    }
+  ]
+}

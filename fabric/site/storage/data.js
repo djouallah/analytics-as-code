@@ -1,10 +1,10 @@
 // =============================================================================
 // data.js — DataSource: bring up DuckDB-WASM with the OneLake data attached
 // =============================================================================
-// The Fabric version: the counterpart of ../../dashboard/data.js (GitHub Pages), with the same
-// members (init, attachAgg, ensureHistory, has, query) over the same views.js and history.js,
-// so index.html and model.js are the same files on both hosts. The files are the same too;
-// what differs is where they are: in a lakehouse, behind a Fabric sign-in (auth.js).
+// The Fabric version: the counterpart of ../../../dashboard/storage/data.js (GitHub Pages),
+// with the same members (init, attachAgg, ensureHistory, query) over the same history.js, so
+// index.html and the semantic model are the same files on both hosts. The data files are the
+// same too; what differs is where they are: in a lakehouse, behind a Fabric sign-in (auth.js).
 //   1. resolve the latest import from the OneLake `latest.json` pointer
 //      ({"ts": "<ts>", "periods": ["2018_h1", ...]}),
 //   2. download the files of that import whole (parallel Range fetches, cached in OPFS by
@@ -26,7 +26,6 @@
 // =============================================================================
 
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev65.0/+esm";
-import { createViews, RECENT_CUT } from "../semantic/views.js";
 import { periodsForRange, attachCached } from "./history.js";
 import { createAuth } from "./auth.js";
 import { perf, HTTP_TRACE_SHIM } from "../frontend/perflog.js";
@@ -40,7 +39,6 @@ document.head.append(Object.assign(document.createElement('link'),
 
 export function createDataSource({ onStatus = () => {} } = {}) {
   const auth = createAuth();
-  const views = createViews(sql => conn.query(sql));
   let db, conn;   // set by init()
 
   const signedUrl = async (name) => { const { baseUrl, sas } = await auth.dataAccess(); return `${baseUrl}/${name}?${sas}`; };
@@ -138,20 +136,13 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     await perf.time('attach', `ATTACH ${name} (local)`, () => conn.query(`ATTACH '${name}' AS ${alias} (READ_ONLY);`));
   }
 
-  // The base views (views.js), over what is attached by now.
-  let _aggLoaded = false;
   const _attachedPeriods = new Set();
-  const refreshViews = () => views.refresh({ history: [..._attachedPeriods].map(p => `p${p}`), agg: _aggLoaded });
 
   // The rollups only feed ranges over 30 days: attached after the first paint. One attach,
   // whoever asks; a failed one can be asked for again.
   let _agg = null;
   function attachAgg() {
-    return _agg ??= (async () => {
-      await attachLocal(await loadLocal('agg'), 'agg');
-      _aggLoaded = true;
-      await refreshViews();
-    })().catch(e => { _agg = null; throw e; });
+    return _agg ??= (async () => attachLocal(await loadLocal('agg'), 'agg'))().catch(e => { _agg = null; throw e; });
   }
 
   // --- The 5-minute history: the half-year files a range needs, downloaded into OPFS ---
@@ -187,21 +178,15 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   }
 
   // Attach the half-year periods of a date range that exist and aren't attached yet.
-  // True if any was attached: the views were rebuilt, so results the caller cached are stale.
-  // A range that starts on or after the cut is read from `today` alone (the default
-  // "Last 3 days" view): no half-year file is downloaded.
+  // True if any was attached. The caller (the compiler) asks only for a range that reaches
+  // back past the days `today` covers.
   async function ensureHistory(from, to, msg) {
-    const cut = (await conn.query(`SELECT CAST(CAST(${RECENT_CUT} AS DATE) AS VARCHAR) AS d`)).toArray()[0].d;
-    if (from >= cut) return false;
     const { periods } = await latest();
     const needed = periodsForRange(from, to).filter(p => periods.includes(p)
       && !_attachedPeriods.has(p) && !(Date.now() - _failedPeriods.get(p) < RETRY_MS));
     if (!needed.length) return false;
     onStatus(msg);
-    const attached = await Promise.all(needed.map(attachPeriod));
-    if (!attached.includes(true)) return false;
-    await refreshViews();
-    return true;
+    return (await Promise.all(needed.map(attachPeriod))).includes(true);
   }
 
   // Signed in, DuckDB-WASM up, `dim` + `today` attached: enough for the default "Last 3 days" view.
@@ -235,9 +220,8 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     // Brisbane time, for CURRENT_DATE alone (the NEM's day): the files carry date and time.
     await conn.query("SET TimeZone = 'Australia/Brisbane';");
     await conn.query("SET preserve_insertion_order = false;");
-    await refreshViews();
     return { db };
   }
 
-  return { init, attachAgg, ensureHistory, has: views.has, query: sql => perf.query(sql, () => conn.query(sql)) };
+  return { init, attachAgg, ensureHistory, query: sql => perf.query(sql, () => conn.query(sql)) };
 }

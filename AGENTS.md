@@ -141,61 +141,91 @@ transport fails the OneLake TLS handshake).
 `NEMTRACKER_TOKEN` (gh-pages deploy) is the one true secret.
 
 ## Dashboard
-The dashboard is four files, one job each, plus the Logs tab, and it has two hosts: GitHub
-Pages and a Fabric app. `index.html`, `model.js`, `views.js`, `history.js` and the Logs tab
-are the same files on both; only `data.js` differs.
+The dashboard has the layers of a BI stack, each in its own place under `dashboard/` (the
+table of what stands in each place in a real product is in `ARCHITECTURE.md`), and two hosts:
+GitHub Pages and a Fabric app. Everything is the same file on both except `storage/data.js`.
+- consumer and query language: `index.html`, with its SQL written by hand
+- semantic model: `semantic/model.json`
+- compiler: `semantic/compiler.js`
+- engine: DuckDB-WASM
+- storage: `storage/data.js`, `storage/history.js`
+- and the Logs tab, `frontend/`
+
+**The implementation is naive on purpose; the point is that the layers are there.** The
+compiler compiles the model only. A real one also compiles the queries; here the page writes
+them by hand, in SQL, so the rules a query compiler would apply on its own (which grain to
+read, when a join is needed, MW to MWh) are the author's: in `index.html` and in the speed
+rules below. Don't build a query generator.
+
+`index.html` is the one file at the top of `dashboard/`: it is the site's URL, and `data.js`
+finds `data/` from the page's URL. The deployed tree is the repo tree, so a relative import
+resolves the same locally and deployed.
 - `dashboard/index.html` is the page: charts, and SQL that only picks columns from views,
   filters and groups them. **It joins nothing** and knows no `dim_duid` column, no fuel
   naming rule, no region names (they are `v_unit.state`). Which fuels are renewable is not in
   the dashboard at all: `dim_duid.Renewable` says, and `v_unit.renewable` passes it on. It
   names a fuel only to colour it, to label `Grid` "Battery" in a legend, to pick the solar
   and wind records of the History page, and to limit the curtailment charts to wind and
-  solar. A new chart that needs a join or a rule gets a view or a macro in `model.js`, not
-  SQL in the page.
-- `dashboard/model.js` is the semantic layer (`createModel(dataSource)`: the same members as
-  the data source, plus `needs`). Over `views.js`'s views it builds the ones the page reads —
-  `v_unit` (a unit's attributes under the page's names), `v_gen`/`v_gen_daily`/`v_gen_hourly`/
-  `v_gen_today` (generation with the unit's attributes on every row), `v_gen_price*` (plus the
-  price of the unit's region), `v_gen_latest`/`v_price_latest`, `v_region`, `v_curtailment`/
-  `v_curtailment_recent` —
-  and the measures as DuckDB macros (`generated`, `renewable_share`, `capture_price`,
-  `capacity_factor`). The list at its top is the page's contract. It reads only `views.js`'s
-  views, so it is the same file for every host. Its views are created once, in one query:
-  DuckDB binds a view again on every read, so they follow `views.js` rebuilding the views under
-  them; only `v_gen_hourly` and the curtailment views wait for agg. Creating them costs ~30 ms at
-  startup and ~50 ms with history attached (each is bound at creation), which is why they are
-  not rebuilt after every attach.
-- `dashboard/views.js` is the base views over the attached databases (`createViews(query)`:
-  `refresh({ history, agg })`, `has`; the list at its top is its contract with `model.js`):
-  the last 5 days from `today` (`RECENT_CUT`), older days from the history databases or
-  `agg`, and a column a deployed file lacks read as NULL. The view SQL exists once, here.
-- `dashboard/history.js` is what both `data.js` share about the half-year history files:
-  `periodsForRange` (which ones a date range needs) and `attachCached` (ATTACH from OPFS in
-  place, into memory if a second tab holds the file).
-- `data.js` is the host: how the `.duckdb` files are fetched, cached and attached
-  (`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `has`, `query`). It attaches
-  `dim`, `today`, `agg` and the 5-minute history, and tells `views.js` which history
-  databases are attached. On both the files are downloaded whole into OPFS, and the history
-  is the half-year files (`p2026_h1`, ...), the ones a range needs. There are two, with the
-  same members:
-  - `dashboard/data.js`, GitHub Pages: the files sit in `data/`, with
+  solar. A new chart that needs a join or a rule gets a dataset, a relationship or a metric
+  in `model.json`, not SQL in the page.
+- `dashboard/semantic/model.json` is the semantic model, and the only place a view or a
+  measure is defined: `constants`, `glossary` (what a field holds in every dataset that has
+  it), `datasets`, `relationships`, `functions` and `metrics`, each with its `description`.
+  A dataset is one view, of four kinds:
+  - `table`: one attached table as it is; a table a deployed file lacks gets no view.
+  - `partitions`: a history table and a recent one, stitched at the cut (`recent_days`, 5):
+    the last 5 days from `today`, older days from the half-year databases (`p*.<table>`) or
+    `agg`. An `optional` field reads NULL from a file that lacks its column; `rollup` is a
+    field's expression on the recent side. The three stitching rules are described in the
+    file (`stitching`).
+  - `from`: fields picked from another dataset, plus `calculated` ones (`v_unit`: a unit's
+    attributes under the page's names).
+  - `sql`: derived from other datasets (`v_region`, `v_gen_latest`/`v_price_latest`,
+    `v_curtailment_recent`).
+  A relationship is a view too, `from` LEFT JOIN `to`: `v_gen`/`v_gen_daily`/`v_gen_hourly`/
+  `v_gen_today` and `v_curtailment` (a fact with the unit's attributes on every row), and
+  `v_gen_price*` (plus the price of the unit's region). The `calculated` fields of `v_unit`
+  are worked out again on the joined row, which is how a unit missing from `dim_duid` gets
+  the fuel "Unregistered". The functions and metrics are DuckDB macros (`fuel_name`,
+  `generated`; `renewable_share`, `capture_price`, `capacity_factor`).
+  It is JSON because a browser reads it with no library: there are no comments, so the why
+  goes in a `description`, and a long expression is an array of lines.
+- `dashboard/semantic/compiler.js` turns the model into those views and macros
+  (`createModel(dataSource)`: the data source's members plus `has` and `needs`). It compiles
+  after every attach: one query reads what is attached from the engine's catalog
+  (`information_schema`), and one runs the statements that are new or changed. A view is
+  created once: DuckDB binds a view again on every read, so the ones over a rebuilt view
+  follow it. At startup the catalog read costs ~100 ms and the statements ~40 ms; an attach
+  after that ~20 ms in all (2026-10-05). `needs(sql)` is worked out from what each dataset
+  reads. `ensureHistory` attaches nothing for a range that starts inside the last 5 days:
+  `today` covers it, so the default view fetches no history. It knows the attached databases
+  by name only (`dim`, `today`, `agg`, `p<YYYY>_h<N>`), so it and `model.json` are the same
+  files for every host.
+- `storage/data.js` is the host: how the `.duckdb` files are fetched, cached and attached
+  (`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `query`). It attaches `dim`,
+  `today`, `agg` and the 5-minute history, and builds no view. On both the files are
+  downloaded whole into OPFS, and the history is the half-year files (`p2026_h1`, ...), the
+  ones a range needs. There are two, with the same members:
+  - `dashboard/storage/data.js`, GitHub Pages: the files sit in `data/`, with
     `daily_manifest.json` listing the half-years.
-  - `fabric/site/data.js`, the Fabric app: the files are in a lakehouse behind a Fabric
-    sign-in, read with a short-lived read-only SAS, and downloaded as 2 MB Range requests,
-    6 at a time. Its own, and unknown to the page: the sign-in gate (`auth.js`).
+  - `fabric/site/storage/data.js`, the Fabric app: the files are in a lakehouse behind a
+    Fabric sign-in, read with a short-lived read-only SAS, and downloaded as 2 MB Range
+    requests, 6 at a time. Its own, and unknown to the page: the sign-in gate (`auth.js`,
+    next to it).
   The history is never read in place over HTTP: duckdb-wasm reads a remote file one block
   at a time, three round trips each, and OneLake answers one in ~700 ms whatever its size
   (one 2024 day took 38 s that way, 2026-10-04).
-  On both, `ensureHistory` attaches nothing for a range that starts inside the last 5 days:
-  `today` covers it, so the default view fetches no history. Both set the session to
-  Brisbane time, on purpose: the files carry `date` and `time`, no TIMESTAMPTZ, and the
-  only thing the zone decides is that `CURRENT_DATE` is the NEM's day.
-- `dashboard/perflog.js` and `dashboard/logs.js` are the Logs tab, on both hosts: a table
-  of what this session fetched, attached and ran, with timings, and the build stamp. This
-  session only: it lives in the page's memory, nothing is stored, written to a file or
-  uploaded, and the Copy button is the one way out. A host's `data.js` does the logging
-  (`perf.log`, `perf.time`, and `perf.query` around every query); the page has the tab and
-  its panel, and `logs.js` fills it.
+  Both set the session to Brisbane time, on purpose: the files carry `date` and `time`, no
+  TIMESTAMPTZ, and the only thing the zone decides is that `CURRENT_DATE` is the NEM's day.
+- `dashboard/storage/history.js` is what both `data.js` share about the half-year history
+  files: `periodsForRange` (which ones a date range needs) and `attachCached` (ATTACH from
+  OPFS in place, into memory if a second tab holds the file).
+- `dashboard/frontend/perflog.js` and `dashboard/frontend/logs.js` are the Logs tab, on both
+  hosts: a table of what this session fetched, attached and ran, with timings, and the build
+  stamp. This session only: it lives in the page's memory, nothing is stored, written to a
+  file or uploaded, and the Copy button is the one way out. A host's `data.js` does the
+  logging (`perf.log`, `perf.time`, and `perf.query` around every query, the compiler's
+  included); the page has the tab and its panel, and `logs.js` fills it.
 
 Four things in that design are there for speed and must survive an edit:
 - A query that needs nothing about the unit (previous-period generation with no filter, the
@@ -208,7 +238,7 @@ Four things in that design are there for speed and must survive an edit:
   `NOT storage`: with the fuel filter on Grid the optimizer then sees
   `fuel = 'Grid' AND fuel <> 'Grid'` and reads nothing (18 ms); through
   `NOT (fuel = 'Grid')` it does not (65 ms). This is why "storage" stays a rule on the fuel
-  in `model.js` and is not a column like `Renewable`.
+  in `model.json` and is not a column like `Renewable`.
 
 `v_gen_price*` is a LEFT join: capture price and the battery chart add `price IS NOT NULL`,
 Analyze's generation + price keeps the rows without a price.
@@ -218,8 +248,8 @@ rather than round them:
 - The chrome is monochrome: surfaces, ink and hairlines are CSS tokens on `:root` (light under
   `[data-theme="light"]`, set by the `<head>` script before first paint: the stored choice,
   else the system's). Colour is for the data and for status, and status comes with an arrow
-  or a label. The CSS stays inline: a separate file would need both deploy copy lists
-  (`build.yml`, `fabric/build.mjs`).
+  or a label. The CSS stays inline: a separate file next to `index.html` would need both
+  deploy copy lists (`build.yml`, `fabric/build.mjs`).
 - `chartTheme()` builds one ECharts theme per scheme from those tokens (font, label size,
   tooltip, legend, zoom slider, colour scale) and `plot()` is every chart's plot area, with
   measured axis labels. A chart sets no margin, font or tooltip style of its own.
@@ -230,7 +260,7 @@ rather than round them:
 - The Dashboard tab leads with "Right now" (`renderNow`): the newest interval from
   `v_gen_latest` and `v_price_latest`, two queries, following the region filter only.
 
-**Checking a change to `model.js`, `views.js`, a `data.js` or the page:** in headless Chrome, the page before against
+**Checking a change to `model.json`, `compiler.js`, a `data.js` or the page:** in headless Chrome, the page before against
 the page after on one copy of the deployed files, through the same page states; compare the
 query results (same SQL, same rows), read `EXPLAIN` for a join that was not there, and time
 old against new alternately in the same page (two separate sessions differ by more than the
@@ -239,7 +269,7 @@ difference of some 10 ms on one query is not worth chasing: on a second run as m
 other way.
 
 ## Dashboard deploy
-`build.yml` (index.html, data.js, views.js, history.js, model.js, perflog.js, logs.js, dbt docs) and
+`build.yml` (index.html, the `frontend/`, `semantic/` and `storage/` folders, dbt docs) and
 `import_data.yml` (the .duckdb files)
 publish into `NemTracker/nemtracker.github.io` with `scripts/deploy_pages.sh`: a blobless
 depth-1 clone, the published paths added with `-f` (so the deploy repo's `.gitignore` can't
@@ -271,8 +301,9 @@ it is viewed.
 **The Fabric app is `fabric/`**, a Rayfin project: static hosting, Fabric sign-in, and one
 function, `getDataSas` (`fabric/rayfin/functions`), which signs a read-only SAS on the data
 folder so that the browser never holds a storage token. `fabric/build.mjs` assembles
-`fabric/dist`: the shared files and `dag/` from `dashboard/`, plus `fabric/site/` (its
-`data.js` and `auth.js`), with `?v=<build>` added to every relative import.
+`fabric/dist`: `index.html`, the three folders and `dag/` from `dashboard/`, with
+`fabric/site/` copied over them (`storage/data.js`, its own, and `storage/auth.js`), and
+`?v=<build>` added to every relative import; `compiler.js` passes its own on to `model.json`.
 
 **It is deployed from the owner's laptop**, under their own login:
 ```
@@ -320,8 +351,8 @@ To check a deploy, open the Logs tab: the build stamp, each fetch, attach and qu
 A daily run refuses to splice when the deployed aggregate's tables or columns differ from what
 `build_daily_agg` now builds, so a change to them needs one `all_periods=true` dispatch. The
 page itself reads any column or table a deployed file lacks as "no data"
-(`views.js` `loadColumns`/`colOrNull`, the NULL columns of `model.js`'s `v_unit`, and `data.has`
-in the page), so a new page can go out before the data does.
+(an `optional` field of `model.json` reads NULL, a dataset whose table is missing gets no
+view, and `data.has` in the page), so a new page can go out before the data does.
 `energy_daily_agg.duckdb` holds, besides the per-day tables, hour-of-day × month tables
 (`scada_hourly`, `price_hourly`, `month_days`) that the daily-profile and price heatmap read
 for ranges over 30 days — `scada_hourly` and `month_days` leave out the newest date of the
@@ -334,7 +365,7 @@ next-day file (the export leaves out the newest date, which only has 00:05–04:
 intraday files carry no per-unit availability. The days after it come from AEMO's regional
 figures: `energy_today.duckdb`'s `price_today` carries `wind_available`, `wind_curtailed`,
 `solar_available`, `solar_curtailed` (MW, the region's semi-scheduled, from
-`fct_regionsum_today`), which `model.js` turns into `v_curtailment_recent`; the chart draws
+`fct_regionsum_today`), which `model.json` turns into `v_curtailment_recent`; the chart draws
 those days lighter and leaves them out when units are picked. Only units on the current
 registration list have a classification, so semi-scheduled farms that have left the list are
 not counted. The Insights page reads both for any range.
@@ -395,8 +426,8 @@ that has never been probed either.
   bug. `fct_scada_today` has no `INTERVENTION` column, so its export can't filter on it.
   Unifying them would mean rebuilding a fact; not worth it. Three numbers are involved, in
   three places: the `_today` tables keep every row they ever loaded (insert-only, never
-  trimmed), the export takes their last 14 days, and `views.js` reads the last 5 from them
-  (`RECENT_CUT`) and the rest from history. And one asymmetry: `fct_scada_today` drops the
+  trimmed), the export takes their last 14 days, and the model reads the last 5 from them
+  (`recent_days` in `model.json`) and the rest from history. And one asymmetry: `fct_scada_today` drops the
   0 MW rows at load, `fct_scada` keeps them and the export drops them.
 - **What the export applies, which a reader of the Iceberg tables has to redo**
   (`scripts/cache_catalog.py`): `INTERVENTION = 0` only (the pricing run); 0 MW rows left
@@ -454,7 +485,7 @@ the same pins, and pins the two Azure SDK packages its upload uses.
 - **The dashboard pins `@duckdb/duckdb-wasm@1.33.1-dev65.0`** (DuckDB 1.5.x line), a dev build
   because nothing stable has shipped since 1.33.0. Don't take npm's `latest` tag: it points
   at `1.33.1-dev57.0`, which the DuckDB blog says breaks OPFS. The dev build lets
-  `attachCached` (`dashboard/data.js`) read the OPFS-cached files in place
+  `attachCached` (`dashboard/storage/history.js`) read the OPFS-cached files in place
   (`registerFileHandle` + `BROWSER_FSACCESS`) instead of copying each one into the WASM heap.
   Register the plain filename, not `opfs://`: an `opfs://` ATTACH also opens `<file>.wal`,
   which is never registered, so the ATTACH fails. The handle is exclusive, so a second tab

@@ -565,7 +565,7 @@
 
   <script type="module">
     import { createDataSource } from "./storage/data.js";
-    import { createModel, UNREGISTERED, ROOFTOP } from "./semantic/model.js";
+    import { createModel, UNREGISTERED, ROOFTOP } from "./semantic/compiler.js";
     import { renderLogs } from "./frontend/logs.js";
 
     // =========================================================================
@@ -714,9 +714,10 @@
     // =========================================================================
 
     // Where the .duckdb files live and how they are fetched and attached is data.js's business
-    // (a host that stores the files differently ships its own). What the data means is
-    // model.js's: the joins, the unit's attributes, the measures. The page reads the views
-    // listed at the top of those two files, never an attached table, and joins nothing.
+    // (a host that stores the files differently ships its own). What the data means is the
+    // semantic model's (semantic/model.json: the datasets, the joins, the unit's attributes,
+    // the measures), which compiler.js turns into views and macros. The page reads those views
+    // in SQL written by hand, never an attached table, and joins nothing.
     const data = createModel(createDataSource({ onStatus: setStatus }));
     let _db = null;
 
@@ -743,12 +744,12 @@
       setConnected();
     }
 
-    // Keyed on the view generation as well as the SQL: a query that started before data.js
-    // rebuilt its views and finishes after it stores its result under the old generation.
+    // Keyed on the view generation as well as the SQL: a query that started before the views
+    // were rebuilt and finishes after it stores its result under the old generation.
     const _queryCache = new Map();
     let _viewGen = 0;
     function clearQueryCache() { _queryCache.clear(); }
-    // data.js rebuilt its views over more files. Queries keep the same SQL text, so results
+    // The views were rebuilt over more files. Queries keep the same SQL text, so results
     // cached before must never be served after (see runQuery).
     function viewsChanged() { _viewGen++; clearQueryCache(); }
 
@@ -913,7 +914,7 @@
     // 5. SQL QUERY BUILDERS
     // =========================================================================
 
-    // The views and the measures are model.js's (listed at its top): v_gen* are the generation
+    // The views and the measures are the model's (semantic/model.json): v_gen* are the generation
     // facts with the unit's attributes on every row (read here as `g`), v_unit the units,
     // v_price* the prices (read as `p`).
     // What a date range reads: the 5-minute views up to 30 days, the daily ones beyond.

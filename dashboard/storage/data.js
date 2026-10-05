@@ -8,24 +8,22 @@
 //   energy_daily_agg.duckdb         as `agg`          daily and hour-of-day rollups: attachAgg(), after first paint
 //   energy_data_<YYYY>_h<N>.duckdb  as `p<YYYY>_h<N>` scada, price, interconnector: ensureHistory(), only the
 //                                                     half-years a 5-minute range needs
-// model.js and index.html know none of this: model.js wraps the members createDataSource
-// returns and reads the views of views.js (built here over the attached files, refreshViews),
-// never an attached table. A host that stores the files differently (the Fabric app,
-// fabric/site/data.js: a lakehouse behind a Fabric sign-in) has its own data.js with the same
-// members, over the same views.js and history.js.
+// The model and index.html know none of this: ../semantic/compiler.js wraps the members
+// createDataSource returns and builds its views over the attached databases, which it finds
+// in the engine's catalog. A host that stores the files differently (the Fabric app,
+// fabric/site/storage/data.js: a lakehouse behind a Fabric sign-in) has its own data.js with
+// the same members, over the same history.js.
 //
 // DOM-free: progress is reported through the injected `onStatus` callback, and what is
 // fetched, attached and run is timed in perflog.js, for the Logs tab.
 // =============================================================================
 
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev65.0/+esm";
-import { createViews, RECENT_CUT } from "../semantic/views.js";
 import { periodsForRange, attachCached } from "./history.js";
 import { perf, HTTP_TRACE_SHIM } from "../frontend/perflog.js";
 
 export function createDataSource({ onStatus = () => {} } = {}) {
   let conn;
-  const views = createViews(sql => conn.query(sql));
 
   // Cache a remote .duckdb file in OPFS. Downloads if missing or stale.
   // source: 'opfs-hit' | 'opfs-miss' | 'opfs-refresh'; buffer: the download, only if it couldn't be cached
@@ -137,16 +135,10 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     await Promise.all([loadDb('energy_dim.duckdb', 'dim'), loadDb('energy_today.duckdb', 'today')]);
     await conn.query("SET TimeZone = 'Australia/Brisbane';");
     await conn.query("SET preserve_insertion_order = false;");
-    await refreshViews();
     return { db: _db };
   }
 
-  let _aggLoaded = false;
-  async function attachAgg() {
-    await loadDb('energy_daily_agg.duckdb', 'agg');
-    _aggLoaded = true;
-    await refreshViews();
-  }
+  const attachAgg = () => loadDb('energy_daily_agg.duckdb', 'agg');
 
   let _manifest = null;
   const _attachedPeriods = new Set();
@@ -172,13 +164,9 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   }
 
   // Attach the half-year periods of a date range that exist and aren't attached yet.
-  // True if any was attached: the views were rebuilt, so results the caller cached are stale.
+  // True if any was attached. The caller (the compiler) asks only for a range that reaches
+  // back past the days `today` covers.
   async function ensureHistory(from, to, msg) {
-    // A range that starts on or after the cut is read from `today` alone (refreshViews): no
-    // half-year file has a row it would show, so none is downloaded. That is the default
-    // "Last 3 days" view.
-    const cut = (await conn.query(`SELECT CAST(CAST(${RECENT_CUT} AS DATE) AS VARCHAR) AS d`)).toArray()[0].d;
-    if (from >= cut) return false;
     if (!_manifest) {
       // no-store: a manifest from the HTTP cache can predate a half-year rollover.
       const resp = await fetch(`${_baseUrl}/data/daily_manifest.json`, { cache: 'no-store' });
@@ -189,21 +177,11 @@ export function createDataSource({ onStatus = () => {} } = {}) {
       && !_attachedPeriods.has(p) && !(Date.now() - _failedPeriods.get(p) < RETRY_MS));
     if (!needed.length) return false;
     onStatus(msg);
-    const attached = await Promise.all(needed.map(attachPeriod));
-    if (!attached.includes(true)) return false;
-    await refreshViews();
-    return true;
+    return (await Promise.all(needed.map(attachPeriod))).includes(true);
   }
-
-  // Aliases of the attached databases that hold the 5-minute history.
-  const history = () => [..._attachedPeriods].map(p => `p${p}`);
-
-  // The base views (views.js), over what is attached by now.
-  const refreshViews = () => views.refresh({ history: history(), agg: _aggLoaded });
 
   return {
     init, attachAgg, ensureHistory,
-    has: views.has,
     query: sql => perf.query(sql, () => conn.query(sql)),
   };
 }

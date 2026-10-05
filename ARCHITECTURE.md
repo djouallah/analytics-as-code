@@ -44,18 +44,42 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 
 ## Two Deploy Targets
 
-The dashboard is one page (`dashboard/index.html`), one semantic layer (`model.js`) and one
-set of base views (`views.js`). A target only decides where the data files live and how the
-browser gets them (`data.js`), so a chart or a measure is written once and reaches both.
+The dashboard is one page (`dashboard/index.html`) over one semantic model
+(`dashboard/semantic/model.json`). A target only decides where the data files live and how the
+browser gets them (`storage/data.js`), so a chart or a measure is written once and reaches both.
 
 | | GitHub Pages | Microsoft Fabric app |
 |---|---|---|
 | Live at | [nemtracker.github.io](https://nemtracker.github.io/) | inside a Fabric workspace |
 | Who can open it | anyone | people the app is shared with, after Fabric sign-in |
 | Data files | next to the page | a lakehouse, under `Files/data` |
-| 5-minute history | one file per half-year (GitHub's 100 MB limit), downloaded | one 1.5 GB file, read in place by HTTP range requests |
-| Host code | `dashboard/data.js` | `fabric/` |
+| 5-minute history | one file per half-year (GitHub's 100 MB limit), downloaded | the same half-year files, downloaded as parallel range requests |
+| Host code | `dashboard/storage/data.js` | `fabric/site/storage/` |
 | Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `fabric/` (page), `import_onelake.yml` (data) |
+
+### The layers of the dashboard
+
+The dashboard has the layers of a BI stack, each in its own file. The implementation is naive
+on purpose: the point is the layers, not their maturity.
+
+| Layer | Here | In a real product |
+|---|---|---|
+| Consumer | `dashboard/index.html` | the BI tool |
+| Query language | SQL, written by hand in the page | DAX, MDX, VizQL, Malloy, a metrics request |
+| Semantic model | `dashboard/semantic/model.json` | LookML, TMDL, MetricFlow YAML, OSI |
+| Compiler | `dashboard/semantic/compiler.js` | MetricFlow, Cube's schema compiler, Malloy's compiler, Looker's SQL generator, Power BI's formula engine, Tableau's VizQL |
+| Engine | DuckDB-WASM | the warehouse, VertiPaq, Hyper |
+| Storage | `dashboard/storage/` | the lakehouse or warehouse connection |
+
+- **The semantic model** describes the datasets, their relationships and the measures, each
+  with a description. It is the only place a view or a measure is defined.
+- **The compiler** turns it into DuckDB views and macros. It compiles the model only: a real
+  one also compiles the queries.
+- **The query language** is where that shows. SQL asks for tables, while a semantic model
+  offers measures, which carry their own aggregation, grain and joins; real products put
+  another language there and let the compiler write the SQL. Here the page's SQL is written
+  by hand, so its author applies the rules a query compiler would: which grain to read, when
+  a join is needed, MW to MWh.
 
 ### The Fabric app
 
@@ -85,7 +109,7 @@ no query service.
 │   └── marts/            # Incremental fact tables
 ├── macros/               # Iceberg compatibility overrides, helpers
 ├── scripts/              # Iceberg → DuckDB import, table maintenance, deploy
-├── dashboard/            # The dashboard page, shared by both targets, and the GitHub Pages host
+├── dashboard/            # The page, and a folder per layer: frontend/, semantic/, storage/ (the GitHub Pages host)
 ├── fabric/               # The Fabric app: its host code, sign-in, and the Rayfin project
 ├── tests/                # dbt data tests
 ├── .github/workflows/    # CI/CD pipelines
