@@ -369,6 +369,18 @@ models:
         description: The day's average price of the unit's region ($/MWh), from fct_region_daily
         tests:
           - not_null
+      - name: output_mwh
+        description: The day's output (MWh) - the 5-minute intervals above 0 MW, what [Generation MWh] sums
+        tests:
+          - not_null
+      - name: charging_mwh
+        description: The day's charging (MWh, negative) - the 5-minute intervals below 0 MW
+        tests:
+          - not_null
+      - name: revenue
+        description: What the day's output earned ($) - each interval's output at its own 5-minute price
+        tests:
+          - not_null
 
   - name: fct_summary_hourly
     description: For Power BI and the dashboard's long ranges - output energy per unit, month and hour of day, whole months only (dim_month). In schema mart

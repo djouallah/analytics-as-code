@@ -4,6 +4,10 @@
 -- fact is too much for a browser. mwh is the day's NET energy: a battery's charging is
 -- taken off its output.
 --
+-- output_mwh, charging_mwh and revenue are the day's sums of what the 5-minute measures sum
+-- (output, charging, output x price), so the semantic model's measures give the same number
+-- from this table as from fct_summary and read this one when no time of day is asked for.
+--
 -- A day is written once, when the next-day files hold it whole (macros/whole_days.sql), and
 -- only from the day fct_summary has reached: it fills its history newest first. The price
 -- comes from fct_region_daily, so a day that table does not hold yet waits. Insert-only
@@ -26,7 +30,10 @@ SELECT
   s.DUID,
   s.date,
   CAST(SUM(s.mw) / 12.0 AS DECIMAL(18, 4)) AS mwh,
-  MAX(p.price) AS price
+  MAX(p.price) AS price,
+  CAST(SUM(GREATEST(s.mw, 0)) / 12.0 AS DECIMAL(18, 4)) AS output_mwh,
+  CAST(SUM(LEAST(s.mw, 0)) / 12.0 AS DECIMAL(18, 4)) AS charging_mwh,
+  CAST(SUM(GREATEST(s.mw, 0) * s.price) / 12.0 AS DECIMAL(18, 4)) AS revenue
 FROM {{ ref('fct_summary') }} s
 JOIN {{ ref('dim_duid') }} d ON d.DUID = s.DUID
 JOIN {{ ref('fct_region_daily') }} p ON p.REGIONID = d.Region AND p.date = s.date

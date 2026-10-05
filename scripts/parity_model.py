@@ -11,6 +11,13 @@ settled days (PARITY_DAYS, 5) that the dashboard's newest history file holds; an
 newest of those days, by 5-minute time as well, which is the grain the dashboard draws:
 rooftop there comes from [Rooftop MW], the measure that works it out between half hours.
 
+A quantity is one measure in the model, which reads the daily table or the 5-minute one by
+what is asked (a time of day or not). So the per-day comparison checks the daily tables
+against the dashboard's 5-minute data, and the per-time one checks the 5-minute tables with
+the same measures. The dashboard's own long-range figures (a unit's net energy of the day,
+the day's average price) are not measures of the model: they are checked as the columns a
+copy of the daily tables hands the dashboard (LONG_RANGE).
+
 The files store REAL and the tables DECIMAL(18,4), so numbers are equal within TOLERANCE.
 
 ONE KNOWN DIFFERENCE OF METHOD, reported and not failed: rooftop's capture price. The model
@@ -132,7 +139,8 @@ EXPECTED = {
         WHERE NOT suffix(a.DUID, '_PV') AND a.date IN ({days}) GROUP BY ALL""", f"""
         SELECT date, fuel, sum(greatest(mw, 0)) / 12 AS "Generation MWh", sum(least(mw, 0)) / 12 AS "Charging MWh",
           count(DISTINCT DUID) AS "Units",
-          sum(greatest(mw, 0) * price) / nullif(sum(greatest(mw, 0)), 0) AS "Capture price"
+          sum(greatest(mw, 0) * price) / nullif(sum(greatest(mw, 0)), 0) AS "Capture price",
+          sum(greatest(mw, 0) * price) / 12 AS "Revenue"
         FROM ({UNITS}) GROUP BY ALL""", """
         SELECT c.date, d.FuelSourceDescriptor AS fuel, sum(c.curtailed_mwh) AS "Curtailed MWh",
           sum(c.available_mwh) AS "Available MWh", 100 * sum(c.curtailed_mwh) / sum(c.available_mwh) AS "Curtailment rate"
@@ -141,6 +149,19 @@ EXPECTED = {
     "link": ["""
         SELECT date, interconnector AS link, avg(mw) AS "Flow MW"
         FROM h.interconnector WHERE date IN ({days}) GROUP BY ALL"""],
+}
+# The dashboard's long-range figures, in DAX over the daily tables' columns: what it reads over
+# 30 days, where a unit's day counts for its net energy and is priced at the day's average.
+DAILY_OUTPUT = "SUMX(fct_summary_daily, MAX(fct_summary_daily[mwh], 0))"
+LONG_RANGE = {
+    "Generation MWh daily": DAILY_OUTPUT,
+    "Charging MWh daily": "SUMX(fct_summary_daily, MIN(fct_summary_daily[mwh], 0))",
+    "Capture price daily": f"DIVIDE(SUMX(fct_summary_daily, MAX(fct_summary_daily[mwh], 0) * fct_summary_daily[price]), {DAILY_OUTPUT})",
+    "Renewable share daily": f"DIVIDE(100 * (CALCULATE({DAILY_OUTPUT}, dim_duid[Renewable] = TRUE()) + [Rooftop MWh]), "
+                             f"CALCULATE({DAILY_OUTPUT}, dim_duid[FuelSourceDescriptor] <> \"Grid\") + [Rooftop MWh])",
+    "Average price daily": "AVERAGE(fct_region_daily[price])",
+    "Demand MWh daily": "SUM(fct_region_daily[demand]) * 24",
+    "Net interchange MW daily": "AVERAGE(fct_region_daily[net_interchange])",
 }
 # The same slices by 5-minute time, which is what the dashboard draws up to 30 days: for the
 # newest settled day only (a day is 288 times). The slice and the time come back as one key,
@@ -159,6 +180,7 @@ EXPECTED_5MIN = {
         GROUP BY ALL"""],
     "fuel": [f"""
         SELECT date, coalesce(fuel, '') || '|' || time AS part, sum(greatest(mw, 0)) AS "Generation MW",
+          sum(greatest(mw, 0)) / 12 AS "Generation MWh", sum(least(mw, 0)) / 12 AS "Charging MWh",
           sum(greatest(mw, 0) * price) / nullif(sum(greatest(mw, 0)), 0) AS "Capture price"
         FROM ({UNITS}) GROUP BY ALL"""],
     "link": ["""
@@ -216,6 +238,10 @@ def main():
     months = sorted((r["dim_month[month]"][:10] for r in model.query(conn, "EVALUATE VALUES(dim_month[month])")),
                     reverse=True)[:MONTHS]
     print(f"whole months in the model: {', '.join(months) or 'none yet'}")
+    # Which table answers a per-day question: the daily one for the days it holds.
+    held = {r["fct_summary_daily[date]"][:10] for r in model.query(conn, "EVALUATE VALUES(fct_summary_daily[date])")}
+    print(f"days answered from fct_summary_daily: {', '.join(d for d in days if d in held) or 'none'}; "
+          f"from fct_summary: {', '.join(d for d in days if d not in held) or 'none'}")
 
     # Each grain: its name, the slice, a second key column of the model (the 5-minute time,
     # the hour of day) or None, the model's date column, its queries, its dates newest first.
@@ -245,7 +271,8 @@ def main():
         columns = ", ".join([date_column] + keys)
         dates = f"{date_column} >= {day(its_days[-1])}, {date_column} <= {day(its_days[0])}"
         for measure in sorted({k[3] for k in expected if k[0] == grain}):
-            dax = f'EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS({columns}, "v", [{measure}]), {dates})'
+            figure = LONG_RANGE.get(measure, f"[{measure}]")
+            dax = f'EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS({columns}, "v", {figure}), {dates})'
             started = time.perf_counter()
             rows = model.query(conn, dax)
             slow.append((time.perf_counter() - started, grain, measure, len(rows)))
