@@ -3,9 +3,6 @@ name: Deploy Semantic Model
 # Publishes semantic_model/model.bim (a Direct Lake model over the catalog's
 # Iceberg tables) to the workspace that holds the lakehouse, then refreshes it and asks it,
 # in DAX over XMLA, a row count per table and its measures (scripts/check_model.py).
-# Until 2026-10-05 it also held every measure against the dashboard's deployed files
-# (scripts/parity_model.py): those files were the old export's, and the dashboard now reads
-# a copy of the model's own tables, so there is nothing separate left to compare with.
 #
 # Manual only: it creates or updates a Fabric item. It touches no table and no dashboard
 # file. The identity is the catalog's (the same OIDC login as Process Data), so the model

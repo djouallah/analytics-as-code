@@ -1,5 +1,4 @@
--- Flow on each link between regions, per 5 minutes, back to 2018. For Power BI; the rules
--- are the ones scripts/cache_catalog.py applied in _export_interconnector: the pricing run,
+-- Flow on each link between regions, per 5 minutes, back to 2018. The rules: the pricing run,
 -- one row per interval (fct_interconnector_today holds August 2026 from two sources), and
 -- mw is the dispatch target MWFLOW, not the metered flow. It is positive from the first
 -- region in the id to the second (T-V-MNSP1 > 0: Tasmania to Victoria); the two limits bound

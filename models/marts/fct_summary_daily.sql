@@ -1,7 +1,6 @@
 -- Energy per unit and day, with the day's average price of the unit's region: fct_summary
--- one grain up. What the dashboard reads for ranges over 30 days (the rule
--- scripts/cache_catalog.py applied in build_daily_agg, as scada_daily), where the 5-minute
--- fact is too much for a browser. mwh is the day's NET energy: a battery's charging is
+-- one grain up. What the dashboard reads for ranges over 30 days, where the 5-minute fact is
+-- too much for a browser. mwh is the day's NET energy: a battery's charging is
 -- taken off its output.
 --
 -- output_mwh, charging_mwh and revenue are the day's sums of what the 5-minute measures sum

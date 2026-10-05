@@ -1,7 +1,6 @@
 -- Rooftop solar per region and half hour, with the half hour's price: its own table, not
 -- units in fct_summary. It is AEMO's estimate (MW at the end of the half hour), not a meter
--- reading. For Power BI; the selection is the one scripts/cache_catalog.py applied in
--- rooftop_units: the MEASUREMENT estimate, the latest version of it, never a blank one
+-- reading. The selection: the MEASUREMENT estimate, the latest version of it, never a blank one
 -- (QI 0 means AEMO had none: that half hour is missing, not zero), the five regions, from
 -- the calendar's first day.
 --

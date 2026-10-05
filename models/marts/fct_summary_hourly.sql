@@ -1,6 +1,5 @@
 -- Energy per unit, month and hour of day: what the dashboard's average-day chart reads for
--- ranges over 30 days (the rule scripts/cache_catalog.py applied in build_daily_agg, as
--- scada_hourly). Output only: an interval where the unit is charging is left out, as the
+-- ranges over 30 days. Output only: an interval where the unit is charging is left out, as the
 -- chart leaves storage charging out. hour is time // 100, like the 5-minute charts: the
 -- interval ending 14:00 is hour 14. A range's average MW at an hour is SUM(mwh) over its
 -- months / SUM(dim_month.days) over the same months.

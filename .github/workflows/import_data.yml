@@ -154,8 +154,6 @@ jobs:
         if: steps.mode.outputs.is_daily == 'true'
         env:
           NEMTRACKER_TOKEN: ${{ secrets.NEMTRACKER_TOKEN }}
-          # The files of the export this copy replaced (2026-10-05): removed once, a no-op after.
-          DEPLOY_REMOVE: data/energy_*.duckdb data/daily_manifest.json data/metadata.json
         run: bash scripts/deploy_pages.sh ./deploy_daily "deploy from ${{ github.repository }}@${{ github.sha }}"
 
       # --- Phase 3: Publish manifest LAST, from files actually deployed ---

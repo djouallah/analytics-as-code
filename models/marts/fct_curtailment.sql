@@ -3,8 +3,8 @@
 -- against its dispatch target), never below 0, over the units AEMO classes as Semi-Scheduled
 -- (dim_duid.Classification): those are the ones a target caps; for any other unit the same
 -- subtraction is just headroom. available_mwh is the denominator of a curtailment rate.
--- For Power BI; the rule is the one scripts/cache_catalog.py applied in export_curtailment,
--- where it was checked against AEMO's regional SS_WIND/SS_SOLAR figures (2026-10-03).
+-- Checked against AEMO's regional SS_WIND/SS_SOLAR figures (2026-10-03): the units add up to
+-- them.
 --
 -- From the next-day files, which carry the availability. It cannot be read off fct_summary:
 -- a fully curtailed unit is at 0 MW, and 0 MW rows are not in it.

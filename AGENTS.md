@@ -305,7 +305,8 @@ other way.
 `import_data.yml` (the .duckdb files)
 publish into `NemTracker/nemtracker.github.io` with `scripts/deploy_pages.sh`: a blobless
 depth-1 clone, the published paths added with `-f` (so the deploy repo's `.gitignore` can't
-skip a file), push retried on a race; `DEPLOY_REMOVE` is the one way a file leaves the site.
+skip a file), push retried on a race. It only adds and replaces: a file leaves the site by
+hand, in the deploy repo.
 **The files are a copy of the `mart` tables, with no rule of their own**
 (`scripts/copy_catalog.py`: `SELECT *` per table, into `mart_dim`, `mart_agg`, `mart_today`
 and `mart_<YYYY>_h<N>`). Every run copies the newest 14 days; the daily run also copies the
@@ -473,9 +474,8 @@ they are what these tables are built from.
   principal on this model, as Contributor and as Admin. Its reference page says service
   principals are not supported on a model with single sign-on. The same token is accepted
   over XMLA.
-- **`scripts/parity_model.py` held the model to the dashboard's deployed files, before the
-  port** (it is no longer a step of the deploy: those files were the old export's and left
-  the site with it; the script is kept as the record of how it was compared), at the
+- **Before the port, the model was held to the old dashboard's deployed files**
+  (`scripts/parity_model.py`, deleted with them: it is in git at `b2572d0`), at the
   grains the dashboard draws: per day (by region, by fuel, by link) for the newest five
   settled days, per 5-minute time for the newest of them, and per hour of day for the two
   newest whole months. The per-day figures come from the daily tables and the per-time ones

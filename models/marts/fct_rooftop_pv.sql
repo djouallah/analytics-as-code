@@ -2,8 +2,8 @@
 -- half hour), from the ROOFTOP_PV_ACTUAL record. It is an estimate, not a meter reading,
 -- and it is kept here exactly as published: half-hourly, every estimate type the files
 -- carry (MEASUREMENT, SATELLITE, DAILY), the sub-regions of the older files included.
--- The dashboard export (scripts/cache_catalog.py) takes MEASUREMENT for the five regions
--- and interpolates it to 5 minutes as five pseudo-units (QLD_PV, NSW_PV, ...).
+-- fct_rooftop takes MEASUREMENT for the five regions from it; the 5-minute values a chart
+-- draws are worked out by the reader, never stored.
 --
 -- Three sources (macros/pending_archive_files.sql): the current folder ('rooftop_today',
 -- one file per half hour), the monthly MMSDM archive 2018-01 to 2026-08 ('rooftop_monthly')

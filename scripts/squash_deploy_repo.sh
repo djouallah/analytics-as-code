@@ -4,7 +4,7 @@
 #
 #   NEMTRACKER_TOKEN=... scripts/squash_deploy_repo.sh
 #
-# Why: energy_today.duckdb (~8 MB) is redeployed every 30 minutes and git keeps every copy,
+# Why: mart_today.duckdb (~7 MB) is redeployed every 30 minutes and git keeps every copy,
 # so the repo had grown to ~16 GB by 2026-10-01 with only the current tree being served.
 #
 # How, without downloading any of it: a blobless depth-1 clone gives the current commit and

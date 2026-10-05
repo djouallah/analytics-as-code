@@ -1,7 +1,6 @@
 -- Price, demand and net interchange per region and 5 minutes, with the region's
 -- semi-scheduled wind and solar (available MW, and curtailed MW: available less the dispatch
--- target, never below 0). For Power BI, next to fct_summary; the rules are the ones
--- scripts/cache_catalog.py applied in export_price and export_price_today.
+-- target, never below 0). Next to fct_summary: what is per region, not per unit.
 --
 -- Two sources, one row per interval: the intraday record (price from the PRICE rows, the
 -- rest from the REGIONSUM rows of the same DispatchIS files) where BOTH have the interval,

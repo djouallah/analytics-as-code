@@ -1,6 +1,5 @@
 -- Price per region, month and hour of day: what the dashboard's price heatmap reads for
--- ranges over 30 days (the rule scripts/cache_catalog.py applied in build_daily_agg, as
--- price_hourly). price is the plain average of the month's intervals at that hour and
+-- ranges over 30 days. price is the plain average of the month's intervals at that hour and
 -- intervals is how many were averaged, so a range's price at an hour is the average over
 -- its months weighted by it. hour is time // 100.
 --

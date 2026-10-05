@@ -4,9 +4,6 @@
 #
 #   NEMTRACKER_TOKEN=... scripts/deploy_pages.sh <dir> <commit message>
 #
-# DEPLOY_REMOVE, if set, is a list of paths (wildcards as git reads them) taken out of the
-# deployed tree in the same commit: the one way a file leaves the site.
-#
 # Replaces peaceiris/actions-gh-pages, which broke this deploy three ways:
 #   * it cloned the deploy repo's full history (~900 MB of .duckdb binaries, ~2.5 min),
 #     leaving a window wide enough for build.yml and import_data.yml to race, and the
@@ -36,11 +33,6 @@ publish_once() {
   git clone -q -c core.autocrlf=false --depth 1 --filter=blob:none --no-checkout --branch main "$REMOTE" "$work" || return 1
   cd "$work" || return 1
   git read-tree HEAD || return 1               # index = deployed tree; no blobs downloaded
-  if [ -n "${DEPLOY_REMOVE:-}" ]; then
-    # Unquoted on purpose: one pathspec per word. Nothing is checked out, so the shell has
-    # no file to expand a wildcard to and git gets it as written.
-    git ls-files -z -- $DEPLOY_REMOVE | xargs -0 -r git update-index --force-remove -- || return 1
-  fi
   cp -r "$SRC"/. . || return 1
   (cd "$SRC" && find . -type f -print0) | xargs -0 git add -f -- || return 1
   # diff-index without rename detection compares hashes only.

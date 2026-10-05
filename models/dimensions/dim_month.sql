@@ -1,7 +1,6 @@
 -- The months the hour-of-day tables hold, with their number of days: the divisor that turns
 -- a month's energy at an hour into an average MW (SUM(mwh) / SUM(days) over the months of a
--- range). For Power BI and the dashboard's long ranges (scripts/cache_catalog.py built it in
--- build_daily_agg, as month_days).
+-- range). For Power BI and the dashboard's long ranges.
 --
 -- A month is written once, when it is whole: when fct_summary_daily holds every day of it.
 -- The hour-of-day tables (fct_summary_hourly, fct_region_hourly) take their months from
