@@ -413,6 +413,30 @@
             "formatString": "$#,##0.00",
             "expression": "DIVIDE(SUMX(fct_summary, MIN(fct_summary[mw], 0) * fct_summary[price]), SUMX(fct_summary, MIN(fct_summary[mw], 0)))",
             "description": "The price the charging paid, $/MWh: the 5-minute prices of the unit's region weighted by what it took. Always from fct_summary. Next to [Capture price], a battery's spread."
+          },
+          {
+            "name": "Average generation MW",
+            "formatString": "#,##0",
+            "expression": "DIVIDE([Generation MWh], [Hours])",
+            "description": "The units' output as an average MW: [Generation MWh] over [Hours], the hours the selection holds. Follows the unit filters; rooftop solar is not in it."
+          },
+          {
+            "name": "Average total generation MW",
+            "formatString": "#,##0",
+            "expression": "DIVIDE([Total generation MWh], [Hours])",
+            "description": "The units' output and rooftop solar's as an average MW: [Total generation MWh] over [Hours]. Like it, for slicing by region or date."
+          },
+          {
+            "name": "Generation MW on an average day",
+            "formatString": "#,##0.0",
+            "expression": "DIVIDE([Generation MW], [Days with output])",
+            "description": "By time of day: the output at that time on an average day, MW. [Generation MW] over the days that have a row at it. Always from fct_summary."
+          },
+          {
+            "name": "Charging MW on an average day",
+            "formatString": "#,##0.0",
+            "expression": "DIVIDE([Charging MW], [Days with output])",
+            "description": "By time of day: what the units took at that time on an average day, MW, negative. [Charging MW] over the days that have a row at it. Always from fct_summary."
           }
         ],
         "partitions": [
@@ -680,6 +704,12 @@
             "description": "The lowest 5-minute price in the selection, $/MWh, always from fct_region."
           },
           {
+            "name": "Average demand MW",
+            "formatString": "#,##0",
+            "expression": "DIVIDE([Demand MWh], [Hours])",
+            "description": "Operational demand as an average MW: [Demand MWh] over [Hours]. Summed over the regions in the selection."
+          },
+          {
             "name": "Regional wind curtailed MWh",
             "formatString": "#,##0",
             "expression": "SUM(fct_region[wind_curtailed]) / 12",
@@ -778,6 +808,12 @@
             "formatString": "$#,##0.00",
             "expression": "DIVIDE(SUMX(fct_rooftop, fct_rooftop[mw] * fct_rooftop[price]), SUM(fct_rooftop[mw]))",
             "description": "The price rooftop solar earned, $/MWh: the half-hour prices weighted by its output."
+          },
+          {
+            "name": "Average rooftop MW",
+            "formatString": "#,##0",
+            "expression": "DIVIDE([Rooftop MWh], [Hours])",
+            "description": "Rooftop solar as an average MW: [Rooftop MWh] over [Hours], the nights included."
           },
           {
             "name": "Rooftop MW",
