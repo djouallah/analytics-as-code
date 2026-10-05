@@ -44,10 +44,13 @@ DATA = os.environ.get("DEPLOYED_DATA_URL", "https://nemtracker.github.io/data")
 DAYS = int(os.environ.get("PARITY_DAYS", "5"))
 TOLERANCE = 2e-4   # relative
 # Where a relative difference is measured from, when the figures are small: 1 for everything
-# but revenue. fct_summary keeps MW to 4 decimals and the dashboard's files keep a REAL, so a
+# but dollars. fct_summary keeps MW to 4 decimals and the dashboard's files keep a REAL, so a
 # unit running at a few kW is 0.1% apart in both its energy and its revenue: under the
-# tolerance as energy (a fraction of a MWh), over it as dollars. 250 allows 5 cents.
-SMALL = {"Revenue": 250.0}
+# tolerance as energy (a fraction of a MWh), over it as dollars. 250 allows 5 cents of
+# revenue. A capture price is revenue over energy, and where the regions' prices have
+# opposite signs the revenue nearly cancels, so the same rounding shows in the third decimal
+# (batteries at 15:20 on 2026-10-04: -1.1971 against -1.1960 $/MWh). 50 allows a cent.
+SMALL = {"Revenue": 250.0, "Capture price": 50.0, "Capture price daily": 50.0, "Rooftop capture price": 50.0}
 ROOFTOP_CAPTURE = "Rooftop capture price"
 
 
