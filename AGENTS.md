@@ -455,11 +455,15 @@ they are what these tables are built from.
   `[Generation MWh]`, `[Charging MWh]`, `[Revenue]`, `[Capture price]`, `[Units]` and
   `[Capacity factor]` read `fct_summary_daily` when no time of day is asked for, plus
   `fct_summary` for the days the daily table does not hold yet (`EXCEPT` on the dates), and
-  `fct_summary` alone when one is; `[Average price]`, `[Demand MWh]` and
-  `[Net interchange MW]` do the same over `fct_region_daily` (a day there is 288 intervals).
-  "A time of day is asked for" is written once per fact, in a hidden measure
-  (`[Reads 5 minutes]`, `[Reads 5 minutes regional]`): any column of `dim_time` filtered or
-  grouped, or a column of the fact itself filtered. So filters go through the dimensions.
+  `fct_summary` alone when one is. **Only the measures of `fct_summary` switch.**
+  `[Average price]`, `[Demand MWh]` and `[Net interchange MW]` read `fct_region` and nothing
+  else (since 2026-10-05; they switched to `fct_region_daily` before): 4.5M rows need no
+  aggregate, and `[Capacity factor]` reads that table at 5 minutes anyway. `fct_region_daily`
+  stays for the page's long ranges and for `fct_summary_daily`'s price.
+  "A time of day is asked for" is written once, in a hidden measure (`[Reads 5 minutes]`):
+  any column of `dim_time` filtered or grouped, or a column of `fct_summary` itself
+  filtered. So filters go through the dimensions. What the switch is worth is timed at every
+  deploy: `check_model.py` asks the whole history by year and fuel from each table.
   For the number to be the same from either table, the daily table stores the day's sums of
   what the 5-minute measure sums: `output_mwh`, `charging_mwh`, `revenue`. Its `mwh` (net)
   and `price` (the day's average) are the dashboard's long-range figures, which are not the

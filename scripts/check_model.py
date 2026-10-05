@@ -7,8 +7,10 @@ and the query is what makes VertiPaq read them. So a row count per table, answer
 whole chain works: the model was published, OneLake shows it the Iceberg tables, and the
 columns it names are there with the types it expects. Then every measure, per day, over the
 newest week of fct_summary, a query each (the measures of the tables by month: per month,
-over the newest three). Last, the report on it (dashboard/powerbi): that
-it is in the workspace and reads this model. Nothing here sees a chart draw.
+over the newest three). Then the whole history by year and fuel, timed, from the daily table
+and from the 5-minute one: what the measures' switch between them is worth. Last, the report
+on it (dashboard/powerbi): that it is in the workspace and reads this model. Nothing here
+sees a chart draw.
 
 THE QUERIES GO OVER XMLA (ADOMD.NET, loaded through pythonnet), not the REST executeQueries
 call: that call answers 401 PowerBINotAuthorizedException to a service principal on this
@@ -165,6 +167,26 @@ def main():
         else:
             bad += 1
             print(f"FAILED {' '.join(dax.split())}\n  {error}")
+
+    # What the switch to the daily table is worth: the whole history by year and fuel from
+    # each of the two tables [Generation MWh] can read, timed. The filter on
+    # fct_summary[date] removes no row; it is what makes [Reads 5 minutes] true. Twice each:
+    # the first run of a query also loads the columns it reads.
+    for label, forced in (("daily", ""), ("5-minute", "TREATAS(VALUES(dim_calendar[date]), fct_summary[date]), ")):
+        dax = ("EVALUATE SUMMARIZECOLUMNS(dim_calendar[year], dim_duid[FuelSourceDescriptor], "
+               f"{forced}\"MWh\", [Generation MWh])")
+        for run in ("first", "second"):
+            try:
+                start = time.monotonic()
+                rows = query(conn, dax)
+                took = time.monotonic() - start
+                total = sum(float(r["[MWh]"] or 0) for r in rows)
+                print(f"whole history from the {label} table, {run} run: {took:.2f} s, "
+                      f"{len(rows)} rows, {total:,.0f} MWh")
+            except Exception as e:  # noqa: BLE001
+                bad += 1
+                print(f"FAILED {dax}\n  {(str(e).strip().splitlines() or [type(e).__name__])[0][:600]}")
+                break
 
     status, body = call("GET", f"/groups/{WORKSPACE}/reports")
     report = next((r for r in (body or {}).get("value", []) if r["name"] == REPORT), None) if status == 200 else None

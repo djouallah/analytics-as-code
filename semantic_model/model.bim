@@ -3,7 +3,7 @@
   "model": {
     "culture": "en-US",
     "defaultPowerBIDataSourceVersion": "powerBI_V3",
-    "description": "Australia's National Electricity Market, over the Iceberg tables of the nem lakehouse, in Direct Lake: nothing is imported and no SQL endpoint is involved. Deployed by scripts/deploy_model.py, which writes the workspace and the lakehouse into the DirectLake expression. A quantity is one measure whatever the grain: the measures of fct_summary and fct_region pick the daily table or the 5-minute one themselves, by whether a time of day is asked for.",
+    "description": "Australia's National Electricity Market, over the Iceberg tables of the nem lakehouse, in Direct Lake: nothing is imported and no SQL endpoint is involved. Deployed by scripts/deploy_model.py, which writes the workspace and the lakehouse into the DirectLake expression. A quantity is one measure whatever the grain: the measures of fct_summary pick the daily table or the 5-minute one themselves, by whether a time of day is asked for. The measures of fct_region read it alone: it is small.",
     "expressions": [
       {
         "name": "DirectLake",
@@ -554,50 +554,22 @@
         ],
         "measures": [
           {
-            "name": "Reads 5 minutes regional",
-            "isHidden": true,
-            "expression": "ISCROSSFILTERED(dim_time[time]) || ISFILTERED(fct_region[REGIONID]) || ISFILTERED(fct_region[date]) || ISFILTERED(fct_region[time]) || ISFILTERED(fct_region[price]) || ISFILTERED(fct_region[demand]) || ISFILTERED(fct_region[net_interchange]) || ISFILTERED(fct_region[wind_available]) || ISFILTERED(fct_region[wind_curtailed]) || ISFILTERED(fct_region[solar_available]) || ISFILTERED(fct_region[solar_curtailed])",
-            "description": "Whether the measures of fct_region have to read it rather than its daily table: a time of day is asked for (any column of dim_time is filtered or grouped), or a column of fct_region itself is filtered. Hidden: it is the one place the rule is written."
-          },
-          {
             "name": "Average price",
             "formatString": "$#,##0.00",
-            "expression": [
-              "VAR late = EXCEPT(CROSSJOIN(VALUES(dim_calendar[date]), VALUES(dim_region[Region])), SUMMARIZE(fct_region_daily, dim_calendar[date], dim_region[Region]))",
-              "RETURN",
-              "    IF([Reads 5 minutes regional],",
-              "        AVERAGE(fct_region[price]),",
-              "        DIVIDE(",
-              "            288 * SUM(fct_region_daily[price]) + CALCULATE(SUM(fct_region[price]), late),",
-              "            288 * COUNT(fct_region_daily[price]) + CALCULATE(COUNT(fct_region[price]), late)))"
-            ],
-            "description": "The plain average of the 5-minute regional prices in the selection, $/MWh. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise fct_region_daily (a day there is 288 intervals), plus fct_region for the days it does not hold yet."
+            "expression": "AVERAGE(fct_region[price])",
+            "description": "The plain average of the 5-minute regional prices in the selection, $/MWh. Always from fct_region: it is small enough to read whole, so this measure does not switch to the daily table."
           },
           {
             "name": "Demand MWh",
             "formatString": "#,##0",
-            "expression": [
-              "VAR late = EXCEPT(CROSSJOIN(VALUES(dim_calendar[date]), VALUES(dim_region[Region])), SUMMARIZE(fct_region_daily, dim_calendar[date], dim_region[Region]))",
-              "RETURN",
-              "    IF([Reads 5 minutes regional],",
-              "        SUM(fct_region[demand]) / 12,",
-              "        24 * SUM(fct_region_daily[demand]) + CALCULATE(SUM(fct_region[demand]), late) / 12)"
-            ],
-            "description": "Operational demand as energy; rooftop solar is not in it. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise fct_region_daily (a day there is 288 intervals), plus fct_region for the days it does not hold yet."
+            "expression": "SUM(fct_region[demand]) / 12",
+            "description": "Operational demand as energy; rooftop solar is not in it. A 5-minute row is MW / 12. Always from fct_region."
           },
           {
             "name": "Net interchange MW",
             "formatString": "#,##0",
-            "expression": [
-              "VAR late = EXCEPT(CROSSJOIN(VALUES(dim_calendar[date]), VALUES(dim_region[Region])), SUMMARIZE(fct_region_daily, dim_calendar[date], dim_region[Region]))",
-              "RETURN",
-              "    IF([Reads 5 minutes regional],",
-              "        AVERAGE(fct_region[net_interchange]),",
-              "        DIVIDE(",
-              "            288 * SUM(fct_region_daily[net_interchange]) + CALCULATE(SUM(fct_region[net_interchange]), late),",
-              "            288 * COUNT(fct_region_daily[net_interchange]) + CALCULATE(COUNT(fct_region[net_interchange]), late)))"
-            ],
-            "description": "Average net flow out of a region, MW; positive is exporting. Read it per region. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise fct_region_daily (a day there is 288 intervals), plus fct_region for the days it does not hold yet."
+            "expression": "AVERAGE(fct_region[net_interchange])",
+            "description": "Average net flow out of a region, MW; positive is exporting. Read it per region. Always from fct_region."
           },
           {
             "name": "Regional wind curtailed MWh",
@@ -972,7 +944,7 @@
       },
       {
         "name": "fct_region_daily",
-        "description": "Price, demand and net interchange per region and day: the plain average of the day's 288 intervals, whole days only. The measures of fct_region read this table when no time of day is asked for.",
+        "description": "Price, demand and net interchange per region and day: the plain average of the day's 288 intervals, whole days only. What a chart over a long range reads, and where fct_summary_daily takes its price. No measure reads it: the measures of fct_region read fct_region.",
         "sourceLineageTag": "[mart].[fct_region_daily]",
         "columns": [
           {
