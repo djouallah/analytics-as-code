@@ -29,8 +29,13 @@ only: a finished item is removed, not ticked.
   the MERGE (10 s on `fct_summary`). If they stay there with one new day to write, it is a
   problem: `whole_days` reads all of `fct_scada` to find the whole days, and
   `fct_summary_daily` filters `fct_summary` with a subquery, not constants (not measured
-  whether the scan skips files on it). The fix that fits: a pre-hook puts the days to write
-  in a variable, as the fact models do with their files, so the model filters on constants.
+  whether the scan skips files on it). A pre-hook that puts the days to write in a variable,
+  as the fact models do with their files, would make the filter constants, but first find
+  out whether duckdb-iceberg skips data files on a filter at all: in Import Data the copy of
+  the newest 14 days (1.1M rows of `fct_summary`, `WHERE date >= ...`) takes 28 s and the
+  copy of all four tables whole (162M rows) 32 s, about 10 s of each being start-up
+  (2026-10-05, before the first compaction of these tables). If it does not, the days have
+  to come from a small table instead of a filter on a big one.
 
 ## Bigger
 
