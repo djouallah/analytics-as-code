@@ -715,9 +715,11 @@
 
     // Where the .duckdb files live and how they are fetched and attached is data.js's business
     // (a host that stores the files differently ships its own). What the data means is the
-    // semantic model's (semantic/model.json: the datasets, the joins, the unit's attributes,
-    // the measures), which compiler.js turns into views and macros. The page reads those views
-    // in SQL written by hand, never an attached table, and joins nothing.
+    // semantic model's (semantic/model.bim, a Tabular model in TMSL: the tables, the
+    // relationships, the unit's attributes, the functions), which compiler.js turns into views
+    // and macros. The page queries the model in DAX, which compiler.js turns into SQL over
+    // those views: it names no attached table and writes no join. The Analyze tab alone is
+    // SQL, over the same views.
     const data = createModel(createDataSource({ onStatus: setStatus }));
     let _db = null;
 
@@ -914,24 +916,140 @@
     // 5. SQL QUERY BUILDERS
     // =========================================================================
 
-    // The views and the measures are the model's (semantic/model.json): v_gen* are the generation
-    // facts with the unit's attributes on every row (read here as `g`), v_unit the units,
-    // v_price* the prices (read as `p`).
-    // What a date range reads: the 5-minute views up to 30 days, the daily ones beyond.
+    // The tables and the functions are the model's (semantic/model.bim), and the queries are
+    // DAX: `scada` is the generation per unit, `unit` the units, `price` the prices. A query
+    // that names a column of `unit` next to `scada` reads the two joined; one that does not
+    // reads the fact alone. That is the compiler's doing (semantic/compiler.js), as is the SQL.
+    // What a date range reads: the 5-minute tables up to 30 days, the daily ones beyond.
     function grain() {
       return isIntradayMode()
-        ? { gen: 'v_gen', genPrice: 'v_gen_price', price: 'v_price', val: 'g.mw', energy: 'SUM(generated(g.mw)) / 12.0' }
-        : { gen: 'v_gen_daily', genPrice: 'v_gen_price_daily', price: 'v_price_daily', val: 'g.mwh', energy: 'SUM(generated(g.mwh))' };
+        ? { fact: 'scada', price: 'price', val: 'scada[mw]', energy: 'SUMX(scada, generated(scada[mw])) / 12.0' }
+        : { fact: 'scada_daily', price: 'price_daily', val: 'scada_daily[mwh]', energy: 'SUMX(scada_daily, generated(scada_daily[mwh]))' };
     }
+    const daxStr = v => `"${String(v).replace(/"/g, '""')}"`;
+    const daxDate = d => `dt"${d}"`;
+    const daxDuids = () => `{${crossFilter.duids.map(daxStr).join(', ')}}`;
+    // A table under filters: CALCULATETABLE, or the table as it is when there are none.
+    const filtered = (table, filters) => filters.length ? `CALCULATETABLE(${table}, ${filters.join(', ')})` : table;
 
+    const dax = {
+      // --- Filters: the arguments of a CALCULATETABLE ---
+      dates: (table, from, to) => [`${table}[date] >= ${daxDate(from)}`, `${table}[date] <= ${daxDate(to)}`],
+
+      whereGen(fact, { withFuel = true } = {}) {
+        const { from, to } = getDateRange();
+        return [...dax.dates(fact, from, to), ...dax.unitFilters(fact, withFuel)];
+      },
+
+      // Region / fuel / unit filters on `unit` or on a fact related to it.
+      unitFilters(fact, withFuel = true) {
+        const region = activeRegion(), fuel = withFuel ? activeFuel() : null;
+        const filters = [];
+        if (region) filters.push(`unit[region] = ${daxStr(region)}`);
+        if (fuel) filters.push(`unit[fuel] = ${daxStr(fuel)}`);
+        if (crossFilter.duids.length) filters.push(`${fact}[DUID] IN ${daxDuids()}`);
+        return filters;
+      },
+
+      wherePrice(table) {
+        const { from, to } = getDateRange();
+        return [...dax.dates(table, from, to), ...dax.priceFilters(`${table}[REGIONID]`)];
+      },
+
+      // The region filter on a price table; a fuel or unit pick narrows it to their regions.
+      // The fuel is matched under the name the charts give it, whether it came from the
+      // dropdown or a click. Units missing from dim_duid have no region to narrow to.
+      priceFilters(regionCol) {
+        const region = activeRegion(), fuel = activeFuel();
+        const regionsOf = filter => [`TREATAS(CALCULATETABLE(VALUES(unit[region]), ${filter}), ${regionCol})`];
+        if (region) return [`${regionCol} = ${daxStr(region)}`];
+        if (crossFilter.duids.length) return regionsOf(`unit[DUID] IN ${daxDuids()}`);
+        if (fuel && fuel !== UNREGISTERED) return regionsOf(`unit[fuel] = ${daxStr(fuel)}`);
+        return [];
+      },
+
+      // --- Filter population ---
+      regions: 'EVALUATE SELECTCOLUMNS(region, "Region", region[region]) ORDER BY [Region]',
+      regionNames: `EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS(unit[region], "state", SELECTEDVALUE(unit[state])),
+        NOT ISBLANK(unit[region]), NOT ISBLANK(unit[state]))`,
+      fuels: `EVALUATE CALCULATETABLE(SELECTCOLUMNS(VALUES(unit[fuel_source]), "fuel", [fuel_source]),
+        NOT ISBLANK(unit[fuel_source])) ORDER BY [fuel]`,
+      allDuids: `EVALUATE CALCULATETABLE(SELECTCOLUMNS(unit, "DUID", unit[DUID], "Region", unit[region], "fuel", unit[fuel]),
+        NOT ISBLANK(unit[DUID])) ORDER BY [DUID]`,
+
+      // --- Generation chart ---
+      // Rows with negative output (charging) form their own "<series> (charging)" series, so
+      // they sit below the axis instead of being netted into, and cutting into, the stack.
+      generation(series, intraday) {
+        const { fact, val } = grain();
+        const keys = intraday ? '[date], [time], [series]' : '[date], [series]';
+        return `
+          EVALUATE GROUPBY(
+            CALCULATETABLE(
+              SELECTCOLUMNS(${fact}, "date", ${fact}[date]${intraday ? `, "time", ${fact}[time]` : ''},
+                "series", IF(${val} < 0, ${series} & ${daxStr(CHARGING)}, ${series}), "v", ${val}),
+              ${dax.whereGen(fact).join(', ')}),
+            ${keys}, "total_mw", SUMX(CURRENTGROUP(), [v]))
+          ORDER BY ${keys}`;
+      },
+
+      // --- Price chart ---
+      price(intraday) {
+        const p = grain().price;
+        return `
+          EVALUATE SELECTCOLUMNS(
+            ${filtered(`SUMMARIZECOLUMNS(${p}[date]${intraday ? `, ${p}[time]` : ''}, ${p}[REGIONID], "avg_price", AVERAGE(${p}[price]))`, dax.wherePrice(p))},
+            "date", [date]${intraday ? ', "time", [time]' : ''}, "Region", [REGIONID], "avg_price", [avg_price])
+          ORDER BY [date]${intraday ? ', [time]' : ''}`;
+      },
+
+      // --- Demand line over the generation chart ---
+      // Operational demand of the filtered region, or the sum of all regions: MW per interval,
+      // MWh per day. An interval (day) where a region has no demand yet is left out, not
+      // undercounted.
+      demand(intraday) {
+        const region = activeRegion();
+        const { from, to } = getDateRange();
+        const [t, val] = intraday ? ['price', 'price[demand]'] : ['price_daily', 'price_daily[demand_mwh]'];
+        const keys = `${t}[date]${intraday ? `, ${t}[time]` : ''}`;
+        return `
+          EVALUATE FILTER(
+            CALCULATETABLE(
+              SUMMARIZECOLUMNS(${keys}, "demand", SUM(${val}), "known", COUNT(${val}), "rows", COUNTROWS(${t})),
+              ${[...dax.dates(t, from, to), ...(region ? [`${t}[REGIONID] = ${daxStr(region)}`] : [])].join(', ')}),
+            [known] = [rows])
+          ORDER BY ${keys}`;
+      },
+
+      // --- Map ---
+      mapScatter() {
+        const { fact, val } = grain();
+        return `
+          EVALUATE SELECTCOLUMNS(
+            CALCULATETABLE(
+              SUMMARIZECOLUMNS(${fact}[DUID], unit[fuel], unit[region], unit[lat], unit[lon], "mw", AVERAGE(${val})),
+              ${[...dax.whereGen(fact), 'NOT ISBLANK(unit[lat])'].join(', ')}),
+            "DUID", [DUID], "fuel", [fuel], "Region", [region], "lat", [lat], "lon", [lon], "mw", [mw])`;
+      },
+
+      generatorCount() {
+        const { fact } = grain();
+        return `EVALUATE CALCULATETABLE(ROW("cnt", DISTINCTCOUNT(${fact}[DUID])), ${dax.whereGen(fact).join(', ')})`;
+      },
+
+      // --- Cutoff: the newest interval, as a date and a time ---
+      cutoff: `EVALUATE VAR newest = MAX(scada_today[date])
+        RETURN CALCULATETABLE(ROW("date", MAX(scada_today[date]), "time", MAX(scada_today[time])), scada_today[date] = newest)`,
+    };
+
+    // The same filters in SQL, for the Analyze tab: its queries are SQL over the model's views
+    // (v_gen* read as `g`, v_price* as `p`), shown to the user and edited by hand.
     const sql = {
-      // --- WHERE clauses ---
       whereGen({ withFuel = true } = {}) {
         const { from, to } = getDateRange();
         return [`g.date >= ${sqlStr(from)} AND g.date <= ${sqlStr(to)}`, ...sql.unitFilters('g', withFuel)].join(" AND ");
       },
 
-      // Region / fuel / unit filters on v_unit or a v_gen* view read as `a`.
       unitFilters(a, withFuel = true) {
         const region = activeRegion(), fuel = withFuel ? activeFuel() : null;
         const clauses = [];
@@ -946,9 +1064,6 @@
         return [`p.date >= ${sqlStr(from)} AND p.date <= ${sqlStr(to)}`, ...sql.priceFilters('p.REGIONID')].join(" AND ");
       },
 
-      // The region filter on a price table; a fuel or unit pick narrows it to their regions.
-      // The fuel is matched under the name the charts give it, whether it came from the
-      // dropdown or a click. Units missing from dim_duid have no region to narrow to.
       priceFilters(regionCol) {
         const region = activeRegion(), fuel = activeFuel();
         if (region) return [`${regionCol} = ${sqlStr(region)}`];
@@ -956,85 +1071,6 @@
         if (fuel && fuel !== UNREGISTERED) return [`${regionCol} IN (SELECT region FROM v_unit WHERE fuel = ${sqlStr(fuel)})`];
         return [];
       },
-
-      // --- Filter population ---
-      regions: "SELECT region AS Region FROM v_region ORDER BY region",
-      regionNames: "SELECT region, ANY_VALUE(state) AS state FROM v_unit WHERE region IS NOT NULL AND state IS NOT NULL GROUP BY region",
-      fuels: "SELECT DISTINCT fuel_source AS fuel FROM v_unit WHERE fuel_source IS NOT NULL ORDER BY fuel",
-      allDuids: "SELECT DUID, region AS Region, fuel FROM v_unit WHERE DUID IS NOT NULL ORDER BY DUID",
-
-      // --- Generation chart ---
-      // Rows with negative output (charging) form their own "<series> (charging)" series, so
-      // they sit below the axis instead of being netted into, and cutting into, the stack.
-      generation(seriesCol, intraday) {
-        const { gen, val } = grain();
-        const series = `CASE WHEN ${val} < 0 THEN ${seriesCol} || '${CHARGING}' ELSE ${seriesCol} END AS series`;
-        const time = intraday ? ', CAST(g.time AS INTEGER) AS time' : '';
-        return `
-          SELECT CAST(g.date AS VARCHAR) AS date${time}, ${series}, SUM(${val})::DOUBLE AS total_mw
-          FROM ${gen} g
-          WHERE ${sql.whereGen()}
-          GROUP BY ALL
-          ORDER BY ALL`;
-      },
-
-      // --- Price chart ---
-      price(intraday) {
-        if (intraday) {
-          return `
-            SELECT CAST(p.date AS VARCHAR) AS date, CAST(p.time AS INTEGER) AS time, p.REGIONID AS Region, AVG(p.price)::DOUBLE AS avg_price
-            FROM ${grain().price} p
-            WHERE ${sql.wherePrice()}
-            GROUP BY p.date, p.time, p.REGIONID
-            ORDER BY p.date, p.time`;
-        }
-        return `
-          SELECT CAST(p.date AS VARCHAR) AS date, p.REGIONID AS Region, AVG(p.price)::DOUBLE AS avg_price
-          FROM ${grain().price} p
-          WHERE ${sql.wherePrice()}
-          GROUP BY p.date, p.REGIONID
-          ORDER BY p.date`;
-      },
-
-      // --- Demand line over the generation chart ---
-      // Operational demand of the filtered region, or the sum of all regions: MW per interval,
-      // MWh per day. An interval (day) where a region has no demand yet is left out, not
-      // undercounted.
-      demand(intraday) {
-        const region = activeRegion();
-        const { from, to } = getDateRange();
-        const [view, val, time] = intraday
-          ? ['v_price', 'p.demand', ', CAST(p.time AS INTEGER) AS time']
-          : ['v_price_daily', 'p.demand_mwh', ''];
-        return `
-          SELECT CAST(p.date AS VARCHAR) AS date${time}, SUM(${val})::DOUBLE AS demand
-          FROM ${view} p
-          WHERE p.date >= ${sqlStr(from)} AND p.date <= ${sqlStr(to)}${region ? ` AND p.REGIONID = ${sqlStr(region)}` : ''}
-          GROUP BY ALL
-          HAVING COUNT(${val}) = COUNT(*)
-          ORDER BY ALL`;
-      },
-
-      // --- Map ---
-      mapScatter() {
-        const { gen, val } = grain();
-        return `
-          SELECT g.DUID, g.fuel, g.region AS Region, g.lat, g.lon,
-            AVG(${val})::DOUBLE AS mw
-          FROM ${gen} g
-          WHERE ${sql.whereGen()} AND g.lat IS NOT NULL
-          GROUP BY ALL`;
-      },
-
-      generatorCount() {
-        return `
-          SELECT CAST(COUNT(DISTINCT g.DUID) AS INTEGER) AS cnt
-          FROM ${grain().gen} g
-          WHERE ${sql.whereGen()}`;
-      },
-
-      // --- Cutoff timestamp ---
-      cutoff: "SELECT CAST(MAX(date) AS VARCHAR) || ' ' || substr(lpad(CAST(MAX(time) AS VARCHAR), 4, '0'), 1, 2) || ':' || substr(lpad(CAST(MAX(time) AS VARCHAR), 4, '0'), 3, 2) AS last_update FROM v_scada_today WHERE date = (SELECT MAX(date) FROM v_scada_today)",
     };
 
     // =========================================================================
@@ -1155,15 +1191,18 @@
         ? `${drillFuel} by ${byStation ? 'station' : 'DUID'} (${unit})`
         : `Generation by Fuel Type (${unit})`;
 
-      const seriesCol = drillFuel ? (byStation ? 'COALESCE(g.station, g.DUID)' : 'g.DUID') : 'g.fuel';
+      const { fact } = grain();
+      const seriesCol = drillFuel
+        ? (byStation ? `COALESCE(RELATED(unit[station]), ${fact}[DUID])` : `${fact}[DUID]`)
+        : 'RELATED(unit[fuel])';
       const key = [drillFuel, byStation, activeRegion(), ...Object.values(getDateRange())].join('|');
       if (key !== drillKey) { drillKey = key; drillShown = DRILL_STEP; }
 
       // Demand is regional, so it only sits over the fuel view, not over a drill or a unit pick.
       const withDemand = !drillFuel && !crossFilter.duids.length;
       const [data, demandRows] = await Promise.all([
-        runQuery(sql.generation(seriesCol, intraday)),
-        withDemand ? runQuery(sql.demand(intraday)) : [],
+        runQuery(dax.generation(seriesCol, intraday)),
+        withDemand ? runQuery(dax.demand(intraday)) : [],
       ]);
       if (seq !== _renderSeq) return;
       if (!data.length) {
@@ -1274,7 +1313,7 @@
         if (drillFuel) {
           // A station toggles all its units as a group; a unit toggles itself.
           const duids = byStation
-            ? (await runQuery(`SELECT DUID FROM v_unit WHERE station = ${sqlStr(name)}`)).map(r => r.DUID)
+            ? (await runQuery(`EVALUATE CALCULATETABLE(VALUES(unit[DUID]), unit[station] = ${daxStr(name)})`)).map(r => r.DUID)
             : [];
           const group = duids.length ? duids : [name];
           const allOn = group.every(d => crossFilter.duids.includes(d));
@@ -1316,17 +1355,17 @@
     async function renderNow(seq) {
       const region = activeRegion();
       const [mix, prices] = await Promise.all([
+        // Per fuel, and the row without a fuel: all of them.
+        runQuery(`EVALUATE ${filtered(`
+          SUMMARIZECOLUMNS(ROLLUPADDISSUBTOTAL(gen_latest[fuel], "all"),
+            "mw", SUMX(gen_latest, generated(gen_latest[mw])), "charging", SUMX(gen_latest, MIN(gen_latest[mw], 0)),
+            "share", renewable_share(gen_latest, gen_latest[mw], gen_latest[renewable], gen_latest[generator]),
+            "date", MAX(gen_latest[date]), "time", MAX(gen_latest[time]))`,
+          region ? [`gen_latest[region] = ${daxStr(region)}`] : [])}`),
         runQuery(`
-          SELECT g.fuel, SUM(generated(g.mw))::DOUBLE AS mw, SUM(LEAST(g.mw, 0))::DOUBLE AS charging,
-            renewable_share(g.mw, g.renewable, g.generator)::DOUBLE AS share,
-            CAST(MAX(g.date) AS VARCHAR) AS date, CAST(MAX(g.time) AS INTEGER) AS time
-          FROM v_gen_latest g
-          ${region ? `WHERE g.region = ${sqlStr(region)}` : ''}
-          GROUP BY GROUPING SETS ((g.fuel), ())`),
-        runQuery(`
-          SELECT p.REGIONID AS region, p.price::DOUBLE AS price, p.demand::DOUBLE AS demand,
-            p.net_interchange::DOUBLE AS net
-          FROM v_price_latest p ORDER BY p.REGIONID`),
+          EVALUATE SELECTCOLUMNS(price_latest, "region", price_latest[REGIONID], "price", price_latest[price],
+            "demand", price_latest[demand], "net", price_latest[net_interchange])
+          ORDER BY [region]`),
       ]);
       if (seq !== _renderSeq) return;
       const all = mix.find(r => r.fuel == null), total = all?.mw ?? 0;
@@ -1407,7 +1446,7 @@
     async function renderPrice(seq) {
       const intraday = isIntradayMode();
 
-      const data = await runQuery(sql.price(intraday));
+      const data = await runQuery(dax.price(intraday));
       if (seq !== _renderSeq) return;
       if (!data.length) {
         showEmpty('chart-price');
@@ -1494,13 +1533,14 @@
     // purpose.
     async function renewableShare() {
       const intraday = isIntradayMode();
-      const { gen, val } = grain();
+      const { fact, val } = grain();
+      const keys = `${fact}[date]${intraday ? `, ${fact}[time]` : ''}`;
       const rows = await runQuery(`
-        SELECT CAST(g.date AS VARCHAR) AS date${intraday ? ', CAST(g.time AS INTEGER) AS time' : ''},
-          renewable_share(${val}, g.renewable, g.generator)::DOUBLE AS share
-        FROM ${gen} g
-        WHERE ${sql.whereGen({ withFuel: false })}
-        GROUP BY GROUPING SETS ((g.date${intraday ? ', g.time' : ''}), ()) ORDER BY ALL`);
+        EVALUATE CALCULATETABLE(
+          SUMMARIZECOLUMNS(ROLLUPADDISSUBTOTAL(${intraday ? `ROLLUPGROUP(${keys})` : keys}, "range"),
+            "share", renewable_share(${fact}, ${val}, RELATED(unit[renewable]), RELATED(unit[generator]))),
+          ${dax.whereGen(fact, { withFuel: false }).join(', ')})
+        ORDER BY ${keys}`);
       return { rows: rows.filter(r => r.date != null), overall: rows.find(r => r.date == null)?.share };
     }
 
@@ -1531,24 +1571,25 @@
       const prevFrom = shiftDate(from, -days);
       if (!(days >= 1) || prevFrom < minDate) return ids.forEach(id => show(id));
 
-      const dates = a => `${a}.date >= DATE ${sqlStr(prevFrom)} AND ${a}.date <= DATE ${sqlStr(last)}`;
-      const cur = a => `CAST(${a}.date >= DATE ${sqlStr(from)} AS INTEGER) AS cur, CAST(COUNT(DISTINCT ${a}.date) AS INTEGER) AS n`;
-      // Generation with no region or fuel filter needs nothing about the unit: the plain fact.
+      // One row: a measure and its days over the range (n1, v1) and over the days before (n0, v0).
+      const both = (t, measure, filters) => {
+        const side = (i, cmp) => `"n${i}", CALCULATE(DISTINCTCOUNT(${t}[date]), ${t}[date] ${cmp} ${daxDate(from)}), `
+          + `"v${i}", CALCULATE(${measure}, ${t}[date] ${cmp} ${daxDate(from)})`;
+        return `EVALUATE CALCULATETABLE(ROW(${side(1, '>=')}, ${side(0, '<')}), ${[...dax.dates(t, prevFrom, last), ...filters].join(', ')})`;
+      };
+      // Generation with no region or fuel filter names nothing of the unit: the plain fact.
       const [gen, price, re] = await Promise.all([
-        runQuery(`SELECT ${cur('g')}, (SUM(generated(g.mwh)) / COUNT(DISTINCT g.date))::DOUBLE AS v
-          FROM ${activeRegion() || activeFuel() ? 'v_gen_daily' : 'v_scada_daily'} g
-          WHERE ${[dates('g'), ...sql.unitFilters('g')].join(' AND ')} GROUP BY ALL`),
-        runQuery(`SELECT ${cur('p')}, AVG(p.price)::DOUBLE AS v FROM v_price_daily p
-          WHERE ${[dates('p'), ...sql.priceFilters('p.REGIONID')].join(' AND ')} GROUP BY ALL`),
-        runQuery(`SELECT ${cur('g')}, renewable_share(g.mwh, g.renewable, g.generator)::DOUBLE AS v
-          FROM v_gen_daily g
-          WHERE ${[dates('g'), ...sql.unitFilters('g', false)].join(' AND ')} GROUP BY ALL`),
+        runQuery(both('scada_daily', 'SUMX(scada_daily, generated(scada_daily[mwh])) / DISTINCTCOUNT(scada_daily[date])',
+          dax.unitFilters('scada_daily'))),
+        runQuery(both('price_daily', 'AVERAGE(price_daily[price])', dax.priceFilters('price_daily[REGIONID]'))),
+        runQuery(both('scada_daily', 'renewable_share(scada_daily, scada_daily[mwh], RELATED(unit[renewable]), RELATED(unit[generator]))',
+          dax.unitFilters('scada_daily', false))),
       ]);
       if (seq !== _renderSeq) return;
       const vs = days === 1 ? 'vs the day before' : `vs previous ${days} days`;
       // A side that doesn't hold every day of its period (the daily history not attached yet,
       // a gap in the data) gives no comparison.
-      const pair = rows => [1, 0].map(c => rows.find(r => r.cur === c && r.n === days)?.v);
+      const pair = ([r]) => [1, 0].map(i => r?.[`n${i}`] === days ? r[`v${i}`] : undefined);
       // A change that rounds to zero reads "unchanged", not as an arrow on 0.0.
       const delta = (id, d, fmt, cls = '') => {
         const size = Math.abs(d).toFixed(1);
@@ -1623,8 +1664,9 @@
     const GEN_LEGEND = ['Black coal', 'Brown coal', 'Natural gas', 'Water', 'Wind', 'Solar', 'Grid'];
     let _genUnits = null;
     async function genUnits() {
-      _genUnits ??= new Map((await runQuery(`SELECT DUID, fuel, region AS Region,
-        renewable, generator, lat, lon FROM v_unit`)).map(u => [u.DUID, u]));
+      _genUnits ??= new Map((await runQuery(`EVALUATE SELECTCOLUMNS(unit, "DUID", unit[DUID], "fuel", unit[fuel],
+        "Region", unit[region], "renewable", unit[renewable], "generator", unit[generator],
+        "lat", unit[lat], "lon", unit[lon])`)).map(u => [u.DUID, u]));
       return _genUnits;
     }
     async function ensureGens(date) {
@@ -1632,9 +1674,9 @@
       icState.gensLoading.add(date);
       try {
         const [rows] = await Promise.all([runQuery(`
-          SELECT CAST(time AS INTEGER) AS time,
-            string_agg(DUID || ':' || CAST(CAST(ROUND(mw) AS INTEGER) AS VARCHAR), ',') AS g
-          FROM v_scada WHERE date = ${sqlStr(date)} AND abs(mw) >= 1 GROUP BY time`), genUnits()]);
+          EVALUATE CALCULATETABLE(
+            SUMMARIZECOLUMNS(scada[time], "g", CONCATENATEX(scada, scada[DUID] & ":" & ROUND(scada[mw], 0), ",")),
+            scada[date] = ${daxDate(date)}, ABS(scada[mw]) >= 1)`), genUnits()]);
         icState.gens.set(date, new Map(rows.map(r => [padTime(r.time), r.g])));
       } catch (e) {
         console.warn('[Flows] generators unavailable:', e);
@@ -1679,11 +1721,17 @@
       // Always 5-minute frames, so only the ranges whose half-year files renderAll loads.
       if (!isIntradayMode()) return empty('Choose 30 days or less to play the flows');
       const [flows, prices] = await Promise.all([
-        runQuery(`SELECT interconnector AS id, CAST(date AS VARCHAR) AS date, CAST(time AS INTEGER) AS time,
-            mw::DOUBLE AS mw, export_limit::DOUBLE AS export_limit, import_limit::DOUBLE AS import_limit
-          FROM v_interconnector WHERE date BETWEEN ${sqlStr(from)} AND ${sqlStr(to)} ORDER BY date, time`).catch(() => []),
-        runQuery(`SELECT REGIONID AS region, CAST(date AS VARCHAR) AS date, CAST(time AS INTEGER) AS time, price::DOUBLE AS price
-          FROM v_price WHERE date BETWEEN ${sqlStr(from)} AND ${sqlStr(to)}`),
+        runQuery(`
+          EVALUATE CALCULATETABLE(
+            SELECTCOLUMNS(interconnector, "id", interconnector[interconnector], "date", interconnector[date],
+              "time", interconnector[time], "mw", interconnector[mw],
+              "export_limit", interconnector[export_limit], "import_limit", interconnector[import_limit]),
+            ${dax.dates('interconnector', from, to).join(', ')})
+          ORDER BY [date], [time]`).catch(() => []),
+        runQuery(`
+          EVALUATE CALCULATETABLE(
+            SELECTCOLUMNS(price, "region", price[REGIONID], "date", price[date], "time", price[time], "price", price[price]),
+            ${dax.dates('price', from, to).join(', ')})`),
       ]);
       const mapReady = await registerAustraliaMap();
       if (seq !== _renderSeq) return;
@@ -2000,9 +2048,9 @@
     // Ranges over 30 days read the hour-of-day x month tables of agg (scripts/cache_catalog.py
     // build_daily_agg): whole months, the ones the range touches. Until agg is attached, or
     // while the deployed agg predates those tables, the chart says so instead of guessing.
-    const monthsSql = col => {
+    const monthsOf = table => {
       const { from, to } = getDateRange();
-      return `${col} >= date_trunc('month', DATE ${sqlStr(from)}) AND ${col} <= DATE ${sqlStr(to)}`;
+      return [`${table}[month] >= ${daxDate(from.slice(0, 8) + '01')}`, `${table}[month] <= ${daxDate(to)}`];
     };
     const formatMonth = str => formatDate(str).replace(/^\d+ /, '');
     function hourlyMissing(id, view) {
@@ -2018,11 +2066,19 @@
         ? 'Price by hour of day ($/MWh)' : 'Price by hour of day and month ($/MWh)';
       if (!intraday && hourlyMissing('chart-heat', 'v_price_hourly')) return;
       const rows = await runQuery(intraday ? `
-          SELECT CAST(p.date AS VARCHAR) AS date, CAST(p.time // 100 AS INTEGER) AS y, AVG(p.price)::DOUBLE AS price
-          FROM v_price p WHERE ${sql.wherePrice()} GROUP BY ALL ORDER BY ALL` : `
-          SELECT CAST(h.month AS VARCHAR) AS date, CAST(h.hour AS INTEGER) AS y, (SUM(h.price * h.n) / SUM(h.n))::DOUBLE AS price
-          FROM v_price_hourly h WHERE ${[monthsSql('h.month'), ...sql.priceFilters('h.REGIONID')].join(' AND ')}
-          GROUP BY ALL ORDER BY ALL`);
+          EVALUATE GROUPBY(
+            CALCULATETABLE(
+              SELECTCOLUMNS(price, "date", price[date], "y", QUOTIENT(price[time], 100), "p", price[price]),
+              ${dax.wherePrice('price').join(', ')}),
+            [date], [y], "price", AVERAGEX(CURRENTGROUP(), [p]))
+          ORDER BY [date], [y]` : `
+          EVALUATE SELECTCOLUMNS(
+            CALCULATETABLE(
+              SUMMARIZECOLUMNS(price_hourly[month], price_hourly[hour],
+                "price", SUMX(price_hourly, price_hourly[price] * price_hourly[n]) / SUM(price_hourly[n])),
+              ${[...monthsOf('price_hourly'), ...dax.priceFilters('price_hourly[REGIONID]')].join(', ')}),
+            "date", [month], "y", [hour], "price", [price])
+          ORDER BY [date], [y]`);
       if (seq !== _renderSeq) return;
       if (!rows.length) return showEmpty('chart-heat');
       const dates = [...new Set(rows.map(r => r.date))].sort();
@@ -2052,18 +2108,21 @@
       const intraday = isIntradayMode();
       document.getElementById('title-profile').textContent = 'Average day by fuel (MW)';
       if (!intraday && hourlyMissing('chart-profile', 'v_gen_hourly')) return;
-      const months = `SELECT month, days FROM v_month_days WHERE ${monthsSql('month')}`;
+      const months = monthsOf('month_days').join(', ');
       const [rows, span] = await Promise.all([runQuery(intraday ? `
-        SELECT g.fuel, CAST(g.time AS INTEGER) AS time,
-          (SUM(generated(g.mw)) / COUNT(DISTINCT g.date))::DOUBLE AS mw
-        FROM v_gen g WHERE ${sql.whereGen()} AND g.generator
-        GROUP BY ALL ORDER BY ALL` : `
-        SELECT h.fuel, CAST(h.hour AS INTEGER) * 100 AS time,
-          (SUM(h.mwh) / (SELECT SUM(days) FROM (${months})))::DOUBLE AS mw
-        FROM v_gen_hourly h
-        WHERE ${['h.month IN (SELECT month FROM (' + months + '))', ...sql.unitFilters('h'), 'h.generator'].join(' AND ')}
-        GROUP BY ALL ORDER BY ALL`),
-        intraday ? [] : runQuery(`SELECT CAST(MIN(month) AS VARCHAR) AS first, CAST(MAX(month) AS VARCHAR) AS last FROM (${months})`)]);
+        EVALUATE CALCULATETABLE(
+          SUMMARIZECOLUMNS(unit[fuel], scada[time], "mw", SUMX(scada, generated(scada[mw])) / DISTINCTCOUNT(scada[date])),
+          ${[...dax.whereGen('scada'), 'unit[generator]'].join(', ')})
+        ORDER BY unit[fuel], scada[time]` : `
+        EVALUATE VAR days = CALCULATE(SUM(month_days[days]), ${months})
+        RETURN SELECTCOLUMNS(
+          CALCULATETABLE(
+            SUMMARIZECOLUMNS(unit[fuel], scada_hourly[hour], "mw", SUM(scada_hourly[mwh]) / days),
+            ${[`TREATAS(CALCULATETABLE(VALUES(month_days[month]), ${months}), scada_hourly[month])`,
+              ...dax.unitFilters('scada_hourly'), 'unit[generator]'].join(', ')}),
+          "fuel", [fuel], "time", CONVERT([hour], INTEGER) * 100, "mw", [mw])
+        ORDER BY [fuel], [time]`),
+        intraday ? [] : runQuery(`EVALUATE CALCULATETABLE(ROW("first", MIN(month_days[month]), "last", MAX(month_days[month])), ${months})`)]);
       if (seq !== _renderSeq) return;
       if (!rows.length) return showEmpty('chart-profile');
       if (span[0]?.first) document.getElementById('title-profile').textContent =
@@ -2088,17 +2147,19 @@
     // Generation-weighted price each fuel earned in its own region, against the plain average.
     async function renderCapture(seq) {
       const intraday = isIntradayMode();
-      const { genPrice, price, val } = grain();
+      const { fact, price, val } = grain();
       const v = `generated(${val})`;
       // Only where the region has a price.
       const rows = await runQuery(`
-        SELECT g.fuel,
-          capture_price(${v}, g.price)::DOUBLE AS capture,
-          SUM(${v})::DOUBLE AS volume
-        FROM ${genPrice} g
-        WHERE ${sql.whereGen({ withFuel: false })} AND g.generator AND g.price IS NOT NULL
-        GROUP BY ALL HAVING SUM(${v}) > 0 ORDER BY capture`);
-      const avg = await runQuery(`SELECT AVG(p.price)::DOUBLE AS avg FROM ${price} p WHERE ${sql.wherePrice()}`);
+        EVALUATE FILTER(
+          CALCULATETABLE(
+            SUMMARIZECOLUMNS(unit[fuel],
+              "capture", capture_price(${fact}, ${v}, RELATED(${price}[price])),
+              "volume", SUMX(${fact}, ${v})),
+            ${[...dax.whereGen(fact, { withFuel: false }), 'unit[generator]', `NOT ISBLANK(${price}[price])`].join(', ')}),
+          [volume] > 0)
+        ORDER BY [capture]`);
+      const avg = await runQuery(`EVALUATE ${filtered(`ROW("avg", AVERAGE(${price}[price]))`, dax.wherePrice(price))}`);
       if (seq !== _renderSeq) return;
       document.getElementById('title-capture').textContent =
         `Capture price by fuel ($/MWh${intraday ? '' : ', from daily prices'})`;
@@ -2120,10 +2181,13 @@
 
     async function renderNegative(seq) {
       const intraday = isIntradayMode();
+      const p = grain().price;
       const rows = await runQuery(`
-        SELECT p.REGIONID AS region, (100 * AVG(CASE WHEN p.price < 0 THEN 1 ELSE 0 END))::DOUBLE AS pct,
-          MIN(p.price)::DOUBLE AS lowest
-        FROM ${grain().price} p WHERE ${sql.wherePrice()} GROUP BY ALL ORDER BY region`);
+        EVALUATE SELECTCOLUMNS(
+          ${filtered(`SUMMARIZECOLUMNS(${p}[REGIONID],
+            "pct", 100 * AVERAGEX(${p}, IF(${p}[price] < 0, 1, 0)), "lowest", MIN(${p}[price]))`, dax.wherePrice(p))},
+          "region", [REGIONID], "pct", [pct], "lowest", [lowest])
+        ORDER BY [region]`);
       if (seq !== _renderSeq) return;
       document.getElementById('title-neg').textContent = intraday
         ? 'Share of 5-minute intervals with negative prices (%)' : 'Share of days with a negative average price (%)';
@@ -2145,11 +2209,12 @@
     // fct_regionsum_today still filling) are gaps in the line.
     async function renderNetExports(seq) {
       const intraday = isIntradayMode();
+      const p = grain().price;
       const rows = await runQuery(`
-        SELECT CAST(p.date AS VARCHAR) AS date${intraday ? ', CAST(p.time AS INTEGER) AS time' : ''},
-          p.REGIONID AS region, AVG(p.net_interchange)::DOUBLE AS mw
-        FROM ${grain().price} p WHERE ${sql.wherePrice()}
-        GROUP BY ALL ORDER BY ALL`);
+        EVALUATE SELECTCOLUMNS(
+          ${filtered(`SUMMARIZECOLUMNS(${p}[date]${intraday ? `, ${p}[time]` : ''}, ${p}[REGIONID], "mw", AVERAGE(${p}[net_interchange]))`, dax.wherePrice(p))},
+          "date", [date]${intraday ? ', "time", [time]' : ''}, "region", [REGIONID], "mw", [mw])
+        ORDER BY [date]${intraday ? ', [time]' : ''}, [region]`);
       if (seq !== _renderSeq) return;
       document.getElementById('title-net').textContent =
         `Net exports by region (${intraday ? 'MW' : 'daily average MW'}; below zero = importing)`;
@@ -2180,21 +2245,26 @@
       }
       const intraday = isIntradayMode();
       // Hours in the range = intervals (or days) present in the price data for it.
-      const { gen, price, energy } = grain();
+      const { fact, price, energy } = grain();
       const hours = intraday
-        ? `(SELECT COUNT(DISTINCT (p.date, p.time)) / 12.0 FROM ${price} p WHERE ${sql.wherePrice()})`
-        : `(SELECT COUNT(DISTINCT p.date) * 24.0 FROM ${price} p WHERE ${sql.wherePrice()})`;
-      // One row per unit, then the factor at two grains in one pass: per fuel (the rows
-      // without a DUID) and per unit. Sorted by factor, so the top units are the last ones.
+        ? `COUNTROWS(SUMMARIZE(${price}, ${price}[date], ${price}[time])) / 12.0`
+        : `DISTINCTCOUNT(${price}[date]) * 24.0`;
+      // One row per unit, then the factor at two grains from it: per unit, and per fuel (the
+      // rows without a DUID). Sorted by factor, so the top units are the last ones.
+      const factor = keys => `GROUPBY(u, ${keys}, "station", MAXX(CURRENTGROUP(), [station]),
+            "cap", SUMX(CURRENTGROUP(), [cap]), "cf", capacity_factor(CURRENTGROUP(), [mwh], [cap], hours))`;
       const rows = (await runQuery(`
-        WITH u AS (
-          SELECT g.DUID, g.fuel, ANY_VALUE(g.station) AS station, ANY_VALUE(g.cap_mw) AS cap,
-            ${energy} AS mwh
-          FROM ${gen} g WHERE ${sql.whereGen()} AND g.cap_mw > 0 AND g.generator
-          GROUP BY g.DUID, g.fuel)
-        SELECT u.DUID, u.fuel, ANY_VALUE(u.station) AS station, SUM(u.cap)::DOUBLE AS cap,
-          capacity_factor(u.mwh, u.cap, ${hours})::DOUBLE AS cf
-        FROM u GROUP BY GROUPING SETS ((u.fuel), (u.DUID, u.fuel)) ORDER BY cf`)).filter(r => r.cf != null);
+        EVALUATE
+        VAR hours = CALCULATE(${hours}, ${dax.wherePrice(price).join(', ')})
+        VAR u = CALCULATETABLE(
+          SUMMARIZECOLUMNS(${fact}[DUID], unit[fuel],
+            "station", SELECTEDVALUE(unit[station]), "cap", SELECTEDVALUE(unit[cap_mw]), "mwh", ${energy}),
+          ${[...dax.whereGen(fact), 'unit[cap_mw] > 0', 'unit[generator]'].join(', ')})
+        RETURN UNION(
+          ${factor('[DUID], [fuel]')},
+          SELECTCOLUMNS(${factor('[fuel]')},
+            "DUID", BLANK(), "fuel", [fuel], "station", [station], "cap", [cap], "cf", [cf]))
+        ORDER BY [cf]`)).filter(r => r.cf != null);
       if (seq !== _renderSeq) return;
       const byFuel = rows.filter(r => r.DUID == null);
       const topAsc = rows.filter(r => r.DUID != null).slice(-15);
@@ -2250,23 +2320,41 @@
       const fuel = activeFuel();
       if (fuel && !CURTAIL_FUELS.includes(fuel)) return ids.forEach(id => showEmpty(id, 'Curtailment is measured on wind and solar farms'));
       const { from, to } = getDateRange();
-      const where = [`c.date >= ${sqlStr(from)} AND c.date <= ${sqlStr(to)}`, ...sql.unitFilters('c')].join(' AND ');
       const byMonth = rangeDays() > 120;
-      const period = byMonth ? `CAST(date_trunc('month', c.date) AS DATE)` : 'c.date';
+      const period = byMonth ? 'DATE(YEAR([date]), MONTH([date]), 1)' : '[date]';
       // Past the newest next-day file, AEMO's regional figures carry it on: per region, so not
       // when units are picked.
       const recent = data.has('v_curtailment_recent') && !crossFilter.duids.length;
-      const cols = 'region, fuel, date, curtailed_mwh, available_mwh';
-      const source = recent ? `(SELECT ${cols} FROM v_curtailment UNION ALL SELECT ${cols} FROM v_curtailment_recent)` : 'v_curtailment';
+      // The farms' days under the names the regional figures have; the two are then one table.
+      const farms = `SELECTCOLUMNS(curtailment_daily, "DUID", curtailment_daily[DUID], "region", RELATED(unit[region]),
+            "fuel", RELATED(unit[fuel]), "date", curtailment_daily[date],
+            "curtailed_mwh", curtailment_daily[curtailed_mwh], "available_mwh", curtailment_daily[available_mwh])`;
+      const regional = `SELECTCOLUMNS(curtailment_recent, "DUID", BLANK(), "region", curtailment_recent[region],
+            "fuel", curtailment_recent[fuel], "date", curtailment_recent[date],
+            "curtailed_mwh", curtailment_recent[curtailed_mwh], "available_mwh", curtailment_recent[available_mwh])`;
+      const region = activeRegion();
+      const where = [`[date] >= ${daxDate(from)}`, `[date] <= ${daxDate(to)}`,
+        ...(region ? [`[region] = ${daxStr(region)}`] : []), ...(fuel ? [`[fuel] = ${daxStr(fuel)}`] : []),
+        ...(crossFilter.duids.length ? [`[DUID] IN ${daxDuids()}`] : [])].join(' && ');
       const [rows, units, last] = await Promise.all([
-        runQuery(`SELECT CAST(${period} AS VARCHAR) AS period, c.fuel,
-            SUM(c.curtailed_mwh)::DOUBLE AS cur, SUM(c.available_mwh)::DOUBLE AS avail
-          FROM ${source} c WHERE ${where} GROUP BY ALL ORDER BY ALL`),
-        runQuery(`SELECT c.DUID, ANY_VALUE(c.station) AS station, c.fuel,
-            SUM(c.curtailed_mwh)::DOUBLE AS cur, SUM(c.available_mwh)::DOUBLE AS avail
-          FROM v_curtailment c WHERE ${where} GROUP BY c.DUID, c.fuel
-          HAVING SUM(c.curtailed_mwh) > 0 ORDER BY cur DESC LIMIT 15`),
-        runQuery(`SELECT CAST(MAX(date) AS VARCHAR) AS d FROM v_curtailment_daily`),
+        runQuery(`
+          EVALUATE GROUPBY(
+            SELECTCOLUMNS(
+              FILTER(${recent ? `UNION(${farms}, ${regional})` : farms}, ${where}),
+              "period", ${period}, "fuel", [fuel], "c", [curtailed_mwh], "a", [available_mwh]),
+            [period], [fuel], "cur", SUMX(CURRENTGROUP(), [c]), "avail", SUMX(CURRENTGROUP(), [a]))
+          ORDER BY [period], [fuel]`),
+        runQuery(`
+          EVALUATE TOPN(15,
+            FILTER(
+              CALCULATETABLE(
+                SUMMARIZECOLUMNS(curtailment_daily[DUID], unit[fuel], "station", SELECTEDVALUE(unit[station]),
+                  "cur", SUM(curtailment_daily[curtailed_mwh]), "avail", SUM(curtailment_daily[available_mwh])),
+                ${[...dax.dates('curtailment_daily', from, to), ...dax.unitFilters('curtailment_daily')].join(', ')}),
+              [cur] > 0),
+            [cur], DESC)
+          ORDER BY [cur] DESC`),
+        runQuery(`EVALUATE ROW("d", MAX(curtailment_daily[date]))`),
       ]);
       if (seq !== _renderSeq) return;
       const lastDay = last[0]?.d;
@@ -2338,18 +2426,19 @@
       if (!isIntradayMode()) return showEmpty('chart-battery', 'Choose 30 days or less: daily totals net charging against output');
       const [rows, fleet] = await Promise.all([
         runQuery(`
-          SELECT CAST(g.time AS INTEGER) AS time,
-            (SUM(GREATEST(g.mw, 0)) / COUNT(DISTINCT g.date))::DOUBLE AS discharge,
-            (SUM(LEAST(g.mw, 0)) / COUNT(DISTINCT g.date))::DOUBLE AS charge,
-            AVG(g.price)::DOUBLE AS price,
-            SUM(GREATEST(g.mw, 0) * g.price)::DOUBLE AS sold, SUM(GREATEST(g.mw, 0))::DOUBLE AS sold_mw,
-            SUM(LEAST(g.mw, 0) * g.price)::DOUBLE AS bought, SUM(LEAST(g.mw, 0))::DOUBLE AS bought_mw
-          FROM v_gen_price g
-          WHERE ${sql.whereGen({ withFuel: false })} AND g.storage AND g.price IS NOT NULL
-          GROUP BY ALL ORDER BY ALL`),
+          EVALUATE CALCULATETABLE(
+            SUMMARIZECOLUMNS(scada[time],
+              "discharge", SUMX(scada, MAX(scada[mw], 0)) / DISTINCTCOUNT(scada[date]),
+              "charge", SUMX(scada, MIN(scada[mw], 0)) / DISTINCTCOUNT(scada[date]),
+              "price", AVERAGEX(scada, RELATED(price[price])),
+              "sold", SUMX(scada, MAX(scada[mw], 0) * RELATED(price[price])), "sold_mw", SUMX(scada, MAX(scada[mw], 0)),
+              "bought", SUMX(scada, MIN(scada[mw], 0) * RELATED(price[price])), "bought_mw", SUMX(scada, MIN(scada[mw], 0))),
+            ${[...dax.whereGen('scada', { withFuel: false }), 'unit[storage]', 'NOT ISBLANK(price[price])'].join(', ')})
+          ORDER BY scada[time]`),
         runQuery(`
-          SELECT COUNT(*)::INTEGER AS units, SUM(u.cap_mw)::DOUBLE AS mw, SUM(u.storage_mwh)::DOUBLE AS mwh
-          FROM v_unit u WHERE ${['u.storage', ...sql.unitFilters('u', false)].join(' AND ')}`),
+          EVALUATE CALCULATETABLE(
+            ROW("units", COUNTROWS(unit), "mw", SUM(unit[cap_mw]), "mwh", SUM(unit[storage_mwh])),
+            ${['unit[storage]', ...dax.unitFilters('unit', false)].join(', ')})`),
       ]);
       if (seq !== _renderSeq) return;
       if (!rows.length) return showEmpty('chart-battery', 'No battery output for the selected filters');
@@ -2386,12 +2475,18 @@
     // have no owner there, are grouped as "Unknown".
     async function renderOwners(seq) {
       if (!data.has('v_unit', 'owner')) return showEmpty('chart-owners', 'Ownership data not deployed yet');
-      const { gen, energy } = grain();
+      const { fact, val } = grain();
       const rows = await runQuery(`
-        SELECT COALESCE(g.owner, 'Unknown') AS owner, COALESCE(g.station, g.DUID) AS station,
-          g.fuel, (${energy})::DOUBLE AS mwh
-        FROM ${gen} g WHERE ${sql.whereGen()}
-        GROUP BY ALL HAVING ${energy} > 0 ORDER BY mwh DESC`);
+        EVALUATE FILTER(
+          GROUPBY(
+            CALCULATETABLE(
+              SELECTCOLUMNS(${fact}, "owner", COALESCE(RELATED(unit[owner]), "Unknown"),
+                "station", COALESCE(RELATED(unit[station]), ${fact}[DUID]), "fuel", RELATED(unit[fuel]),
+                "v", generated(${val})),
+              ${dax.whereGen(fact).join(', ')}),
+            [owner], [station], [fuel], "mwh", SUMX(CURRENTGROUP(), [v])${isIntradayMode() ? ' / 12.0' : ''}),
+          [mwh] > 0)
+        ORDER BY [mwh] DESC`);
       if (seq !== _renderSeq) return;
       if (!rows.length) return showEmpty('chart-owners');
       const total = rows.reduce((s, r) => s + r.mwh, 0);
@@ -2459,21 +2554,23 @@
       }
       const region = activeRegion();
       // The newest day is still filling: its energy and its share are not a day's yet.
-      const before = `< DATE ${sqlStr(document.getElementById('dateTo').max)}`;
-      const sumIf = (cond, alias) => `SUM(CASE WHEN ${cond} THEN generated(g.mwh) ELSE 0 END)::DOUBLE AS ${alias}`;
+      const before = `< ${daxDate(document.getElementById('dateTo').max)}`;
+      const sumIf = cond => `SUMX(scada_daily, IF(${cond}, generated(scada_daily[mwh]), 0))`;
       const [gen, price] = await Promise.all([
         runQuery(`
-          SELECT CAST(g.date AS VARCHAR) AS date, renewable_share(g.mwh, g.renewable, g.generator)::DOUBLE AS re,
-            ${sumIf(`g.fuel IN ('Solar', ${sqlStr(ROOFTOP)})`, 'solar')}, ${sumIf(`g.fuel = 'Wind'`, 'wind')}
-          FROM v_gen_daily g
-          WHERE g.date ${before}${region ? ` AND g.region = ${sqlStr(region)}` : ''}
-          GROUP BY ALL ORDER BY ALL`),
+          EVALUATE CALCULATETABLE(
+            SUMMARIZECOLUMNS(scada_daily[date],
+              "re", renewable_share(scada_daily, scada_daily[mwh], RELATED(unit[renewable]), RELATED(unit[generator])),
+              "solar", ${sumIf(`RELATED(unit[fuel]) IN {"Solar", ${daxStr(ROOFTOP)}}`)},
+              "wind", ${sumIf('RELATED(unit[fuel]) = "Wind"')}),
+            scada_daily[date] ${before}${region ? `, unit[region] = ${daxStr(region)}` : ''})
+          ORDER BY scada_daily[date]`),
         runQuery(`
-          SELECT CAST(p.date AS VARCHAR) AS date, AVG(p.price)::DOUBLE AS price,
-            (CASE WHEN COUNT(p.demand) = COUNT(*) THEN SUM(p.demand) END)::DOUBLE AS demand
-          FROM v_price_daily p
-          WHERE p.date ${before}${region ? ` AND p.REGIONID = ${sqlStr(region)}` : ''}
-          GROUP BY ALL ORDER BY ALL`),
+          EVALUATE CALCULATETABLE(
+            SUMMARIZECOLUMNS(price_daily[date], "price", AVERAGE(price_daily[price]),
+              "demand", IF(COUNT(price_daily[demand]) = COUNTROWS(price_daily), SUM(price_daily[demand]))),
+            price_daily[date] ${before}${region ? `, price_daily[REGIONID] = ${daxStr(region)}` : ''})
+          ORDER BY price_daily[date]`),
       ]);
       if (seq !== _renderSeq) return;
       const days = {
@@ -2563,7 +2660,7 @@
       const unit = intraday ? 'MW' : 'MWh';
       document.getElementById('title-map').textContent = `Generators (average ${intraday ? 'MW' : 'MWh/day'}, sized by output)`;
 
-      const data = await runQuery(sql.mapScatter());
+      const data = await runQuery(dax.mapScatter());
       if (seq !== _renderSeq) return;
 
       const fuels = [...new Set(data.map(d => d.fuel))].sort();
@@ -3000,18 +3097,18 @@ ORDER BY ALL`;
 
     // --- Filter population ---
     async function populateFilters() {
-      for (const r of await runQuery(sql.regionNames)) REGION_NAMES[r.region] = r.state;
-      const regions = await runQuery(sql.regions);
-      const fuels = await runQuery(sql.fuels);
+      for (const r of await runQuery(dax.regionNames)) REGION_NAMES[r.region] = r.state;
+      const regions = await runQuery(dax.regions);
+      const fuels = await runQuery(dax.fuels);
       const regionSelect = document.getElementById("regionFilter");
       for (const r of regions) regionSelect.add(new Option(regionName(r.Region), r.Region));
       const fuelSelect = document.getElementById("fuelFilter");
       for (const f of fuels) fuelSelect.add(new Option(f.fuel, f.fuel));
-      allDuids = await runQuery(sql.allDuids);
+      allDuids = await runQuery(dax.allDuids);
 
       // Set date range defaults: last 3 days up to max date in data
-      const maxDateResult = await runQuery("SELECT CAST(MAX(date) AS VARCHAR) AS d FROM v_scada_today");
-      const minDateResult = await runQuery("SELECT CAST(MIN(date) AS VARCHAR) AS d FROM v_calendar");
+      const maxDateResult = await runQuery('EVALUATE ROW("d", MAX(scada_today[date]))');
+      const minDateResult = await runQuery('EVALUATE ROW("d", MIN(calendar[date]))');
       const maxDate = maxDateResult[0].d;
       const minDate = minDateResult[0].d;
       const fromDate = new Date(`${maxDate}T00:00:00Z`);
@@ -3116,18 +3213,18 @@ ORDER BY ALL`;
           visible('view-insights') ? renderInsights(seq) : null,
           visible('view-history') ? renderHistory(seq) : null,
           visible('view-flows') ? renderFlows(seq) : null,
-          runQuery(sql.generatorCount()).then(r => { if (seq === _renderSeq && r.length) setKpiNumber('kpiGens', r[0].cnt, v => Math.round(v).toLocaleString()); })
+          runQuery(dax.generatorCount()).then(r => { if (seq === _renderSeq && r.length) setKpiNumber('kpiGens', r[0].cnt, v => Math.round(v).toLocaleString()); })
         ]);
         if (seq !== _renderSeq) return;
         dim(false);
         if (!window._cutoffCached) {
-          const cutoffResult = await runQuery(sql.cutoff);
+          const cutoffResult = await runQuery(dax.cutoff);
           if (seq !== _renderSeq) return;
-          if (cutoffResult.length && cutoffResult[0].last_update) {
-            // Already AEST wall clock: format the string as-is. new Date() would read it
-            // in the viewer's zone (wrong outside Brisbane, Invalid Date on Safari).
-            const [day, hhmm] = cutoffResult[0].last_update.split(' ');
-            window._cutoffCached = `${formatDate(day)} ${hhmm} AEST`;
+          if (cutoffResult.length && cutoffResult[0].date) {
+            // Already AEST wall clock: format the date and the HHMM as they are. new Date()
+            // would read them in the viewer's zone (wrong outside Brisbane).
+            const { date, time } = cutoffResult[0];
+            window._cutoffCached = `${formatDate(date)} ${formatTime(time)} AEST`;
           }
         }
         // What this render cost: queries that ran (a cached view runs none) and wall time.

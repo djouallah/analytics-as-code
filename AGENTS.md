@@ -144,63 +144,95 @@ transport fails the OneLake TLS handshake).
 The dashboard has the layers of a BI stack, each in its own place under `dashboard/` (the
 table of what stands in each place in a real product is in `ARCHITECTURE.md`), and two hosts:
 GitHub Pages and a Fabric app. Everything is the same file on both except `storage/data.js`.
-- consumer and query language: `index.html`, with its SQL written by hand
-- semantic model: `semantic/model.json`
-- compiler: `semantic/compiler.js`
+- consumer: `index.html`
+- query language: DAX, written in the page
+- semantic model: `semantic/model.bim`, a Tabular model in TMSL
+- compiler: `semantic/compiler.js`, the model to views and the DAX to SQL
 - engine: DuckDB-WASM
 - storage: `storage/data.js`, `storage/history.js`
 - and the Logs tab, `frontend/`
 
-**The implementation is naive on purpose; the point is that the layers are there.** The
-compiler compiles the model only. A real one also compiles the queries; here the page writes
-them by hand, in SQL, so the rules a query compiler would apply on its own (which grain to
-read, when a join is needed, MW to MWh) are the author's: in `index.html` and in the speed
-rules below. Don't build a query generator.
+**It is a proof of concept (2026-10-05); the point is that the layers are there, in the
+formats of a real product.** The compiler is not a DAX engine. It knows the constructs the
+page uses and throws on anything else (`DAX: X is not supported`), and where DAX and SQL
+differ the result is SQL's: a blank is a NULL, a group whose measures are all blank is kept,
+and there is no filter context (a filter is a boolean argument of `CALCULATETABLE` or
+`CALCULATE`). A chart that needs a new construct gets it in `compiler.js`, as one more case;
+don't grow it into a general engine. Of the rules a query compiler applies on its own, it
+applies one, when a join is needed (below); which grain to read and MW to MWh are still the
+page's.
+
+**The Analyze tab is SQL, and only SQL**: its box, the two builders that fill it
+(`buildAnalyzeSQL`, `buildGenPriceSQL`) and the `sql` filter helpers they use. It reads the
+same views and macros. The compiler never sees text a user typed: `query()` translates what
+starts with `EVALUATE`, and only the page's own queries do. Don't make the box accept DAX.
 
 `index.html` is the one file at the top of `dashboard/`: it is the site's URL, and `data.js`
 finds `data/` from the page's URL. The deployed tree is the repo tree, so a relative import
 resolves the same locally and deployed.
-- `dashboard/index.html` is the page: charts, and SQL that only picks columns from views,
-  filters and groups them. **It joins nothing** and knows no `dim_duid` column, no fuel
-  naming rule, no region names (they are `v_unit.state`). Which fuels are renewable is not in
-  the dashboard at all: `dim_duid.Renewable` says, and `v_unit.renewable` passes it on. It
+- `dashboard/index.html` is the page: charts, and DAX that names the model's tables, columns
+  and functions (`scada[mw]`, `unit[fuel]`, `renewable_share(...)`). **It joins nothing**,
+  names no view (outside Analyze and `data.has('v_...')`) and knows no `dim_duid` column, no
+  fuel naming rule, no region names (they are `unit[state]`). Which fuels are renewable is not
+  in the dashboard at all: `dim_duid.Renewable` says, and `unit[renewable]` passes it on. It
   names a fuel only to colour it, to label `Grid` "Battery" in a legend, to pick the solar
   and wind records of the History page, and to limit the curtailment charts to wind and
-  solar. A new chart that needs a join or a rule gets a dataset, a relationship or a metric
-  in `model.json`, not SQL in the page.
-- `dashboard/semantic/model.json` is the semantic model, and the only place a view or a
-  measure is defined: `constants`, `glossary` (what a field holds in every dataset that has
-  it), `datasets`, `relationships`, `functions` and `metrics`, each with its `description`.
-  A dataset is one view, of four kinds:
-  - `table`: one attached table as it is; a table a deployed file lacks gets no view.
-  - `partitions`: a history table and a recent one, stitched at the cut (`recent_days`, 5):
-    the last 5 days from `today`, older days from the half-year databases (`p*.<table>`) or
-    `agg`. An `optional` field reads NULL from a file that lacks its column; `rollup` is a
-    field's expression on the recent side. The three stitching rules are described in the
-    file (`stitching`).
-  - `from`: fields picked from another dataset, plus `calculated` ones (`v_unit`: a unit's
-    attributes under the page's names).
-  - `sql`: derived from other datasets (`v_region`, `v_gen_latest`/`v_price_latest`,
-    `v_curtailment_recent`).
-  A relationship is a view too, `from` LEFT JOIN `to`: `v_gen`/`v_gen_daily`/`v_gen_hourly`/
-  `v_gen_today` and `v_curtailment` (a fact with the unit's attributes on every row), and
-  `v_gen_price*` (plus the price of the unit's region). The `calculated` fields of `v_unit`
-  are worked out again on the joined row, which is how a unit missing from `dim_duid` gets
-  the fuel "Unregistered". The functions and metrics are DuckDB macros (`fuel_name`,
-  `generated`; `renewable_share`, `capture_price`, `capacity_factor`).
-  It is JSON because a browser reads it with no library: there are no comments, so the why
-  goes in a `description`, and a long expression is an array of lines.
-- `dashboard/semantic/compiler.js` turns the model into those views and macros
-  (`createModel(dataSource)`: the data source's members plus `has` and `needs`). It compiles
-  after every attach: one query reads what is attached from the engine's catalog
-  (`information_schema`), and one runs the statements that are new or changed. A view is
-  created once: DuckDB binds a view again on every read, so the ones over a rebuilt view
-  follow it. At startup the catalog read costs ~100 ms and the statements ~40 ms; an attach
-  after that ~20 ms in all (2026-10-05). `needs(sql)` is worked out from what each dataset
-  reads. `ensureHistory` attaches nothing for a range that starts inside the last 5 days:
-  `today` covers it, so the default view fetches no history. It knows the attached databases
-  by name only (`dim`, `today`, `agg`, `p<YYYY>_h<N>`), so it and `model.json` are the same
-  files for every host.
+  solar. A new chart that needs a join or a rule gets a table, a relationship or a function
+  in `model.bim`, not a rule in the page. The filters are DAX too (`dax.whereGen`,
+  `dax.unitFilters`, `dax.wherePrice`, `dax.priceFilters`: the arguments of a
+  `CALCULATETABLE`); the `sql` ones next to them are Analyze's.
+- `dashboard/semantic/model.bim` is the semantic model, and the only place a view or a
+  function is defined. It is TMSL, the JSON of a Tabular model (compatibility level 1702,
+  the one with user-defined functions): `expressions` (the constants, as parameters),
+  `tables`, `relationships`, `functions`, each with its `description`, and the glossary and
+  the stitching rules as model `annotations`. What TMSL has no property for is an annotation,
+  its own extension point. A table is one view, `v_<table>`, of four kinds, told by its
+  partitions:
+  - one entity partition with a schema (`today`.`scada_today`): that attached table as it
+    is; a table a deployed file lacks gets no view.
+  - two partitions, `history` and `recent`, stitched at the cut (`recent_days`, 5): the last
+    5 days from `today`, older days from the half-year databases (schema `p*`) or `agg`. The
+    table's `stitch` annotation picks one of the three rules. A column with the `optional`
+    annotation reads NULL from a file that lacks it (typed by `sourceProviderType`); `rollup`
+    is a column's expression on the recent side.
+  - one entity partition without a schema: columns picked from another table of the model
+    (`sourceColumn`, or the `sql` annotation), plus the calculated columns, in DAX (`unit`:
+    a unit's attributes under the page's names).
+  - a query partition: SQL over other views (`region`, `gen_latest`/`price_latest`,
+    `curtailment_recent`); `when` names a column that must exist.
+  A relationship is a view too, under its `name`, the from side LEFT JOIN the to side:
+  `v_gen`/`v_gen_daily`/`v_gen_hourly`/`v_gen_today` and `v_curtailment` (a fact with the
+  unit's attributes on every row), and `v_gen_price*` (plus the price of the unit's region).
+  A TMSL relationship is one column to one column, so the price ones, which join on date,
+  time and the unit's region, carry the rest in `from`, `on` and `columns`. The calculated
+  columns of `unit` are worked out again on the joined row, which is how a unit missing from
+  `dim_duid` gets the fuel "Unregistered". The functions are DAX user-defined functions
+  (`fuel_name`, `generated`; `renewable_share`, `capture_price`, `capacity_factor`), each
+  compiled to a DuckDB macro of the same name: a table parameter (`t : TABLE EXPR`) is what
+  the function's iterators run over, and is not a macro argument.
+  It is JSON, so a browser reads it with no library: there are no comments, so the why goes
+  in a `description`, and a long expression is an array of lines.
+- `dashboard/semantic/compiler.js` has two parts (`createModel(dataSource)`: the data
+  source's members plus `has`, `needs` and `toSQL`).
+  The model: it turns `model.bim` into those views and macros. It compiles after every
+  attach: one query reads what is attached from the engine's catalog (`information_schema`),
+  and one runs the statements that are new or changed. A view is created once: DuckDB binds
+  a view again on every read, so the ones over a rebuilt view follow it. At startup the
+  catalog read costs ~100 ms and the statements ~40 ms; an attach after that ~20 ms in all
+  (2026-10-05). `needs(sql)` is worked out from what each table reads. `ensureHistory`
+  attaches nothing for a range that starts inside the last 5 days: `today` covers it, so the
+  default view fetches no history. It knows the attached databases by name only (`dim`,
+  `today`, `agg`, `p<YYYY>_h<N>`), so it and `model.bim` are the same files for every host.
+  The queries: `toSQL(dax)` turns a DAX query into one SELECT over those views, the same
+  text once (a Map). The header of the file lists what each DAX construct becomes. Three
+  things to know:
+  - It picks the view from the tables a query names: `scada` alone reads `v_scada`, with
+    `unit` it reads `v_gen`, with `price` `v_gen_price`. A query never says which.
+  - The result is cast by the column's `dataType` for the browser: a date as VARCHAR, a
+    whole number as INTEGER, a number as DOUBLE. A subquery or a CTE is left as it is.
+  - A function call is the macro call, so the SQL in the Logs tab reads like the DAX. Under
+    `CALCULATE` the function's body is written out instead, because its aggregates take the
+    `FILTER (WHERE ...)` and a macro call cannot.
 - `storage/data.js` is the host: how the `.duckdb` files are fetched, cached and attached
   (`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `query`). It attaches `dim`,
   `today`, `agg` and the 5-minute history, and builds no view. On both the files are
@@ -230,6 +262,8 @@ resolves the same locally and deployed.
 Four things in that design are there for speed and must survive an edit:
 - A query that needs nothing about the unit (previous-period generation with no filter, the
   Flows generators, the cutoff) reads the plain fact view, not `v_gen*`: no join to pay for.
+  The compiler does this, from the tables the DAX names: so a query that needs nothing of
+  the unit must not name `unit`, and a unit pick is a filter on the fact's own `DUID`.
 - `v_gen_latest` takes its newest interval from `v_scada_today`, not from the joined view.
 - A rule about the fuel is never an IN list inside a view: an IN list becomes a hash join,
   and a join in a view runs for every query whether it reads the column or not. Attributes
@@ -238,7 +272,8 @@ Four things in that design are there for speed and must survive an edit:
   `NOT storage`: with the fuel filter on Grid the optimizer then sees
   `fuel = 'Grid' AND fuel <> 'Grid'` and reads nothing (18 ms); through
   `NOT (fuel = 'Grid')` it does not (65 ms). This is why "storage" stays a rule on the fuel
-  in `model.json` and is not a column like `Renewable`.
+  in `model.bim` and is not a column like `Renewable`. In DAX the filter is the bare column,
+  `unit[generator]`: the compiler writes it as it is, not as `= TRUE`.
 
 `v_gen_price*` is a LEFT join: capture price and the battery chart add `price IS NOT NULL`,
 Analyze's generation + price keeps the rows without a price.
@@ -260,9 +295,10 @@ rather than round them:
 - The Dashboard tab leads with "Right now" (`renderNow`): the newest interval from
   `v_gen_latest` and `v_price_latest`, two queries, following the region filter only.
 
-**Checking a change to `model.json`, `compiler.js`, a `data.js` or the page:** in headless Chrome, the page before against
-the page after on one copy of the deployed files, through the same page states; compare the
-query results (same SQL, same rows), read `EXPLAIN` for a join that was not there, and time
+**Checking a change to `model.bim`, `compiler.js`, a `data.js` or the page:** in headless Chrome, the page before against
+the page after on one copy of the deployed files, through the same page states; compare what
+each chart draws (its ECharts series) and the SQL that ran (the Logs tab has it, translated),
+read `EXPLAIN` for a join that was not there, and time
 old against new alternately in the same page (two separate sessions differ by more than the
 change does). Speed is tracked every time: the total, and any query clearly slower. A
 difference of some 10 ms on one query is not worth chasing: on a second run as many go the
@@ -303,7 +339,7 @@ function, `getDataSas` (`fabric/rayfin/functions`), which signs a read-only SAS 
 folder so that the browser never holds a storage token. `fabric/build.mjs` assembles
 `fabric/dist`: `index.html`, the three folders and `dag/` from `dashboard/`, with
 `fabric/site/` copied over them (`storage/data.js`, its own, and `storage/auth.js`), and
-`?v=<build>` added to every relative import; `compiler.js` passes its own on to `model.json`.
+`?v=<build>` added to every relative import; `compiler.js` passes its own on to `model.bim`.
 
 **It is deployed from the owner's laptop**, under their own login:
 ```
@@ -351,7 +387,7 @@ To check a deploy, open the Logs tab: the build stamp, each fetch, attach and qu
 A daily run refuses to splice when the deployed aggregate's tables or columns differ from what
 `build_daily_agg` now builds, so a change to them needs one `all_periods=true` dispatch. The
 page itself reads any column or table a deployed file lacks as "no data"
-(an `optional` field of `model.json` reads NULL, a dataset whose table is missing gets no
+(an `optional` column of `model.bim` reads NULL, a table whose source is missing gets no
 view, and `data.has` in the page), so a new page can go out before the data does.
 `energy_daily_agg.duckdb` holds, besides the per-day tables, hour-of-day × month tables
 (`scada_hourly`, `price_hourly`, `month_days`) that the daily-profile and price heatmap read
@@ -365,7 +401,7 @@ next-day file (the export leaves out the newest date, which only has 00:05–04:
 intraday files carry no per-unit availability. The days after it come from AEMO's regional
 figures: `energy_today.duckdb`'s `price_today` carries `wind_available`, `wind_curtailed`,
 `solar_available`, `solar_curtailed` (MW, the region's semi-scheduled, from
-`fct_regionsum_today`), which `model.json` turns into `v_curtailment_recent`; the chart draws
+`fct_regionsum_today`), which `model.bim` turns into `v_curtailment_recent`; the chart draws
 those days lighter and leaves them out when units are picked. Only units on the current
 registration list have a classification, so semi-scheduled farms that have left the list are
 not counted. The Insights page reads both for any range.
@@ -427,7 +463,7 @@ that has never been probed either.
   Unifying them would mean rebuilding a fact; not worth it. Three numbers are involved, in
   three places: the `_today` tables keep every row they ever loaded (insert-only, never
   trimmed), the export takes their last 14 days, and the model reads the last 5 from them
-  (`recent_days` in `model.json`) and the rest from history. And one asymmetry: `fct_scada_today` drops the
+  (`recent_days` in `model.bim`) and the rest from history. And one asymmetry: `fct_scada_today` drops the
   0 MW rows at load, `fct_scada` keeps them and the export drops them.
 - **What the export applies, which a reader of the Iceberg tables has to redo**
   (`scripts/cache_catalog.py`): `INTERVENTION = 0` only (the pricing run); 0 MW rows left

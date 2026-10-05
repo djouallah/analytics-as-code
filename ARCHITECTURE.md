@@ -45,7 +45,7 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 ## Two Deploy Targets
 
 The dashboard is one page (`dashboard/index.html`) over one semantic model
-(`dashboard/semantic/model.json`). A target only decides where the data files live and how the
+(`dashboard/semantic/model.bim`). A target only decides where the data files live and how the
 browser gets them (`storage/data.js`), so a chart or a measure is written once and reaches both.
 
 | | GitHub Pages | Microsoft Fabric app |
@@ -65,21 +65,23 @@ on purpose: the point is the layers, not their maturity.
 | Layer | Here | In a real product |
 |---|---|---|
 | Consumer | `dashboard/index.html` | the BI tool |
-| Query language | SQL, written by hand in the page | DAX, MDX, VizQL, Malloy, a metrics request |
-| Semantic model | `dashboard/semantic/model.json` | LookML, TMDL, MetricFlow YAML, OSI |
+| Query language | DAX, written in the page | DAX, MDX, VizQL, Malloy, a metrics request |
+| Semantic model | `dashboard/semantic/model.bim`, a Tabular model in TMSL | a Tabular model (TMSL, TMDL), LookML, MetricFlow YAML |
 | Compiler | `dashboard/semantic/compiler.js` | MetricFlow, Cube's schema compiler, Malloy's compiler, Looker's SQL generator, Power BI's formula engine, Tableau's VizQL |
 | Engine | DuckDB-WASM | the warehouse, VertiPaq, Hyper |
 | Storage | `dashboard/storage/` | the lakehouse or warehouse connection |
 
-- **The semantic model** describes the datasets, their relationships and the measures, each
-  with a description. It is the only place a view or a measure is defined.
-- **The compiler** turns it into DuckDB views and macros. It compiles the model only: a real
-  one also compiles the queries.
-- **The query language** is where that shows. SQL asks for tables, while a semantic model
-  offers measures, which carry their own aggregation, grain and joins; real products put
-  another language there and let the compiler write the SQL. Here the page's SQL is written
-  by hand, so its author applies the rules a query compiler would: which grain to read, when
-  a join is needed, MW to MWh.
+- **The semantic model** describes the tables, their relationships and the functions, each
+  with a description, in the format of a Power BI model (`model.bim`). It is the only place
+  a view or a function is defined.
+- **The compiler** turns it into DuckDB views and macros, and turns the page's DAX queries
+  into SQL over them. It is a proof of concept, not a DAX engine: it knows the constructs
+  this page uses and nothing else.
+- **The query language** is where the layers show. SQL asks for tables, while a semantic
+  model offers tables that know how they relate; the page asks in DAX for `scada[mw]` by
+  `unit[fuel]` and the compiler works out that the two have to be joined, and writes the
+  SQL. Which grain to read and MW to MWh are still the page's to say. The Analyze tab is the
+  exception: it is SQL, written against the same views.
 
 ### The Fabric app
 

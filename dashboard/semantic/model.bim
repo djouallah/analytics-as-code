@@ -1,0 +1,424 @@
+{
+  "name": "nem",
+  "compatibilityLevel": 1702,
+  "model": {
+    "description": [
+      "Australia's National Electricity Market as the dashboard reads it: what each unit generated, what each region paid, what flowed between regions, and what wind and solar were curtailed.",
+      "This file is the semantic model, in TMSL (a Tabular model.bim): the tables, how they relate, and the functions. compiler.js turns it into DuckDB views (v_<table> per table, and one per relationship, under the relationship's name) and macros (one per function), and translates the page's DAX queries into SQL over those views.",
+      "What TMSL has no property for is an annotation: `stitch` on a table of two partitions, `optional`, `since`, `sql` and `rollup` on a column, `from`, `on` and `columns` on a relationship. In an expression, {name} is one of the model's `expressions` (its constants).",
+      "A table only holds what is attached. The 5-minute tables hold the last 5 days (interconnector 14) until the half-year files of a date range are attached; the daily ones hold the last 14 days, and the hourly ones do not exist, until the daily aggregate is. A query over the rest runs and returns the newest days alone, with no error: the compiler's needs(sql) says what a SQL query reads.",
+      "A fact table stays readable as it is: a query that names nothing of the unit reads v_<fact>, not the relationship's view, and pays for no join. The compiler decides that from the tables a query names."
+    ],
+
+    "expressions": [
+      {
+        "name": "recent_days", "kind": "m",
+        "expression": "5 meta [IsParameterQuery=true, Type=\"Number\", IsParameterQueryRequired=true]",
+        "description": "Rows from this many days back are read from `today` (refreshed every 30 minutes), older ones from the half-year history files or the daily aggregate. CURRENT_DATE is the NEM's day: the host sets the session to Brisbane time for it."
+      },
+      {
+        "name": "unregistered", "kind": "m",
+        "expression": "\"Unregistered\" meta [IsParameterQuery=true, Type=\"Text\", IsParameterQueryRequired=true]",
+        "description": "The fuel of a unit that is in the data and not in dim_duid, e.g. one the registration list hasn't caught up with yet. Its rows are kept, so it still counts toward totals. A unit that is in dim_duid without a fuel is 'Unknown'."
+      },
+      {
+        "name": "rooftop", "kind": "m",
+        "expression": "\"Rooftop solar\" meta [IsParameterQuery=true, Type=\"Text\", IsParameterQueryRequired=true]",
+        "description": "The fuel of the rooftop pseudo-units (QLD_PV, NSW_PV, VIC_PV, SA_PV, TAS_PV): AEMO's regional estimate, one unit per region, with no capacity and no coordinates. The estimate is half-hourly, drawn as a straight line onto the 5-minute intervals (scripts/cache_catalog.py rooftop_units)."
+      },
+      {
+        "name": "storage_fuel", "kind": "m",
+        "expression": "\"Grid\" meta [IsParameterQuery=true, Type=\"Text\", IsParameterQueryRequired=true]",
+        "description": "The fuel of batteries. Storage is on neither side of the renewable share."
+      }
+    ],
+
+    "annotations": [
+      { "name": "glossary.date", "value": "NEM time (AEST all year)." },
+      { "name": "glossary.time", "value": "HHMM as a number, NEM time: 1435 is 14:35, and the hour is time // 100." },
+      { "name": "glossary.mw", "value": "MW in that 5 minutes; a battery charging is negative. Energy in MWh is SUM(mw) / 12. An interval at 0 MW is not stored, so AVG(mw) and COUNT(*) only see the others: the intervals of a range are counted in price." },
+      { "name": "glossary.mwh", "value": "Energy. Daily: the day's, net of charging. Hourly: that hour of the day over the month, output only (charging is left out)." },
+      { "name": "glossary.month", "value": "The month's first day." },
+      { "name": "glossary.hour", "value": "Hour of day, 0-23. The average MW at an hour over a range is SUM(mwh) / SUM(month_days.days) over its months." },
+      { "name": "glossary.price", "value": "The regional reference price (AEMO's RRP), $/MWh. In the daily and hourly tables, the plain average of the intervals." },
+      { "name": "glossary.demand", "value": "Operational demand in MW: rooftop solar is not in it. Daily: the average MW." },
+      { "name": "glossary.demand_mwh", "value": "The day's operational demand as energy: a whole day from the aggregate, the intervals so far today." },
+      { "name": "glossary.net_interchange", "value": "MW, positive when the region exports." },
+      { "name": "glossary.region", "value": "NSW1, QLD1, SA1, TAS1, VIC1. unit also holds the units of WA1 (Western Australia, another market), which region leaves out." },
+      { "name": "glossary.REGIONID", "value": "The region, under AEMO's name for the column: NSW1, QLD1, SA1, TAS1, VIC1." },
+      { "name": "glossary.DUID", "value": "AEMO's id of a dispatchable unit." },
+      { "name": "stitch.cut", "value": "The `history` partition before the cut (recent_days), the `recent` one from the cut on. The default." },
+      { "name": "stitch.cut_when_history", "value": "The same once the history is attached; until then the recent table as it is, all its days." },
+      { "name": "stitch.after_history", "value": "History before the cut, and from recent whatever is newer than the attached history holds: a file without the table, or a daily import that is behind, leaves no hole." }
+    ],
+
+    "tables": [
+      {
+        "name": "duid",
+        "isHidden": true,
+        "description": "dim_duid under the names the export gives its columns: the units on AEMO's registration list plus the ones in the data that are not on it (retired plant, replaced DUIDs), and the rooftop pseudo-units. Queries read unit.",
+        "partitions": [{ "name": "duid", "source": { "type": "entity", "schemaName": "dim", "entityName": "dim_duid" } }]
+      },
+      {
+        "name": "calendar",
+        "description": "dim_calendar. The first date is where the history starts.",
+        "partitions": [{ "name": "calendar", "source": { "type": "entity", "schemaName": "dim", "entityName": "dim_calendar" } }],
+        "columns": [
+          { "name": "date", "dataType": "dateTime", "sourceColumn": "date", "isKey": true },
+          { "name": "year", "dataType": "int64", "sourceColumn": "year" },
+          { "name": "month", "dataType": "int64", "sourceColumn": "month" }
+        ]
+      },
+      {
+        "name": "scada_today",
+        "description": "Generation per unit and 5 minutes, the newest 14 days: where the latest interval is read.",
+        "annotations": [{ "name": "grain", "value": "DUID, date, time" }],
+        "partitions": [{ "name": "scada_today", "source": { "type": "entity", "schemaName": "today", "entityName": "scada_today" } }],
+        "columns": [
+          { "name": "DUID", "dataType": "string", "sourceColumn": "DUID" },
+          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
+          { "name": "time", "dataType": "int64", "sourceColumn": "time" },
+          { "name": "mw", "dataType": "double", "sourceColumn": "mw" }
+        ]
+      },
+      {
+        "name": "price_today",
+        "description": "Price and demand per region and 5 minutes, the newest 14 days, with the region's semi-scheduled wind and solar.",
+        "annotations": [{ "name": "grain", "value": "REGIONID, date, time" }],
+        "partitions": [{ "name": "price_today", "source": { "type": "entity", "schemaName": "today", "entityName": "price_today" } }],
+        "columns": [
+          { "name": "REGIONID", "dataType": "string", "sourceColumn": "REGIONID" },
+          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
+          { "name": "time", "dataType": "int64", "sourceColumn": "time" },
+          { "name": "price", "dataType": "double", "sourceColumn": "price" },
+          { "name": "demand", "dataType": "double", "sourceColumn": "demand" },
+          { "name": "net_interchange", "dataType": "double", "sourceColumn": "net_interchange" },
+          { "name": "wind_available", "dataType": "double", "sourceColumn": "wind_available", "description": "MW the region's semi-scheduled wind could make." },
+          { "name": "wind_curtailed", "dataType": "double", "sourceColumn": "wind_curtailed", "description": "MW of it that was not dispatched." },
+          { "name": "solar_available", "dataType": "double", "sourceColumn": "solar_available", "description": "MW the region's semi-scheduled solar could make." },
+          { "name": "solar_curtailed", "dataType": "double", "sourceColumn": "solar_curtailed", "description": "MW of it that was not dispatched." }
+        ]
+      },
+      {
+        "name": "scada",
+        "description": "Generation per unit and 5 minutes.",
+        "annotations": [{ "name": "grain", "value": "DUID, date, time" }],
+        "partitions": [
+          { "name": "history", "source": { "type": "entity", "schemaName": "p*", "entityName": "scada" } },
+          { "name": "recent", "source": { "type": "entity", "schemaName": "today", "entityName": "scada_today" } }
+        ],
+        "columns": [
+          { "name": "DUID", "dataType": "string", "sourceColumn": "DUID" },
+          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
+          { "name": "time", "dataType": "int64", "sourceColumn": "time" },
+          { "name": "mw", "dataType": "double", "sourceColumn": "mw" }
+        ]
+      },
+      {
+        "name": "price",
+        "description": "Price and demand per region and 5 minutes.",
+        "annotations": [{ "name": "grain", "value": "REGIONID, date, time" }],
+        "partitions": [
+          { "name": "history", "source": { "type": "entity", "schemaName": "p*", "entityName": "price" } },
+          { "name": "recent", "source": { "type": "entity", "schemaName": "today", "entityName": "price_today" } }
+        ],
+        "columns": [
+          { "name": "REGIONID", "dataType": "string", "sourceColumn": "REGIONID" },
+          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
+          { "name": "time", "dataType": "int64", "sourceColumn": "time" },
+          { "name": "price", "dataType": "double", "sourceColumn": "price" },
+          { "name": "demand", "dataType": "double", "sourceColumn": "demand", "sourceProviderType": "REAL",
+            "annotations": [{ "name": "optional", "value": "true" }, { "name": "since", "value": "2026-10-02" }] },
+          { "name": "net_interchange", "dataType": "double", "sourceColumn": "net_interchange", "sourceProviderType": "REAL",
+            "annotations": [{ "name": "optional", "value": "true" }, { "name": "since", "value": "2026-10-02" }] }
+        ]
+      },
+      {
+        "name": "scada_daily",
+        "description": "Energy per unit and day.",
+        "annotations": [{ "name": "grain", "value": "DUID, date" }, { "name": "stitch", "value": "cut_when_history" }],
+        "partitions": [
+          { "name": "history", "source": { "type": "entity", "schemaName": "agg", "entityName": "scada_daily" } },
+          { "name": "recent", "source": { "type": "entity", "schemaName": "today", "entityName": "scada_today" } }
+        ],
+        "columns": [
+          { "name": "DUID", "dataType": "string", "sourceColumn": "DUID" },
+          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
+          { "name": "mwh", "dataType": "double", "sourceColumn": "mwh",
+            "annotations": [{ "name": "rollup", "value": "CAST(SUM(mw) / 12.0 AS REAL)" }] }
+        ]
+      },
+      {
+        "name": "price_daily",
+        "description": "Price and demand per region and day. A day from `today` with any interval missing demand (fct_regionsum_today still filling) keeps demand NULL.",
+        "annotations": [{ "name": "grain", "value": "REGIONID, date" }, { "name": "stitch", "value": "cut_when_history" }],
+        "partitions": [
+          { "name": "history", "source": { "type": "entity", "schemaName": "agg", "entityName": "price_daily" } },
+          { "name": "recent", "source": { "type": "entity", "schemaName": "today", "entityName": "price_today" } }
+        ],
+        "columns": [
+          { "name": "REGIONID", "dataType": "string", "sourceColumn": "REGIONID" },
+          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
+          { "name": "price", "dataType": "double", "sourceColumn": "price",
+            "annotations": [{ "name": "rollup", "value": "CAST(AVG(price) AS REAL)" }] },
+          { "name": "demand", "dataType": "double", "sourceColumn": "demand", "sourceProviderType": "REAL",
+            "annotations": [
+              { "name": "optional", "value": "true" }, { "name": "since", "value": "2026-10-02" },
+              { "name": "rollup", "value": "CAST(CASE WHEN COUNT(demand) = COUNT(*) THEN AVG(demand) END AS REAL)" }] },
+          { "name": "net_interchange", "dataType": "double", "sourceColumn": "net_interchange", "sourceProviderType": "REAL",
+            "annotations": [
+              { "name": "optional", "value": "true" }, { "name": "since", "value": "2026-10-02" },
+              { "name": "rollup", "value": "CAST(CASE WHEN COUNT(net_interchange) = COUNT(*) THEN AVG(net_interchange) END AS REAL)" }] },
+          { "name": "demand_mwh", "dataType": "double", "sourceColumn": "demand", "sourceProviderType": "REAL",
+            "annotations": [
+              { "name": "optional", "value": "true" }, { "name": "since", "value": "2026-10-02" },
+              { "name": "sql", "value": "demand * 24" },
+              { "name": "rollup", "value": "CASE WHEN COUNT(demand) = COUNT(*) THEN SUM(demand) / 12.0 END" }] }
+        ]
+      },
+      {
+        "name": "interconnector",
+        "description": "Flow on each link between regions, per 5 minutes, back to 2018. mw is the dispatch target, positive from the first region in the name to the second (T-V-MNSP1 > 0: Tasmania to Victoria); export_limit and import_limit bound it, in the same sign. History files built before 2026-10-03 have no such table.",
+        "annotations": [{ "name": "grain", "value": "interconnector, date, time" }, { "name": "stitch", "value": "after_history" }],
+        "partitions": [
+          { "name": "history", "source": { "type": "entity", "schemaName": "p*", "entityName": "interconnector" } },
+          { "name": "recent", "source": { "type": "entity", "schemaName": "today", "entityName": "interconnector_today" } }
+        ],
+        "columns": [
+          { "name": "interconnector", "dataType": "string", "sourceColumn": "interconnector", "sourceProviderType": "VARCHAR" },
+          { "name": "date", "dataType": "dateTime", "sourceColumn": "date", "sourceProviderType": "DATE" },
+          { "name": "time", "dataType": "int64", "sourceColumn": "time", "sourceProviderType": "SMALLINT" },
+          { "name": "mw", "dataType": "double", "sourceColumn": "mw", "sourceProviderType": "REAL" },
+          { "name": "export_limit", "dataType": "double", "sourceColumn": "export_limit", "sourceProviderType": "REAL" },
+          { "name": "import_limit", "dataType": "double", "sourceColumn": "import_limit", "sourceProviderType": "REAL" }
+        ]
+      },
+      {
+        "name": "scada_hourly",
+        "description": "Energy per unit, month and hour of day: what the daily profile reads for ranges over 30 days. It leaves out the newest date of the export.",
+        "annotations": [{ "name": "grain", "value": "DUID, month, hour" }],
+        "partitions": [{ "name": "scada_hourly", "source": { "type": "entity", "schemaName": "agg", "entityName": "scada_hourly" } }],
+        "columns": [
+          { "name": "DUID", "dataType": "string", "sourceColumn": "DUID" },
+          { "name": "month", "dataType": "dateTime", "sourceColumn": "month" },
+          { "name": "hour", "dataType": "int64", "sourceColumn": "hour" },
+          { "name": "mwh", "dataType": "double", "sourceColumn": "mwh" }
+        ]
+      },
+      {
+        "name": "price_hourly",
+        "description": "Price per region, month and hour of day: what the price heatmap reads for ranges over 30 days.",
+        "annotations": [{ "name": "grain", "value": "REGIONID, month, hour" }],
+        "partitions": [{ "name": "price_hourly", "source": { "type": "entity", "schemaName": "agg", "entityName": "price_hourly" } }],
+        "columns": [
+          { "name": "REGIONID", "dataType": "string", "sourceColumn": "REGIONID" },
+          { "name": "month", "dataType": "dateTime", "sourceColumn": "month" },
+          { "name": "hour", "dataType": "int64", "sourceColumn": "hour" },
+          { "name": "price", "dataType": "double", "sourceColumn": "price" },
+          { "name": "n", "dataType": "int64", "sourceColumn": "n", "description": "The intervals averaged." }
+        ]
+      },
+      {
+        "name": "month_days",
+        "description": "The days of each month that have data: the divisor of the hourly tables.",
+        "partitions": [{ "name": "month_days", "source": { "type": "entity", "schemaName": "agg", "entityName": "month_days" } }],
+        "columns": [
+          { "name": "month", "dataType": "dateTime", "sourceColumn": "month", "isKey": true },
+          { "name": "days", "dataType": "int64", "sourceColumn": "days" }
+        ]
+      },
+      {
+        "name": "curtailment_daily",
+        "description": "Curtailment per semi-scheduled unit and day, up to the newest complete next-day file.",
+        "annotations": [{ "name": "grain", "value": "DUID, date" }],
+        "partitions": [{ "name": "curtailment_daily", "source": { "type": "entity", "schemaName": "agg", "entityName": "curtailment_daily" } }],
+        "columns": [
+          { "name": "DUID", "dataType": "string", "sourceColumn": "DUID" },
+          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
+          { "name": "curtailed_mwh", "dataType": "double", "sourceColumn": "curtailed_mwh", "description": "Sum of max(availability - cleared, 0) / 12." },
+          { "name": "available_mwh", "dataType": "double", "sourceColumn": "available_mwh", "description": "What the unit could have made." }
+        ]
+      },
+      {
+        "name": "unit",
+        "description": "A unit and its attributes, under the names the page uses. One row per unit.",
+        "annotations": [{ "name": "alias", "value": "u" }],
+        "partitions": [{ "name": "unit", "source": { "type": "entity", "entityName": "duid" } }],
+        "columns": [
+          { "name": "DUID", "dataType": "string", "sourceColumn": "DUID", "isKey": true },
+          { "name": "fuel_source", "dataType": "string", "sourceColumn": "FuelSourceDescriptor", "description": "The fuel as registered; may be NULL." },
+          { "name": "region", "dataType": "string", "sourceColumn": "Region" },
+          { "name": "state", "dataType": "string", "sourceColumn": "State", "sourceProviderType": "VARCHAR", "description": "The region's name.",
+            "annotations": [{ "name": "optional", "value": "true" }] },
+          { "name": "station", "dataType": "string", "sourceColumn": "StationName", "sourceProviderType": "VARCHAR",
+            "annotations": [{ "name": "optional", "value": "true" }] },
+          { "name": "owner", "dataType": "string", "sourceColumn": "Participant", "sourceProviderType": "VARCHAR",
+            "annotations": [{ "name": "optional", "value": "true" }] },
+          { "name": "cap_mw", "dataType": "double", "sourceColumn": "RegCapMW", "sourceProviderType": "REAL", "description": "Registered capacity, MW.",
+            "annotations": [{ "name": "optional", "value": "true" }, { "name": "since", "value": "2026-10-01" }] },
+          { "name": "storage_mwh", "dataType": "double", "sourceColumn": "StorageMWh", "sourceProviderType": "REAL", "description": "A battery's storage, MWh.",
+            "annotations": [{ "name": "optional", "value": "true" }, { "name": "since", "value": "2026-10-01" }] },
+          { "name": "renewable", "dataType": "boolean", "sourceColumn": "Renewable", "sourceProviderType": "BOOLEAN",
+            "description": "As dim_duid says: the list of renewable fuels is in the dbt model, and the rooftop units get it in the export.",
+            "annotations": [{ "name": "optional", "value": "true" }, { "name": "since", "value": "2026-10-04" }] },
+          { "name": "lat", "dataType": "double", "sourceColumn": "latitude", "annotations": [{ "name": "sql", "value": "latitude::DOUBLE" }] },
+          { "name": "lon", "dataType": "double", "sourceColumn": "longitude", "annotations": [{ "name": "sql", "value": "longitude::DOUBLE" }] },
+          { "name": "fuel", "type": "calculated", "dataType": "string",
+            "expression": "fuel_name(unit[DUID], unit[fuel_source])",
+            "description": "The name the charts use." },
+          { "name": "storage", "type": "calculated", "dataType": "boolean",
+            "expression": "unit[fuel] = \"{storage_fuel}\"",
+            "description": "A battery." },
+          { "name": "generator", "type": "calculated", "dataType": "boolean",
+            "expression": "unit[fuel] <> \"{storage_fuel}\"",
+            "description": "Anything that is not storage. Its own column, for speed (EXPLAIN, 2026-10-04): the charts that leave storage out filter on it, not on NOT storage. With the fuel filter on Grid the optimizer then sees fuel = 'Grid' AND fuel <> 'Grid' and reads nothing; it does not see through NOT (fuel = 'Grid'). That is why storage is a rule on the fuel here and not a column of dim_duid like renewable: a rule written as an IN list in a view runs as a hash join in every query, read or not." }
+        ]
+      },
+      {
+        "name": "region",
+        "description": "The NEM regions.",
+        "partitions": [{ "name": "region", "source": { "type": "query",
+          "query": "SELECT DISTINCT Region AS region FROM v_duid WHERE Region IS NOT NULL AND Region != 'WA1'" } }],
+        "columns": [{ "name": "region", "dataType": "string", "sourceColumn": "region", "isKey": true }]
+      },
+      {
+        "name": "gen_latest",
+        "description": "v_gen_today, the newest interval only: the generation of that interval with the unit's attributes on every row. The interval is found in v_scada_today, not in the joined view.",
+        "partitions": [{ "name": "gen_latest", "source": { "type": "query", "query": [
+          "SELECT * FROM v_gen_today WHERE date = (SELECT MAX(date) FROM v_scada_today)",
+          "AND time = (SELECT MAX(time) FROM v_scada_today WHERE date = (SELECT MAX(date) FROM v_scada_today))"
+        ] } }],
+        "columns": [
+          { "name": "DUID", "dataType": "string", "sourceColumn": "DUID" },
+          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
+          { "name": "time", "dataType": "int64", "sourceColumn": "time" },
+          { "name": "mw", "dataType": "double", "sourceColumn": "mw" },
+          { "name": "region", "dataType": "string", "sourceColumn": "region" },
+          { "name": "fuel", "dataType": "string", "sourceColumn": "fuel" },
+          { "name": "renewable", "dataType": "boolean", "sourceColumn": "renewable" },
+          { "name": "generator", "dataType": "boolean", "sourceColumn": "generator" }
+        ]
+      },
+      {
+        "name": "price_latest",
+        "description": "v_price_today, the newest interval only.",
+        "partitions": [{ "name": "price_latest", "source": { "type": "query", "query": [
+          "SELECT * FROM v_price_today WHERE date = (SELECT MAX(date) FROM v_price_today)",
+          "AND time = (SELECT MAX(time) FROM v_price_today WHERE date = (SELECT MAX(date) FROM v_price_today))"
+        ] } }],
+        "columns": [
+          { "name": "REGIONID", "dataType": "string", "sourceColumn": "REGIONID" },
+          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
+          { "name": "time", "dataType": "int64", "sourceColumn": "time" },
+          { "name": "price", "dataType": "double", "sourceColumn": "price" },
+          { "name": "demand", "dataType": "double", "sourceColumn": "demand" },
+          { "name": "net_interchange", "dataType": "double", "sourceColumn": "net_interchange" }
+        ]
+      },
+      {
+        "name": "curtailment_recent",
+        "description": "Curtailment for the days after curtailment_daily's newest, per region and fuel, from AEMO's regional 5-minute figures in `today`: the same two measures. No unit, so no DUID.",
+        "annotations": [{ "name": "grain", "value": "region, date, fuel" }, { "name": "when", "value": "v_price_today.wind_curtailed" }],
+        "partitions": [{ "name": "curtailment_recent", "source": { "type": "query", "query": [
+          "SELECT REGIONID AS region, date, 'Wind' AS fuel,",
+          "SUM(wind_curtailed) / 12.0 AS curtailed_mwh, SUM(wind_available) / 12.0 AS available_mwh",
+          "FROM v_price_today WHERE date > (SELECT MAX(date) FROM v_curtailment_daily) GROUP BY ALL",
+          "UNION ALL",
+          "SELECT REGIONID AS region, date, 'Solar' AS fuel,",
+          "SUM(solar_curtailed) / 12.0 AS curtailed_mwh, SUM(solar_available) / 12.0 AS available_mwh",
+          "FROM v_price_today WHERE date > (SELECT MAX(date) FROM v_curtailment_daily) GROUP BY ALL"
+        ] } }],
+        "columns": [
+          { "name": "region", "dataType": "string", "sourceColumn": "region" },
+          { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
+          { "name": "fuel", "dataType": "string", "sourceColumn": "fuel" },
+          { "name": "curtailed_mwh", "dataType": "double", "sourceColumn": "curtailed_mwh" },
+          { "name": "available_mwh", "dataType": "double", "sourceColumn": "available_mwh" }
+        ]
+      }
+    ],
+
+    "relationships": [
+      {
+        "name": "v_gen",
+        "fromTable": "scada", "fromColumn": "DUID", "toTable": "unit", "toColumn": "DUID",
+        "annotations": [{ "name": "description", "value": "Generation per unit and 5 minutes, with the unit's attributes on every row. A unit missing from unit keeps its rows, under the fuel `unregistered` names." }]
+      },
+      {
+        "name": "v_gen_daily",
+        "fromTable": "scada_daily", "fromColumn": "DUID", "toTable": "unit", "toColumn": "DUID",
+        "annotations": [{ "name": "description", "value": "Energy per unit and day, with the unit's attributes." }]
+      },
+      {
+        "name": "v_gen_today",
+        "fromTable": "scada_today", "fromColumn": "DUID", "toTable": "unit", "toColumn": "DUID",
+        "annotations": [{ "name": "description", "value": "As v_gen, the newest 14 days." }]
+      },
+      {
+        "name": "v_gen_hourly",
+        "fromTable": "scada_hourly", "fromColumn": "DUID", "toTable": "unit", "toColumn": "DUID",
+        "annotations": [{ "name": "description", "value": "Energy per unit, month and hour of day, with the unit's attributes." }]
+      },
+      {
+        "name": "v_curtailment",
+        "fromTable": "curtailment_daily", "fromColumn": "DUID", "toTable": "unit", "toColumn": "DUID",
+        "annotations": [{ "name": "description", "value": "Curtailment per wind or solar farm and day, with the unit's attributes." }]
+      },
+      {
+        "name": "v_gen_price",
+        "fromTable": "scada", "fromColumn": "date", "toTable": "price", "toColumn": "date",
+        "annotations": [
+          { "name": "description", "value": "v_gen plus the price of the unit's region in that interval. A row without a price is kept: capture price and the battery chart add price IS NOT NULL. A TMSL relationship is one column to one column; this one has three, and starts from v_gen (the region is the unit's), so the rest is in `from` and `on`." },
+          { "name": "from", "value": "v_gen" },
+          { "name": "on", "value": "date = date, time = time, region = REGIONID" },
+          { "name": "columns", "value": "price" }
+        ]
+      },
+      {
+        "name": "v_gen_price_daily",
+        "fromTable": "scada_daily", "fromColumn": "date", "toTable": "price_daily", "toColumn": "date",
+        "annotations": [
+          { "name": "description", "value": "v_gen_daily plus the day's price of the unit's region." },
+          { "name": "from", "value": "v_gen_daily" },
+          { "name": "on", "value": "date = date, region = REGIONID" },
+          { "name": "columns", "value": "price" }
+        ]
+      }
+    ],
+
+    "functions": [
+      {
+        "name": "fuel_name",
+        "expression": "(duid : STRING, descr : STRING) => IF(ISBLANK(duid), \"{unregistered}\", COALESCE(descr, \"Unknown\"))",
+        "description": "The name a unit's fuel goes by on the page. The model's own: it names unit[fuel]."
+      },
+      {
+        "name": "generated",
+        "expression": "(v : NUMERIC) => MAX(v, 0)",
+        "description": "Output only: a unit that is charging (negative) generates nothing. Given a daily mwh it clips the day's net: a battery counts for its output less its charging, never below 0."
+      },
+      {
+        "name": "renewable_share",
+        "expression": [
+          "(t : TABLE EXPR, v : NUMERIC EXPR, renewable : BOOLEAN EXPR, generator : BOOLEAN EXPR) =>",
+          "DIVIDE(100 * SUMX(t, SWITCH(TRUE(), renewable, generated(v), NOT renewable, 0)),",
+          "SUMX(t, IF(generator, generated(v), 0)))"
+        ],
+        "description": "Renewable share of the output, over the rows of t. Takes the raw mw or mwh and the renewable and generator columns; batteries are in neither the renewables nor the total. A unit missing from dim_duid (renewable blank) is in the total only. Blank, not 0, when nothing says what is renewable: a dim_duid deployed before the column existed.",
+        "annotations": [{ "name": "unit", "value": "%" }]
+      },
+      {
+        "name": "capture_price",
+        "expression": "(t : TABLE EXPR, v : NUMERIC EXPR, price : NUMERIC EXPR) => DIVIDE(SUMX(t, v * price), SUMX(t, v))",
+        "description": "The price a volume earned: the prices weighted by it. Takes generated(mw) or generated(mwh) and the price of the unit's region (scada with price, scada_daily with price_daily), where the price is not blank: that join is LEFT, and a volume without a price would count below the line only.",
+        "annotations": [{ "name": "unit", "value": "$/MWh" }]
+      },
+      {
+        "name": "capacity_factor",
+        "expression": "(t : TABLE EXPR, mwh : NUMERIC EXPR, cap : NUMERIC EXPR, hours : NUMERIC VAL) => DIVIDE(100 * SUMX(t, mwh), SUMX(t, cap) * hours)",
+        "description": "Energy over what the registered capacity could make in the hours. Takes one row per unit (its energy in the range, its cap_mw once) and the hours of the range; a unit without a capacity (cap_mw blank or 0, the rooftop ones) is filtered out first, or its energy counts against no capacity. Blank when the range has no hours.",
+        "annotations": [{ "name": "unit", "value": "%" }]
+      }
+    ]
+  }
+}
