@@ -1,13 +1,17 @@
 # Analytics as Code
 
 An example of AI-driven analytics: every line here — ingestion, models, tests, pipelines,
-dashboard — was written by AI. The data is the Australian electricity market (AEMO).
+semantic model, dashboards — was written by AI. The data is the Australian electricity
+market (AEMO).
 
 ![Architecture](architecture.svg)
 
-No servers: the browser queries the data itself (DuckDB-WASM).
+One Power BI semantic model ([`semantic_model/`](semantic_model/)), three clients
+([`dashboard/`](dashboard/)):
 
-Deploy the same dashboard to **GitHub Pages** ([live](https://nemtracker.github.io/), public)
-or as a **Microsoft Fabric app** (Fabric sign-in).
+- **GitHub Pages** ([live](https://nemtracker.github.io/), public) and a **Microsoft Fabric
+  app** (Fabric sign-in): the same page, and no server, the browser runs the queries itself
+  (DuckDB-WASM).
+- a **Power BI report**, on the same model in Direct Lake.
 
 Details: [ARCHITECTURE.md](ARCHITECTURE.md)
