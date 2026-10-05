@@ -464,6 +464,8 @@ they are what these tables are built from.
   any column of `dim_time` filtered or grouped, or a column of `fct_summary` itself
   filtered. So filters go through the dimensions. What the switch is worth is timed at every
   deploy: `check_model.py` asks the whole history by year and fuel from each table.
+  2026-10-05, run 37319760193: 0.43 s from the daily table, 1.9 s from the 5-minute one,
+  the same total. So it stays; it is worth removing if that gap closes.
   For the number to be the same from either table, the daily table stores the day's sums of
   what the 5-minute measure sums: `output_mwh`, `charging_mwh`, `revenue`. Its `mwh` (net)
   and `price` (the day's average) are the dashboard's long-range figures, which are not the
