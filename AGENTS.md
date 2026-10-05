@@ -171,8 +171,25 @@ differ the result is SQL's: a blank is a NULL, a group whose measures are all bl
 and there is no filter context (a filter is a boolean argument of `CALCULATETABLE` or
 `CALCULATE`). A chart that needs a new construct gets it in `compiler.js`, as one more case;
 don't grow it into a general engine. Of the rules a query compiler applies on its own, it
-applies one, when a join is needed (below); which grain to read and MW to MWh are still the
-page's.
+applies one, when a join is needed (below). Which table a measure reads is the model's rule,
+which the compiler answers from the query; which grain a date range gets, and MW to MWh, are
+still the page's.
+
+**A figure is a measure of the model, the one Power BI calls** (the owner's, 2026-10-05,
+angrily, on finding that the page worked most of its figures out itself: "the whole point is
+to use the same semantic model"). No query in `index.html` aggregates a column of the model.
+A query groups, filters and names measures. What it may do besides:
+- shape rows: rename, `UNION` with rooftop, add up the units of a station or an owner;
+- list rows as they are stored: the filter lists, the newest interval, the Flows rows, the
+  first and last key of a table;
+- divide one measure by another, and turn a day's MWh into MW;
+- what the model does not hold: rooftop's newest half hour carried forward, and so the
+  renewable share and the average day, which are divided in JS.
+A figure that is not a measure yet becomes one in `model.bim` first. The one exception is
+the capacity factor: the model's `[Capacity factor]` reads the units' table and the regions'
+in one measure, which the compiler does not write as one SELECT, so the page divides
+`[Generation MWh]` by the registered capacity and `[Hours]` itself. Analyze is not part of
+this: it is SQL.
 
 **The Analyze tab is SQL, and only SQL**: its box, the two builders that fill it
 (`buildAnalyzeSQL`, `buildGenPriceSQL`) and the `sql` filter helpers they use. It reads the
@@ -192,7 +209,13 @@ and anything that serves the page from the repo has to do the same.
   hold are written once, at the top of its section 5: storage is the fuel "Grid", a
   generator is anything else (a blank fuel included, which DAX and SQL disagree on, so it is
   spelled out), and which grain a date range reads (`grain()`: the 5-minute tables up to 30
-  days, the daily ones beyond, as columns of `fct_summary_daily` and `fct_region_daily`).
+  days, the daily ones beyond). The page does not name the table for it: up to 30 days it
+  filters and groups by the fact's own columns (`fct_summary[date]`, `fct_region[REGIONID]`),
+  beyond by the dimensions' (`dim_calendar[date]`, `dim_duid[DUID]`, `dim_region[Region]`)
+  with `dax.wholeDays`, and the same measure reads the 5-minute table or the daily one, as
+  the model's `[Reads 5 minutes]` says. Where the two grains are different figures, each is
+  its own measure and `grain()` names it: `[Generation MW]` at a time and `[Generation MWh]`
+  a day, `[Negative price share]` of intervals and `[Negative price days share]`.
   The filters are DAX too (`dax.whereGen`, `dax.unitFilters`, `dax.wherePrice`,
   `dax.priceFilters`: the arguments of a `CALCULATETABLE`, on the fact's own `date` and on
   the unit's attributes); the `sql` ones next to them are Analyze's.
@@ -236,11 +259,23 @@ and anything that serves the page from the repo has to do the same.
   - A `[Name]` that is not a column of the table being built is a measure, and its
     expression is written out in its place: there are no macros. Under `CALCULATE` its
     aggregates take the `FILTER (WHERE ...)`.
+  - A measure that picks its table, `IF([Reads 5 minutes], a, b)`, picks it here as in
+    Power BI: `ISFILTERED` and `ISCROSSFILTERED` are answered from the columns the query's
+    keys and filters name around the measure, and an `IF` on one keeps the side it picks;
+    the other is never translated. (Until 2026-10-05 it was always `a`, and the page named
+    the daily table itself, with figures of its own.)
   - Its fixed cases for this model: `[Rooftop MW]` is `SUM(mw)` over `v_fct_rooftop_5min`,
     a view whose SQL is in the file (a half hour and the five times after it on the line
-    to the next half hour); and a measure that picks its table,
-    `IF([Reads 5 minutes], a, b)`, is `a`: the page filters the fact's own date column,
-    which is what makes it true in DAX too, and names the daily table itself.
+    to the next half hour). The days the daily table lacks, which a measure adds from the
+    5-minute table (`late`, an `EXCEPT`), are none: the page restricts a long range to the
+    days the daily table holds (`dax.wholeDays`, `dax.wholeRegionDays`), which makes that
+    set empty in DAX too. So a long range ends on the newest whole day on the page, and
+    on the newest interval in Power BI. `[Units]` off the daily table is
+    `COUNT(DISTINCT DUID)`. And `wholeDays` on the daily table itself is not written: as a
+    semi-join it cost 100 ms a query to keep every row. `MAX(column, 0)` and
+    `MIN(column, 0)` read the column as DOUBLE: a sum of fixed decimals is 128-bit, and
+    two of them (output and charging) made the 30-day generation query slower than the
+    one sum by sign it replaced (623 ms against 452; 335 as DOUBLE).
 - `storage/data.js` is the host: how the `.duckdb` files are fetched, cached and attached
   (`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `query`). It attaches `dim`,
   `today`, `agg` and the 5-minute history, and builds no view. On both the files are
@@ -460,23 +495,26 @@ they are what these tables are built from.
   `[Generation MWh]`, `[Charging MWh]`, `[Revenue]`, `[Capture price]`, `[Units]` and
   `[Capacity factor]` read `fct_summary_daily` when no time of day is asked for, plus
   `fct_summary` for the days the daily table does not hold yet (`EXCEPT` on the dates), and
-  `fct_summary` alone when one is. **Only the measures of `fct_summary` switch.**
-  `[Average price]`, `[Demand MWh]` and `[Net interchange MW]` read `fct_region` and nothing
-  else (since 2026-10-05; they switched to `fct_region_daily` before): 4.5M rows need no
-  aggregate, and `[Capacity factor]` reads that table at 5 minutes anyway. `fct_region_daily`
-  stays for the page's long ranges and for `fct_summary_daily`'s price.
-  "A time of day is asked for" is written once, in a hidden measure (`[Reads 5 minutes]`):
-  any column of `dim_time` filtered or grouped, or a column of `fct_summary` itself
-  filtered. So filters go through the dimensions. What the switch is worth is timed at every
-  deploy: `check_model.py` asks the whole history by year and fuel from each table.
-  2026-10-05, run 37319760193: 0.43 s from the daily table, 1.9 s from the 5-minute one,
-  the same total. So it stays; it is worth removing if that gap closes.
+  `fct_summary` alone when one is; `[Average price]`, `[Demand MWh]`, `[Net interchange MW]`
+  and `[Hours]` do the same over `fct_region_daily` (a day there is 288 intervals).
+  "A time of day is asked for" is written once per fact, in a hidden measure
+  (`[Reads 5 minutes]`, `[Reads 5 minutes regional]`): any column of `dim_time` filtered or
+  grouped, or a column of the fact itself filtered. So filters go through the dimensions.
+  **The switch is not there for VertiPaq alone: it is what lets the browser call the same
+  measure over a long range**, where it cannot hold the 5-minute rows. For a few hours on
+  2026-10-05 the regional measures read `fct_region` alone, on the argument that 4.5M rows
+  need no aggregate in VertiPaq; that was judged by one client and undone the same day.
+  What the switch is worth in Power BI is timed at every deploy (`check_model.py`, the whole
+  history by year and fuel from each table): 0.43 s from the daily table, 1.9 s from the
+  5-minute one, the same total (run 37319760193).
   For the number to be the same from either table, the daily table stores the day's sums of
   what the 5-minute measure sums: `output_mwh`, `charging_mwh`, `revenue`. Its `mwh` (net)
-  and `price` (the day's average) are the dashboard's long-range figures, which are not the
-  same numbers (a battery's day nets out, a day is priced at its average) and are not
-  measures of this model. The hour-of-day tables are not switched to: `[Output MWh hourly]`,
-  `[Average MW at hour]` and `[Price at hour]` name them.
+  and `price` (the day's average) are not the same numbers (a battery's day nets out, a day
+  is priced at its average) and no measure reads them: they were the page's long-range
+  figures until 2026-10-05, and Analyze's SQL still lists them. The hour-of-day tables are
+  not switched to: `[Output MWh hourly]`, `[Average MW at hour]` and `[Price at hour]` name
+  them, as `[Negative price days share]`, `[Lowest daily price]` and `[Average MWh a day]`
+  name the daily tables: a share of days is not a share of intervals.
 - **Rooftop at 5 minutes is a measure**, `[Rooftop MW]`: only the half-hourly estimate is
   stored, and the measure draws the straight line between two consecutive half hours
   (nothing across a missing one). The newest value is not held forward: that is the chart's.
@@ -545,7 +583,7 @@ they are what these tables are built from.
 | dim_region | mart | incremental insert-only merge on Region — for Power BI: the regions of `dim_duid`, the one filter that reaches units, regional data and rooftop |
 | dim_time | mart | incremental insert-only merge on time — the 288 5-minute times of a day (`time` HHMM, `minute`, `hour`): the time axis of the 5-minute facts, and what the measures look at to choose a table |
 | fct_region_daily | mart | incremental insert-only merge on (REGIONID, date) — the plain average of a day's 288 intervals of `fct_region` (price, demand, net interchange); a day is written once it has all 288 |
-| fct_summary_daily | mart | incremental insert-only merge on (DUID, date) — `fct_summary` per unit and day, written once `fct_scada` holds the day whole (`macros/whole_days.sql`), `process_limit` days per run, newest first: `output_mwh`, `charging_mwh`, `revenue` (the sums the measures switch to) and `mwh` net with the region's daily `price` (the dashboard's long-range figures). Inner join to `fct_region_daily` |
+| fct_summary_daily | mart | incremental insert-only merge on (DUID, date) — `fct_summary` per unit and day, written once `fct_scada` holds the day whole (`macros/whole_days.sql`), `process_limit` days per run, newest first: `output_mwh`, `charging_mwh`, `revenue` (the sums the measures switch to) and `mwh` net with the region's daily `price` (no measure reads those two; Analyze lists them). Inner join to `fct_region_daily` |
 | dim_month | mart | incremental insert-only merge on month — the whole months of `fct_summary_daily` with their number of days |
 | fct_summary_hourly | mart | incremental insert-only merge on (DUID, month, hour) — output energy per unit, whole month and hour of day (`time // 100`), 12 months per run |
 | fct_region_hourly | mart | incremental insert-only merge on (REGIONID, month, hour) — average price per region, whole month and hour of day, with the number of intervals averaged |

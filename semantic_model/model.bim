@@ -3,7 +3,7 @@
   "model": {
     "culture": "en-US",
     "defaultPowerBIDataSourceVersion": "powerBI_V3",
-    "description": "Australia's National Electricity Market, over the Iceberg tables of the nem lakehouse, in Direct Lake: nothing is imported and no SQL endpoint is involved. Deployed by scripts/deploy_model.py, which writes the workspace and the lakehouse into the DirectLake expression. A quantity is one measure whatever the grain: the measures of fct_summary pick the daily table or the 5-minute one themselves, by whether a time of day is asked for. The measures of fct_region read it alone: it is small.",
+    "description": "Australia's National Electricity Market, over the Iceberg tables of the nem lakehouse, in Direct Lake: nothing is imported and no SQL endpoint is involved. Deployed by scripts/deploy_model.py, which writes the workspace and the lakehouse into the DirectLake expression. A quantity is one measure whatever the grain and whoever asks: the measures of fct_summary and fct_region pick the daily table or the 5-minute one themselves, by whether a time of day is asked for. Power BI and the dashboard's page (through its compiler) call the same measures.",
     "expressions": [
       {
         "name": "DirectLake",
@@ -182,6 +182,26 @@
             "summarizeBy": "none"
           }
         ],
+        "measures": [
+          {
+            "name": "Registered units",
+            "formatString": "#,##0",
+            "expression": "COUNTROWS(dim_duid)",
+            "description": "The units in the selection, whether they ran or not. For the ones that did, [Units]."
+          },
+          {
+            "name": "Registered MW",
+            "formatString": "#,##0",
+            "expression": "SUM(dim_duid[RegCapMW])",
+            "description": "Registered generating capacity of the units in the selection, MW."
+          },
+          {
+            "name": "Storage MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(dim_duid[StorageMWh])",
+            "description": "Storage of the batteries in the selection, MWh."
+          }
+        ],
         "partitions": [
           {
             "name": "dim_duid",
@@ -342,7 +362,7 @@
             "formatString": "0.0",
             "expression": [
               "VAR late = EXCEPT(VALUES(dim_calendar[date]), CALCULATETABLE(VALUES(fct_summary_daily[date]), REMOVEFILTERS(dim_duid), REMOVEFILTERS(dim_region)))",
-              "VAR hours = COUNTROWS(SUMMARIZE(fct_region, fct_region[date], fct_region[time])) / 12",
+              "VAR hours = [Hours]",
               "VAR capacity =",
               "    IF([Reads 5 minutes],",
               "        CALCULATE(SUM(dim_duid[RegCapMW]), SUMMARIZE(fct_summary, dim_duid[DUID])),",
@@ -350,7 +370,7 @@
               "            DISTINCT(UNION(SUMMARIZE(fct_summary_daily, dim_duid[DUID]), CALCULATETABLE(SUMMARIZE(fct_summary, dim_duid[DUID]), late)))))",
               "RETURN DIVIDE(100 * CALCULATE([Generation MWh], dim_duid[RegCapMW] > 0), capacity * hours)"
             ],
-            "description": "Energy over what the registered capacity could make in the hours of the selection, %. The capacity is that of the units with output or charging in the selection (found in the daily table when no time of day is asked for); a unit without a registered capacity is left out. The hours are counted in fct_region."
+            "description": "Energy over what the registered capacity could make in the hours of the selection, %. The capacity is that of the units with output or charging in the selection (found in the daily table when no time of day is asked for); a unit without a registered capacity is left out. The hours are [Hours]."
           },
           {
             "name": "Generation MW",
@@ -363,6 +383,36 @@
             "formatString": "#,##0",
             "expression": "[Generation MW] + [Rooftop MW]",
             "description": "Units and rooftop solar together, in MW at a 5-minute time; rooftop is worked out between its half hours by [Rooftop MW]. Slice it by region, date and time, not by a unit's attribute: rooftop has none."
+          },
+          {
+            "name": "Charging MW",
+            "formatString": "#,##0",
+            "expression": "SUMX(fct_summary, MIN(fct_summary[mw], 0))",
+            "description": "What the batteries are taking in MW at a 5-minute time, negative, always from fct_summary: read it at one time, like [Generation MW]. For energy use [Charging MWh]."
+          },
+          {
+            "name": "Average MW",
+            "formatString": "#,##0.0",
+            "expression": "AVERAGE(fct_summary[mw])",
+            "description": "A unit's average MW over the 5-minute intervals it ran in, always from fct_summary: an interval at 0 MW has no row and is not counted. Read it per unit."
+          },
+          {
+            "name": "Days with output",
+            "formatString": "#,##0",
+            "expression": "DISTINCTCOUNT(fct_summary[date])",
+            "description": "The days on which the selection has output or charging, always from fct_summary. At one time of day, what an average day divides by."
+          },
+          {
+            "name": "Price seen",
+            "formatString": "$#,##0.00",
+            "expression": "AVERAGE(fct_summary[price])",
+            "description": "The plain average of the price on the units' rows, $/MWh, always from fct_summary: the price the units in the selection saw while they ran, not weighted by their output."
+          },
+          {
+            "name": "Charging price",
+            "formatString": "$#,##0.00",
+            "expression": "DIVIDE(SUMX(fct_summary, MIN(fct_summary[mw], 0) * fct_summary[price]), SUMX(fct_summary, MIN(fct_summary[mw], 0)))",
+            "description": "The price the charging paid, $/MWh: the 5-minute prices of the unit's region weighted by what it took. Always from fct_summary. Next to [Capture price], a battery's spread."
           }
         ],
         "partitions": [
@@ -554,22 +604,80 @@
         ],
         "measures": [
           {
+            "name": "Reads 5 minutes regional",
+            "isHidden": true,
+            "expression": "ISCROSSFILTERED(dim_time[time]) || ISFILTERED(fct_region[REGIONID]) || ISFILTERED(fct_region[date]) || ISFILTERED(fct_region[time]) || ISFILTERED(fct_region[price]) || ISFILTERED(fct_region[demand]) || ISFILTERED(fct_region[net_interchange]) || ISFILTERED(fct_region[wind_available]) || ISFILTERED(fct_region[wind_curtailed]) || ISFILTERED(fct_region[solar_available]) || ISFILTERED(fct_region[solar_curtailed])",
+            "description": "Whether the measures of fct_region have to read it rather than its daily table: a time of day is asked for (any column of dim_time is filtered or grouped), or a column of fct_region itself is filtered. Hidden: it is the one place the rule is written."
+          },
+          {
             "name": "Average price",
             "formatString": "$#,##0.00",
-            "expression": "AVERAGE(fct_region[price])",
-            "description": "The plain average of the 5-minute regional prices in the selection, $/MWh. Always from fct_region: it is small enough to read whole, so this measure does not switch to the daily table."
+            "expression": [
+              "VAR late = EXCEPT(CROSSJOIN(VALUES(dim_calendar[date]), VALUES(dim_region[Region])), SUMMARIZE(fct_region_daily, dim_calendar[date], dim_region[Region]))",
+              "RETURN",
+              "    IF([Reads 5 minutes regional],",
+              "        AVERAGE(fct_region[price]),",
+              "        DIVIDE(",
+              "            288 * SUM(fct_region_daily[price]) + CALCULATE(SUM(fct_region[price]), late),",
+              "            288 * COUNT(fct_region_daily[price]) + CALCULATE(COUNT(fct_region[price]), late)))"
+            ],
+            "description": "The plain average of the 5-minute regional prices in the selection, $/MWh. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise fct_region_daily (a day there is 288 intervals), plus fct_region for the days it does not hold yet. The daily table is what lets a reader that cannot hold years of 5-minute rows, a browser, ask the same measure over a long range."
           },
           {
             "name": "Demand MWh",
             "formatString": "#,##0",
-            "expression": "SUM(fct_region[demand]) / 12",
-            "description": "Operational demand as energy; rooftop solar is not in it. A 5-minute row is MW / 12. Always from fct_region."
+            "expression": [
+              "VAR late = EXCEPT(CROSSJOIN(VALUES(dim_calendar[date]), VALUES(dim_region[Region])), SUMMARIZE(fct_region_daily, dim_calendar[date], dim_region[Region]))",
+              "RETURN",
+              "    IF([Reads 5 minutes regional],",
+              "        SUM(fct_region[demand]) / 12,",
+              "        24 * SUM(fct_region_daily[demand]) + CALCULATE(SUM(fct_region[demand]), late) / 12)"
+            ],
+            "description": "Operational demand as energy; rooftop solar is not in it. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise fct_region_daily (a day there is 288 intervals), plus fct_region for the days it does not hold yet."
           },
           {
             "name": "Net interchange MW",
             "formatString": "#,##0",
-            "expression": "AVERAGE(fct_region[net_interchange])",
-            "description": "Average net flow out of a region, MW; positive is exporting. Read it per region. Always from fct_region."
+            "expression": [
+              "VAR late = EXCEPT(CROSSJOIN(VALUES(dim_calendar[date]), VALUES(dim_region[Region])), SUMMARIZE(fct_region_daily, dim_calendar[date], dim_region[Region]))",
+              "RETURN",
+              "    IF([Reads 5 minutes regional],",
+              "        AVERAGE(fct_region[net_interchange]),",
+              "        DIVIDE(",
+              "            288 * SUM(fct_region_daily[net_interchange]) + CALCULATE(SUM(fct_region[net_interchange]), late),",
+              "            288 * COUNT(fct_region_daily[net_interchange]) + CALCULATE(COUNT(fct_region[net_interchange]), late)))"
+            ],
+            "description": "Average net flow out of a region, MW; positive is exporting. Read it per region. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise fct_region_daily (a day there is 288 intervals), plus fct_region for the days it does not hold yet."
+          },
+          {
+            "name": "Demand MW",
+            "formatString": "#,##0",
+            "expression": "IF(COUNT(fct_region[demand]) = COUNTROWS(fct_region), SUM(fct_region[demand]))",
+            "description": "Operational demand in MW at a 5-minute time, always from fct_region: read it at one time, it is a sum over the regions and the intervals in the selection. Blank when a region in the selection has no demand yet, so that it is left out and not undercounted. For energy use [Demand MWh]."
+          },
+          {
+            "name": "Hours",
+            "formatString": "#,##0.0",
+            "expression": [
+              "VAR late = EXCEPT(VALUES(dim_calendar[date]), VALUES(fct_region_daily[date]))",
+              "RETURN",
+              "    IF([Reads 5 minutes regional],",
+              "        COUNTROWS(SUMMARIZE(fct_region, fct_region[date], fct_region[time])) / 12,",
+              "        24 * DISTINCTCOUNT(fct_region_daily[date]) + CALCULATE(COUNTROWS(SUMMARIZE(fct_region, fct_region[date], fct_region[time])), late) / 12)"
+            ],
+            "description": "The hours the selection holds data for: its 5-minute intervals / 12. What a capacity factor divides by, and / 24 the days. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise 24 hours per day of fct_region_daily, plus the intervals of fct_region on the days it does not hold yet."
+          },
+          {
+            "name": "Negative price share",
+            "formatString": "0.0",
+            "expression": "100 * AVERAGEX(fct_region, IF(fct_region[price] < 0, 1, 0))",
+            "description": "Share of the 5-minute intervals with a price below zero, %, always from fct_region. Read it per region."
+          },
+          {
+            "name": "Lowest price",
+            "formatString": "$#,##0.00",
+            "expression": "MIN(fct_region[price])",
+            "description": "The lowest 5-minute price in the selection, $/MWh, always from fct_region."
           },
           {
             "name": "Regional wind curtailed MWh",
@@ -929,6 +1037,14 @@
             "formatString": "$#,##0.00"
           }
         ],
+        "measures": [
+          {
+            "name": "Average MWh a day",
+            "formatString": "#,##0.0",
+            "expression": "AVERAGE(fct_summary_daily[output_mwh])",
+            "description": "A unit's average output per day, MWh, over the whole days it ran in. Names this table, like the measures of the tables by month. Read it per unit."
+          }
+        ],
         "partitions": [
           {
             "name": "fct_summary_daily",
@@ -944,7 +1060,7 @@
       },
       {
         "name": "fct_region_daily",
-        "description": "Price, demand and net interchange per region and day: the plain average of the day's 288 intervals, whole days only. What a chart over a long range reads, and where fct_summary_daily takes its price. No measure reads it: the measures of fct_region read fct_region.",
+        "description": "Price, demand and net interchange per region and day: the plain average of the day's 288 intervals, whole days only. The measures of fct_region read this table when no time of day is asked for; it is also where fct_summary_daily takes its price.",
         "sourceLineageTag": "[mart].[fct_region_daily]",
         "columns": [
           {
@@ -990,6 +1106,20 @@
             "sourceLineageTag": "net_interchange",
             "summarizeBy": "none",
             "formatString": "#,##0.00"
+          }
+        ],
+        "measures": [
+          {
+            "name": "Negative price days share",
+            "formatString": "0.0",
+            "expression": "100 * AVERAGEX(fct_region_daily, IF(fct_region_daily[price] < 0, 1, 0))",
+            "description": "Share of the whole days whose average price was below zero, %. Not [Negative price share], which counts 5-minute intervals: this one names the daily table. Read it per region."
+          },
+          {
+            "name": "Lowest daily price",
+            "formatString": "$#,##0.00",
+            "expression": "MIN(fct_region_daily[price])",
+            "description": "The lowest daily average price in the selection, $/MWh. Names the daily table."
           }
         ],
         "partitions": [

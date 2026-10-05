@@ -28,8 +28,10 @@
 //                        the `to` side, with the columns of `to`
 //   measures             nothing of their own: a measure is DAX, written out where a query
 //                        names it ([Capture price]), so a CALCULATE around it reaches its
-//                        aggregates. Two fixed cases: [Rooftop MW], and the measures that
-//                        pick their table
+//                        aggregates. A measure that picks its table (5 minutes or days)
+//                        picks it here as in Power BI, from what the query filters. Fixed
+//                        cases: [Rooftop MW]; the days the daily table lacks (none); and
+//                        [Units] off the daily table
 //
 // Part 2, the queries (toSQL). A DAX query becomes one SELECT over those views:
 //   SUMMARIZECOLUMNS, ROW             an aggregate; ROLLUPADDISSUBTOTAL is GROUPING SETS
@@ -40,6 +42,8 @@
 //   TOPN, ORDER BY                    ORDER BY .. LIMIT
 //   UNION, a table VAR                UNION ALL, a CTE; a scalar VAR is a scalar subquery
 //   CALCULATE(measure, filter)        the aggregates of the measure with FILTER (WHERE ..)
+//   ISFILTERED, ISCROSSFILTERED       true or false, from the columns the query names; an IF
+//                                     on one keeps the side it picks
 //   [Name]                            a column of the table being built, else a measure
 // Which view a query reads is decided here, from the tables it names: `fct_summary` alone
 // reads v_fct_summary, with a column of `dim_duid` the relationship's view. So a query that
@@ -189,9 +193,37 @@ const ROOFTOP_5MIN = 'fct_rooftop_5min';
 TABLES.set(ROOFTOP_5MIN, new Map(['REGIONID', 'date', 'time', 'mw'].map(n => [n, TABLES.get('fct_rooftop').get(n)])));
 RELS.push(...RELS.filter(r => r.from === 'fct_rooftop').map(r => ({ ...r, view: null, from: ROOFTOP_5MIN })));
 // A measure whose DAX picks its table: IF([Reads 5 minutes], the 5-minute table, the daily
-// one). Here it is the first: the page filters the fact's own date column, which is what
-// makes [Reads 5 minutes] true in DAX, and names the daily table itself when it wants it.
-const READS_5_MINUTES = /^Reads 5 minutes/;
+// one), where [Reads 5 minutes] asks whether a column is filtered (ISFILTERED,
+// ISCROSSFILTERED). That is answered from the query, as the DAX says: the columns its keys
+// and filters name around the measure (`scope`). So the page picks the side the way a
+// report does: it filters the fact's own date for 5 minutes, dim_calendar's for the days.
+// TREATAS filters the columns it is put on, not the ones its table is made of.
+function colsIn(e, out = []) {
+  if (!e || typeof e !== 'object') return out;
+  if (e.k === 'col') out.push(e);
+  else if (isCall(e, 'TREATAS')) e.args.slice(1).forEach(x => colsIn(x, out));
+  else for (const x of [e.e, e.l, e.r, e.body, ...(e.args ?? []), ...(e.list ?? []), ...(e.items ?? []), ...(e.defs ?? [])]) colsIn(x, out);
+  return out;
+}
+// What a condition is, when the query alone says: true, false, or undefined.
+function known(e, cx) {
+  if (e.k === 'paren') return known(e.e, cx);
+  if (e.k === 'ref') return MEASURE_DAX.has(e.name) && !cx.ref?.(e.name) ? known(measure(e.name), cx) : undefined;
+  if (e.k === 'bin' && e.op === '||') {
+    const l = known(e.l, cx), r = known(e.r, cx);
+    return l === true || r === true ? true : l === false && r === false ? false : undefined;
+  }
+  if (isCall(e, 'ISFILTERED') || isCall(e, 'ISCROSSFILTERED')) {
+    const c = e.args[0], whole = isCall(e, 'ISCROSSFILTERED');
+    return cx.scope.some(cols => cols.some(x => x.table === c.table && (whole || x.name === c.name)));
+  }
+  return undefined;
+}
+// The days the daily table does not hold yet, which a measure adds from the 5-minute table
+// (`late`, an EXCEPT): none here. The page reads the daily tables on the days they hold
+// (its `wholeDays` filter), which is what makes that set empty in DAX too. A second fact in
+// the same SELECT is not something this compiler writes.
+const isNone = (x, cx) => x.k === 'name' && !!cx.names.get(x.name)?.lazy && isCall(cx.names.get(x.name).lazy, 'EXCEPT');
 
 const JOINS = RELS.filter(r => r.view).map(r => ({ view: r.view, tables: new Set([r.from, r.to]) }));
 function viewOf(tables) {
@@ -292,7 +324,14 @@ function call(e, cx) {
     case 'COUNT': return agg(`COUNT(${arg(0).s})`, 'int');
     case 'DISTINCTCOUNT': return agg(`COUNT(DISTINCT ${arg(0).s})`, 'int');
     case 'MIN': case 'MAX': {
-      if (a.length === 2) return atom(`${fn === 'MAX' ? 'GREATEST' : 'LEAST'}(${arg(0).s}, ${arg(1).s})`, 'double');
+      if (a.length === 2) {
+        // MAX(column, 0) under a SUMX: the column as DOUBLE. A sum of fixed decimals adds
+        // 128-bit integers, and two of them (output and charging) made the generation
+        // chart's query twice as slow at 30 days; as doubles it is faster than one was
+        // (2026-10-06). The result is cast to DOUBLE for the browser either way.
+        const dbl = x => x.t === 'double' && /^t\.\w+$/.test(x.s) ? `CAST(${x.s} AS DOUBLE)` : x.s;
+        return atom(`${fn === 'MAX' ? 'GREATEST' : 'LEAST'}(${dbl(arg(0))}, ${dbl(arg(1))})`, 'double');
+      }
       const x = arg(0);
       return agg(`${fn}(${x.s})`, x.t);
     }
@@ -302,6 +341,12 @@ function call(e, cx) {
     case 'MINX': case 'MAXX': { over(a[0]); const x = arg(1); return agg(`${fn.slice(0, 3)}(${x.s})`, x.t); }
     case 'CONCATENATEX': over(a[0]); return agg(`string_agg(${arg(1).s}, ${arg(2).s})`, 'string');
     case 'COUNTROWS': {
+      // [Units] off the daily table: its units, and those of the days it lacks (none).
+      if (isCall(a[0], 'DISTINCT') && isCall(a[0].args[0], 'UNION')) {
+        const [first, ...rest] = a[0].args[0].args;
+        if (isCall(first, 'VALUES') && rest.every(x => isCall(x, 'CALCULATETABLE') && x.args.slice(1).some(f => isNone(f, cx))))
+          return agg(`COUNT(DISTINCT ${scalar(first.args[0], cx).s})`, 'int');
+      }
       if (isCall(a[0], 'SUMMARIZE')) {
         over(a[0].args[0]);
         const cols = a[0].args.slice(1).map(c => scalar(c, cx).s);
@@ -311,8 +356,11 @@ function call(e, cx) {
       return agg('COUNT(*)', 'int');
     }
     case 'DIVIDE': return { s: `${par(arg(0), P.mul)} / NULLIF(${arg(1).s}, 0)`, t: 'double', p: P.mul };
+    case 'ISFILTERED': case 'ISCROSSFILTERED': return atom(known(e, cx) ? 'TRUE' : 'FALSE', 'bool');
     case 'IF': {
-      if (a[0].k === 'ref' && READS_5_MINUTES.test(a[0].name)) return arg(1);
+      // A condition the query settles keeps one side; the other is never translated.
+      const is = known(a[0], cx);
+      if (is != null) return is ? arg(1) : a[2] ? arg(2) : atom('NULL', null);
       const v = arg(1);
       return atom(`${when([[arg(0).s, v.s]])}${a[2] ? ` ELSE ${arg(2).s}` : ''} END`, v.t);
     }
@@ -340,8 +388,11 @@ function call(e, cx) {
       return atom(`CAST(date_trunc('month', ${scalar(y.args[0], cx).s}) AS DATE)`, 'date');
     }
     case 'CALCULATE': {
+      if (a.slice(1).some(f => isNone(f, cx))) return atom('0', 'double');
       const filters = a.slice(1).map(x => par(scalar(x, { ...cx, filter: null }), P.and));
-      return scalar(a[0], { ...cx, filter: [cx.filter, ...filters].filter(Boolean).join(' AND ') });
+      cx.scope.push(a.slice(1).flatMap(f => colsIn(f)));
+      try { return scalar(a[0], { ...cx, filter: [cx.filter, ...filters].filter(Boolean).join(' AND ') }); }
+      finally { cx.scope.pop(); }
     }
   }
   throw new Error(`DAX: ${e.fn} is not supported`);
@@ -359,7 +410,7 @@ const wrap = r => rel({ from: `(${select(r, true)})`, cols: r.cols.map(derived) 
 
 function emit(e, r, q, names = q.names) {
   const state = { agg: false };
-  const x = scalar(e, { state, names, filter: null,
+  const x = scalar(e, { state, names, filter: null, scope: q.scope,
     touch: t => r.tables.add(t),
     col(table, name) {
       const c = column(table, name);
@@ -378,18 +429,31 @@ function emit(e, r, q, names = q.names) {
 }
 
 // A filter argument of CALCULATETABLE or CALCULATE, as a condition on the rows read.
+// TREATAS(VALUES(table[column]), a dimension's key) is noted as such: put on the table it
+// was taken from, it says nothing (see `says`).
 function condition(f, r, q) {
   if (!isCall(f, 'TREATAS')) return par(emit(f, r, q), P.and);
-  const values = table(f.args[0], q);
+  const [from, to] = f.args;
+  const values = table(from, q);
   values.distinct = false;   // IN does not need it
-  return `${emit(f.args[1], r, q).s} IN (${select(values, true)})`;
+  const sql = `${emit(to, r, q).s} IN (${select(values, true)})`;
+  const own = isCall(from, 'VALUES') && from.args[0].k === 'col' && to.k === 'col' && f.args.length === 2;
+  return own ? { sql, table: from.args[0].table, column: from.args[0].name, dim: to.table, name: to.name } : sql;
 }
+// A condition as SQL, or nothing when it is a table's own values put back on its own key:
+// the page's `wholeDays` (the days the daily table holds) on a query that reads the daily
+// table. As a semi-join it cost 100 ms a query (2026-10-05) to keep every row.
+const says = (w, r) => typeof w === 'string' ? w
+  : !r.from && RELS.some(x => x.from === w.table && x.fromColumn === w.column && x.to === w.dim && x.toColumn === w.name && r.tables.has(x.from)) ? null
+  : w.sql;
 
 // The value of an expression on its own, as a scalar subquery: a VAR that is not a table.
 function subquery(e, q) {
   const r = rel({ group: [] });
   const [inner, ...filters] = isCall(e, 'CALCULATE') ? e.args : [e];
+  q.scope.push(filters.flatMap(f => colsIn(f)));
   const x = emit(inner, r, q);
+  q.scope.pop();
   for (const f of filters) r.where.push(condition(f, r, q));
   r.cols = [{ sql: x.s, type: x.t, p: x.p }];
   return atom(`(${select(r, true)})`, x.t);
@@ -452,7 +516,9 @@ function table(e, q) {
       for (const f of flags) f.sql = `GROUPING(${key(f.first).sql}) = 1`;
       r.group = [...keys, ...rollup].map(c => c.sql);
       if (rollup.length) r.sets = `(${r.group.join(', ')}), (${keys.map(c => c.sql).join(', ')})`;
+      q.scope.push([...plain, ...rolled]);
       r.cols = [...keys, ...rollup, ...flags, ...pairs(i).map(([n, x]) => named(n, emit(x, r, q)))];
+      q.scope.pop();
       return r;
     }
     case 'ROW': {
@@ -466,7 +532,9 @@ function table(e, q) {
       return r;
     }
     case 'CALCULATETABLE': {
+      q.scope.push(a.slice(1).flatMap(f => colsIn(f)));
       const r = table(a[0], q);
+      q.scope.pop();
       for (const f of a.slice(1)) r.where.push(condition(f, r, q));
       return r;
     }
@@ -517,9 +585,10 @@ function select(r, raw) {
       : c.type === 'double' ? `${/^t\.\w+$/.test(c.sql) ? c.sql : `(${c.sql})`}::DOUBLE` : c.sql;
     return !c.name || s === `t.${c.name}` ? s : `${s} AS ${c.name}`;
   };
+  const where = r.where.map(w => says(w, r)).filter(Boolean);
   const parts = [
     `SELECT ${r.distinct ? 'DISTINCT ' : ''}${r.cols.map(out).join(', ')}`,
-    r.where.length && `WHERE ${r.where.join(' AND ')}`,
+    where.length && `WHERE ${where.join(' AND ')}`,
     r.group?.length && (r.sets ? `GROUP BY GROUPING SETS (${r.sets})` : `GROUP BY ${r.group.join(', ')}`),
     r.having.length && `HAVING ${r.having.join(' AND ')}`,
     r.order.length && `ORDER BY ${r.order.map(o => o.name + (o.desc ? ' DESC' : '')).join(', ')}`,
@@ -538,7 +607,7 @@ export function toSQL(dax) {
   let sql = _translated.get(dax);
   if (sql) return sql;
   const { e, order } = parse(dax).query();
-  const q = { names: new Map(), ctes: [] };
+  const q = { names: new Map(), ctes: [], scope: [] };
   const r = table(e, q);
   if (order.length) r.order = order.map(o => ({ name: sortKey(o.e, r), desc: o.desc }));
   sql = (q.ctes.length ? `WITH ${q.ctes.join(', ')} ` : '') + select(r, false);
