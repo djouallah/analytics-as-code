@@ -457,7 +457,7 @@
         ],
         "measures": [
           {
-            "name": "Price",
+            "name": "Average price",
             "formatString": "$#,##0.00",
             "expression": "AVERAGE(fct_region[price])",
             "description": "The plain average of the regional prices in the selection, $/MWh."
