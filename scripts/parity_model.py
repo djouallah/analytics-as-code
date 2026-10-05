@@ -196,11 +196,12 @@ def main():
 
     # Not a failure: how far the dashboard's 5-minute rooftop capture price is from the model's.
     five = {(str(r[0]), r[1]): r[2] for r in con.execute(ROOFTOP_CAPTURE_5MIN.format(days=days_sql)).fetchall()}
-    gaps = [abs(five[(k[1], k[2])] - v) / abs(v) for k, v in got.items()
-            if k[0] == "region" and k[3] == ROOFTOP_CAPTURE and five.get((k[1], k[2])) and v]
+    # In $/MWh, not in percent: a day's capture price can sit near zero.
+    gaps = [abs(five[(k[1], k[2])] - v) for k, v in got.items()
+            if k[0] == "region" and k[3] == ROOFTOP_CAPTURE and five.get((k[1], k[2])) is not None]
     if gaps:
         print(f"method difference, not compared: [{ROOFTOP_CAPTURE}] against the dashboard's 5-minute figure, "
-              f"per day and region: mean {100 * sum(gaps) / len(gaps):.1f}%, largest {100 * max(gaps):.1f}%")
+              f"per day and region: mean {sum(gaps) / len(gaps):.2f} $/MWh apart, largest {max(gaps):.2f} $/MWh")
 
     print(f"{len(set(expected) | set(got)) - len(bad)} values equal, {len(bad)} different")
     return 1 if bad or not expected else 0
