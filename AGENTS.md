@@ -20,9 +20,12 @@
 [`dbt-fabric`](https://github.com/djouallah/dbt-fabric) runs the same AEMO models on other
 engines: `models/aemo/dwh/` (Fabric Warehouse) and `models/aemo/spark/`. It has no
 DuckDB/Iceberg variant, so ports are by idea, not by file (`macros/new_source_files.sql` there
-is the counterpart of `macros/pending_archive_files.sql` here). This repo has no
-`fct_summary`: the dashboard joins facts to `dim_duid`/prices client-side in DuckDB-WASM, and
-`scripts/cache_catalog.py` exports, pre-aggregates and adds the rooftop pseudo-units.
+is the counterpart of `macros/pending_archive_files.sql` here). The one model that is the
+same file is `fct_summary`, taken from the iceberg tree of
+[`fabric-medallion-dbt-community`](https://github.com/djouallah/fabric-medallion-dbt-community)
+(dbt-duckdb on this same kind of catalog). The dashboard does not read it yet: it joins facts
+to `dim_duid`/prices client-side in DuckDB-WASM, and `scripts/cache_catalog.py` exports,
+pre-aggregates and adds the rooftop pseudo-units.
 **Look there first for fixes, and port them rather than diverging.** Worth knowing: there,
 downloading lives outside dbt and the log is read straight from parquet, not from an Iceberg
 table.
@@ -411,7 +414,31 @@ those days lighter and leaves them out when units are picked. Only units on the 
 registration list have a classification, so semi-scheduled farms that have left the list are
 not counted. The Insights page reads both for any range.
 
-## Models (10)
+## The Power BI model (in progress, 2026-10-05)
+The core of the project is the Iceberg catalog and a semantic model. Three consumers are
+meant to read it: the two DuckDB-WASM hosts above, and Power BI in Direct Lake. The owner's
+order: keep the existing tables and the dashboard as they are, add the tables Power BI needs
+next to them, deploy the model and check it, and only then port `compiler.js` and the cache
+to it (`cache_catalog.py` ends as a copy with no rule of its own).
+- `dashboard/semantic/nem.SemanticModel/` is the model, a Fabric item (`model.bim`,
+  `definition.pbism`, `.platform`): every table is one Direct Lake partition on a table of
+  the `nem` lakehouse, reached through OneLake (no SQL endpoint). Fabric shows Direct Lake
+  the Iceberg tables as Delta on its own. `{WS_ID}`/`{LH_ID}` in the `DirectLake` expression
+  are placeholders. It is **not** the dashboard's model: that is still `semantic/model.bim`.
+  For now it holds `dim_calendar` and `dim_duid` only.
+- `deploy_model.yml` (dispatch only) publishes it into the catalog's workspace with
+  `scripts/deploy_model.py` (fabric-cicd, as the sibling does) and then runs
+  `scripts/check_model.py`: a refresh, and a row count per table in DAX. First run,
+  2026-10-05: published, refresh completed; the DAX call (`executeQueries`) answered 401
+  `PowerBINotAuthorizedException` to the service principal that owns the model. Cause not
+  established.
+- `fct_summary` (schema `mart`, tag `powerbi`) is what Power BI reads for generation: one
+  row per unit and 5 minutes with `mw` and the `price` of the unit's region, so a report
+  joins no two facts. `process_data.yml` builds it in a second step that cannot fail the
+  job. Rooftop solar gets a table of its own there, not pseudo-units; a value that is only
+  held or interpolated for drawing is the client's, never stored.
+
+## Models (11)
 | Model | Schema | Materialization |
 |-------|--------|-----------------|
 | stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
@@ -421,6 +448,7 @@ not counted. The Insights page reads both for any range.
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
 | fct_interconnector_today | landing | incremental insert-only merge (by file) — the INTERCONNECTORRES rows of the same archived DispatchIS files as fct_price_today **and, despite the name, the whole history**: AEMO's monthly MMSDM archive of the same record, 2018-01 → 2026-08 (source_type `interconnector_monthly`, a finite backfill; read with `strict_mode = false`, which the files from 2024-08 need). August 2026 is in both sources, so readers take `ANY_VALUE … GROUP BY`. Exported as `interconnector` in the half-year files; the Flows page plays any range ≤ 30 days |
 | fct_regionsum_today | landing | incremental insert-only merge (by file) — the REGIONSUM rows (v9) of the same files: demand, net interchange (positive = export), regional semi-scheduled UIGF/availability/cleared MW. History's demand/net interchange come from fct_price's DREGION rows |
+| fct_summary | mart | incremental insert-only merge on (date, time, DUID) — the Power BI fact: `fct_scada` joined to `dim_duid` and `fct_price` (inner joins), then the intraday feed after the newest daily interval, for the units the daily files know (`dispatch_duids`). Every run recomputes the dates still in flux; missing keys are added, a stored value is never revised. `rebuild=fct_summary` resets it |
 | fct_rooftop_pv | landing | incremental insert-only merge (by file) — rooftop solar per region and half hour, AEMO's `ROOFTOP_PV_ACTUAL` estimate **kept as published**: the current folder, the monthly MMSDM archive 2018-01 → 2026-08 and the weekly archives after it. The monthly files from 2024-08 swap `QI` and `LASTCHANGED`; the model reads each file's `I` row to tell |
 
 **Rooftop solar reaches the dashboard as pseudo-units, built in the export, not in Iceberg.**

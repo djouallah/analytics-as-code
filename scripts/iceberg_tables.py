@@ -22,4 +22,5 @@ TABLES = [
     "landing.stg_csv_archive_log",
     "landing.fct_price",
     "landing.fct_scada",
+    "mart.fct_summary",
 ]

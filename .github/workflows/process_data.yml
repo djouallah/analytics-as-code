@@ -100,4 +100,12 @@ jobs:
           REBUILD_TABLE: ${{ inputs.rebuild }}
         run: python scripts/rebuild_table.py
       - name: Process data
-        run: dbt run --target prod --profiles-dir .
+        # Everything the dashboard reads. The Power BI tables are the next step.
+        run: dbt run --target prod --profiles-dir . --exclude tag:powerbi
+      - name: Build the Power BI tables
+        # fct_summary, built from the facts above. A step of its own that cannot fail the
+        # job: Import Data only runs after a green Process Data, and the dashboard does not
+        # read these tables. A failure shows as a warning on the run, and in this step's log.
+        continue-on-error: true
+        timeout-minutes: 45
+        run: dbt run --target prod --profiles-dir . --select tag:powerbi || { echo "::warning::the Power BI tables failed to build"; exit 1; }

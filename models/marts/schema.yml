@@ -204,6 +204,34 @@ models:
         tests:
           - not_null
 
+  - name: fct_summary
+    description: The table Power BI reads - one row per unit and 5 minutes, joining its output (mw) to the price of its region, so a report joins no two facts. The daily files where they have landed, the intraday feed after them. Ported from the sibling repos; in schema mart
+    columns:
+      - name: date
+        description: Calendar date of the dispatch interval, NEM time
+        tests:
+          - not_null
+      - name: time
+        description: Time of day as an HHMM integer, 5-minute grain
+      - name: DUID
+        description: Dispatchable Unit Identifier of the generating unit; always one dim_duid has (inner join)
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_duid')
+                field: DUID
+      - name: mw
+        description: Output for the interval (MW), DECIMAL(18,4); negative when a battery charges. Rows at 0 MW are left out
+        tests:
+          - not_null
+      - name: price
+        description: Regional Reference Price of the unit's region for the interval ($/MWh), DECIMAL(18,4)
+        tests:
+          - not_null
+      - name: cutoff
+        description: Newest SETTLEMENTDATE in the facts when the row was written. Provenance only
+
 exposures:
   - name: dashboard_summary
     type: application
