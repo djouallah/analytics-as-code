@@ -82,9 +82,17 @@ def main():
                 fct_summary[date] > newest - 7)
             ORDER BY fct_summary[date]""")
     bad = 0
-    for dax in queries:
-        status, body = call("POST", f"{base}/executeQueries",
-                            {"queries": [{"query": dax}], "serializerSettings": {"includeNulls": True}})
+    for n, dax in enumerate(queries):
+        # A model that was just created cannot read OneLake until its access has propagated:
+        # the first query is asked again for a few minutes before its failure counts.
+        for attempt in range(8 if n == 0 else 1):
+            status, body = call("POST", f"{base}/executeQueries",
+                                {"queries": [{"query": dax}], "serializerSettings": {"includeNulls": True}})
+            if status == 200:
+                break
+            if n == 0 and attempt < 7:
+                print(f"{status} not answering yet: {json.dumps(body)[:300]}; again in 30 s", flush=True)
+                time.sleep(30)
         try:
             for row in body["results"][0]["tables"][0]["rows"]:
                 print(f"{status} {json.dumps(row)}")
