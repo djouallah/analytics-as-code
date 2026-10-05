@@ -9,10 +9,17 @@ model, under its own name, with its own types. What this file decides is only wh
 table goes into, so that a browser downloads what a page needs and no file outgrows what the
 host takes:
   mart_dim.duckdb              the dimensions
-  mart_agg.duckdb              the per-day and per-month tables, whole
+  mart_agg.duckdb              the per-day and per-month tables, whole, and fct_rooftop whole:
+                               it is small, and the daily charts read it over any range, with
+                               no half-year attached (it is in the split files too, so that a
+                               5-minute range does not wait for this file)
   mart_today.duckdb            the newest RECENT_DAYS days of the tables in SPLIT
   mart_<YYYY>_h<N>.duckdb      the same tables, by half-year of `date`
-Rows are written in key order: it is what makes a file small and a range scan cheap.
+Rows are written in an order that makes a file small and a range scan cheap: key order, but
+fct_summary by date, time, price, DUID. Its price is the price of the unit's region, so at
+one time there are five of them: in that order the column is runs and costs nothing, where
+in key order it made a half-year 60% larger (93 MB against 58; 56 MB in this order,
+measured on 2026 H1) and pushed it past what the host takes.
 
 Not deployed yet: copy_mart.yml builds these as a workflow artifact, for the port of the
 dashboard to these tables. cache_catalog.py still builds the files the dashboard reads; the
@@ -36,8 +43,8 @@ DIM = {"dim_duid": "DUID", "dim_calendar": "date", "dim_region": "Region", "dim_
        "dim_month": "month"}
 AGG = {"fct_summary_daily": "DUID, date", "fct_region_daily": "REGIONID, date",
        "fct_summary_hourly": "DUID, month, hour", "fct_region_hourly": "REGIONID, month, hour",
-       "fct_curtailment": "DUID, date"}
-SPLIT = {"fct_summary": "DUID, date, time", "fct_region": "REGIONID, date, time",
+       "fct_curtailment": "DUID, date", "fct_rooftop": "REGIONID, date, time"}
+SPLIT = {"fct_summary": "date, time, price, DUID", "fct_region": "REGIONID, date, time",
          "fct_interconnector": "interconnector, date, time", "fct_rooftop": "REGIONID, date, time"}
 GROUPS = {"dim": DIM, "agg": AGG, "today": SPLIT, "history": SPLIT}
 
