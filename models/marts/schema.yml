@@ -330,6 +330,90 @@ models:
         tests:
           - not_null
 
+  - name: fct_region_daily
+    description: For Power BI and the dashboard's long ranges - price, demand and net interchange per region and day, the plain average of the day's intervals. A day is written once fct_region holds its 288 intervals. In schema mart
+    columns:
+      - name: REGIONID
+        description: NEM region
+        tests:
+          - not_null
+      - name: date
+        description: Calendar date, NEM time
+        tests:
+          - not_null
+      - name: price
+        description: Average Regional Reference Price of the day ($/MWh)
+        tests:
+          - not_null
+      - name: demand
+        description: Average operational demand of the day (MW); the day's energy is demand * 24
+      - name: net_interchange
+        description: Average net flow out of the region (MW); positive = export
+
+  - name: fct_summary_daily
+    description: For Power BI and the dashboard's long ranges - net energy per unit and day, with the day's average price of the unit's region. A day is written once the next-day files hold it whole. In schema mart
+    columns:
+      - name: DUID
+        description: The unit
+        tests:
+          - not_null
+      - name: date
+        description: Calendar date, NEM time
+        tests:
+          - not_null
+      - name: mwh
+        description: The day's net energy (MWh) - a battery's charging is taken off its output
+        tests:
+          - not_null
+      - name: price
+        description: The day's average price of the unit's region ($/MWh), from fct_region_daily
+        tests:
+          - not_null
+
+  - name: fct_summary_hourly
+    description: For Power BI and the dashboard's long ranges - output energy per unit, month and hour of day, whole months only (dim_month). In schema mart
+    columns:
+      - name: DUID
+        description: The unit
+        tests:
+          - not_null
+      - name: month
+        description: The month's first day
+        tests:
+          - not_null
+      - name: hour
+        description: Hour of day, 0-23, as time // 100 (the interval ending 14:00 is hour 14)
+        tests:
+          - not_null
+      - name: mwh
+        description: Output energy at that hour over the month (MWh); charging is left out
+        tests:
+          - not_null
+
+  - name: fct_region_hourly
+    description: For Power BI and the dashboard's long ranges - average price per region, month and hour of day, whole months only (dim_month). In schema mart
+    columns:
+      - name: REGIONID
+        description: NEM region
+        tests:
+          - not_null
+      - name: month
+        description: The month's first day
+        tests:
+          - not_null
+      - name: hour
+        description: Hour of day, 0-23, as time // 100
+        tests:
+          - not_null
+      - name: price
+        description: Plain average of the month's prices at that hour ($/MWh)
+        tests:
+          - not_null
+      - name: intervals
+        description: How many intervals were averaged - the weight when months are combined
+        tests:
+          - not_null
+
 exposures:
   - name: dashboard_summary
     type: application

@@ -113,8 +113,23 @@ EXPECTED = {
           GROUP BY ALL
         ) hp ON hp.REGIONID = pv.region AND hp.n = 6
           AND hp.half_hour = CAST(pv.date AS TIMESTAMP) + to_minutes((pv.time // 100) * 60 + pv.time % 100)
-        WHERE pv.time % 100 IN (0, 30) GROUP BY ALL"""],
-    "fuel": [f"""
+        WHERE pv.time % 100 IN (0, 30) GROUP BY ALL""", """
+        -- The daily tables: what the dashboard reads over 30 days.
+        SELECT date, REGIONID AS region, avg(price) AS "Average price daily", sum(demand) * 24 AS "Demand MWh daily",
+          avg(net_interchange) AS "Net interchange MW daily"
+        FROM agg.price_daily WHERE date IN ({days}) GROUP BY ALL""", """
+        SELECT a.date, d.Region AS region,
+          100 * sum(greatest(a.mwh, 0)) FILTER (WHERE d.Renewable)
+            / nullif(sum(greatest(a.mwh, 0)) FILTER (WHERE coalesce(d.FuelSourceDescriptor, '') <> 'Grid'), 0) AS "Renewable share daily"
+        FROM agg.scada_daily a JOIN dim.dim_duid d ON d.DUID = a.DUID
+        WHERE a.date IN ({days}) GROUP BY ALL"""],
+    "fuel": ["""
+        SELECT a.date, d.FuelSourceDescriptor AS fuel,
+          sum(greatest(a.mwh, 0)) AS "Generation MWh daily", sum(least(a.mwh, 0)) AS "Charging MWh daily",
+          sum(greatest(a.mwh, 0) * p.price) / nullif(sum(greatest(a.mwh, 0)), 0) AS "Capture price daily"
+        FROM agg.scada_daily a JOIN dim.dim_duid d ON d.DUID = a.DUID
+        JOIN agg.price_daily p ON p.REGIONID = d.Region AND p.date = a.date
+        WHERE NOT suffix(a.DUID, '_PV') AND a.date IN ({days}) GROUP BY ALL""", f"""
         SELECT date, fuel, sum(greatest(mw, 0)) / 12 AS "Generation MWh", sum(least(mw, 0)) / 12 AS "Charging MWh",
           count(DISTINCT DUID) AS "Units",
           sum(greatest(mw, 0) * price) / nullif(sum(greatest(mw, 0)), 0) AS "Capture price"
@@ -150,7 +165,24 @@ EXPECTED_5MIN = {
         SELECT date, interconnector || '|' || time AS part, avg(mw) AS "Flow MW"
         FROM h.interconnector WHERE date IN ({days}) GROUP BY ALL"""],
 }
-SLICE = {"region": "dim_region[Region]", "fuel": "dim_duid[FuelSourceDescriptor]", "link": "fct_interconnector[interconnector]"}
+# The hour-of-day tables, by month: what the dashboard's average-day and price-by-hour charts
+# read over 30 days. For the newest whole months the model holds (it writes a month once it is
+# whole). Each entry: the model's hour column, then the queries, keyed `slice|hour`.
+EXPECTED_MONTH = {
+    "fuel": ("fct_summary_hourly[hour]", ["""
+        SELECT h.month, coalesce(d.FuelSourceDescriptor, '') || '|' || h.hour AS part, sum(h.mwh) AS "Output MWh hourly"
+        FROM agg.scada_hourly h JOIN dim.dim_duid d ON d.DUID = h.DUID
+        WHERE NOT suffix(h.DUID, '_PV') AND h.month IN ({days}) GROUP BY ALL"""]),
+    "region": ("fct_region_hourly[hour]", ["""
+        SELECT month, REGIONID || '|' || hour AS part, sum(price * n) / sum(n) AS "Price at hour"
+        FROM agg.price_hourly WHERE month IN ({days}) GROUP BY ALL"""]),
+    "month": (None, ["""
+        SELECT month, '' AS part, sum(days) AS "Month days"
+        FROM agg.month_days WHERE month IN ({days}) GROUP BY ALL"""]),
+}
+MONTHS = 2
+SLICE = {"region": "dim_region[Region]", "fuel": "dim_duid[FuelSourceDescriptor]",
+         "link": "fct_interconnector[interconnector]", "month": None}
 # The dashboard's 5-minute figure for the one measure that differs by method.
 ROOFTOP_CAPTURE_5MIN = f"""
     SELECT pv.date, pv.region, sum(pv.mw * p.price) / nullif(sum(pv.mw), 0) AS capture
@@ -175,12 +207,25 @@ def main():
     days_sql = ", ".join(f"DATE '{d}'" for d in days)
     print(f"dashboard files from {DATA}, history {period}, days {days[-1]} to {days[0]}")
 
-    # Each grain: its name, the slice, whether it is by 5-minute time, its queries, its days.
-    grains = ([(g, g, False, q, days) for g, q in EXPECTED.items()]
-              + [(f"{g}, 5 min", g, True, q, days[:1]) for g, q in EXPECTED_5MIN.items()])
+    status, body = model.call("GET", f"/groups?$filter=id%20eq%20'{model.WORKSPACE}'")
+    if status != 200 or not body.get("value"):
+        print(f"cannot read the workspace's name ({status}): {body}")
+        return 1
+    conn = model.connect(body["value"][0]["name"])
+    # The newest whole months the model holds, newest first.
+    months = sorted((r["dim_month[month]"][:10] for r in model.query(conn, "EVALUATE VALUES(dim_month[month])")),
+                    reverse=True)[:MONTHS]
+    print(f"whole months in the model: {', '.join(months) or 'none yet'}")
+
+    # Each grain: its name, the slice, a second key column of the model (the 5-minute time,
+    # the hour of day) or None, the model's date column, its queries, its dates newest first.
+    grains = ([(g, g, None, "dim_calendar[date]", q, days) for g, q in EXPECTED.items()]
+              + [(f"{g}, 5 min", g, "dim_time[time]", "dim_calendar[date]", q, days[:1]) for g, q in EXPECTED_5MIN.items()]
+              + [(f"{g}, month" if g != "month" else g, g, extra, "dim_month[month]", q, months)
+                 for g, (extra, q) in EXPECTED_MONTH.items() if months])
 
     expected = {}   # (grain, date, slice, measure) -> value
-    for grain, _, _, queries, its_days in grains:
+    for grain, _, _, _, queries, its_days in grains:
         its_days_sql = ", ".join(f"DATE '{d}'" for d in its_days)
         for sql in queries:
             cur = con.execute(sql.format(days=its_days_sql))
@@ -190,20 +235,15 @@ def main():
                     if value is not None:
                         expected[(grain, str(row[0]), row[1] or "", name)] = float(value)
 
-    status, body = model.call("GET", f"/groups?$filter=id%20eq%20'{model.WORKSPACE}'")
-    if status != 200 or not body.get("value"):
-        print(f"cannot read the workspace's name ({status}): {body}")
-        return 1
-    conn = model.connect(body["value"][0]["name"])
-
     def day(d):
         y, m, dd = (int(x) for x in d.split("-"))
         return f"DATE({y}, {m}, {dd})"
 
     got, slow = {}, []
-    for grain, by, five, _, its_days in grains:
-        columns = f"dim_calendar[date], {SLICE[by]}" + (", dim_time[time]" if five else "")
-        dates = f"dim_calendar[date] >= {day(its_days[-1])}, dim_calendar[date] <= {day(its_days[0])}"
+    for grain, by, extra, date_column, _, its_days in grains:
+        keys = [c for c in (SLICE[by], extra) if c]
+        columns = ", ".join([date_column] + keys)
+        dates = f"{date_column} >= {day(its_days[-1])}, {date_column} <= {day(its_days[0])}"
         for measure in sorted({k[3] for k in expected if k[0] == grain}):
             dax = f'EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS({columns}, "v", [{measure}]), {dates})'
             started = time.perf_counter()
@@ -212,8 +252,7 @@ def main():
             for row in rows:
                 value = number(row["[v]"])
                 if value is not None:
-                    part = row[SLICE[by]] + (f"|{row['dim_time[time]']}" if five else "")
-                    got[(grain, row["dim_calendar[date]"][:10], part, measure)] = value
+                    got[(grain, row[date_column][:10], "|".join(row[c] for c in keys), measure)] = value
 
     # A value one side does not have counts as 0 there: a blank and a zero are the same answer
     # (no charging in a region), and a figure that is really missing shows as its whole size.

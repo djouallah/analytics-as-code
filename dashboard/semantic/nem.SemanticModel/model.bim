@@ -819,6 +819,355 @@
             }
           }
         ]
+      },
+      {
+        "name": "fct_summary_daily",
+        "description": "Net energy per unit and day, with the day's average price of the unit's region: fct_summary one grain up, for ranges where 5 minutes is too much. Whole days only: a day is written once the next-day files hold all of it.",
+        "sourceLineageTag": "[mart].[fct_summary_daily]",
+        "columns": [
+          {
+            "name": "DUID",
+            "dataType": "string",
+            "description": "The unit.",
+            "sourceColumn": "DUID",
+            "sourceLineageTag": "DUID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "date",
+            "dataType": "dateTime",
+            "description": "Calendar date, NEM time (AEST all year).",
+            "sourceColumn": "date",
+            "sourceLineageTag": "date",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM-dd"
+          },
+          {
+            "name": "mwh",
+            "dataType": "decimal",
+            "description": "The day's net energy, MWh: a battery's charging is taken off its output.",
+            "sourceColumn": "mwh",
+            "sourceLineageTag": "mwh",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "price",
+            "dataType": "decimal",
+            "description": "The day's average price of the unit's region, $/MWh.",
+            "sourceColumn": "price",
+            "sourceLineageTag": "price",
+            "summarizeBy": "none",
+            "formatString": "$#,##0.00"
+          }
+        ],
+        "measures": [
+          {
+            "name": "Generation MWh daily",
+            "formatString": "#,##0",
+            "expression": "SUMX(fct_summary_daily, MAX(fct_summary_daily[mwh], 0))",
+            "description": "Energy generated, from the daily table. It clips each unit's net of the day: a battery counts for its output less its charging, never below 0."
+          },
+          {
+            "name": "Charging MWh daily",
+            "formatString": "#,##0",
+            "expression": "SUMX(fct_summary_daily, MIN(fct_summary_daily[mwh], 0))",
+            "description": "The unit-days whose net energy is negative, from the daily table."
+          },
+          {
+            "name": "Capture price daily",
+            "formatString": "$#,##0.00",
+            "expression": "DIVIDE(SUMX(fct_summary_daily, MAX(fct_summary_daily[mwh], 0) * fct_summary_daily[price]), SUMX(fct_summary_daily, MAX(fct_summary_daily[mwh], 0)))",
+            "description": "The price the output earned, from the daily table: the day's average price of the unit's region weighted by the day's energy."
+          },
+          {
+            "name": "Renewable share daily",
+            "formatString": "0.0",
+            "expression": [
+              "DIVIDE(",
+              "    100 * (CALCULATE([Generation MWh daily], dim_duid[Renewable] = TRUE()) + [Rooftop MWh]),",
+              "    CALCULATE([Generation MWh daily], dim_duid[FuelSourceDescriptor] <> \"Grid\") + [Rooftop MWh]",
+              ")"
+            ],
+            "description": "Renewable share from the daily table, %, rooftop solar included; batteries in neither side. Slice it by region or date."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_summary_daily",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_summary_daily",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "fct_region_daily",
+        "description": "Price, demand and net interchange per region and day: the plain average of the day's intervals. Whole days only.",
+        "sourceLineageTag": "[mart].[fct_region_daily]",
+        "columns": [
+          {
+            "name": "REGIONID",
+            "dataType": "string",
+            "description": "The region.",
+            "sourceColumn": "REGIONID",
+            "sourceLineageTag": "REGIONID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "date",
+            "dataType": "dateTime",
+            "description": "Calendar date, NEM time (AEST all year).",
+            "sourceColumn": "date",
+            "sourceLineageTag": "date",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM-dd"
+          },
+          {
+            "name": "price",
+            "dataType": "decimal",
+            "description": "Average regional reference price of the day, $/MWh.",
+            "sourceColumn": "price",
+            "sourceLineageTag": "price",
+            "summarizeBy": "none",
+            "formatString": "$#,##0.00"
+          },
+          {
+            "name": "demand",
+            "dataType": "decimal",
+            "description": "Average operational demand of the day, MW.",
+            "sourceColumn": "demand",
+            "sourceLineageTag": "demand",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "net_interchange",
+            "dataType": "decimal",
+            "description": "Average net flow out of the region, MW; positive is exporting.",
+            "sourceColumn": "net_interchange",
+            "sourceLineageTag": "net_interchange",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          }
+        ],
+        "measures": [
+          {
+            "name": "Average price daily",
+            "formatString": "$#,##0.00",
+            "expression": "AVERAGE(fct_region_daily[price])",
+            "description": "The plain average of the daily regional prices in the selection, $/MWh."
+          },
+          {
+            "name": "Demand MWh daily",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_region_daily[demand]) * 24",
+            "description": "Operational demand as energy, from the daily averages."
+          },
+          {
+            "name": "Net interchange MW daily",
+            "formatString": "#,##0",
+            "expression": "AVERAGE(fct_region_daily[net_interchange])",
+            "description": "Average net flow out of a region from the daily table, MW. Read it per region."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_region_daily",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_region_daily",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "dim_month",
+        "description": "The whole months the hour-of-day tables hold, with their number of days: the divisor that turns a month's energy at an hour into an average MW.",
+        "sourceLineageTag": "[mart].[dim_month]",
+        "columns": [
+          {
+            "name": "month",
+            "dataType": "dateTime",
+            "description": "The month's first day.",
+            "sourceColumn": "month",
+            "sourceLineageTag": "month",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM",
+            "isKey": true
+          },
+          {
+            "name": "days",
+            "dataType": "int64",
+            "description": "Days in the month.",
+            "sourceColumn": "days",
+            "sourceLineageTag": "days",
+            "summarizeBy": "none"
+          }
+        ],
+        "measures": [
+          {
+            "name": "Month days",
+            "formatString": "#,##0",
+            "expression": "SUM(dim_month[days])",
+            "description": "Days of the months in the selection."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "dim_month",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "dim_month",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "fct_summary_hourly",
+        "description": "Output energy per unit, month and hour of day, whole months only: what an average-day chart reads over a long range.",
+        "sourceLineageTag": "[mart].[fct_summary_hourly]",
+        "columns": [
+          {
+            "name": "DUID",
+            "dataType": "string",
+            "description": "The unit.",
+            "sourceColumn": "DUID",
+            "sourceLineageTag": "DUID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "month",
+            "dataType": "dateTime",
+            "description": "The month's first day.",
+            "sourceColumn": "month",
+            "sourceLineageTag": "month",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM"
+          },
+          {
+            "name": "hour",
+            "dataType": "int64",
+            "description": "Hour of day, 0 to 23, as time // 100: the interval ending 14:00 is hour 14.",
+            "sourceColumn": "hour",
+            "sourceLineageTag": "hour",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "mwh",
+            "dataType": "decimal",
+            "description": "Output energy at that hour over the month, MWh; charging is left out.",
+            "sourceColumn": "mwh",
+            "sourceLineageTag": "mwh",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          }
+        ],
+        "measures": [
+          {
+            "name": "Output MWh hourly",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_summary_hourly[mwh])",
+            "description": "Output energy at an hour of day over the months in the selection."
+          },
+          {
+            "name": "Average MW at hour",
+            "formatString": "#,##0",
+            "expression": "DIVIDE([Output MWh hourly], [Month days])",
+            "description": "Average output at an hour of day over the months in the selection, MW: the energy at that hour over the days of those months. Read it per hour."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_summary_hourly",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_summary_hourly",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "fct_region_hourly",
+        "description": "Average price per region, month and hour of day, whole months only: what a price-by-hour chart reads over a long range.",
+        "sourceLineageTag": "[mart].[fct_region_hourly]",
+        "columns": [
+          {
+            "name": "REGIONID",
+            "dataType": "string",
+            "description": "The region.",
+            "sourceColumn": "REGIONID",
+            "sourceLineageTag": "REGIONID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "month",
+            "dataType": "dateTime",
+            "description": "The month's first day.",
+            "sourceColumn": "month",
+            "sourceLineageTag": "month",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM"
+          },
+          {
+            "name": "hour",
+            "dataType": "int64",
+            "description": "Hour of day, 0 to 23, as time // 100: the interval ending 14:00 is hour 14.",
+            "sourceColumn": "hour",
+            "sourceLineageTag": "hour",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "price",
+            "dataType": "decimal",
+            "description": "Plain average of the month's prices at that hour, $/MWh.",
+            "sourceColumn": "price",
+            "sourceLineageTag": "price",
+            "summarizeBy": "none",
+            "formatString": "$#,##0.00"
+          },
+          {
+            "name": "intervals",
+            "dataType": "int64",
+            "description": "How many intervals were averaged.",
+            "sourceColumn": "intervals",
+            "sourceLineageTag": "intervals",
+            "summarizeBy": "none"
+          }
+        ],
+        "measures": [
+          {
+            "name": "Price at hour",
+            "formatString": "$#,##0.00",
+            "expression": "DIVIDE(SUMX(fct_region_hourly, fct_region_hourly[price] * fct_region_hourly[intervals]), SUM(fct_region_hourly[intervals]))",
+            "description": "Average price at an hour of day over the months in the selection: the monthly averages weighted by their intervals."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_region_hourly",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_region_hourly",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
       }
     ],
     "relationships": [
@@ -921,6 +1270,62 @@
         "fromColumn": "time",
         "toTable": "dim_time",
         "toColumn": "time"
+      },
+      {
+        "name": "fct_summary_daily_to_dim_duid",
+        "fromTable": "fct_summary_daily",
+        "fromColumn": "DUID",
+        "toTable": "dim_duid",
+        "toColumn": "DUID"
+      },
+      {
+        "name": "fct_summary_daily_to_dim_calendar",
+        "fromTable": "fct_summary_daily",
+        "fromColumn": "date",
+        "toTable": "dim_calendar",
+        "toColumn": "date"
+      },
+      {
+        "name": "fct_region_daily_to_dim_region",
+        "fromTable": "fct_region_daily",
+        "fromColumn": "REGIONID",
+        "toTable": "dim_region",
+        "toColumn": "Region"
+      },
+      {
+        "name": "fct_region_daily_to_dim_calendar",
+        "fromTable": "fct_region_daily",
+        "fromColumn": "date",
+        "toTable": "dim_calendar",
+        "toColumn": "date"
+      },
+      {
+        "name": "fct_summary_hourly_to_dim_duid",
+        "fromTable": "fct_summary_hourly",
+        "fromColumn": "DUID",
+        "toTable": "dim_duid",
+        "toColumn": "DUID"
+      },
+      {
+        "name": "fct_summary_hourly_to_dim_month",
+        "fromTable": "fct_summary_hourly",
+        "fromColumn": "month",
+        "toTable": "dim_month",
+        "toColumn": "month"
+      },
+      {
+        "name": "fct_region_hourly_to_dim_region",
+        "fromTable": "fct_region_hourly",
+        "fromColumn": "REGIONID",
+        "toTable": "dim_region",
+        "toColumn": "Region"
+      },
+      {
+        "name": "fct_region_hourly_to_dim_month",
+        "fromTable": "fct_region_hourly",
+        "fromColumn": "month",
+        "toTable": "dim_month",
+        "toColumn": "month"
       }
     ]
   }

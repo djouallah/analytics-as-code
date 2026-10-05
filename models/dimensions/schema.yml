@@ -85,3 +85,16 @@ models:
           - not_null
       - name: hour
         description: Hour of day, 0 to 23
+
+  - name: dim_month
+    description: For Power BI and the dashboard's long ranges - the whole months the hour-of-day tables hold, with their number of days (the divisor of an average MW at an hour)
+    columns:
+      - name: month
+        description: The month's first day
+        tests:
+          - unique
+          - not_null
+      - name: days
+        description: Days in the month, all of them in fct_summary_daily
+        tests:
+          - not_null

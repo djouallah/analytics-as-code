@@ -24,20 +24,9 @@
     tags=['powerbi']
 ) }}
 
-{%- set process_limit = env_var('process_limit', '1000') %}
-
 WITH
 days AS (
-  SELECT DATE AS date
-  FROM {{ ref('fct_scada') }}
-  WHERE INTERVENTION = 0
-    {% if is_incremental() %}
-    AND DATE NOT IN (SELECT DISTINCT date FROM {{ this }})
-    {% endif %}
-  GROUP BY DATE
-  HAVING COUNT(DISTINCT SETTLEMENTDATE) = 288
-  ORDER BY date DESC
-  LIMIT {{ process_limit }}
+  {{ whole_days() }}
 ),
 intervals AS (
   SELECT DUID, DATE AS date, MAX(AVAILABILITY) AS available, MAX(TOTALCLEARED) AS target
