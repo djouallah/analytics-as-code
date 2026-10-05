@@ -1,10 +1,10 @@
 {
   "name": "nem",
-  "compatibilityLevel": 1702,
+  "compatibilityLevel": 1604,
   "model": {
     "description": [
       "Australia's National Electricity Market as the dashboard reads it: what each unit generated, what each region paid, what flowed between regions, and what wind and solar were curtailed.",
-      "This file is the semantic model, in TMSL (a Tabular model.bim): the tables, how they relate, and the functions. compiler.js turns it into DuckDB views (v_<table> per table, and one per relationship, under the relationship's name) and macros (one per function), and translates the page's DAX queries into SQL over those views.",
+      "This file is the semantic model, in TMSL (a Tabular model.bim): the tables, how they relate, and the measures. compiler.js turns it into DuckDB views (v_<table> per table, and one per relationship, under the relationship's name), and translates the page's DAX queries into SQL over those views; a measure is written out where a query names it.",
       "What TMSL has no property for is an annotation: `stitch` on a table of two partitions, `optional`, `since`, `sql` and `rollup` on a column, `from`, `on` and `columns` on a relationship. In an expression, {name} is one of the model's `expressions` (its constants).",
       "A table only holds what is attached. The 5-minute tables hold the last 5 days (interconnector 14) until the half-year files of a date range are attached; the daily ones hold the last 14 days, and the hourly ones do not exist, until the daily aggregate is. A query over the rest runs and returns the newest days alone, with no error: the compiler's needs(sql) says what a SQL query reads.",
       "A fact table stays readable as it is: a query that names nothing of the unit reads v_<fact>, not the relationship's view, and pays for no join. The compiler decides that from the tables a query names."
@@ -112,6 +112,20 @@
           { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
           { "name": "time", "dataType": "int64", "sourceColumn": "time" },
           { "name": "mw", "dataType": "double", "sourceColumn": "mw" }
+        ],
+        "measures": [
+          { "name": "Generation MWh", "formatString": "#,0",
+            "expression": "SUMX(scada, MAX(scada[mw], 0)) / 12.0",
+            "description": "Energy generated. Output only: a unit that is charging (negative) generates nothing." },
+          { "name": "Renewable share", "formatString": "0.0",
+            "expression": [
+              "DIVIDE(100 * SUMX(scada, SWITCH(TRUE(), RELATED(unit[renewable]), MAX(scada[mw], 0), NOT RELATED(unit[renewable]), 0)),",
+              "SUMX(scada, IF(RELATED(unit[generator]), MAX(scada[mw], 0), 0)))"
+            ],
+            "description": "Renewable share of the output, %. Batteries are in neither the renewables nor the total, and a unit that is charging generates nothing. A unit missing from dim_duid (renewable blank) is in the total only. Blank, not 0, when nothing says what is renewable: a dim_duid deployed before the column existed." },
+          { "name": "Capture price", "formatString": "#,0.00",
+            "expression": "DIVIDE(SUMX(scada, MAX(scada[mw], 0) * RELATED(price[price])), SUMX(scada, MAX(scada[mw], 0)))",
+            "description": "The price the output earned, $/MWh: the prices of the unit's region weighted by the output. Read where the price is not blank: that join is LEFT, and output without a price would count below the line only." }
         ]
       },
       {
@@ -146,6 +160,20 @@
           { "name": "date", "dataType": "dateTime", "sourceColumn": "date" },
           { "name": "mwh", "dataType": "double", "sourceColumn": "mwh",
             "annotations": [{ "name": "rollup", "value": "CAST(SUM(mw) / 12.0 AS REAL)" }] }
+        ],
+        "measures": [
+          { "name": "Generation MWh daily", "formatString": "#,0",
+            "expression": "SUMX(scada_daily, MAX(scada_daily[mwh], 0))",
+            "description": "Energy generated, from the daily table. It clips the day's net: a battery counts for its output less its charging, never below 0." },
+          { "name": "Renewable share daily", "formatString": "0.0",
+            "expression": [
+              "DIVIDE(100 * SUMX(scada_daily, SWITCH(TRUE(), RELATED(unit[renewable]), MAX(scada_daily[mwh], 0), NOT RELATED(unit[renewable]), 0)),",
+              "SUMX(scada_daily, IF(RELATED(unit[generator]), MAX(scada_daily[mwh], 0), 0)))"
+            ],
+            "description": "Renewable share, from the daily table: as [Renewable share], on each unit's net energy of the day." },
+          { "name": "Capture price daily", "formatString": "#,0.00",
+            "expression": "DIVIDE(SUMX(scada_daily, MAX(scada_daily[mwh], 0) * RELATED(price_daily[price])), SUMX(scada_daily, MAX(scada_daily[mwh], 0)))",
+            "description": "Capture price, from the daily tables: the day's average price of the unit's region weighted by the day's energy." }
         ]
       },
       {
@@ -264,8 +292,8 @@
           { "name": "lat", "dataType": "double", "sourceColumn": "latitude", "annotations": [{ "name": "sql", "value": "latitude::DOUBLE" }] },
           { "name": "lon", "dataType": "double", "sourceColumn": "longitude", "annotations": [{ "name": "sql", "value": "longitude::DOUBLE" }] },
           { "name": "fuel", "type": "calculated", "dataType": "string",
-            "expression": "fuel_name(unit[DUID], unit[fuel_source])",
-            "description": "The name the charts use." },
+            "expression": "IF(ISBLANK(unit[DUID]), \"{unregistered}\", COALESCE(unit[fuel_source], \"Unknown\"))",
+            "description": "The name the charts use. On a fact row whose unit is not in dim_duid there is no DUID on the unit's side: that row gets the fuel `unregistered` names." },
           { "name": "storage", "type": "calculated", "dataType": "boolean",
             "expression": "unit[fuel] = \"{storage_fuel}\"",
             "description": "A battery." },
@@ -297,6 +325,20 @@
           { "name": "fuel", "dataType": "string", "sourceColumn": "fuel" },
           { "name": "renewable", "dataType": "boolean", "sourceColumn": "renewable" },
           { "name": "generator", "dataType": "boolean", "sourceColumn": "generator" }
+        ],
+        "measures": [
+          { "name": "Generation MW latest", "formatString": "#,0",
+            "expression": "SUMX(gen_latest, MAX(gen_latest[mw], 0))",
+            "description": "MW generated in the newest interval. Output only." },
+          { "name": "Charging MW latest", "formatString": "#,0",
+            "expression": "SUMX(gen_latest, MIN(gen_latest[mw], 0))",
+            "description": "MW the batteries are charging at in the newest interval, negative." },
+          { "name": "Renewable share latest", "formatString": "0.0",
+            "expression": [
+              "DIVIDE(100 * SUMX(gen_latest, SWITCH(TRUE(), gen_latest[renewable], MAX(gen_latest[mw], 0), NOT gen_latest[renewable], 0)),",
+              "SUMX(gen_latest, IF(gen_latest[generator], MAX(gen_latest[mw], 0), 0)))"
+            ],
+            "description": "Renewable share of the newest interval: as [Renewable share]." }
         ]
       },
       {
@@ -383,41 +425,6 @@
           { "name": "on", "value": "date = date, region = REGIONID" },
           { "name": "columns", "value": "price" }
         ]
-      }
-    ],
-
-    "functions": [
-      {
-        "name": "fuel_name",
-        "expression": "(duid : STRING, descr : STRING) => IF(ISBLANK(duid), \"{unregistered}\", COALESCE(descr, \"Unknown\"))",
-        "description": "The name a unit's fuel goes by on the page. The model's own: it names unit[fuel]."
-      },
-      {
-        "name": "generated",
-        "expression": "(v : NUMERIC) => MAX(v, 0)",
-        "description": "Output only: a unit that is charging (negative) generates nothing. Given a daily mwh it clips the day's net: a battery counts for its output less its charging, never below 0."
-      },
-      {
-        "name": "renewable_share",
-        "expression": [
-          "(t : TABLE EXPR, v : NUMERIC EXPR, renewable : BOOLEAN EXPR, generator : BOOLEAN EXPR) =>",
-          "DIVIDE(100 * SUMX(t, SWITCH(TRUE(), renewable, generated(v), NOT renewable, 0)),",
-          "SUMX(t, IF(generator, generated(v), 0)))"
-        ],
-        "description": "Renewable share of the output, over the rows of t. Takes the raw mw or mwh and the renewable and generator columns; batteries are in neither the renewables nor the total. A unit missing from dim_duid (renewable blank) is in the total only. Blank, not 0, when nothing says what is renewable: a dim_duid deployed before the column existed.",
-        "annotations": [{ "name": "unit", "value": "%" }]
-      },
-      {
-        "name": "capture_price",
-        "expression": "(t : TABLE EXPR, v : NUMERIC EXPR, price : NUMERIC EXPR) => DIVIDE(SUMX(t, v * price), SUMX(t, v))",
-        "description": "The price a volume earned: the prices weighted by it. Takes generated(mw) or generated(mwh) and the price of the unit's region (scada with price, scada_daily with price_daily), where the price is not blank: that join is LEFT, and a volume without a price would count below the line only.",
-        "annotations": [{ "name": "unit", "value": "$/MWh" }]
-      },
-      {
-        "name": "capacity_factor",
-        "expression": "(t : TABLE EXPR, mwh : NUMERIC EXPR, cap : NUMERIC EXPR, hours : NUMERIC VAL) => DIVIDE(100 * SUMX(t, mwh), SUMX(t, cap) * hours)",
-        "description": "Energy over what the registered capacity could make in the hours. Takes one row per unit (its energy in the range, its cap_mw once) and the hours of the range; a unit without a capacity (cap_mw blank or 0, the rooftop ones) is filtered out first, or its energy counts against no capacity. Blank when the range has no hours.",
-        "annotations": [{ "name": "unit", "value": "%" }]
       }
     ]
   }

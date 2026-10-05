@@ -71,10 +71,10 @@ on purpose: the point is the layers, not their maturity.
 | Engine | DuckDB-WASM | the warehouse, VertiPaq, Hyper |
 | Storage | `dashboard/storage/` | the lakehouse or warehouse connection |
 
-- **The semantic model** describes the tables, their relationships and the functions, each
+- **The semantic model** describes the tables, their relationships and the measures, each
   with a description, in the format of a Power BI model (`model.bim`). It is the only place
-  a view or a function is defined.
-- **The compiler** turns it into DuckDB views and macros, and turns the page's DAX queries
+  a view or a measure is defined.
+- **The compiler** turns it into DuckDB views, and turns the page's DAX queries
   into SQL over them. It is a proof of concept, not a DAX engine: it knows the constructs
   this page uses and nothing else.
 - **The query language** is where the layers show. SQL asks for tables, while a semantic

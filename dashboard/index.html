@@ -716,8 +716,8 @@
     // Where the .duckdb files live and how they are fetched and attached is data.js's business
     // (a host that stores the files differently ships its own). What the data means is the
     // semantic model's (semantic/model.bim, a Tabular model in TMSL: the tables, the
-    // relationships, the unit's attributes, the functions), which compiler.js turns into views
-    // and macros. The page queries the model in DAX, which compiler.js turns into SQL over
+    // relationships, the unit's attributes, the measures), which compiler.js turns into
+    // views. The page queries the model in DAX, which compiler.js turns into SQL over
     // those views: it names no attached table and writes no join. The Analyze tab alone is
     // SQL, over the same views.
     const data = createModel(createDataSource({ onStatus: setStatus }));
@@ -916,15 +916,16 @@
     // 5. SQL QUERY BUILDERS
     // =========================================================================
 
-    // The tables and the functions are the model's (semantic/model.bim), and the queries are
+    // The tables and the measures are the model's (semantic/model.bim), and the queries are
     // DAX: `scada` is the generation per unit, `unit` the units, `price` the prices. A query
     // that names a column of `unit` next to `scada` reads the two joined; one that does not
     // reads the fact alone. That is the compiler's doing (semantic/compiler.js), as is the SQL.
-    // What a date range reads: the 5-minute tables up to 30 days, the daily ones beyond.
+    // What a date range reads: the 5-minute tables up to 30 days, the daily ones beyond. A
+    // measure belongs to one table, so each grain has its own.
     function grain() {
       return isIntradayMode()
-        ? { fact: 'scada', price: 'price', val: 'scada[mw]', energy: 'SUMX(scada, generated(scada[mw])) / 12.0' }
-        : { fact: 'scada_daily', price: 'price_daily', val: 'scada_daily[mwh]', energy: 'SUMX(scada_daily, generated(scada_daily[mwh]))' };
+        ? { fact: 'scada', price: 'price', val: 'scada[mw]', energy: '[Generation MWh]', share: '[Renewable share]', capture: '[Capture price]' }
+        : { fact: 'scada_daily', price: 'price_daily', val: 'scada_daily[mwh]', energy: '[Generation MWh daily]', share: '[Renewable share daily]', capture: '[Capture price daily]' };
     }
     const daxStr = v => `"${String(v).replace(/"/g, '""')}"`;
     const daxDate = d => `dt"${d}"`;
@@ -1358,8 +1359,7 @@
         // Per fuel, and the row without a fuel: all of them.
         runQuery(`EVALUATE ${filtered(`
           SUMMARIZECOLUMNS(ROLLUPADDISSUBTOTAL(gen_latest[fuel], "all"),
-            "mw", SUMX(gen_latest, generated(gen_latest[mw])), "charging", SUMX(gen_latest, MIN(gen_latest[mw], 0)),
-            "share", renewable_share(gen_latest, gen_latest[mw], gen_latest[renewable], gen_latest[generator]),
+            "mw", [Generation MW latest], "charging", [Charging MW latest], "share", [Renewable share latest],
             "date", MAX(gen_latest[date]), "time", MAX(gen_latest[time]))`,
           region ? [`gen_latest[region] = ${daxStr(region)}`] : [])}`),
         runQuery(`
@@ -1533,12 +1533,12 @@
     // purpose.
     async function renewableShare() {
       const intraday = isIntradayMode();
-      const { fact, val } = grain();
+      const { fact, share } = grain();
       const keys = `${fact}[date]${intraday ? `, ${fact}[time]` : ''}`;
       const rows = await runQuery(`
         EVALUATE CALCULATETABLE(
           SUMMARIZECOLUMNS(ROLLUPADDISSUBTOTAL(${intraday ? `ROLLUPGROUP(${keys})` : keys}, "range"),
-            "share", renewable_share(${fact}, ${val}, RELATED(unit[renewable]), RELATED(unit[generator]))),
+            "share", ${share}),
           ${dax.whereGen(fact, { withFuel: false }).join(', ')})
         ORDER BY ${keys}`);
       return { rows: rows.filter(r => r.date != null), overall: rows.find(r => r.date == null)?.share };
@@ -1579,10 +1579,10 @@
       };
       // Generation with no region or fuel filter names nothing of the unit: the plain fact.
       const [gen, price, re] = await Promise.all([
-        runQuery(both('scada_daily', 'SUMX(scada_daily, generated(scada_daily[mwh])) / DISTINCTCOUNT(scada_daily[date])',
+        runQuery(both('scada_daily', '[Generation MWh daily] / DISTINCTCOUNT(scada_daily[date])',
           dax.unitFilters('scada_daily'))),
         runQuery(both('price_daily', 'AVERAGE(price_daily[price])', dax.priceFilters('price_daily[REGIONID]'))),
-        runQuery(both('scada_daily', 'renewable_share(scada_daily, scada_daily[mwh], RELATED(unit[renewable]), RELATED(unit[generator]))',
+        runQuery(both('scada_daily', '[Renewable share daily]',
           dax.unitFilters('scada_daily', false))),
       ]);
       if (seq !== _renderSeq) return;
@@ -2111,7 +2111,7 @@
       const months = monthsOf('month_days').join(', ');
       const [rows, span] = await Promise.all([runQuery(intraday ? `
         EVALUATE CALCULATETABLE(
-          SUMMARIZECOLUMNS(unit[fuel], scada[time], "mw", SUMX(scada, generated(scada[mw])) / DISTINCTCOUNT(scada[date])),
+          SUMMARIZECOLUMNS(unit[fuel], scada[time], "mw", SUMX(scada, MAX(scada[mw], 0)) / DISTINCTCOUNT(scada[date])),
           ${[...dax.whereGen('scada'), 'unit[generator]'].join(', ')})
         ORDER BY unit[fuel], scada[time]` : `
         EVALUATE VAR days = CALCULATE(SUM(month_days[days]), ${months})
@@ -2147,15 +2147,13 @@
     // Generation-weighted price each fuel earned in its own region, against the plain average.
     async function renderCapture(seq) {
       const intraday = isIntradayMode();
-      const { fact, price, val } = grain();
-      const v = `generated(${val})`;
+      const { fact, price, energy, capture } = grain();
       // Only where the region has a price.
       const rows = await runQuery(`
         EVALUATE FILTER(
           CALCULATETABLE(
             SUMMARIZECOLUMNS(unit[fuel],
-              "capture", capture_price(${fact}, ${v}, RELATED(${price}[price])),
-              "volume", SUMX(${fact}, ${v})),
+              "capture", ${capture}, "volume", ${energy}),
             ${[...dax.whereGen(fact, { withFuel: false }), 'unit[generator]', `NOT ISBLANK(${price}[price])`].join(', ')}),
           [volume] > 0)
         ORDER BY [capture]`);
@@ -2250,9 +2248,11 @@
         ? `COUNTROWS(SUMMARIZE(${price}, ${price}[date], ${price}[time])) / 12.0`
         : `DISTINCTCOUNT(${price}[date]) * 24.0`;
       // One row per unit, then the factor at two grains from it: per unit, and per fuel (the
-      // rows without a DUID). Sorted by factor, so the top units are the last ones.
+      // rows without a DUID): energy over what the registered capacity could make in the
+      // hours. Sorted by factor, so the top units are the last ones.
       const factor = keys => `GROUPBY(u, ${keys}, "station", MAXX(CURRENTGROUP(), [station]),
-            "cap", SUMX(CURRENTGROUP(), [cap]), "cf", capacity_factor(CURRENTGROUP(), [mwh], [cap], hours))`;
+            "cap", SUMX(CURRENTGROUP(), [cap]),
+            "cf", DIVIDE(100 * SUMX(CURRENTGROUP(), [mwh]), SUMX(CURRENTGROUP(), [cap]) * hours))`;
       const rows = (await runQuery(`
         EVALUATE
         VAR hours = CALCULATE(${hours}, ${dax.wherePrice(price).join(', ')})
@@ -2482,7 +2482,7 @@
             CALCULATETABLE(
               SELECTCOLUMNS(${fact}, "owner", COALESCE(RELATED(unit[owner]), "Unknown"),
                 "station", COALESCE(RELATED(unit[station]), ${fact}[DUID]), "fuel", RELATED(unit[fuel]),
-                "v", generated(${val})),
+                "v", MAX(${val}, 0)),
               ${dax.whereGen(fact).join(', ')}),
             [owner], [station], [fuel], "mwh", SUMX(CURRENTGROUP(), [v])${isIntradayMode() ? ' / 12.0' : ''}),
           [mwh] > 0)
@@ -2555,14 +2555,14 @@
       const region = activeRegion();
       // The newest day is still filling: its energy and its share are not a day's yet.
       const before = `< ${daxDate(document.getElementById('dateTo').max)}`;
-      const sumIf = cond => `SUMX(scada_daily, IF(${cond}, generated(scada_daily[mwh]), 0))`;
+      const only = fuels => `CALCULATE([Generation MWh daily], ${fuels})`;
       const [gen, price] = await Promise.all([
         runQuery(`
           EVALUATE CALCULATETABLE(
             SUMMARIZECOLUMNS(scada_daily[date],
-              "re", renewable_share(scada_daily, scada_daily[mwh], RELATED(unit[renewable]), RELATED(unit[generator])),
-              "solar", ${sumIf(`RELATED(unit[fuel]) IN {"Solar", ${daxStr(ROOFTOP)}}`)},
-              "wind", ${sumIf('RELATED(unit[fuel]) = "Wind"')}),
+              "re", [Renewable share daily],
+              "solar", ${only(`unit[fuel] IN {"Solar", ${daxStr(ROOFTOP)}}`)},
+              "wind", ${only('unit[fuel] = "Wind"')}),
             scada_daily[date] ${before}${region ? `, unit[region] = ${daxStr(region)}` : ''})
           ORDER BY scada_daily[date]`),
         runQuery(`

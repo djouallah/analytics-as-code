@@ -1,6 +1,6 @@
 // =============================================================================
-// compiler.js — compiles the semantic model (model.bim) into DuckDB views and macros,
-// and the page's DAX queries into SQL over them
+// compiler.js — compiles the semantic model (model.bim) into DuckDB views, and the page's
+// DAX queries into SQL over them
 // =============================================================================
 // The layers of the dashboard, and what stands in each place in a real product:
 //   consumer        index.html                 the BI tool
@@ -16,8 +16,9 @@
 // filter is a boolean argument of CALCULATETABLE or CALCULATE, and becomes a WHERE.
 //
 // Part 1, the model. What model.bim holds and what each entry becomes:
-//   functions            a macro each (a DAX user-defined function; a table parameter is
-//                        what its iterators run over, and is not a macro argument)
+//   measures             nothing of their own: a measure is DAX, written out where a query
+//                        names it ([Renewable share]), so a CALCULATE around it reaches its
+//                        aggregates
 //   tables               a view each, v_<table>, of one of four kinds, told by its partitions:
 //     one entity partition with a schema   that attached table, as it is; no view if a
 //                        deployed file lacks it
@@ -44,6 +45,7 @@
 //   TOPN, ORDER BY                    ORDER BY .. LIMIT
 //   UNION, a table VAR                UNION ALL, a CTE; a scalar VAR is a scalar subquery
 //   CALCULATE(measure, filter)        the aggregates of the measure with FILTER (WHERE ..)
+//   [Name]                            a column of the table being built, else a measure
 // Which view a query reads is decided here, from the tables it names: `scada` alone reads
 // v_scada, with `unit` v_gen, with `price` v_gen_price. So a query that needs nothing about
 // the unit pays for no join, with no rule for the author to remember.
@@ -78,7 +80,7 @@ export const ROOFTOP = C.rooftop;
 // =============================================================================
 
 function lex(src) {
-  const re = /\s+|\/\/[^\n]*|(\d+(?:\.\d+)?)|dt"([^"]*)"|"((?:[^"]|"")*)"|'([^']+)'|\[([^\]]+)\]|([A-Za-z_][\w.]*)|(&&|\|\||<>|<=|>=|=>|[-=<>+*\/&(),{}:])/y;
+  const re = /\s+|\/\/[^\n]*|(\d+(?:\.\d+)?)|dt"([^"]*)"|"((?:[^"]|"")*)"|'([^']+)'|\[([^\]]+)\]|([A-Za-z_][\w.]*)|(&&|\|\||<>|<=|>=|[-=<>+*\/&(),{}])/y;
   const out = [];
   while (re.lastIndex < src.length) {
     const at = re.lastIndex, m = re.exec(src);
@@ -91,8 +93,7 @@ function lex(src) {
   return out;
 }
 
-// A recursive-descent parser. `query` reads EVALUATE .. ORDER BY, `fn` a user-defined
-// function ((a : TYPE, b) => body), `expr` an expression.
+// A recursive-descent parser. `query` reads EVALUATE .. ORDER BY, `expr` an expression.
 function parse(src) {
   const toks = lex(src);
   let i = 0;
@@ -149,20 +150,6 @@ function parse(src) {
   const end = x => { if (i < toks.length) throw new Error(`DAX: unexpected ${here()}`); return x; };
   return {
     expr: () => end(expr()),
-    fn() {
-      const params = [];
-      need('(');
-      if (!eat(')')) {
-        do {
-          const p = { name: toks[i++].v, types: [] };
-          if (eat(':')) while (toks[i]?.t === 'id') p.types.push(toks[i++].v.toUpperCase());
-          params.push(p);
-        } while (eat(','));
-        need(')');
-      }
-      need('=>');
-      return end({ params, body: expr() });
-    },
     query() {
       need('EVALUATE');
       const e = expr(), order = [];
@@ -194,11 +181,11 @@ const lit = v => `'${String(v).replace(/'/g, "''")}'`;
 const isCall = (e, fn) => e.k === 'call' && e.fn.toUpperCase() === fn;
 const TYPES = { string: 'string', int64: 'int', double: 'double', decimal: 'double', dateTime: 'date', boolean: 'bool' };
 
-// The model as DAX sees it: tables and their columns, the functions, and which view holds
+// The model as DAX sees it: tables and their columns, the measures, and which view holds
 // the columns of which tables.
 const TABLES = new Map(MODEL.tables.map(t => [t.name, new Map((t.columns || []).map(c => [c.name,
   { name: c.name, type: TYPES[c.dataType], dax: c.type === 'calculated' ? parse(fill(c.expression)).expr() : null }]))]));
-const FUNCS = new Map();
+const MEASURES = new Map(MODEL.tables.flatMap(t => (t.measures || []).map(m => [m.name, parse(fill(m.expression)).expr()])));
 const JOINS = [];
 for (const r of MODEL.relationships) {
   const from = JOINS.find(j => j.view === ann(r, 'from'));
@@ -219,8 +206,9 @@ function column(table, name) {
 }
 
 // One expression. `cx` says what a name means here: `col` a model column, `ref` a [column] of
-// the table being built, `names` the variables and parameters in scope, `touch` notes a table
-// that an iterator runs over, and `filter` is what CALCULATE put on the aggregates.
+// the table being built, `names` the variables in scope, `touch` notes a table that an
+// iterator runs over, and `filter` is what CALCULATE put on the aggregates. A [Name] that is
+// not such a column is a measure of the model, written out in its place.
 function scalar(e, cx) {
   const go = x => scalar(x, cx);
   switch (e.k) {
@@ -235,7 +223,12 @@ function scalar(e, cx) {
     }
     case 'in': return { s: `${par(go(e.e), P.cat)} IN (${e.list.map(x => go(x).s).join(', ')})`, t: 'bool', p: P.cmp };
     case 'col': return cx.col(e.table, e.name);
-    case 'ref': return cx.ref(e.name);
+    case 'ref': {
+      const c = cx.ref?.(e.name);
+      if (c) return c;
+      if (!MEASURES.has(e.name)) throw new Error(`DAX: there is no column or measure [${e.name}] here`);
+      return scalar(MEASURES.get(e.name), cx);
+    }
     case 'name': {
       const n = cx.names.get(e.name);
       if (n?.s == null) throw new Error(`DAX: ${e.name} is not a value here`);
@@ -320,28 +313,7 @@ function call(e, cx) {
       return scalar(a[0], { ...cx, filter: [cx.filter, ...filters].filter(Boolean).join(' AND ') });
     }
   }
-  const f = FUNCS.get(e.fn);
-  if (!f) throw new Error(`DAX: ${e.fn} is not supported`);
-  f.params.forEach((p, i) => p.table && over(a[i]));
-  const values = f.params.map((p, i) => p.table ? null : scalar(a[i], { ...cx, filter: null }));
-  if (f.agg) cx.state.agg = true;
-  // A macro call cannot take a FILTER: under CALCULATE the body is written out in its place.
-  if (f.agg && cx.filter) {
-    const x = scalar(f.body, { ...cx, names: new Map(f.params.map((p, i) => [p.name, values[i] ?? {}])) });
-    return atom(`(${x.s})`, x.t);
-  }
-  return atom(`${e.fn}(${values.filter(Boolean).map(x => x.s).join(', ')})`, f.type);
-}
-
-// The functions of the model, each compiled once: the macro's SQL, and what a call returns.
-for (const def of MODEL.functions) {
-  const f = parse(fill(def.expression)).fn();
-  for (const p of f.params) p.table = p.types.some(t => t.startsWith('TABLE'));
-  const hint = p => p.types.includes('STRING') ? 'string' : p.types.includes('BOOLEAN') ? 'bool' : 'double';
-  const cx = { state: { agg: false }, filter: null, touch() {},
-    names: new Map(f.params.filter(p => !p.table).map(p => [p.name, atom(p.name, hint(p))])) };
-  const x = scalar(f.body, cx);
-  FUNCS.set(def.name, { ...f, sql: x.s, type: x.t, agg: cx.state.agg, args: f.params.filter(p => !p.table).map(p => p.name) });
+  throw new Error(`DAX: ${e.fn} is not supported`);
 }
 
 // A calculated column, as SQL over its table read as `alias`. Another calculated column it
@@ -374,7 +346,7 @@ function emit(e, r, q, names = q.names) {
     },
     ref(name) {
       const c = r.cols.find(c => c.name === name);
-      if (!c) throw new Error(`DAX: there is no column [${name}] here`);
+      if (!c) return null;
       if (c.agg) state.agg = true;
       return { s: c.sql, t: c.type, p: c.p };
     } });
@@ -548,14 +520,12 @@ export function toSQL(dax) {
 const isDax = q => /^\s*EVALUATE\b/i.test(q);
 
 // =============================================================================
-// The model -> views and macros
+// The model -> views
 // =============================================================================
 
 // SQL date: rows from this day on are read from `today`, older ones from history / agg.
 const CUT = `CURRENT_DATE - INTERVAL ${C.recent_days} DAY`;
 const OLD = `date < ${CUT}`, RECENT = `date >= ${CUT}`;
-
-const MACROS = MODEL.functions.map(f => ({ name: f.name, ...FUNCS.get(f.name) }));
 
 // A table as the view builder reads it. A column's SQL is its `sql` annotation, else its
 // sourceColumn; `column` is the source column an optional one needs.
@@ -689,7 +659,7 @@ export function createModel(data) {
   const compile = () => _compiling = _compiling.catch(() => {}).then(async () => {
     const tables = await catalog();
     const views = new Map();
-    const statements = MACROS.map(m => [`macro ${m.name}`, `CREATE OR REPLACE MACRO ${m.name}(${m.args.join(', ')}) AS ${m.sql}`]);
+    const statements = [];
     for (const item of ITEMS) {
       const view = build(item, tables, views);
       if (!view) continue;

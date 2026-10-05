@@ -164,14 +164,14 @@ page's.
 
 **The Analyze tab is SQL, and only SQL**: its box, the two builders that fill it
 (`buildAnalyzeSQL`, `buildGenPriceSQL`) and the `sql` filter helpers they use. It reads the
-same views and macros. The compiler never sees text a user typed: `query()` translates what
+same views. The compiler never sees text a user typed: `query()` translates what
 starts with `EVALUATE`, and only the page's own queries do. Don't make the box accept DAX.
 
 `index.html` is the one file at the top of `dashboard/`: it is the site's URL, and `data.js`
 finds `data/` from the page's URL. The deployed tree is the repo tree, so a relative import
 resolves the same locally and deployed.
 - `dashboard/index.html` is the page: charts, and DAX that names the model's tables, columns
-  and functions (`scada[mw]`, `unit[fuel]`, `renewable_share(...)`). **It joins nothing**,
+  and measures (`scada[mw]`, `unit[fuel]`, `[Renewable share]`). **It joins nothing**,
   names no view (outside Analyze and `data.has('v_...')`) and knows no `dim_duid` column, no
   fuel naming rule, no region names (they are `unit[state]`). Which fuels are renewable is not
   in the dashboard at all: `dim_duid.Renewable` says, and `unit[renewable]` passes it on. It
@@ -182,9 +182,9 @@ resolves the same locally and deployed.
   `dax.unitFilters`, `dax.wherePrice`, `dax.priceFilters`: the arguments of a
   `CALCULATETABLE`); the `sql` ones next to them are Analyze's.
 - `dashboard/semantic/model.bim` is the semantic model, and the only place a view or a
-  function is defined. It is TMSL, the JSON of a Tabular model (compatibility level 1702,
-  the one with user-defined functions): `expressions` (the constants, as parameters),
-  `tables`, `relationships`, `functions`, each with its `description`, and the glossary and
+  measure is defined. It is TMSL, the JSON of a Tabular model (compatibility level 1604):
+  `expressions` (the constants, as parameters), `tables` with their `measures`,
+  `relationships`, each with its `description`, and the glossary and
   the stitching rules as model `annotations`. What TMSL has no property for is an annotation,
   its own extension point. A table is one view, `v_<table>`, of four kinds, told by its
   partitions:
@@ -206,15 +206,20 @@ resolves the same locally and deployed.
   A TMSL relationship is one column to one column, so the price ones, which join on date,
   time and the unit's region, carry the rest in `from`, `on` and `columns`. The calculated
   columns of `unit` are worked out again on the joined row, which is how a unit missing from
-  `dim_duid` gets the fuel "Unregistered". The functions are DAX user-defined functions
-  (`fuel_name`, `generated`; `renewable_share`, `capture_price`, `capacity_factor`), each
-  compiled to a DuckDB macro of the same name: a table parameter (`t : TABLE EXPR`) is what
-  the function's iterators run over, and is not a macro argument.
+  `dim_duid` gets the fuel "Unregistered". The logic is **measures, not DAX user-defined
+  functions** (the owner's call, 2026-10-05: a measure is what every Tabular consumer
+  reads): generation, renewable share and capture price. A measure belongs to one table, so
+  there is one per grain the page reads (`[Renewable share]` on `scada`,
+  `[Renewable share daily]` on `scada_daily`, `[Renewable share latest]` on `gen_latest`).
+  Capacity factor is not one: it is worked out in the page, over its own one-row-per-unit
+  table. **The page's DAX must be DAX that VertiPaq accepts with the same meaning**, not
+  only DAX the compiler accepts: the model is headed for a Direct Lake deployment, where
+  the same queries will be run and compared.
   It is JSON, so a browser reads it with no library: there are no comments, so the why goes
   in a `description`, and a long expression is an array of lines.
 - `dashboard/semantic/compiler.js` has two parts (`createModel(dataSource)`: the data
   source's members plus `has`, `needs` and `toSQL`).
-  The model: it turns `model.bim` into those views and macros. It compiles after every
+  The model: it turns `model.bim` into those views. It compiles after every
   attach: one query reads what is attached from the engine's catalog (`information_schema`),
   and one runs the statements that are new or changed. A view is created once: DuckDB binds
   a view again on every read, so the ones over a rebuilt view follow it. At startup the
@@ -230,9 +235,9 @@ resolves the same locally and deployed.
     `unit` it reads `v_gen`, with `price` `v_gen_price`. A query never says which.
   - The result is cast by the column's `dataType` for the browser: a date as VARCHAR, a
     whole number as INTEGER, a number as DOUBLE. A subquery or a CTE is left as it is.
-  - A function call is the macro call, so the SQL in the Logs tab reads like the DAX. Under
-    `CALCULATE` the function's body is written out instead, because its aggregates take the
-    `FILTER (WHERE ...)` and a macro call cannot.
+  - A `[Name]` that is not a column of the table being built is a measure, and its
+    expression is written out in its place: there are no macros. Under `CALCULATE` its
+    aggregates take the `FILTER (WHERE ...)`.
 - `storage/data.js` is the host: how the `.duckdb` files are fetched, cached and attached
   (`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `query`). It attaches `dim`,
   `today`, `agg` and the 5-minute history, and builds no view. On both the files are
