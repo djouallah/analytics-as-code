@@ -1,8 +1,8 @@
 name: Deploy Semantic Model
 
 # Publishes dashboard/semantic/nem.SemanticModel (a Direct Lake model over the catalog's
-# Iceberg tables) to the workspace that holds the lakehouse, then refreshes it and asks it a
-# row count per table in DAX (scripts/check_model.py).
+# Iceberg tables) to the workspace that holds the lakehouse, then refreshes it and asks it,
+# in DAX over XMLA, a row count per table and its measures (scripts/check_model.py).
 #
 # Manual only: it creates or updates a Fabric item. It touches no table and no dashboard
 # file. The identity is the catalog's (the same OIDC login as Process Data), so the model
@@ -35,7 +35,20 @@ jobs:
         with:
           python-version: "3.11"
       # Pinned exactly, like every other version here (AGENTS.md, version policy).
-      - run: pip install -q "fabric-cicd==1.3.0"
+      - run: pip install -q "fabric-cicd==1.3.0" "pythonnet==3.1.0"
+      - name: Install the ADOMD.NET client
+        # What scripts/check_model.py asks its DAX through (XMLA). The .NET Core build runs on
+        # Linux under pythonnet; publishing a throwaway project that references it puts the
+        # DLL and everything it depends on in one folder.
+        run: |
+          set -euo pipefail
+          proj="$RUNNER_TEMP/adomd"
+          mkdir -p "$proj" && cd "$proj"
+          dotnet new console -o . --force >/dev/null
+          dotnet add package Microsoft.AnalysisServices.AdomdClient.NetCore.retail.amd64 --version 19.84.1 >/dev/null
+          dotnet publish -c Release -o publish >/dev/null
+          test -f "$proj/publish/Microsoft.AnalysisServices.AdomdClient.dll"
+          echo "ADOMD_DIR=$proj/publish" >> "$GITHUB_ENV"
       - name: Azure federated login
         uses: azure/login@v2
         with:
@@ -45,6 +58,8 @@ jobs:
       - name: Publish the model
         run: python scripts/deploy_model.py
       - name: Refresh it and query it
+        env:
+          PYTHONNET_RUNTIME: coreclr
         run: |
           TOKEN=$(az account get-access-token --resource https://analysis.windows.net/powerbi/api --query accessToken -o tsv)
           echo "::add-mask::$TOKEN"
