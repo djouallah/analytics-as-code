@@ -267,10 +267,10 @@
               "VAR late = EXCEPT(VALUES(dim_calendar[date]), CALCULATETABLE(VALUES(fct_summary_daily[date]), REMOVEFILTERS(dim_duid), REMOVEFILTERS(dim_region)))",
               "RETURN",
               "    IF([Reads 5 minutes],",
-              "        SUMX(fct_summary, MAX(fct_summary[mw], 0)) / 12,",
-              "        SUM(fct_summary_daily[output_mwh]) + CALCULATE(SUMX(fct_summary, MAX(fct_summary[mw], 0)), late) / 12)"
+              "        CONVERT(SUMX(fct_summary, MAX(fct_summary[mw], 0)), DOUBLE) / 12,",
+              "        SUM(fct_summary_daily[output_mwh]) + CONVERT(CALCULATE(SUMX(fct_summary, MAX(fct_summary[mw], 0)), late), DOUBLE) / 12)"
             ],
-            "description": "Energy generated. Output only: a unit that is charging (negative) generates nothing. A 5-minute row is MW / 12. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days the daily table does not hold yet. The number is the same from either."
+            "description": "Energy generated. Output only: a unit that is charging (negative) generates nothing. A 5-minute row is MW / 12. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days the daily table does not hold yet. The number is the same from either. CONVERT is there because MW is a fixed decimal: divided as one, the energy of a small unit at one 5-minute time is rounded to 4 decimals."
           },
           {
             "name": "Charging MWh",
@@ -279,10 +279,10 @@
               "VAR late = EXCEPT(VALUES(dim_calendar[date]), CALCULATETABLE(VALUES(fct_summary_daily[date]), REMOVEFILTERS(dim_duid), REMOVEFILTERS(dim_region)))",
               "RETURN",
               "    IF([Reads 5 minutes],",
-              "        SUMX(fct_summary, MIN(fct_summary[mw], 0)) / 12,",
-              "        SUM(fct_summary_daily[charging_mwh]) + CALCULATE(SUMX(fct_summary, MIN(fct_summary[mw], 0)), late) / 12)"
+              "        CONVERT(SUMX(fct_summary, MIN(fct_summary[mw], 0)), DOUBLE) / 12,",
+              "        SUM(fct_summary_daily[charging_mwh]) + CONVERT(CALCULATE(SUMX(fct_summary, MIN(fct_summary[mw], 0)), late), DOUBLE) / 12)"
             ],
-            "description": "Energy the batteries took, negative. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days the daily table does not hold yet. The number is the same from either."
+            "description": "Energy the batteries took, negative. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days the daily table does not hold yet. The number is the same from either. CONVERT is there because MW is a fixed decimal: divided as one, the energy of a small unit at one 5-minute time is rounded to 4 decimals."
           },
           {
             "name": "Revenue",
@@ -709,18 +709,18 @@
               "    VAR _minute = dim_time[minute]",
               "    VAR _region = dim_region[Region]",
               "    VAR _past = MOD(_minute, 30)",
-              "    VAR _mwBefore = CALCULATE(SUM(fct_rooftop[mw]), dim_calendar[date] = _date, dim_time[minute] = _minute - _past, dim_region[Region] = _region)",
+              "    VAR _mwBefore = CALCULATE(SUM(fct_rooftop[mw]), REMOVEFILTERS(dim_calendar), REMOVEFILTERS(dim_time), dim_calendar[date] = _date, dim_time[minute] = _minute - _past, dim_region[Region] = _region)",
               "    VAR _mwAfter =",
               "        IF(_past > 0,",
               "            IF(_minute - _past + 30 < 1440,",
-              "                CALCULATE(SUM(fct_rooftop[mw]), dim_calendar[date] = _date, dim_time[minute] = _minute - _past + 30, dim_region[Region] = _region),",
-              "                CALCULATE(SUM(fct_rooftop[mw]), dim_calendar[date] = _date + 1, dim_time[minute] = 0, dim_region[Region] = _region)))",
+              "                CALCULATE(SUM(fct_rooftop[mw]), REMOVEFILTERS(dim_calendar), REMOVEFILTERS(dim_time), dim_calendar[date] = _date, dim_time[minute] = _minute - _past + 30, dim_region[Region] = _region),",
+              "                CALCULATE(SUM(fct_rooftop[mw]), REMOVEFILTERS(dim_calendar), REMOVEFILTERS(dim_time), dim_calendar[date] = _date + 1, dim_time[minute] = 0, dim_region[Region] = _region)))",
               "    RETURN",
               "        IF(_past = 0, _mwBefore,",
               "            IF(NOT ISBLANK(_mwBefore) && NOT ISBLANK(_mwAfter), _mwBefore + (_mwAfter - _mwBefore) * _past / 30))",
               ")"
             ],
-            "description": "Rooftop solar in MW at a 5-minute time, worked out from the half-hourly estimate: on a half hour the estimate itself, between two consecutive half hours the straight line between them, and nothing across a missing half hour. Nothing of it is stored. Summed over the dates, times and regions in the selection, so read it at one time; for energy use [Rooftop MWh]. The newest value is not carried forward: that is the chart's choice."
+            "description": "Rooftop solar in MW at a 5-minute time, worked out from the half-hourly estimate: on a half hour the estimate itself, between two consecutive half hours the straight line between them, and nothing across a missing half hour. Nothing of it is stored. Summed over the dates, times and regions in the selection, so read it at one time; for energy use [Rooftop MWh]. The newest value is not carried forward: that is the chart's choice. The half hours on either side are read with the filters on dim_time and dim_calendar removed: the query's own filter is on the 5-minute time, which has no row in fct_rooftop."
           }
         ],
         "partitions": [
@@ -931,7 +931,7 @@
           },
           {
             "name": "output_mwh",
-            "dataType": "decimal",
+            "dataType": "double",
             "description": "The day's output, MWh: the 5-minute intervals above 0 MW. What [Generation MWh] sums.",
             "sourceColumn": "output_mwh",
             "sourceLineageTag": "output_mwh",
@@ -940,7 +940,7 @@
           },
           {
             "name": "charging_mwh",
-            "dataType": "decimal",
+            "dataType": "double",
             "description": "The day's charging, MWh, negative: the 5-minute intervals below 0 MW.",
             "sourceColumn": "charging_mwh",
             "sourceLineageTag": "charging_mwh",
@@ -949,7 +949,7 @@
           },
           {
             "name": "revenue",
-            "dataType": "decimal",
+            "dataType": "double",
             "description": "What the day's output earned, $: each interval's output at its own 5-minute price.",
             "sourceColumn": "revenue",
             "sourceLineageTag": "revenue",

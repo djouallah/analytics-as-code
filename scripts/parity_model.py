@@ -43,6 +43,11 @@ import check_model as model
 DATA = os.environ.get("DEPLOYED_DATA_URL", "https://nemtracker.github.io/data")
 DAYS = int(os.environ.get("PARITY_DAYS", "5"))
 TOLERANCE = 2e-4   # relative
+# Where a relative difference is measured from, when the figures are small: 1 for everything
+# but revenue. fct_summary keeps MW to 4 decimals and the dashboard's files keep a REAL, so a
+# unit running at a few kW is 0.1% apart in both its energy and its revenue: under the
+# tolerance as energy (a fraction of a MWh), over it as dollars. 250 allows 5 cents.
+SMALL = {"Revenue": 250.0}
 ROOFTOP_CAPTURE = "Rooftop capture price"
 
 
@@ -306,7 +311,7 @@ def main():
     bad = []
     for key in sorted(set(expected) | set(got)):
         e, g = expected.get(key, 0.0), got.get(key, 0.0)
-        if abs(e - g) > TOLERANCE * max(1.0, abs(e), abs(g)):
+        if abs(e - g) > TOLERANCE * max(SMALL.get(key[3], 1.0), abs(e), abs(g)):
             bad.append((key, e, g))
     by_measure = {}
     for key in set(expected) | set(got):

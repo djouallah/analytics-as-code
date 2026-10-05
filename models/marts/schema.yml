@@ -370,7 +370,7 @@ models:
         tests:
           - not_null
       - name: output_mwh
-        description: The day's output (MWh) - the 5-minute intervals above 0 MW, what [Generation MWh] sums
+        description: The day's output (MWh) - the 5-minute intervals above 0 MW, what [Generation MWh] sums. DOUBLE, like the next two - an exact sum
         tests:
           - not_null
       - name: charging_mwh
