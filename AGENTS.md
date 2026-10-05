@@ -148,6 +148,11 @@ transport fails the OneLake TLS handshake).
 top of the repo is the one semantic model, and `dashboard/` holds its three clients:
 `github/` (the page, on GitHub Pages), `fabric_app/` (the same page as a Fabric app) and
 `powerbi/` (`nem.Report`, a report over the deployed model).
+**The GitHub page is the critical one: it is public and must never break** (the owner's,
+2026-10-05). The Fabric app and Power BI are internal: they should not break either, but it
+is not the end of the world if one does. So a change that touches what the three share (the
+model, the `mart` tables, the page's files) is checked on the public page first and goes
+out only when that check is clean, and where the clients pull apart the public page wins.
 The page has the layers of a BI stack, each in its own place under `dashboard/github/` (the
 table of what stands in each place in a real product is in `ARCHITECTURE.md`), and two hosts:
 GitHub Pages and a Fabric app. Everything is the same file on both except `storage/data.js`.
