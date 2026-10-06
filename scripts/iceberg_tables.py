@@ -12,6 +12,9 @@ the semantic model and the dashboard read, follow the landing facts, fct_summary
 """
 
 TABLES = [
+    # Seven small appends a run (one per landing fact that loaded something): the most
+    # data files per row of any table here, so compaction matters most to it.
+    "landing.processed_files",
     "landing.fct_price_today",
     "landing.fct_scada_today",
     "landing.fct_interconnector_today",

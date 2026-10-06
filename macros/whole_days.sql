@@ -2,21 +2,58 @@
 
      A daily row is written ONCE (insert-only merge: a stored value is not revised), so a day
      is only taken when fct_scada holds its 288 intervals. A calendar date straddles two daily
-     files, and a day summed from one of them could not be completed afterwards. Days not in
-     the table yet, newest first, process_limit per run, like the facts: fct_scada is 300M
-     rows. `also` is one more condition on fct_scada's DATE. --#}
-{% macro whole_days(also=none) -%}
+     files, and a day summed from one of them could not be completed afterwards.
+
+     Which dates to look at is decided at compile time from the Iceberg manifests
+     (macros/date_bounds.sql) and written as literals, so that the scans carry constant DATE
+     filters and prune data files. Until 2026-10-06 this grouped all of fct_scada by date
+     every run (300M rows over OneLake, 75-100 s per model) and anti-joined the table's own
+     dates. Two kinds of range, [from, to) with to exclusive:
+       * every run: the days after the newest one the table holds, up to fct_scada's newest;
+       * refill (a first build, or after rebuild=<table>): process_limit days below the
+         oldest one the table holds, newest first, until it reaches the oldest the source
+         has. The refill is contiguous downward, so MIN(date) is the frontier.
+     A day that never reaches 288 intervals in fct_scada is passed over once a later day is
+     written; before, it was retried every run and never written either.
+     `floor` is a date below which no day is taken (fct_summary_daily: the oldest day
+     fct_summary holds, which it fills newest first). --#}
+
+{% macro pending_day_ranges(floor=none) -%}
+  {%- set process_limit = env_var('process_limit', '1000') | int -%}
+  {%- set day = modules.datetime.timedelta(days=1) -%}
+  {%- set scada_min, scada_max = date_bounds(ref('fct_scada'), 'DATE') -%}
+  {%- set this_min, this_max = date_bounds(this, 'date') if is_incremental() else (none, none) -%}
+  {%- set ranges = [] -%}
+  {%- if scada_max -%}
+    {%- set oldest = scada_min if floor is none or floor < scada_min else floor -%}
+    {%- if this_max -%}
+      {%- do ranges.append((this_max + day, scada_max + day)) -%}
+      {%- if this_min and this_min > oldest -%}
+        {%- do ranges.append((this_min - process_limit * day, this_min)) -%}
+      {%- endif -%}
+    {%- else -%}
+      {%- do ranges.append((scada_max - (process_limit - 1) * day, scada_max + day)) -%}
+    {%- endif -%}
+    {#- Nothing below the floor; a range that ends up empty is dropped. #}
+    {%- set kept = [] -%}
+    {%- for lo, hi in ranges -%}
+      {%- set lo = oldest if lo < oldest else lo -%}
+      {%- if lo < hi %}{% do kept.append((lo, hi)) %}{% endif -%}
+    {%- endfor -%}
+    {%- set ranges = kept -%}
+  {%- endif -%}
+  {%- if execute -%}
+    {%- do log(this.identifier ~ ": fct_scada " ~ scada_min ~ " .. " ~ scada_max ~ ", this " ~ this_min ~ " .. "
+               ~ this_max ~ (", floor " ~ floor if floor else "") ~ "; looking at " ~ ranges_text(ranges), info=True) -%}
+  {%- endif -%}
+  {{ return(ranges) }}
+{%- endmacro %}
+
+{% macro whole_days(ranges) -%}
   SELECT DATE AS date
   FROM {{ ref('fct_scada') }}
   WHERE INTERVENTION = 0
-    {%- if also %}
-    AND {{ also }}
-    {%- endif %}
-    {%- if is_incremental() %}
-    AND DATE NOT IN (SELECT DISTINCT date FROM {{ this }})
-    {%- endif %}
+    AND {{ date_ranges_sql(ranges, 'DATE') }}
   GROUP BY DATE
   HAVING COUNT(DISTINCT SETTLEMENTDATE) = 288
-  ORDER BY date DESC
-  LIMIT {{ env_var('process_limit', '1000') }}
 {%- endmacro %}

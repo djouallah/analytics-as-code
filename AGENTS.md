@@ -30,10 +30,14 @@ the other `mart` tables and through the same semantic model as Power BI.
 downloading lives outside dbt and the log is read straight from parquet, not from an Iceberg
 table.
 Four deliberate local differences, all of which must survive a port:
-- `fct_summary` takes the dates it has never seen `process_limit` at a time (uncapped, the
-  first build ran the runner out of memory), and takes the intraday table's dates only from
-  the newest daily date on (that table is never trimmed, so taken whole it is one more day
-  recomputed every run). Its header says both.
+- `fct_summary` decides its dates at compile time from the Iceberg manifests and writes
+  them as literals (Architecture point 3): the newest daily date minus six days on, the
+  intraday feed after the newest daily interval, and in a refill `process_limit` dates
+  below the oldest it holds (uncapped, the first build ran the runner out of memory). The
+  reference asks the data (`MAX(DATE)`, `DISTINCT DATE ... NOT IN`, the partial-dates
+  `COUNT(DISTINCT time) < 280`): full scans, which cost 450-700 s a run here. The
+  partial-dates repair is not kept (its header says why; the test remains).
+  `dispatch_duids` is the units of the window's next-day rows, not of all history.
 - No `relationships → dim_duid` tests on `fct_scada`/`fct_scada_today` — `dim_duid` holds the
   registered DUIDs plus the unlisted ones that generated, while the facts go back to 2018 and
   also carry units only ever dispatched at 0 MW, so the test could never be 0.
@@ -76,14 +80,32 @@ Four deliberate local differences, all of which must survive a port:
 3. Work is discovered from the **log table**, not a filesystem glob: each fact model's pre-hook
    (`macros/pending_archive_files.sql`) builds its path list from
    `SELECT DISTINCT stg_csv_archive_log.archive_path` filtered by `NOT EXISTS` against
-   `{{ this }}.file` (not `NOT IN`: one NULL `file` would stop every load), newest first
+   **`landing.processed_files`** (not `NOT IN`: one NULL would stop every load), newest first
    (`ORDER BY archive_path DESC LIMIT process_limit`; that is path order, so newest first
    within a source folder, and for a model that reads several folders one folder after the
-   other). A file counts as loaded once the fact holds a row of it: one that yields no row
-   stays pending and is read again every run. The DISTINCT is load-bearing: the log table is
-   append-only and can hold a file more than once, and MERGE only dedupes against the target,
-   never within a batch — without it a backlog is read 2-N times per batch and turns into
-   duplicate keys.
+   other). `processed_files` (`model, csv_filename, processed_at`) is appended by each
+   fact's post-hook (`macros/record_processed_files.sql`, outside the model's transaction)
+   with the files its batch merged: a file counts as processed once its batch committed,
+   whether or not it yielded a row. Until 2026-10-06 the anti-join was against the fact's
+   own `file` column — a full scan of the fact over OneLake (`fct_scada`: 80-175 s), twice
+   per model per run, to find most runs that there was nothing to do. A `rebuild=<fact>`
+   appends a reset row (`csv_filename` NULL) for it, so only files processed after the
+   reset count and the refill reads the whole archive again. The table's first build seeds
+   it from the facts' `file` columns (`rebuild=processed_files` reseeds it); the
+   `assert_all_*files_processed_*` tests still compare the log to the facts. The DISTINCT is
+   load-bearing: the log table is append-only and can hold a file more than once, and MERGE
+   only dedupes against the target, never within a batch — without it a backlog is read 2-N
+   times per batch and turns into duplicate keys.
+   **The mart models decide their dates the same way, without scanning** (2026-10-06):
+   `MIN`/`MAX` of a date column come from the Iceberg manifests
+   (`macros/date_bounds.sql`, `iceberg_column_stats()`), and the dates a run recomputes are
+   written into the SQL as literals, so every scan of a big table carries a constant `DATE`
+   filter that duckdb-iceberg prunes data files on — a subquery (`MAX(DATE) FROM ...`,
+   `DATE IN (SELECT ...)`) does not prune. `fct_summary` scanned `fct_scada` whole five times
+   and itself twice per run (450-700 s) to recompute a week; `whole_days` grouped all of
+   `fct_scada` by date for each daily table (75-100 s each). Each model logs the bounds it
+   read and the ranges it chose, so a run's log says what it decided. The `ci` target (no
+   Iceberg) reads plain `MIN`/`MAX`.
    The staging model appends only the rows the Iceberg table is missing (anti-join on
    source_type/source_filename/csv_filename against `dbt.this`). Appending the whole log every
    run grows the table by its own size 48 times a day, until the OneLake catalog answers HTTP
@@ -684,25 +706,26 @@ they are what these tables are built from.
   recreated Iceberg table to Direct Lake: a refresh 2.5 and 5 minutes after a
   `rebuild=fct_summary_daily` answered `DirectLake_TableNotFound`, at 7 minutes it passed.
 
-## Models (22)
+## Models (23)
 | Model | Schema | Materialization |
 |-------|--------|-----------------|
 | stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
+| processed_files | landing | incremental append — the files each landing fact has loaded (`model, csv_filename, processed_at`), appended by the facts' post-hooks; the pending check is the log minus this table. A `rebuild=<fact>` appends a reset row (`csv_filename` NULL); the first build seeds it from the facts' `file` columns |
 | dim_calendar | mart | incremental append (the NOT-IN filter keeps existing dates out; runs 2 years ahead) |
 | dim_duid | mart | incremental insert-only merge on DUID; NEM units from the registration list, then `duid_unregistered.csv`; registered capacity (RegCapMW etc.); `Renewable` — **the list of renewable fuels lives in this model** (an inline CTE next to `states`), nowhere else; `Classification` from the list (Scheduled / Semi-Scheduled / Non-Scheduled, stars stripped; NULL off the list): curtailment is measured on Semi-Scheduled, not on a fuel, because HPR1 (a battery) is registered with fuel "Wind". A new column or a changed rule reaches the existing rows with a `rebuild=dim_duid` |
 | fct_scada, fct_price | landing | incremental insert-only merge (by file) |
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
 | fct_interconnector_today | landing | incremental insert-only merge (by file) — the INTERCONNECTORRES rows of the same archived DispatchIS files as fct_price_today **and, despite the name, the whole history**: AEMO's monthly MMSDM archive of the same record, 2018-01 → 2026-08 (source_type `interconnector_monthly`, a finite backfill; read with `strict_mode = false`, which the files from 2024-08 need). August 2026 is in both sources, so `fct_interconnector` takes one row per interval (`MAX … GROUP BY`); the Flows page plays any range ≤ 30 days |
 | fct_regionsum_today | landing | incremental insert-only merge (by file) — the REGIONSUM rows (v9) of the same files: demand, net interchange (positive = export), regional semi-scheduled UIGF/availability/cleared MW. History's demand/net interchange come from fct_price's DREGION rows |
-| fct_summary | mart | incremental insert-only merge on (date, time, DUID) — the Power BI fact: `fct_scada` joined to `dim_duid` and `fct_price` (inner joins), then the intraday feed after the newest daily interval, for the units the daily files know (`dispatch_duids`). Every run recomputes the dates still in flux; missing keys are added, a stored value is never revised. Dates it has never seen are taken newest first, `process_limit` per run (the one difference from the example's file: uncapped, the first build ran the runner out of memory). `rebuild=fct_summary` resets it |
+| fct_summary | mart | incremental insert-only merge on (date, time, DUID) — the Power BI fact: `fct_scada` joined to `dim_duid` and `fct_price` (inner joins), then the intraday feed after the newest daily interval, for the units the daily files know (`dispatch_duids`). Every run recomputes the newest daily date minus six days on; missing keys are added, a stored value is never revised. The dates come from the Iceberg manifests and are written as literals (no scan to find them); a refill takes `process_limit` dates below the oldest it holds, newest first. `rebuild=fct_summary` resets it |
 | fct_region | mart | incremental insert-only merge on (REGIONID, date, time) — for Power BI: price, demand, net interchange and the regional semi-scheduled wind and solar. The intraday record where `fct_price_today` and `fct_regionsum_today` both have the interval, else `fct_price`'s. Recomputed whole every run (4.5M rows); the merge adds what is missing |
 | fct_rooftop | mart | incremental insert-only merge on (REGIONID, date, time) — for Power BI: the `MEASUREMENT` estimate per region and half hour as published (zeros kept, blanks out), with the half hour's average price from `fct_region`; written once its six prices exist |
 | fct_interconnector | mart | incremental insert-only merge on (interconnector, date, time) — for Power BI: `MWFLOW` and the two limits, the pricing run, one row per interval |
-| fct_curtailment | mart | incremental insert-only merge on (DUID, date) — for Power BI: curtailed and available MWh per semi-scheduled unit and day. A day is written once `fct_scada` holds its 288 intervals, `process_limit` days per run, newest first |
+| fct_curtailment | mart | incremental insert-only merge on (DUID, date) — for Power BI: curtailed and available MWh per semi-scheduled unit and day. A day is written once `fct_scada` holds its 288 intervals: the days after the newest one here, and in a refill `process_limit` days below the oldest, newest first (`macros/whole_days.sql`) |
 | dim_region | mart | incremental insert-only merge on Region — for Power BI: the regions of `dim_duid`, the one filter that reaches units, regional data and rooftop |
 | dim_time | mart | incremental insert-only merge on time — the 288 5-minute times of a day (`time` HHMM, `minute`, `hour`): the time axis of the 5-minute facts, and what the measures look at to choose a table |
 | fct_region_daily | mart | incremental insert-only merge on (REGIONID, date) — the plain average of a day's 288 intervals of `fct_region` (price, demand, net interchange); a day is written once it has all 288 |
-| fct_summary_daily | mart | incremental insert-only merge on (DUID, date) — `fct_summary` per unit and day, written once `fct_scada` holds the day whole (`macros/whole_days.sql`), `process_limit` days per run, newest first: `output_mwh`, `charging_mwh`, `revenue` (the sums the measures switch to) and `mwh` net with the region's daily `price` (no measure reads those two; Analyze lists them). Inner join to `fct_region_daily` |
+| fct_summary_daily | mart | incremental insert-only merge on (DUID, date) — `fct_summary` per unit and day, written once `fct_scada` holds the day whole (`macros/whole_days.sql`: the days after the newest one here; in a refill `process_limit` days below the oldest, newest first, never below `fct_summary`'s oldest): `output_mwh`, `charging_mwh`, `revenue` (the sums the measures switch to) and `mwh` net with the region's daily `price` (no measure reads those two; Analyze lists them). Inner join to `fct_region_daily` |
 | dim_month | mart | incremental insert-only merge on month — the whole months of `fct_summary_daily` with their number of days |
 | fct_summary_hourly | mart | incremental insert-only merge on (DUID, month, hour) — output energy per unit, whole month and hour of day (`time // 100`), 12 months per run |
 | fct_region_hourly | mart | incremental insert-only merge on (REGIONID, month, hour) — average price per region, whole month and hour of day, with the number of intervals averaged |
@@ -723,8 +746,10 @@ stops updating, that is the replacement to move to.
 place. **Rebuilding a table = dispatch `process_data.yml` with `rebuild=<table>`**: it runs
 `scripts/rebuild_table.py` (DROP, names checked against `scripts/iceberg_tables.py`) and the
 dbt run that follows recreates the table with a plain CTAS, refilling at `process_limit`
-files per run. It also works on a table the catalog can no longer serve (the pre-drop count
-is best-effort). Do not use `dbt run --full-refresh`: dbt-duckdb builds `<table>__dbt_tmp` and
+files per run (for a landing fact the script also appends the reset row to
+`processed_files`, which is what makes its files pending again; a mart table refills from
+the oldest date it holds, see Architecture point 3). It also works on a table the catalog
+can no longer serve (the pre-drop count is best-effort). Do not use `dbt run --full-refresh`: dbt-duckdb builds `<table>__dbt_tmp` and
 RENAMEs it into place, and RENAME has never been probed against this catalog. A model change
 that adds a column to an existing table goes out together with its rebuild, not ahead of it:
 the semantic model would name a column the catalog doesn't have, and dbt would try an ALTER TABLE

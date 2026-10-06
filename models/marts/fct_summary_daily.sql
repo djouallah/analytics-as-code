@@ -22,9 +22,14 @@
     tags=['powerbi']
 ) }}
 
+{#- The oldest day fct_summary holds (it fills newest first) is the floor: a day it does
+    not hold yet waits. From the manifests, like the ranges (macros/whole_days.sql). #}
+{%- set summary_min, summary_max = date_bounds(ref('fct_summary'), 'date') %}
+{%- set ranges = pending_day_ranges(floor=summary_min) %}
+
 WITH
 days AS (
-  {{ whole_days("DATE >= (SELECT MIN(date) FROM " ~ ref('fct_summary') ~ ")") }}
+  {{ whole_days(ranges) }}
 )
 
 SELECT
@@ -38,5 +43,6 @@ SELECT
 FROM {{ ref('fct_summary') }} s
 JOIN {{ ref('dim_duid') }} d ON d.DUID = s.DUID
 JOIN {{ ref('fct_region_daily') }} p ON p.REGIONID = d.Region AND p.date = s.date
-WHERE s.date IN (SELECT date FROM days)
+WHERE {{ date_ranges_sql(ranges, 's.date') }}
+  AND s.date IN (SELECT date FROM days)
 GROUP BY s.DUID, s.date

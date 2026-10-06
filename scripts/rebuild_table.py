@@ -144,10 +144,28 @@ def main():
         if not listed(schema, tbl):
             print(f"{fq} dropped via {how} ({before}); "
                   "the dbt run that follows recreates it from the archive")
-            return 0
+            break
         time.sleep(10)
-    print(f"::error::{fq} is still listed by the catalog 60s after the drop via {how}")
-    return 1
+    else:
+        print(f"::error::{fq} is still listed by the catalog 60s after the drop via {how}")
+        return 1
+
+    # A landing fact's pending files are the archive log minus landing.processed_files
+    # (macros/pending_archive_files.sql). A reset row makes every file processed before it
+    # pending again, so the refill reads the whole archive, process_limit files per run.
+    # Appended, never deleted; a missing processed_files (being rebuilt itself) needs none.
+    if schema == "landing" and tbl != "processed_files" and tbl != "stg_csv_archive_log":
+        con = connect()
+        try:
+            con.execute(
+                "INSERT INTO catalog.landing.processed_files (model, csv_filename, processed_at) "
+                "VALUES (?, NULL, now())",
+                [tbl],
+            )
+            print(f"catalog.landing.processed_files: reset row for {tbl} appended")
+        finally:
+            con.close()
+    return 0
 
 
 if __name__ == "__main__":

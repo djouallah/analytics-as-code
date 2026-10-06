@@ -16,7 +16,8 @@
     incremental_strategy='merge',
     merge_clauses={'when_matched': [{'action': 'do_nothing'}]},
     unique_key=['file', 'INTERCONNECTORID', 'SETTLEMENTDATE', 'INTERVENTION'],
-    pre_hook="{{ set_pending_archive_paths('interconnector_today_paths', ref('stg_csv_archive_log'), ['price_today', 'interconnector_monthly']) }}"
+    pre_hook="{{ set_pending_archive_paths('interconnector_today_paths', ref('stg_csv_archive_log'), ['price_today', 'interconnector_monthly']) }}",
+    post_hook={"sql": "{{ record_processed_files('interconnector_today_paths') }}", "transaction": false}
 ) }}
 
 {%- set check_files_query -%}

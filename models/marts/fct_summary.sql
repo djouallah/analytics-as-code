@@ -1,10 +1,11 @@
 -- depends_on: {{ ref('fct_scada_today') }}
 -- depends_on: {{ ref('fct_price_today') }}
+-- depends_on: {{ ref('fct_price') }}
 
 -- The table Power BI reads: one row per unit and 5 minutes with its MW and the price of its
--- region, so no report joins two facts. Ported as it is from the iceberg tree of
+-- region, so no report joins two facts. The idea is the fct_summary of the iceberg tree of
 -- djouallah/fabric-medallion-dbt-community (dbt1/models/aemo/iceberg/marts/fct_summary.sql),
--- the same fct_summary as the sibling repo's; fix it there first.
+-- the same as the sibling repo's; the dates it reads are decided differently here (below).
 --
 -- Determinism contract: same inputs => same summary, regardless of the run history. Every
 -- run emits the COMPLETE recomputation -- the same SQL as a first build -- for exactly the
@@ -15,22 +16,38 @@
 -- matched-UPDATE branch (BadRequest 400). Consequence: a re-emitted row carrying REVISED
 -- mw/price does NOT overwrite what is stored -- craters (missing keys) are repaired, changed
 -- values are not. The repair lever is rebuild=fct_summary (process_data.yml): the table is
--- dropped and the next run recomputes it.
+-- dropped and the next runs recompute it.
+--
+-- WHICH DATES, AND HOW THEY ARE FOUND (2026-10-06). The dates are decided at compile time
+-- and written into the SQL as literals, so that every scan of fct_scada carries a constant
+-- DATE filter, which duckdb-iceberg prunes data files on. The reference's SQL asked them of
+-- the data (MAX(DATE), DISTINCT DATE ... NOT IN, COUNT(DISTINCT time) per date): five full
+-- scans of fct_scada and two of this table, 450-700 s a run over OneLake, to recompute a
+-- week. The bounds come from the Iceberg manifests (macros/date_bounds.sql), not from scans.
+--   * Every run: from six days before the newest daily date on -- a date first written
+--     from the intraday feed is incomplete until its daily file lands, which is several
+--     days later if the pipeline missed a run, so a window, not just the newest date -- and
+--     the intraday feed's intervals after the newest daily interval.
+--   * Refill (a first build, or after rebuild=fct_summary): process_limit dates below the
+--     oldest date this table holds, newest first, until it reaches fct_scada's oldest. The
+--     refill is contiguous downward, so MIN(date) is the frontier; nothing is asked of
+--     this table's rows. Uncapped, the first build ran the runner out of memory (12.4 GiB,
+--     2026-10-05).
+--   * Not kept: the reference's "partially written" dates (COUNT(DISTINCT time) < 280). It
+--     repaired dates whose second daily file landed after a backfill batch had moved on.
+--     fct_scada now holds the whole archive, so a refill reads dates whose files are all
+--     there, and the window recomputes the newest week every run.
+--     tests/assert_fct_summary_no_partial_dates.sql remains the tripwire; the repair is
+--     rebuild=fct_summary.
 --
 -- No merge path DELETES a row the recomputation stops producing, which is why dispatch_duids
--- below gates the intraday branch to units the daily branch can reproduce: some
--- non-scheduled units publish SCADA telemetry and never appear in the next-day files.
--- Treat any edit to dispatch_duids as load-bearing.
---
--- TWO LOCAL DIFFERENCES. First, the catch-up obeys process_limit, like the facts. In the repos
--- this comes from, the facts fill process_limit files per run and the summary follows them,
--- so it needs no cap of its own. Here the facts already hold 8 years: an uncapped first
--- build is 230M rows in one statement and ran the runner out of memory (12.4 GiB,
--- 2026-10-05). So the dates never seen before are taken newest first, process_limit of them
--- per run (a daily file is about a date), the first build included, until none is left.
--- Second, "still in flux" takes the intraday dates from the newest daily date on. The
--- intraday table is never trimmed (no DELETE on OneLake), so taken whole its dates are
--- recomputed every run, one more each day. The older ones are settled, and the 6-day window covers the newest of them anyway.
+-- gates the intraday branch to units the daily branch can reproduce: some non-scheduled
+-- units publish SCADA telemetry and never appear in the next-day files. It is the units of
+-- the window's next-day rows: fct_scada keeps 0 MW rows, so every unit the next-day files
+-- know is in them every day, and a unit they stopped carrying can no longer be reproduced
+-- by the daily branch -- the reference's DISTINCT over all history let such a unit through,
+-- at the price of a full scan. A unit new to the next-day files is gated in from the day
+-- its first file lands. Treat any edit to it as load-bearing.
 --
 -- Tagged `powerbi`: process_data.yml builds the mart tables in a step of their own, after
 -- the landing facts they read, so a failure here cannot fail the load of those.
@@ -50,62 +67,43 @@
    glues WITH onto the `-- depends_on` comment line above, commenting the keyword out
    (the compiled SQL then starts at `daily_summary AS (` and the parser errors there). #}
 {%- set scoped = is_incremental() %}
-{%- set process_limit = env_var('process_limit', '1000') %}
+{%- set process_limit = env_var('process_limit', '1000') | int %}
+{%- set day = modules.datetime.timedelta(days=1) %}
+{%- set scada_min, scada_max = date_bounds(ref('fct_scada'), 'DATE') %}
+{%- set summary_min, summary_max = date_bounds(this, 'date') if scoped else (none, none) %}
+
+{#- The date ranges the daily branch recomputes: [from, to), to exclusive, none = open. #}
+{%- set ranges = [] %}
+{%- set scada_max_ts = none %}
+{%- if scada_max %}
+  {%- set window_from = scada_max - 6 * day %}
+  {%- if scoped %}
+    {%- do ranges.append((window_from, none)) %}
+    {%- set frontier = window_from if summary_min is none or summary_min > window_from else summary_min %}
+    {%- if scada_min and frontier > scada_min %}
+      {%- do ranges.append((frontier - process_limit * day, frontier)) %}
+    {%- endif %}
+  {%- else %}
+    {%- do ranges.append((scada_max - (process_limit - 1) * day, none)) %}
+  {%- endif %}
+  {%- if execute %}
+    {%- set scada_max_ts = run_query("SELECT CAST(MAX(SETTLEMENTDATE) AS VARCHAR) FROM " ~ ref('fct_scada')
+                                     ~ " WHERE DATE >= DATE '" ~ scada_max ~ "'").rows[0][0] %}
+  {%- endif %}
+{%- endif %}
+{%- if execute %}
+  {%- do log("fct_summary: fct_scada " ~ scada_min ~ " .. " ~ scada_max ~ " (newest interval " ~ scada_max_ts
+             ~ "), this " ~ summary_min ~ " .. " ~ summary_max ~ "; recomputing " ~ ranges_text(ranges), info=True) %}
+{%- endif %}
 
 WITH
--- The unit universe the DAILY branch can reproduce. Gates the intraday branch so it never
--- emits a unit that will be unreproducible once the date settles (see the header).
--- Deliberately UNBOUNDED, not a trailing window: fct_scada is append-only, so this set only
--- ever GROWS and can never orphan a row it previously admitted. A rolling window would
--- reintroduce the same bug from the other side — a unit ageing out of the window turns its
--- already-written intraday rows into orphans, which merge still cannot delete.
--- Outside the `scoped` block on purpose: a --full-refresh runs the intraday branch too and
--- must apply the identical filter.
 dispatch_duids AS (
   SELECT DISTINCT DUID FROM {{ ref('fct_scada') }}
-),
--- Dates whose stored content could differ from a clean recomputation. Everything older
--- is settled: its daily file has landed and been folded in, so recomputing it would
--- reproduce it exactly. Shrinking this window silently reduces what can be repaired.
-rebuild_dates AS (
-  -- Never seen before: archive backfill, or a first build catching up. Newest first,
-  -- process_limit per run (the local difference, see the header).
-  SELECT date FROM (
-    SELECT DISTINCT s.DATE AS date FROM {{ ref('fct_scada') }} s
-    WHERE s.INTERVENTION = 0
-      {% if scoped %}
-      AND s.DATE NOT IN (SELECT DISTINCT date FROM {{ this }})
-      {% endif %}
-    ORDER BY date DESC
-    LIMIT {{ process_limit }}
-  )
-  {% if scoped %}
-  UNION
-  -- Recently settled: a date first written from the intraday feed is incomplete until
-  -- its daily file lands, which is several days later if the pipeline missed a run — so
-  -- a window, not just the newest daily date.
-  SELECT DISTINCT s.DATE FROM {{ ref('fct_scada') }} s
-  WHERE s.DATE >= (SELECT MAX(DATE) - INTERVAL 6 DAY FROM {{ ref('fct_scada') }})
-  UNION
-  -- Still in flux: the intraday feed keeps extending these until their daily file lands.
-  -- From the newest daily date on (the second local difference, see the header).
-  SELECT DISTINCT s.DATE FROM {{ ref('fct_scada_today') }} s
-  WHERE s.DATE >= (SELECT MAX(DATE) FROM {{ ref('fct_scada') }})
-  UNION
-  -- Partially written and never completed. A calendar date straddles TWO PUBLIC_DAILY files
-  -- (they roll at 04:00), so a date first computed when only one had landed holds ~48 or
-  -- ~240 intervals; when the second file lands in a LATER run, a 60-file backfill batch has
-  -- moved MAX(DATE) two months past the 6-day window above and the date is never revisited.
-  -- Every batch boundary of a backfill left one (measured 2026-09-17: spark short ~30k rows
-  -- on each of 2019-01-27, 2019-11-23, 2020-01-23 after three incremental runs; the reference
-  -- repo never saw it because it loads the whole archive at once). 280 matches
-  -- assert_fct_summary_no_partial_dates. A date the SOURCE itself still lacks stays in this
-  -- set and recomputes each run until its file lands -- a few dates' scan, nothing inserts.
-  SELECT date FROM {{ this }} GROUP BY date HAVING COUNT(DISTINCT time) < 280
-  {% endif %}
+  WHERE {{ date_ranges_sql(ranges, 'DATE') }}
 ),
 
 daily_summary AS (
+  {%- for lo, hi in ranges %}
   SELECT
     s.DATE as date,
     CAST(strftime(s.SETTLEMENTDATE, '%H%M') AS INT) as time,
@@ -122,13 +120,15 @@ daily_summary AS (
     s.INTERVENTION = 0
     AND s.INITIALMW <> 0
     AND p.INTERVENTION = 0
-    AND s.DATE IN (SELECT date FROM rebuild_dates)
+    AND {{ date_ranges_sql([(lo, hi)], 's.DATE') }}
+    AND {{ date_ranges_sql([(lo, hi)], 'p.DATE') }}
   GROUP BY ALL
 
   UNION ALL
+  {%- endfor %}
 
-  -- Intraday tail: intervals beyond the daily horizon. Every date here is in
-  -- rebuild_dates by construction, so no extra scoping predicate is needed.
+  -- Intraday tail: intervals beyond the daily horizon. Its dates are in the window by
+  -- construction (they are the newest daily date and after), so no further scoping.
   SELECT
     s.DATE as date,
     CAST(strftime(s.SETTLEMENTDATE, '%H%M') AS INT) as time,
@@ -144,7 +144,13 @@ daily_summary AS (
     AND p.INTERVENTION = 0
     -- Only units the daily branch will be able to reproduce once this date settles.
     AND s.DUID IN (SELECT DUID FROM dispatch_duids)
-    AND s.SETTLEMENTDATE > (SELECT MAX(CAST(SETTLEMENTDATE AS TIMESTAMPTZ)) FROM {{ ref('fct_scada') }})
+    {%- if scada_max_ts %}
+    AND s.DATE >= DATE '{{ scada_max }}'
+    AND p.DATE >= DATE '{{ scada_max }}'
+    AND s.SETTLEMENTDATE > TIMESTAMPTZ '{{ scada_max_ts }}'
+    {%- else %}
+    AND FALSE
+    {%- endif %}
   GROUP BY ALL
 )
 
@@ -156,10 +162,12 @@ SELECT
   CAST(price AS DECIMAL(18, 4)) AS price,
   -- Provenance column only: no read path depends on it. Kept so the table has the same
   -- columns as the sibling's.
-  (SELECT GREATEST(
-    (SELECT MAX(CAST(SETTLEMENTDATE AS TIMESTAMPTZ)) FROM {{ ref('fct_scada') }}),
-    COALESCE((SELECT MAX(CAST(SETTLEMENTDATE AS TIMESTAMPTZ)) FROM {{ ref('fct_scada_today') }}), CAST('1900-01-01' AS TIMESTAMPTZ))
-  )) AS cutoff
+  GREATEST(
+    TIMESTAMPTZ '{{ scada_max_ts or "1900-01-01 00:00:00+00" }}',
+    COALESCE((SELECT MAX(SETTLEMENTDATE) FROM {{ ref('fct_scada_today') }}
+              {%- if scada_max %} WHERE DATE >= DATE '{{ scada_max }}'{% else %} WHERE FALSE{% endif %}),
+             TIMESTAMPTZ '1900-01-01 00:00:00+00')
+  ) AS cutoff
 FROM daily_summary
 -- As in the sibling's copies. It makes no claim about physical layout: this SQL is a merge
 -- SOURCE, so nothing about the ordering reaches the stored table.

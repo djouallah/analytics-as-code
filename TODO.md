@@ -23,23 +23,21 @@ only: a finished item is removed, not ticked.
   only an item's owner can deploy to it. When it is fixed: dispatch the workflow with
   `app=wasm` and open `nemtracker`.
   Until then the app is deployed from the laptop (`cd dashboard/fabric_app_wasm && npx rayfin up`).
-- [ ] **What the mart step costs once the backfill is over** — read the model timings of a
-  Process Data run when `fct_summary_daily` reaches back to 2018-03. During the backfill
-  (run 37312125168, 2026-10-05, dispatched with `debug`): `fct_summary` 460 s,
-  `fct_summary_daily` 79 s, `fct_curtailment` 67 s, nearly all of it the model's SELECT, not
-  the MERGE (10 s on `fct_summary`). If they stay there with one new day to write, it is a
-  problem: `whole_days` reads all of `fct_scada` to find the whole days, and
-  `fct_summary_daily` filters `fct_summary` with a subquery, not constants (not measured
-  whether the scan skips files on it). A pre-hook that puts the days to write in a variable,
-  as the fact models do with their files, would make the filter constants, but first find
-  out whether duckdb-iceberg skips data files on a filter at all: in Import Data the copy of
-  the newest 14 days (1.1M rows of `fct_summary`, `WHERE date >= ...`) takes 28 s and the
-  copy of all four tables whole (162M rows) 32 s, about 10 s of each being start-up
-  (2026-10-05, before the first compaction of these tables). If it does not, the days have
-  to come from a small table instead of a filter on a big one.
-  2026-10-06: `fct_summary` 793 s and 706 s, then 739 s once it took the intraday dates
-  only from the newest daily date on (run 37401075745): those dates are not where its time
-  goes. Next step is a run dispatched with `debug`, to see which statement it is.
+- [ ] **The empty MERGE** — a landing fact with no new file still creates its temp table
+  and runs `MERGE` against the target (5-7 s each, seven facts a run). Skipping it needs a
+  custom incremental strategy (dbt-duckdb looks up `get_incremental_<name>_sql`) that
+  counts the temp table first. Worth it only if the run total still matters after
+  2026-10-06.
+- [ ] **The intraday tables are never trimmed** (`fct_scada_today`, `fct_price_today`,
+  `fct_regionsum_today`: no DELETE on OneLake). Since 2026-10-06 the scans that read them
+  are bounded by the newest daily date, so growth costs file pruning, not rows; the
+  tables themselves still grow by about a month's intervals a month, and a
+  `rebuild=<table>` of one re-reads every intraday file in the log. If that ever hurts, the
+  log could stop listing intraday files older than the newest daily file.
+- [ ] **A refill is not exercised by CI** — `fct_summary`, `fct_summary_daily` and
+  `fct_curtailment` refill downward from the oldest date they hold (2026-10-06); the next
+  `rebuild=` of one of them is the first run of that path on the catalog. Read its log
+  line ("recomputing" / "looking at") on each run until it reaches `fct_scada`'s oldest.
 
 ## Bigger
 

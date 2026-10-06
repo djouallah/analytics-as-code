@@ -10,7 +10,8 @@
     incremental_strategy='merge',
     merge_clauses={'when_matched': [{'action': 'do_nothing'}]},
     unique_key=['file', 'REGIONID', 'SETTLEMENTDATE','INTERVENTION'],
-    pre_hook="{{ set_pending_archive_paths('price_today_paths', ref('stg_csv_archive_log'), 'price_today') }}"
+    pre_hook="{{ set_pending_archive_paths('price_today_paths', ref('stg_csv_archive_log'), 'price_today') }}",
+    post_hook={"sql": "{{ record_processed_files('price_today_paths') }}", "transaction": false}
 ) }}
 
 {% set csv_archive_path = get_csv_archive_path() %}

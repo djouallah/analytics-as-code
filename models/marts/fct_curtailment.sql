@@ -12,9 +12,11 @@
 -- A DAY IS WRITTEN ONCE, WHEN IT IS WHOLE: when fct_scada holds its 288 intervals. A
 -- calendar date straddles two daily files, and a day summed from one of them could not be
 -- completed afterwards (insert-only merge on the grain: a stored value is not revised).
--- Days not written yet are taken newest first, process_limit per run, like fct_summary: the
--- fact is 300M rows. A unit that is not Semi-Scheduled in dim_duid when its day is written
--- is not there; rebuild=fct_curtailment recomputes everything.
+-- Which days are looked at is decided from the Iceberg manifests and written as literals
+-- (macros/whole_days.sql): the days after the newest one here, and in a refill
+-- process_limit days below the oldest, newest first. A unit that is not Semi-Scheduled in
+-- dim_duid when its day is written is not there; rebuild=fct_curtailment recomputes
+-- everything.
 {{ config(
     materialized='incremental',
     incremental_strategy='merge',
@@ -24,14 +26,17 @@
     tags=['powerbi']
 ) }}
 
+{%- set ranges = pending_day_ranges() %}
+
 WITH
 days AS (
-  {{ whole_days() }}
+  {{ whole_days(ranges) }}
 ),
 intervals AS (
   SELECT DUID, DATE AS date, MAX(AVAILABILITY) AS available, MAX(TOTALCLEARED) AS target
   FROM {{ ref('fct_scada') }}
   WHERE INTERVENTION = 0
+    AND {{ date_ranges_sql(ranges, 'DATE') }}
     AND DATE IN (SELECT date FROM days)
     AND DUID IN (SELECT DUID FROM {{ ref('dim_duid') }} WHERE Classification = 'Semi-Scheduled')
   GROUP BY DUID, DATE, SETTLEMENTDATE

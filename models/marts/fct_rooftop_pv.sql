@@ -19,7 +19,8 @@
     incremental_strategy='merge',
     merge_clauses={'when_matched': [{'action': 'do_nothing'}]},
     unique_key=['file', 'REGIONID', 'INTERVAL_DATETIME', 'TYPE'],
-    pre_hook="{{ set_pending_archive_paths('rooftop_pv_paths', ref('stg_csv_archive_log'), ['rooftop_today', 'rooftop_weekly', 'rooftop_monthly']) }}"
+    pre_hook="{{ set_pending_archive_paths('rooftop_pv_paths', ref('stg_csv_archive_log'), ['rooftop_today', 'rooftop_weekly', 'rooftop_monthly']) }}",
+    post_hook={"sql": "{{ record_processed_files('rooftop_pv_paths') }}", "transaction": false}
 ) }}
 
 {%- set check_files_query -%}

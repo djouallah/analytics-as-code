@@ -1,6 +1,16 @@
 version: 2
 
 models:
+  - name: processed_files
+    description: The archived files each landing fact has loaded, appended by the fact's post-hook once its batch's MERGE committed. A fact's pending files are the archive log minus this table; a rebuild appends a reset row (csv_filename NULL) so the refill starts over. Seeded from the facts' file columns on its first build
+    columns:
+      - name: model
+        description: The landing fact (fct_scada, fct_price, fct_scada_today, fct_price_today, fct_regionsum_today, fct_interconnector_today, fct_rooftop_pv)
+      - name: csv_filename
+        description: The archived file, as the fact's `file` column names it; NULL for a reset row
+      - name: processed_at
+        description: When the batch committed, or when the reset was asked for
+
   - name: fct_price
     description: Regional spot prices, demand and supply every 5 minutes, from the DREGION rows of AEMO's next-day PUBLIC_DAILY files (history back to 2018)
     columns:
