@@ -105,7 +105,9 @@ Four deliberate local differences, all of which must survive a port:
    and itself twice per run (450-700 s) to recompute a week; `whole_days` grouped all of
    `fct_scada` by date for each daily table (75-100 s each). Each model logs the bounds it
    read and the ranges it chose, so a run's log says what it decided. The `ci` target (no
-   Iceberg) reads plain `MIN`/`MAX`.
+   Iceberg) reads plain `MIN`/`MAX`. Measured on the first run (37408067580, 2026-10-06):
+   `fct_scada` with nothing to do 5 s, `fct_summary` 47 s (its MERGE 22 s of it),
+   `fct_summary_daily` 7 s, `fct_curtailment` 33 s; the mart step 3.5 min against 16.
    The staging model appends only the rows the Iceberg table is missing (anti-join on
    source_type/source_filename/csv_filename against `dbt.this`). Appending the whole log every
    run grows the table by its own size 48 times a day, until the OneLake catalog answers HTTP
