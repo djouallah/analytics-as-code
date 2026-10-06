@@ -37,6 +37,9 @@ only: a finished item is removed, not ticked.
   copy of all four tables whole (162M rows) 32 s, about 10 s of each being start-up
   (2026-10-05, before the first compaction of these tables). If it does not, the days have
   to come from a small table instead of a filter on a big one.
+  2026-10-06: `fct_summary` 793 s and 706 s, then 739 s once it took the intraday dates
+  only from the newest daily date on (run 37401075745): those dates are not where its time
+  goes. Next step is a run dispatched with `debug`, to see which statement it is.
 
 ## Bigger
 
