@@ -9,10 +9,12 @@ market (AEMO).
 - **dbt + DuckDB** on GitHub Actions load the data into **Iceberg** tables, every 30 minutes.
 - **One Power BI semantic model** ([`semantic_model/`](semantic_model/)) describes those
   tables: their relationships and the measures, in DAX.
-- **Three clients** read it ([`dashboard/`](dashboard/)):
+- **Four clients** read it ([`dashboard/`](dashboard/)):
   - **GitHub Pages** ([live](https://nemtracker.github.io/), public) and a **Microsoft
     Fabric app** (Fabric sign-in): the same page. No server: the browser runs the queries
     itself (DuckDB-WASM) on a cached copy of the tables.
+  - a second **Fabric app**, the same page with no DuckDB: its DAX queries go to the
+    deployed model as they are written, and Power BI runs them.
   - a **Power BI report**, on the same model in Direct Lake.
 - **[`compiler.js`](dashboard/github/semantic/compiler.js)** is what lets the page read a
   Power BI model without Power BI: it turns the model into DuckDB views and the page's DAX

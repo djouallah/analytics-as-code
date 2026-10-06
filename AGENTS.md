@@ -145,17 +145,22 @@ transport fails the OneLake TLS handshake).
 
 ## Dashboard
 **The layout says who reads the model** (the owner's, 2026-10-05): `semantic_model/` at the
-top of the repo is the one semantic model, and `dashboard/` holds its three clients:
-`github/` (the page, on GitHub Pages), `fabric_app_wasm/` (the same page as a Fabric app) and
-`powerbi/` (`nem.Report`, a report over the deployed model).
+top of the repo is the one semantic model, and `dashboard/` holds its four clients:
+`github/` (the page, on GitHub Pages), `fabric_app_wasm/` (the same page as a Fabric app, on
+DuckDB-WASM), `fabric_app_vertipaq/` (the same page as a Fabric app, its DAX run by the
+deployed model: see "The Fabric app on VertiPaq") and `powerbi/` (`nem.Report`, a report over
+the deployed model). The two Fabric apps are named by their engine (the owner's, 2026-10-06).
 **The GitHub page is the critical one: it is public and must never break** (the owner's,
-2026-10-05). The Fabric app and Power BI are internal: they should not break either, but it
-is not the end of the world if one does. So a change that touches what the three share (the
+2026-10-05). The Fabric apps and Power BI are internal: they should not break either, but it
+is not the end of the world if one does. So a change that touches what they share (the
 model, the `mart` tables, the page's files) is checked on the public page first and goes
 out only when that check is clean, and where the clients pull apart the public page wins.
 The page has the layers of a BI stack, each in its own place under `dashboard/github/` (the
-table of what stands in each place in a real product is in `ARCHITECTURE.md`), and two hosts:
-GitHub Pages and a Fabric app. Everything is the same file on both except `storage/data.js`.
+table of what stands in each place in a real product is in `ARCHITECTURE.md`), and two hosts
+that run it on DuckDB-WASM: GitHub Pages and a Fabric app. Everything is the same file on
+both except `storage/data.js`. On the third host, the Fabric app on VertiPaq, the last three
+layers are Power BI's, and of this list it has `index.html`, its own `storage/data.js` and
+the Logs tab.
 - consumer: `index.html`
 - query language: DAX, written in the page
 - semantic model: `semantic_model/model.bim` (at the top of the repo), a Tabular model in TMSL
@@ -174,6 +179,11 @@ don't grow it into a general engine. Of the rules a query compiler applies on it
 applies one, when a join is needed (below). Which table a measure reads is the model's rule,
 which the compiler answers from the query; which grain a date range gets, and MW to MWh, are
 still the page's.
+**The page's DAX has to be right in DAX, not only through the compiler** (2026-10-06): the
+Fabric app on VertiPaq sends it to Power BI as written. Where the two would differ, the
+query is written for DAX and the compiler gets the case. The one found so far: a filter
+inside `CALCULATE` replaces the ones around it on the same column, so the KPI deltas wrap
+theirs in `KEEPFILTERS`, which the compiler reads as the filter itself.
 
 **A figure the model can express is a measure there, the one Power BI calls, and the page
 asks for it** (the owner's, 2026-10-05, angrily, on finding that the page worked most of its
@@ -320,7 +330,9 @@ and anything that serves the page from the repo has to do the same.
   - `dashboard/fabric_app_wasm/site/storage/data.js`, the Fabric app: the files are in a lakehouse behind a
     Fabric sign-in, read with a short-lived read-only SAS, and downloaded as 2 MB Range
     requests, 6 at a time. Its own, and unknown to the page: the sign-in gate (`auth.js`,
-    next to it).
+    next to it) and the SAS (`sas.js`).
+  The Fabric app on VertiPaq has a third, `dashboard/fabric_app_vertipaq/site/storage/data.js`,
+  with the same members and none of this: it attaches nothing and sends the DAX to the model.
   The history is never read in place over HTTP: duckdb-wasm reads a remote file one block
   at a time, three round trips each, and OneLake answers one in ~700 ms whatever its size
   (one 2024 day took 38 s that way, 2026-10-04).
@@ -422,8 +434,12 @@ function, `getDataSas` (`dashboard/fabric_app_wasm/rayfin/functions`), which sig
 folder so that the browser never holds a storage token. `dashboard/fabric_app_wasm/build.mjs` assembles
 `dashboard/fabric_app_wasm/dist`: `index.html`, the three folders and `dag/` from `dashboard/github/`,
 `semantic_model/model.bim`, with
-`dashboard/fabric_app_wasm/site/` copied over them (`storage/data.js`, its own, and `storage/auth.js`), and
+`dashboard/fabric_app_wasm/site/` copied over them (`storage/data.js`, its own, `storage/auth.js` and
+`storage/sas.js`), and
 `?v=<build>` added to every relative import; `compiler.js` passes its own on to `model.bim`.
+`build.mjs` is the build of both Fabric apps: the project is the working directory, and the
+page folders to take besides `frontend/` are its arguments (`semantic storage` here, none
+for the VertiPaq app). `site/storage/auth.js` here is the sign-in of both, copied into each.
 
 **It is deployed from the owner's laptop**, under their own login:
 ```
@@ -468,6 +484,40 @@ Rules of the Fabric host that are easy to break:
   Fabric sign-in popup.
 To check a deploy, open the Logs tab: the build stamp, each fetch, attach and query.
 
+### The Fabric app on VertiPaq (2026-10-06)
+`dashboard/fabric_app_vertipaq/` is the same page with the deployed semantic model as its
+engine: the page's DAX goes to `nem` as written and Power BI runs it, in Direct Lake over
+the `mart` tables. **It talks to Power BI only, and nothing of the DuckDB path is in it**
+(the owner's, 2026-10-06): no DuckDB-WASM, no `.duckdb` file, no compiler, no `model.bim`,
+no function, no SAS. Its `dist` is `index.html`, `frontend/`, `storage/data.js` and
+`storage/auth.js`, and `semantic/compiler.js`, which here is one line
+(`createModel = data => data`) standing where the compiler does so that `index.html` is the
+same file.
+- **How it reaches the model:** a Rayfin connector, `nem` in `rayfin/rayfin.yml` (type
+  `fabric-semanticmodel`, one operation, `executeQuery`, delegated). The browser calls the
+  app's backend, which runs the query on the model as the signed-in user: the browser holds
+  no Power BI token, and a reader sees what their own access to the model allows. A function
+  could not do it: functions have no Power BI audience and run as the item's owner.
+  `rayfin.yml` names the workspace and the model by id, as literals: `rayfin connector add`
+  refuses placeholders.
+- **It lives in workspace `power`**, next to the model (the owner's, 2026-10-06), not in the
+  other app's tenant. Deployed from the laptop, as the other one is, under a login of that
+  tenant.
+- **`storage/data.js`** has the members the page calls. `query` hands back the shape the
+  page reads from DuckDB: Power BI names a column `table[column]` or `[alias]` and the page
+  asks for the bare name; a date comes back as a date and time and the page wants the day.
+  `has` is always true: the model holds every table. There is no `needs`, which is how the
+  page knows to leave the Analyze tab out (it is SQL).
+- **What differs from the other hosts, by design of DAX:** `SUMMARIZECOLUMNS` drops a group
+  whose measures are all blank, where the compiler keeps it; `TOPN` keeps ties. A long range
+  still ends on the newest whole day, because the page's own filter says so (`wholeDays`).
+- **Not deployed yet, and `rayfin.yml` has no `connectors:` entry yet:** `rayfin connector
+  add` writes it, and that and the first deploy wait for an interactive login to the `power`
+  tenant (it asks for MFA). Until it has run in a browser nothing here is proven beyond the
+  build: `rayfin connector invoke nem executeQuery --file <json>` is the first check (the
+  DAX, under the developer's identity), and the deployed page drawing rows is the second
+  (the delegated path, which can refuse where the first passed).
+
 A table or a column the page asks for and a deployed file lacks reads as "no data" where
 the page checks (`data.has`), so a new page can go out before its data; a new table goes
 into `cache_catalog.py`'s lists once it is a dbt model and a table of `model.bim`.
@@ -483,7 +533,8 @@ that have left the list are not counted.
 
 ## The semantic model, for Power BI and for the dashboard (2026-10-05)
 The core of the project is the Iceberg catalog and a semantic model. Three consumers are
-meant to read it: the two DuckDB-WASM hosts above, and Power BI in Direct Lake. The owner's
+meant to read it: the two DuckDB-WASM hosts above, and Power BI in Direct Lake (since
+2026-10-06 also from the page, in the Fabric app on VertiPaq). The owner's
 order: keep the existing tables and the dashboard as they are, add the tables Power BI needs
 next to them, deploy the model and check it, and only then port `compiler.js` and the cache
 to it (the import ends as a copy with no rule of its own). **All of it is done
