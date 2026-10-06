@@ -18,9 +18,10 @@ only: a finished item is removed, not ticked.
   check Process Data, maintenance and import; update AGENTS.md's version policy.
 - [ ] **Capability probe** (separate repo, manual) — re-run against the 2.0 pin.
 - [ ] **Fabric app from CI** — waiting on microsoft/rayfin#89. The CI deploy works
-  (`deploy_fabric.yml`, dispatch-only, into its own item `nemtracker`), but Fabric answers
-  500 to every function call on an item owned by a service principal, and only an item's
-  owner can deploy to it. When it is fixed: dispatch the workflow and open `nemtracker`.
+  (`deploy_fabric.yml` with `app=wasm`, dispatch-only, into its own item `nemtracker`), but
+  Fabric answers 500 to every function call on an item owned by a service principal, and
+  only an item's owner can deploy to it. When it is fixed: dispatch the workflow with
+  `app=wasm` and open `nemtracker`.
   Until then the app is deployed from the laptop (`cd dashboard/fabric_app_wasm && npx rayfin up`).
 - [ ] **What the mart step costs once the backfill is over** — read the model timings of a
   Process Data run when `fct_summary_daily` reaches back to 2018-03. During the backfill

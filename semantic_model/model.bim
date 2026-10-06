@@ -1026,7 +1026,7 @@
       },
       {
         "name": "fct_summary_daily",
-        "description": "Energy per unit and day: fct_summary one grain up, whole days only (a day is written once the next-day files hold all of it). The measures of fct_summary read this table when no time of day is asked for: output_mwh, charging_mwh and revenue are the day's sums of what they sum at 5 minutes, so the answer is the same. mwh (net) and price (the day's average) are the dashboard's own long-range figures.",
+        "description": "Energy per unit and day: fct_summary one grain up, whole days only (a day is written once the next-day files hold all of it). The measures of fct_summary read this table when no time of day is asked for: output_mwh, charging_mwh and revenue are the day's sums of what they sum at 5 minutes, so the answer is the same. mwh (net) and price (the day's average) are not the same numbers and no measure reads them: they are kept for the dashboard's Analyze tab, which is SQL.",
         "sourceLineageTag": "[mart].[fct_summary_daily]",
         "columns": [
           {

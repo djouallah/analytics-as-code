@@ -29,13 +29,17 @@ the other `mart` tables and through the same semantic model as Power BI.
 **Look there first for fixes, and port them rather than diverging.** Worth knowing: there,
 downloading lives outside dbt and the log is read straight from parquet, not from an Iceberg
 table.
-Three deliberate local differences, all of which must survive a port:
+Four deliberate local differences, all of which must survive a port:
+- `fct_summary` takes the dates it has never seen `process_limit` at a time (uncapped, the
+  first build ran the runner out of memory), and takes the intraday table's dates only from
+  the newest daily date on (that table is never trimmed, so taken whole it is one more day
+  recomputed every run). Its header says both.
 - No `relationships → dim_duid` tests on `fct_scada`/`fct_scada_today` — `dim_duid` holds the
   registered DUIDs plus the unlisted ones that generated, while the facts go back to 2018 and
   also carry units only ever dispatched at 0 MW, so the test could never be 0.
   `tests/assert_recent_scada_duids_registered.sql` is the meaningful version and is this
   repo's own.
-- `tests/assert_all_*_files_processed_*.sql` use `NOT EXISTS` and are untagged; the sibling's
+- `tests/assert_all_*files_processed_*.sql` use `NOT EXISTS` and are untagged; the sibling's
   use `NOT IN` (a single NULL `file` makes them permanently green) and are tagged `heavy`.
 - `profiles.yml` keeps a `ci` target (plain DuckDB, no Iceberg; `build.yml` gives it a file,
   `ci.duckdb`), and `dbt_project.yml`'s `on-run-start` hooks are guarded with
@@ -99,7 +103,9 @@ Three deliberate local differences, all of which must survive a port:
    so something on the OneLake side already trims them; treat this step as a bounded safety
    net, and if a table is ever seen above ~48 snapshots that assumption has changed. The job
    takes a job-level `process-data` concurrency group — both operations commit
-   optimistically, so an overlap with a load could fail one side. It is `continue-on-error`
+   optimistically, so an overlap with a load could fail one side. GitHub keeps one pending
+   run per group: while compaction holds it, each new Process Data run replaces the one
+   waiting, and a maintenance job still waiting is replaced by the next Process Data run. It is `continue-on-error`
    and both scripts always exit 0: maintenance must never fail its workflow (a red run there
    means a dbt test failed). The price of that is that a compaction that has stopped working
    only shows in the job's log. Both scripts read their table list from
@@ -181,9 +187,13 @@ which the compiler answers from the query; which grain a date range gets, and MW
 still the page's.
 **The page's DAX has to be right in DAX, not only through the compiler** (2026-10-06): the
 Fabric app on VertiPaq sends it to Power BI as written. Where the two would differ, the
-query is written for DAX and the compiler gets the case. The one found so far: a filter
-inside `CALCULATE` replaces the ones around it on the same column, so the KPI deltas wrap
-theirs in `KEEPFILTERS`, which the compiler reads as the filter itself.
+query is written for DAX and the compiler gets the case. Found so far: a filter inside
+`CALCULATE` replaces the ones around it on the same column, so the KPI deltas and "Right
+now"'s generator column (a filter on the fuel it is grouped by) wrap theirs in
+`KEEPFILTERS`, which the compiler reads as the filter itself; and a fact's own column does
+not filter a dimension, so a query that reads a unit's attribute per unit
+(`SELECTEDVALUE(dim_duid[StationName])`) groups by `dim_duid[DUID]`, which the compiler
+reads off the fact.
 
 **A figure the model can express is a measure there, the one Power BI calls, and the page
 asks for it** (the owner's, 2026-10-05, angrily, on finding that the page worked most of its
@@ -199,6 +209,8 @@ stays the page's, each for its reason:
 - what the model does not hold: rooftop's newest half hour carried forward, and so the
   renewable share up to 30 days, "Right now" and rooftop's average day (their parts are
   measures, the division is in JS);
+- the Flows readout: the renewable share of the frame being played, from the unit and
+  rooftop rows the animation already holds (a measure would be a query per frame);
 - the curtailment total in the chart's title: the farms' table to its newest day plus
   AEMO's regional figures after it, two tables the model has no one measure for;
 - shaping rows: rename, `UNION` with rooftop, add up the rows of an additive measure (the
@@ -255,7 +267,7 @@ and anything that serves the page from the repo has to do the same.
   in a `description`, and a long expression is an array of lines.
 - `dashboard/github/semantic/compiler.js` has two parts (`createModel(dataSource)`: the data
   source's members plus `has`, `needs` and `toSQL`). **It is a toy on purpose** (the owner,
-  2026-10-05): the example of the one layer of the stack with no open-source equivalent. It
+  2026-10-05): an example of where that layer of the stack sits, not a DAX engine. It
   translates what this page asks, by fixed cases; it does not plan, and a construct it cannot
   translate gets its equivalent SQL written here, never a general mechanism.
   The model: a view `v_<table>` per table of the model, over the files that are attached
@@ -459,7 +471,8 @@ it; the owner is also the identity `getDataSas` reads the lakehouse as. That is 
 laptop and CI cannot share an item: a deploy to someone else's fails with
 `403 Only AppBackend artifact owner can perform this operation`.
 
-**`deploy_fabric.yml` is parked** (dispatch only), waiting for a fix upstream. It runs the
+**`deploy_fabric.yml` with `app=wasm` is parked** (dispatch only), waiting for a fix
+upstream (with `app=vertipaq` it deploys the other app, below). It runs the
 same `rayfin up` with a Fabric API token from the OIDC login, no secret, into an item of its
 own (`nemtracker`), and the deploy works. The app it makes does not: Fabric answers 500
 ("An internal error occurred.") to every function call on an item owned by a service
@@ -489,7 +502,7 @@ To check a deploy, open the Logs tab: the build stamp, each fetch, attach and qu
 engine: the page's DAX goes to `nem` as written and Power BI runs it, in Direct Lake over
 the `mart` tables. **It talks to Power BI only, and nothing of the DuckDB path is in it**
 (the owner's, 2026-10-06): no DuckDB-WASM, no `.duckdb` file, no compiler, no `model.bim`,
-no function, no SAS. Its `dist` is `index.html`, `frontend/`, `storage/data.js` and
+no function, no SAS. Its `dist` is `index.html`, `frontend/`, `dag/`, `storage/data.js` and
 `storage/auth.js`, and `semantic/compiler.js`, which here is one line
 (`createModel = data => data`) standing where the compiler does so that `index.html` is the
 same file.
@@ -546,9 +559,9 @@ Only units on the current registration list have a classification, so semi-sched
 that have left the list are not counted.
 
 ## The semantic model, for Power BI and for the dashboard (2026-10-05)
-The core of the project is the Iceberg catalog and a semantic model. Three consumers are
-meant to read it: the two DuckDB-WASM hosts above, and Power BI in Direct Lake (since
-2026-10-06 also from the page, in the Fabric app on VertiPaq). The owner's
+The core of the project is the Iceberg catalog and a semantic model. Four clients are
+meant to read it: the two DuckDB-WASM hosts above, the Fabric app on VertiPaq (since
+2026-10-06), and Power BI in Direct Lake. The owner's
 order: keep the existing tables and the dashboard as they are, add the tables Power BI needs
 next to them, deploy the model and check it, and only then port `compiler.js` and the cache
 to it (the import ends as a copy with no rule of its own). **All of it is done
@@ -717,9 +730,9 @@ that adds a column to an existing table goes out together with its rebuild, not 
 the semantic model would name a column the catalog doesn't have, and dbt would try an ALTER TABLE
 that has never been probed either.
 
-## Profiles: ci (plain DuckDB, no Iceberg), dev/prod (OneLake Iceberg REST catalog, the same one)
-
 ## Key Patterns
+- Profiles: `ci` (plain DuckDB, no Iceberg), `dev`/`prod` (the OneLake Iceberg REST
+  catalog, the same one).
 - **SETTLEMENTDATE is AEST wall clock stored as TIMESTAMPTZ labelled UTC.** The models cast
   the CSV string to TIMESTAMPTZ in a session whose zone is UTC, so the instant in the column
   is 10h early; the `DATE`/`YEAR` columns next to it are cast from the string and are right.

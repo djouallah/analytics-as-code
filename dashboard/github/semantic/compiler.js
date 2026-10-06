@@ -14,8 +14,8 @@
 // it holds DAX only, and nothing in it is written for this compiler. The builds put it next
 // to this file.
 //
-// This compiler is a toy, on purpose: the example of the one layer with no open-source
-// equivalent, not a DAX engine. It knows the constructs the page uses and throws on anything
+// This compiler is a toy, on purpose: an example of where that layer sits, not a DAX
+// engine. It knows the constructs the page uses and throws on anything
 // else; what it cannot translate has its equivalent SQL written here, as a fixed case. Where
 // DAX and SQL differ the result is SQL's: a blank is a NULL, and a group whose measures are
 // all blank is kept. There is no filter context: a filter is a boolean argument of

@@ -95,8 +95,8 @@ the same DAX to the deployed model, and Power BI's formula engine and VertiPaq s
   with a description. It is a real Power BI model (`model.bim`), the same file that is
   deployed to Fabric: it holds DAX only, and nothing in it is written for the page.
 - **The compiler** turns it into DuckDB views, and turns the page's DAX queries
-  into SQL over them. It is a toy, on purpose: this is the one layer with no open-source
-  equivalent, and the file is there to show where it sits. It knows the constructs this
+  into SQL over them. It is a toy, on purpose: the file is there to show where that layer
+  sits. It knows the constructs this
   page uses and nothing else.
 - **The query language** is where the layers show. SQL asks for tables, while a semantic
   model offers tables that know how they relate; the page asks in DAX for `fct_summary[mw]`
@@ -164,7 +164,8 @@ The Fabric app is an experiment, with limits of its own:
 The catalog is the **OneLake Iceberg REST catalog** (a Microsoft Fabric lakehouse). In CI the
 values come from GitHub repository **variables** (`WS_ID`, `LH_ID`, `AZURE_TENANT_ID`,
 `AZURE_CLIENT_ID` — public identifiers, no secrets) plus a per-run token minted after an OIDC
-federated `azure/login`:
+federated `azure/login`. The Fabric app's deploys and data add `LAKE_TENANT_ID`,
+`LAKE_CLIENT_ID`, `FABRIC_APP_WORKSPACE_ID` and `ONELAKE_FILES_URL`.
 
 | Variable | Description |
 |----------|-------------|
@@ -175,7 +176,8 @@ federated `azure/login`:
 | `download_limit` | Files fetched per feed per run (default 2; the workflow uses 200) |
 | `process_limit` | Files loaded per fact model per run (default 1000; the workflow uses 300) |
 | `AZURE_TRANSPORT_OPTION_TYPE`, `CURL_CA_INFO` | `curl` and the CA bundle, on GitHub runners only |
-| `GITHUB_TOKEN` | Optional: authenticated GitHub API calls for the backfill listings |
+| `ALL_PERIODS` | `true` copies every half-year file into the dashboard's files, not only the latest two (Import Data on dispatch, Import OneLake always) |
+| `GITHUB_TOKEN` | Authenticated GitHub API calls for the backfill listings and the DUID registration list; the workflows pass it, since anonymous calls from shared runners get rate-limited |
 | `NEMTRACKER_TOKEN` | The one secret: pushes the dashboard to its GitHub Pages repo |
 
 ### Local Development
@@ -228,6 +230,6 @@ Then run the **Import OneLake** workflow to fill the lakehouse (`LAKE_TENANT_ID`
 the workspace), and open the app in the Fabric portal or in its own tab.
 
 `deploy_fabric.yml` runs the same deploy from CI with that Entra app, no secret, into an item
-of its own, because only an item's owner can deploy to it. It is parked: functions do not
-run yet on an item owned by a service principal (microsoft/rayfin#89), so the app is
-deployed from a laptop.
+of its own, because only an item's owner can deploy to it. With `app=wasm` it is parked:
+functions do not run yet on an item owned by a service principal (microsoft/rayfin#89), so
+this app is deployed from a laptop. With `app=vertipaq` it is how the other app deploys.
