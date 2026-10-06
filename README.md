@@ -14,7 +14,8 @@ market (AEMO).
     Fabric app** (Fabric sign-in): the same page. No server: the browser runs the queries
     itself (DuckDB-WASM) on a cached copy of the tables.
   - a second **Fabric app**, the same page with no DuckDB: its DAX queries go to the
-    deployed model as they are written, and Power BI runs them.
+    deployed model as they are written, and Power BI runs them. Built, not deployed yet:
+    Fabric apps are not available in the model's region.
   - a **Power BI report**, on the same model in Direct Lake.
 - **[`compiler.js`](dashboard/github/semantic/compiler.js)** is what lets the page read a
   Power BI model without Power BI: it turns the model into DuckDB views and the page's DAX

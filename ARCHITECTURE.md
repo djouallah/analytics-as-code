@@ -55,6 +55,8 @@ One semantic model (`semantic_model/model.bim`), four clients under `dashboard/`
   has no data files, no DuckDB and no compiler: the DAX the page writes is sent to the model
   as it is, and Power BI runs it (VertiPaq, in Direct Lake over the Iceberg tables). It is
   the check that the page's DAX is DAX. The Analyze tab, which is SQL, is not in it.
+  **It is built but not deployed yet:** the model's workspace is in Australia Southeast,
+  a region where Fabric apps (preview) are not available.
 - `powerbi/` is a Power BI report (`nem.Report`, as JSON) on the model as deployed to Fabric,
   which reads the Iceberg tables in Direct Lake. `deploy_model.yml` publishes the two together.
 
@@ -68,7 +70,7 @@ A measure is written once, in the model, and reaches all four.
 | Data files | next to the page | a lakehouse, under `Files/data` | none: the model reads the Iceberg tables |
 | 5-minute history | one file per half-year (GitHub's 100 MB limit), downloaded | the same half-year files, downloaded as parallel range requests | in the model |
 | Host code | `dashboard/github/storage/data.js` | `dashboard/fabric_app_wasm/site/storage/` | `dashboard/fabric_app_vertipaq/site/` |
-| Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `dashboard/fabric_app_wasm/` (page), `import_onelake.yml` (data) | `rayfin up` from `dashboard/fabric_app_vertipaq/` (page), `deploy_model.yml` (model) |
+| Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `dashboard/fabric_app_wasm/` (page), `import_onelake.yml` (data) | `deploy_fabric.yml` (page; not deployed yet), `deploy_model.yml` (model) |
 
 ### The layers of the dashboard
 

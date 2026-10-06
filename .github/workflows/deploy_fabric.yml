@@ -6,6 +6,9 @@ name: Deploy Fabric
 #   vertipaq   dashboard/fabric_app_vertipaq/: the page's DAX is run by the deployed semantic
 #              model. Deployed next to the model, into the catalog's workspace, as the
 #              catalog's identity (the login of deploy_model.yml): item `vertipaq`.
+#              Refused so far: 403 "The feature is not available", because that workspace's
+#              capacity is in Australia Southeast, where Fabric apps (preview) are not
+#              offered (microsoft/rayfin#8). The steps before the deploy pass.
 #   wasm       dashboard/fabric_app_wasm/: DuckDB-WASM over files in a lakehouse, with the
 #              function that signs their read-only SAS. Into the app's tenant: item
 #              `nemtracker`. The deploy works; the app it makes does not yet: Fabric answers

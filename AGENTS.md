@@ -498,11 +498,14 @@ same file.
   app's backend, which runs the query on the model as the signed-in user: the browser holds
   no Power BI token, and a reader sees what their own access to the model allows. A function
   could not do it: functions have no Power BI audience and run as the item's owner.
-  `rayfin.yml` names the workspace and the model by id, as literals: `rayfin connector add`
-  refuses placeholders.
-- **It lives in workspace `power`**, next to the model (the owner's, 2026-10-06), not in the
-  other app's tenant. Deployed from the laptop, as the other one is, under a login of that
-  tenant.
+  The entry is not in the repo's `rayfin.yml`: it holds the workspace and model ids, and
+  `rayfin connector add` takes literals only, so the deploy writes it (the model is found
+  by its name), as `model.bim`'s ids are written at its deploy.
+- **It is meant for workspace `power`**, next to the model (the owner's, 2026-10-06), not
+  the other app's tenant, and **it is deployed from CI, as the model is**:
+  `deploy_fabric.yml` with `app=vertipaq`, under the catalog's identity (the OIDC login of
+  `deploy_model.yml`), into an item `vertipaq`. No laptop and no interactive login: the
+  owner's account in that tenant asks for MFA, the service principal does not.
 - **`storage/data.js`** has the members the page calls. `query` hands back the shape the
   page reads from DuckDB: Power BI names a column `table[column]` or `[alias]` and the page
   asks for the bare name; a date comes back as a date and time and the page wants the day.
@@ -511,12 +514,23 @@ same file.
 - **What differs from the other hosts, by design of DAX:** `SUMMARIZECOLUMNS` drops a group
   whose measures are all blank, where the compiler keeps it; `TOPN` keeps ties. A long range
   still ends on the newest whole day, because the page's own filter says so (`wholeDays`).
-- **Not deployed yet, and `rayfin.yml` has no `connectors:` entry yet:** `rayfin connector
-  add` writes it, and that and the first deploy wait for an interactive login to the `power`
-  tenant (it asks for MFA). Until it has run in a browser nothing here is proven beyond the
-  build: `rayfin connector invoke nem executeQuery --file <json>` is the first check (the
-  DAX, under the developer's identity), and the deployed page drawing rows is the second
-  (the delegated path, which can refuse where the first passed).
+- **Not deployed: Fabric refuses the item in `power`** (2026-10-06, run 37395788585):
+  `403 The feature is not available` when `rayfin up` creates it. The workspace's capacity
+  is in Australia Southeast, and Microsoft's region list says of that region "Not
+  available: Fabric App (preview)" (Australia East has it); microsoft/rayfin#8 is the same
+  answer. It is not this repo's to fix: the app needs a workspace on a capacity in a
+  region that has Fabric apps, in the model's tenant (the connector names the model's
+  workspace, so the app's can be another one), or the region to get the feature.
+- **What that run did prove:** the connector is declared against the model (`Verified
+  item: "nem"`), and the model answers DAX on the connector's route to a service
+  principal: `rayfin connector invoke nem executeQuery` from the runner returned its row
+  (it needs a token for `https://analysis.windows.net/powerbi/api`, not the Fabric one).
+  That is Power BI's `executeDaxQueries`, not the `executeQueries` call that answers 401
+  to a service principal (see `check_model.py`). A date comes back as
+  `2026-10-06T00:00:00.000`, which is what `data.js` expects. Not proven: anything in a
+  browser. The deployed page drawing rows is the real check (the delegated path, as the
+  signed-in reader, can refuse where the runner's call passed), and whether rayfin#89
+  (500 on an item owned by a service principal) reaches connector calls is not known.
 
 A table or a column the page asks for and a deployed file lacks reads as "no data" where
 the page checks (`data.has`), so a new page can go out before its data; a new table goes
