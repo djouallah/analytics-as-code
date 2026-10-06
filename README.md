@@ -24,7 +24,6 @@ market (AEMO).
   Power BI model without Power BI: it turns the model into DuckDB views and the page's DAX
   queries into SQL. **It is not a general-purpose DAX compiler.** It was written for this
   repository only: it knows this model and the constructs this page uses, and fails on
-  anything else. It is here to show where that layer sits, the one with no open-source
-  equivalent.
+  anything else. It is here to show where that layer sits.
 
 Details: [ARCHITECTURE.md](ARCHITECTURE.md)
