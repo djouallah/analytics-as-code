@@ -106,8 +106,25 @@ jobs:
         if: ${{ inputs.app == 'vertipaq' && !inputs.dry_run }}
         continue-on-error: true
         run: |
+          # This call wants a token for Power BI, not the Fabric one the deploy uses.
+          TOKEN=$(az account get-access-token --resource https://analysis.windows.net/powerbi/api --query accessToken -o tsv)
+          echo "::add-mask::$TOKEN"
           echo '{"query": "EVALUATE ROW(\"newest\", MAX(fct_summary[date]), \"rows\", COUNTROWS(dim_region))"}' > probe.query.json
-          npx rayfin connector invoke nem executeQuery --file ./probe.query.json
+          RAYFIN_TOKEN="$TOKEN" npx rayfin connector invoke nem executeQuery --file ./probe.query.json
+
+      - name: Where the workspace runs
+        # A Fabric app item can only be made on a capacity that has the feature (by region,
+        # and the tenant setting "Fabric App Items"): the deploy answers 403 "The feature is
+        # not available" otherwise (microsoft/rayfin#8). Printed so that a refusal can be read.
+        if: ${{ inputs.app == 'vertipaq' }}
+        continue-on-error: true
+        run: |
+          api=https://api.fabric.microsoft.com/v1
+          CAP=$(curl -sf -H "Authorization: Bearer $RAYFIN_TOKEN" "$api/workspaces/$RAYFIN_WORKSPACE_ID" | jq -r '.capacityId // "none"')
+          echo "capacity of the workspace: $([ "$CAP" = none ] && echo none || echo assigned)"
+          curl -sf -H "Authorization: Bearer $RAYFIN_TOKEN" "$api/capacities" \
+            | jq -r --arg c "$CAP" '.value[] | select(.id == $c) | "sku \(.sku), region \(.region), state \(.state)"' \
+            || echo "this login cannot list capacities"
 
       # --yes: reuse the item on every later run, never ask.
       - name: Deploy
