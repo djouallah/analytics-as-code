@@ -55,8 +55,9 @@ One semantic model (`semantic_model/model.bim`), four clients under `dashboard/`
   has no data files, no DuckDB and no compiler: the DAX the page writes is sent to the model
   as it is, and Power BI runs it (VertiPaq, in Direct Lake over the Iceberg tables). It is
   the check that the page's DAX is DAX. The Analyze tab, which is SQL, is not in it.
-  **It is built but not deployed yet:** the model's workspace is in Australia Southeast,
-  a region where Fabric apps (preview) are not available.
+  **It is built but could not be tested:** the model's workspace is in Australia
+  Southeast, a region where Fabric apps (preview) are not available yet, so it was never
+  deployed and has never run in a browser.
 - `powerbi/` is a Power BI report (`nem.Report`, as JSON) on the model as deployed to Fabric,
   which reads the Iceberg tables in Direct Lake. `deploy_model.yml` publishes the two together.
 
