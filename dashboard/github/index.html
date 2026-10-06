@@ -553,7 +553,7 @@
     <div class="analyze-controls">
       <button class="btn-analyze" id="logsCopy" type="button">Copy</button>
       <button class="btn-analyze" id="logsClear" type="button">Clear</button>
-      <span class="analyze-info" style="padding:0">This session only — kept in memory, nothing is stored. "http" rows are the DuckDB worker's own requests (Range = a seek in a remote file).</span>
+      <span class="analyze-info" style="padding:0">This session only — kept in memory, nothing is stored. "http" rows are the engine's own requests for its data files (Range = a seek in a remote file).</span>
     </div>
     <div class="analyze-info" id="logsSummary" style="white-space:pre;font-family:ui-monospace,Consolas,monospace"></div>
     <div class="analyze-table-wrap">
@@ -720,7 +720,7 @@
     }
 
     // =========================================================================
-    // 3. DUCKDB SETUP
+    // 3. DATA SOURCE
     // =========================================================================
 
     // Where the .duckdb files live and how they are fetched and attached is data.js's business
@@ -731,9 +731,12 @@
     // those views: it names no attached table and writes no join. The Analyze tab alone is
     // SQL, over the same views.
     const data = createModel(createDataSource({ onStatus: setStatus }));
+    // Analyze is SQL. A host whose engine is the model itself (VertiPaq, in the Fabric app
+    // of that name) runs none: its data source has no `needs`, and the tab is left out.
+    if (!data.needs) document.getElementById('tab-analyze').remove();
     let _db = null;
 
-    async function initDuckDB() {
+    async function initData() {
       // enough attached for the default "Last 3 days" view
       ({ db: _db } = await data.init());
 
@@ -1832,8 +1835,10 @@
       // One row: a measure and its hours over the range (n1, v1) and over the days before
       // (n0, v0), on the days a daily table holds.
       const both = (measure, days, filters) => {
-        const side = (i, cmp) => `"n${i}", CALCULATE([Hours], dim_calendar[date] ${cmp} ${daxDate(from)}), `
-          + `"v${i}", CALCULATE(${measure}, dim_calendar[date] ${cmp} ${daxDate(from)})`;
+        // KEEPFILTERS: in DAX a filter inside CALCULATE replaces the ones around it on the
+        // same column, and these two must narrow the range set below, not replace it.
+        const side = (i, cmp) => `"n${i}", CALCULATE([Hours], KEEPFILTERS(dim_calendar[date] ${cmp} ${daxDate(from)})), `
+          + `"v${i}", CALCULATE(${measure}, KEEPFILTERS(dim_calendar[date] ${cmp} ${daxDate(from)}))`;
         return `EVALUATE CALCULATETABLE(ROW(${side(1, '>=')}, ${side(0, '<')}),
           ${[...dax.dates('dim_calendar', prevFrom, last), days, ...filters].join(', ')})`;
       };
@@ -3579,7 +3584,7 @@ ORDER BY ALL`;
 
     // --- Init ---
     try {
-      await initDuckDB();
+      await initData();
       await populateFilters();
       _ready = true;
       await renderAll();

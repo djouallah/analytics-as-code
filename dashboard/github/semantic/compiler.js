@@ -45,6 +45,7 @@
 //   TOPN, ORDER BY                    ORDER BY .. LIMIT
 //   UNION, a table VAR                UNION ALL, a CTE; a scalar VAR is a scalar subquery
 //   CALCULATE(measure, filter)        the aggregates of the measure with FILTER (WHERE ..)
+//   KEEPFILTERS(filter)               the filter: here filters only ever add up
 //   ISFILTERED, ISCROSSFILTERED       true or false, from the columns the query names; an IF
 //                                     on one keeps the side it picks
 //   [Name]                            a column of the table being built, else a measure
@@ -120,7 +121,11 @@ function parse(src) {
     if (t.t === 'id') {
       // table[column]: the bracket follows the name with no space.
       if (toks[i]?.t === 'col' && toks[i].at === t.end) return { k: 'col', table: t.v, name: toks[i++].v };
-      if (eat('(')) return { k: 'call', fn: t.v, args: args(')') };
+      if (eat('(')) {
+        const a = args(')');
+        // In DAX it stops a filter replacing the ones around it; here none ever does.
+        return t.v.toUpperCase() === 'KEEPFILTERS' ? a[0] : { k: 'call', fn: t.v, args: a };
+      }
       return { k: 'name', name: t.v };
     }
     i--;
