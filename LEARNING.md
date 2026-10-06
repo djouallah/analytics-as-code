@@ -403,3 +403,31 @@ it already runs in the browser.
 - Run two engines on the same queries from the first day: the second engine is the test.
 - Write the page lint and the golden queries before the page grows.
 - Keep the AGENTS.md habit of dates and reasons. Turn what can be checked into checks.
+
+## 11. Still open
+
+Carried over from the former `TODO.md`; the rest of it is in the "Could be better" lists
+above.
+
+**Waiting on upstream**
+- OneLake accepting a commit that mixes delete files with data files (fixed upstream,
+  rolling out): re-run the capability probe, and once a `MERGE` with `WHEN MATCHED UPDATE`
+  passes, the merges no longer have to be insert-only. AEMO's late corrections can land,
+  `dim_duid` can update in place, `fct_summary` can take the next-day value over the
+  intraday one, and AGENTS.md's "insert-only" sections change with it.
+- DuckDB 2.0.0 stable (due 2026-10-21): replace `2.0.0.dev2609250715` everywhere it is
+  pinned and re-run the capability probe against it.
+- A duckdb-wasm build on DuckDB 2.0: move the dashboard and the import's write venv together.
+- duckdb-iceberg#1341 (snapshot expiry): replace pyiceberg in `scripts/expire_snapshots.py`.
+- microsoft/rayfin#89: deploy the DuckDB-WASM Fabric app from CI (`deploy_fabric.yml`,
+  `app=wasm`, item `nemtracker`).
+- AEMO publishing `ROOFTOP_PV_ACTUAL_PRED`/`_RUN`: move `fct_rooftop_pv` to the 5-minute
+  estimate.
+
+**Ideas**
+- `rebuild=dim_duid` once the corrected `duid_unregistered.csv` (TORRB1, ADPBA1L) has been
+  downloaded.
+- Interconnectors from the data: a `dim_interconnector` from MMSDM `INTERCONNECTOR` instead
+  of the names typed in `index.html`.
+- Emissions: CO2 factor per unit from `GENUNITS`/`DUALLOC`; a unit without a factor stays
+  out.
