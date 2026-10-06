@@ -1,33 +1,34 @@
 // =============================================================================
-// auth.js — AuthProvider: Rayfin Fabric SSO + a scoped OneLake SAS
+// auth.js — AuthProvider: Rayfin Fabric SSO
 // =============================================================================
-// The Fabric host's sign-in, and the only place that knows about it: the page has no auth
-// gate of its own, so this file draws one over it until there is a session.
+// A Fabric app's sign-in, and the only place that knows about it: the page has no auth gate
+// of its own, so this file draws one over it until there is a session. Both Fabric apps use
+// this file (build.mjs copies it into each); what an app does once signed in is its data.js's.
 //
 //   const auth = createAuth();          // the gate goes up
 //   await auth.signIn();                // resolves once signed in; the gate comes down
-//   auth.dataAccess()  -> { baseUrl, sas, expiresOn }   (data.js reads OneLake with it)
+//   await auth.client()                 // the Rayfin client of the session
+//
+// Two options, one per app:
+//   client(rayfin, config)   builds the Rayfin client, from the SDK module and the resolved
+//                            config. The default is a RayfinClient (functions); the VertiPaq
+//                            app builds one with its connector.
+//   ready()                  true when the app already holds what it needs and can start
+//                            without a session (this app: a OneLake SAS that is still valid).
 // =============================================================================
 
 // Keep these on the same version: jsDelivr resolves their shared deps (rayfin-auth, rayfin-lib)
 // to the same module URLs, so the provider operates on the client's own Auth instance.
-import { perf } from '../frontend/perflog.js';
-
 const RAYFIN_CLIENT_ESM = "https://cdn.jsdelivr.net/npm/@microsoft/rayfin-client@1.36.1/+esm";
 const RAYFIN_FABRIC_ESM = "https://cdn.jsdelivr.net/npm/@microsoft/rayfin-auth-provider-fabric@1.36.1/+esm";
 
 // --- Rayfin provider: Fabric SSO session (no second login; inside the Fabric portal iframe the
-// session is handed over by postMessage). The browser never holds a storage token: the getDataSas function (rayfin/functions)
-// signs a read-only OneLake SAS on the data/ folder, valid ~55 min and cached in localStorage
-// across reloads, so a visitor calls the function about once an hour. Backend URL, key and Fabric coordinates come
-// from the rayfin.config.json that `rayfin up` writes next to the site.
-function createRayfinAuth() {
-  const RENEW_MARGIN_MS = 30 * 1000;       // re-sign this long before a SAS expires
-  const DATA_SAS_KEY = 'rayfin_data_sas';
+// session is handed over by postMessage). Backend URL, key and Fabric coordinates come from the
+// rayfin.config.json that `rayfin up` writes next to the site.
+function createRayfinAuth({ client = (rayfin, config) => new rayfin.RayfinClient(config), ready = () => false } = {}) {
   let _client = null;
   let _fabric = null;
   let _fabricOpts = null;
-  let _data = load();                      // { baseUrl, sas, expiresOn } from getDataSas
 
   // The gate: over the whole page until the Fabric session resolves, so the dashboard is not
   // shown, even empty, before sign-in. The colours are the page's.
@@ -36,18 +37,13 @@ function createRayfinAuth() {
   _gate.textContent = 'Loading…';
   document.body.append(_gate);
 
-  // localStorage can be unavailable (private mode, blocked storage): the cache is best-effort.
-  function load() { try { return JSON.parse(localStorage.getItem(DATA_SAS_KEY)); } catch (e) { return null; } }
-  function save(v) { try { v ? localStorage.setItem(DATA_SAS_KEY, JSON.stringify(v)) : localStorage.removeItem(DATA_SAS_KEY); } catch (e) {} }
-  const fresh = (signed) => !!signed && Date.now() < Date.parse(signed.expiresOn) - RENEW_MARGIN_MS;
-
-  async function init() {
-    if (_client) return;
-    const [{ RayfinClient, resolveRayfinConfig }, fabric] =
-      await Promise.all([import(RAYFIN_CLIENT_ESM), import(RAYFIN_FABRIC_ESM)]);
-    const resolved = await resolveRayfinConfig({});
+  // One init, whoever asks first.
+  let _init = null;
+  const init = () => _init ??= (async () => {
+    const [rayfin, fabric] = await Promise.all([import(RAYFIN_CLIENT_ESM), import(RAYFIN_FABRIC_ESM)]);
+    const resolved = await rayfin.resolveRayfinConfig({});
     if (!resolved.baseUrl) throw new Error('rayfin.config.json not found — deploy with `rayfin up`');
-    _client = new RayfinClient({ ...resolved, authStorage: true });
+    _client = await client(rayfin, { ...resolved, authStorage: true });
     const rc = _client.runtimeConfig || {};
     _fabricOpts = {
       workspaceId: rc.workspaceId,
@@ -56,37 +52,21 @@ function createRayfinAuth() {
       returnOrigin: window.location.origin,
     };
     _fabric = fabric;
-  }
+  })().catch(e => { _init = null; throw e; });
 
-  async function dataAccess() {
-    if (fresh(_data)) return _data;
-    await init();
-    // The function returns its failure as { error }, naming the step that failed.
-    const signed = await perf.time('sas', 'getDataSas (function call)', async () => {
-      const r = await _client.functions.getDataSas.invoke();
-      if (r?.error) throw new Error(`getDataSas failed at ${r.error}`);
-      return r;
-    });
-    _data = signed;
-    // How long the new SAS lives (the function signs ~55 min; a stale one is re-signed on the next call).
-    perf.log('info', `SAS valid ${((Date.parse(_data.expiresOn) - Date.now()) / 60000).toFixed(1)} min (expires ${_data.expiresOn})`);
-    save(_data);
-    return _data;
-  }
-
-  // Silent: cached data SAS / stored session / refresh token / Fabric iframe handoff.
+  // Silent: what the app already holds / stored session / refresh token / Fabric iframe handoff.
   // Interactive (button click) adds the Fabric popup for a standalone tab.
   async function ensureSession(interactive) {
-    if (!interactive && fresh(_data)) return true;
+    if (!interactive && ready()) return true;
     await init();
     if (_client.auth.getSession()?.isAuthenticated) return true;
     if (interactive) return !!(await _fabric.ensureSignedInWithFabric(_client.auth, _fabricOpts))?.isAuthenticated;
     return !!(await _fabric.initEmbeddedAuth(_client.auth, _fabricOpts))?.isAuthenticated;
   }
 
-  // Resolves once there is a session, and takes the gate down. The silent check covers a
-  // cached SAS, a stored session and the Fabric iframe handoff; a standalone tab with no
-  // session gets a button, because the Fabric sign-in popup needs a user gesture.
+  // Resolves once there is a session, and takes the gate down. The silent check covers what
+  // the app already holds, a stored session and the Fabric iframe handoff; a standalone tab
+  // with no session gets a button, because the Fabric sign-in popup needs a user gesture.
   async function signIn() {
     try {
       if (!await ensureSession(false)) await new Promise(resolve => {
@@ -107,16 +87,7 @@ function createRayfinAuth() {
     }
   }
 
-  return {
-    signIn,
-    dataAccess,
-    // Drop cached SAS (e.g. after a 403) so the next call re-signs.
-    async refresh() {
-      _data = null;
-      save(null);
-      return true;
-    },
-  };
+  return { signIn, client: async () => { await init(); return _client; } };
 }
 
 export const createAuth = createRayfinAuth;

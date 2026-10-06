@@ -4,7 +4,8 @@
 // The Fabric version: the counterpart of ../../../github/storage/data.js (GitHub Pages),
 // with the same members (init, attachAgg, ensureHistory, query) over the same history.js, so
 // index.html and the semantic model are the same files on both hosts. The data files are the
-// same too; what differs is where they are: in a lakehouse, behind a Fabric sign-in (auth.js).
+// same too; what differs is where they are: in a lakehouse, behind a Fabric sign-in (auth.js)
+// and a SAS (sas.js).
 //   1. resolve the latest import from the OneLake `latest.json` pointer
 //      ({"ts": "<ts>", "periods": ["2018_h1", ...]}),
 //   2. download the files of that import whole (parallel Range fetches, cached in OPFS by
@@ -19,7 +20,7 @@
 //      in ~700 ms whatever its size, so whole files in parallel beat a block at a time.
 // The files are built and uploaded by import_onelake.yml (scripts/cache_catalog.py,
 // scripts/deploy_onelake.py). Every read goes to the OneLake data/ folder with a read-only SAS
-// from the getDataSas function; auth.dataAccess() signs a new one when it is about to expire.
+// from the getDataSas function; sas.dataAccess() signs a new one when it is about to expire.
 //
 // Progress is reported through the injected `onStatus` callback, and what is fetched,
 // attached and run is timed in perflog.js, for the Logs tab. The sign-in gate (auth.js)
@@ -29,6 +30,7 @@
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev65.0/+esm";
 import { periodsForRange, attachCached } from "./history.js";
 import { createAuth } from "./auth.js";
+import { createSas } from "./sas.js";
 import { perf, HTTP_TRACE_SHIM } from "../frontend/perflog.js";
 
 const CHUNK = 2 * 1024 * 1024;           // whole-file download: Range size per request ...
@@ -39,10 +41,12 @@ document.head.append(Object.assign(document.createElement('link'),
   { rel: 'preconnect', href: 'https://onelake.dfs.fabric.microsoft.com', crossOrigin: '' }));
 
 export function createDataSource({ onStatus = () => {} } = {}) {
-  const auth = createAuth();
+  // A SAS that is still valid needs no session: the page starts without the Rayfin SDK.
+  const sas = createSas(() => auth.client());
+  const auth = createAuth({ ready: sas.fresh });
   let db, conn;   // set by init()
 
-  const signedUrl = async (name) => { const { baseUrl, sas } = await auth.dataAccess(); return `${baseUrl}/${name}?${sas}`; };
+  const signedUrl = async (name) => { const access = await sas.dataAccess(); return `${access.baseUrl}/${name}?${access.sas}`; };
 
   // Resolve the moving `latest.json` pointer: the import's timestamp and its half-years.
   async function resolveLatest() {
@@ -55,7 +59,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
       return r;
     };
     let resp = await fetchLatest();
-    if (resp.status === 403) { await auth.refresh(); resp = await fetchLatest(); }   // expired SAS
+    if (resp.status === 403) { await sas.refresh(); resp = await fetchLatest(); }   // expired SAS
     if (!resp.ok) throw new Error(`Failed to read data/latest.json: HTTP ${resp.status}`);
     const latest = await resp.json();
     if (!latest.ts) throw new Error('data/latest.json names no import');
