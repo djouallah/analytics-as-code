@@ -313,6 +313,10 @@
       .subtab-bar, .kpi-row.records, .flows-bar, .analyze-controls, .analyze-sql, .analyze-info { flex: none; }
       .flows-main { flex: 1 1 0; min-height: 0; grid-template-rows: minmax(0, 1fr); }
       .flows-map { display: flex; flex-direction: column; }
+      /* The readout keeps one width and one line each, whatever the interval says: the slider
+         beside it and the map under it stay put while it is dragged. */
+      .flows-time { flex: none; width: min(30rem, 34vw); min-width: 0; }
+      .flows-now, .flows-event { height: 1.4em; line-height: 1.4em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .flows-board { overflow-y: auto; }
       .analyze-sql textarea { height: 16vh; min-height: 80px; }
       .analyze-table-wrap { flex: 1 1 0; min-height: 0; max-height: none; }
@@ -1844,14 +1848,18 @@
       _scrub.key = key;
       cancelAnimationFrame(_scrub.frame);
       _scrub.frame = requestAnimationFrame(() => {
-        const hero = document.getElementById('hero');
+        const hero = document.getElementById('hero'), legend = document.getElementById('mixLegend');
         const at = key && _scrub.gen?.at(key);
         if (!at || !_heroNow) {
           _scrub.key = null;
           hero.classList.remove('scrubbing');
+          legend.style.height = legend.style.overflow = '';
           if (_heroNow) paintHero(_heroNow, false);
           return;
         }
+        // The legend keeps the height it had: an interval with more fuels would wrap it onto
+        // one more line, and the hero growing would move every chart under the pointer.
+        if (!hero.classList.contains('scrubbing')) Object.assign(legend.style, { height: `${legend.offsetHeight}px`, overflow: 'hidden' });
         hero.classList.add('scrubbing');
         paintHero({
           when: 'At', asOf: at.label, unit: _scrub.gen.unit, mix: at.mix, total: at.total, charging: at.charging,
@@ -2485,9 +2493,11 @@
         ? `${Math.round(genMw).toLocaleString()} MW generating${share}`
           + (gensTime === hhmm ? '' :` <span style="color:var(--muted);font-weight:500">(generators at ${formatTime(+gensTime)})</span>`)
         : '';
+      document.getElementById('flowsNow').title = document.getElementById('flowsNow').textContent;
       // The two latest jumps within the last 3 hours of frames, newest first, so they stay
       // readable while playing.
-      document.getElementById('flowsEvent').textContent = icState.events
+      const flowsEvent = document.getElementById('flowsEvent');
+      flowsEvent.textContent = flowsEvent.title = icState.events
         .filter(e => e.i <= icState.frame && icState.frame - e.i <= 36).slice(-2).reverse()
         .map(e => `${icState.frames[e.i].label.split(' ').pop()} ${e.text}`).join('   |   ');
       const net = {};   // + exporting, - importing
