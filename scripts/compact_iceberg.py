@@ -19,8 +19,10 @@ copy the old sibling repo had went with that repo). Two things differ from the R
     "non-trailing parts must be equal length" rule; OneLake writes go through the azure
     extension over abfss:// and never touch the S3 uploader.
 
-Exactly one iceberg_metadata() call, in prime(). Do not add more — it enumerates every
-manifest, which on a fragmented table is the whole problem we're here to fix.
+No iceberg_metadata() call — it enumerates every manifest, which on a fragmented table is
+the whole problem we're here to fix. One used to run before each rewrite, only to load the
+table's credentials (duckdb/duckdb-iceberg#1349, fixed upstream 2026-09-17, in the pinned
+build).
 
 Known limitations of the upstream function:
   - manifest-level column statistics are not populated for rewritten files
@@ -131,48 +133,10 @@ def has_rewrite_function(con):
     )
 
 
-def prime(con, fq):
-    """Make the table's storage credentials available to the rewrite, and count its files.
-
-    iceberg_rewrite_data_files doesn't fetch credentials itself — called cold it can die
-    with 403 "No credentials are provided" (duckdb/duckdb-iceberg#1349). The cheaper
-    options (LIMIT 0, LIMIT 1) were tried against a real catalog and both still 403'd:
-    the 403 is on the manifest avro, and iceberg_metadata() is what reads those.
-
-    It is expensive — it enumerates every manifest — so it is the one and only metadata
-    call here. Don't add more, and don't "optimise" this one away. Since we're paying for
-    it, keep what it counts: it is the only independent read on how fragmented the table
-    actually is.
-
-    Returns (entries, by status). The row count alone is NOT the number of files a query
-    opens: it has gone up by exactly the number of files rewritten at every run and never
-    down (stg_csv_archive_log: 713, 752, 772, 810 over four runs that each folded all its
-    small files into one, 2026-10-02 to 05). So the rows are counted per `status`, which is
-    what says how many are still live. If this build has no such column, by status is None
-    and the count is printed for what it is.
-    """
-    try:
-        rows = con.execute(f"SELECT CAST(status AS VARCHAR), count(*) FROM iceberg_metadata('{fq}') "
-                           "GROUP BY 1 ORDER BY 1").fetchall()
-        return sum(n for _, n in rows), ", ".join(f"{status} {n}" for status, n in rows)
-    except duckdb.Error:
-        return con.execute(f"SELECT count(*) FROM iceberg_metadata('{fq}')").fetchone()[0], None
-
-
-def compact(con, table, say):
+def compact(con, table):
     """Compact one table. Returns (table, status) for the report."""
     fq = f"catalog.{table}"
 
-    say("priming credentials")
-    try:
-        files, by_status = prime(con, fq)
-    except Exception as e:
-        # Keep it to one line — the full multi-line duckdb error is already on stdout above.
-        return (table, f"ERROR priming: {type(e).__name__}: {oneline(e)}")
-    files = f"{files} manifest entries" + (f": {by_status}" if by_status else "")
-    say(files)
-
-    say("rewriting")
     try:
         row = con.execute(
             f"SELECT rewritten_data_files, added_data_files, rewritten_bytes "
@@ -181,23 +145,23 @@ def compact(con, table, say):
             f"min_input_files => {MIN_INPUT_FILES})"
         ).fetchone()
     except Exception as e:
+        # Keep it to one line — the full multi-line duckdb error is already on stdout above.
         return (table, f"ERROR: {type(e).__name__}: {oneline(e)}")
 
     # Report what the function actually returned. "No row at all" and "a row of zeros"
     # are different failure modes and both look like a tidy table if collapsed into one
     # "skipped".
     if row is None:
-        return (table, f"NO ROW returned ({files})")
+        return (table, "NO ROW returned")
 
     rewritten, added, rewritten_bytes = row
     if not rewritten:
         # What the function's own rule says, no more: it folds a group of at least
-        # MIN_INPUT_FILES files that are below the target size. Which of the two fell short
-        # is not something the entries' count can tell (it holds the replaced files too).
-        return (table, f"0 rewritten ({files}) — fewer than {MIN_INPUT_FILES} files below the {TARGET_FILE_SIZE} target")
+        # MIN_INPUT_FILES files that are below the target size.
+        return (table, f"nothing to compact (fewer than {MIN_INPUT_FILES} files under {TARGET_FILE_SIZE})")
 
     mb = (rewritten_bytes or 0) / 1048576.0
-    return (table, f"OK ({rewritten} -> {added} files, {mb:.1f} MB, {files})")
+    return (table, f"{rewritten} files deleted, {added} added ({mb:.1f} MB)")
 
 
 def report(lines, duckdb_version):
@@ -259,16 +223,12 @@ def main():
                   f"{', '.join(TABLES[i - 1:])}", flush=True)
             break
 
-        prefix = f"[{i}/{total}] catalog.{table}"
-
-        def say(phase, _prefix=prefix):
-            # Which step it's on, so a slow table can't be mistaken for a hang.
-            print(f"{_prefix} ... {phase}", flush=True)
-
-        print(f"{prefix} ... ({elapsed:.1f}min elapsed)", flush=True)
-        _, status = compact(con, table, say)
+        prefix = f"[{i}/{total}] {table}"
+        # Printed before the work, so a slow table can't be mistaken for a hang.
+        print(f"{prefix} ...", flush=True)
+        _, status = compact(con, table)
         took = (time.monotonic() - started) / 60.0 - elapsed
-        print(f"{prefix}: {status}  [{took:.1f}min]\n", flush=True)
+        print(f"{prefix}: {status}  [{took:.1f}min]", flush=True)
         lines.append((table, status))
 
     report(lines, version)
