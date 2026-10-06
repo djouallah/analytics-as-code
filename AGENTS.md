@@ -261,7 +261,8 @@ and anything that serves the page from the repo has to do the same.
   and measures (`fct_summary[mw]`, `dim_duid[FuelSourceDescriptor]`, `[Capture price]`). **It
   joins nothing** and names no view (outside Analyze and `data.has('v_...')`). Which fuels
   are renewable is not in the dashboard at all: `dim_duid[Renewable]` says. The rules it does
-  hold are written once, at the top of its section 5: storage is the fuel "Grid", a
+  hold are written once, at the top of its section 1, which holds every DAX query the
+  charts send (the `dax` object, by tab and chart; the renderers only call it): storage is the fuel "Grid", a
   generator is anything else (a blank fuel included, which DAX and SQL disagree on, so it is
   spelled out), and which grain a date range reads (`grain()`: the 5-minute tables up to 30
   days, the daily ones beyond). The page does not name the table for it: up to 30 days it
