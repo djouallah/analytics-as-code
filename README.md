@@ -13,13 +13,15 @@ market (AEMO).
   - **GitHub Pages** ([live](https://nemtracker.github.io/), public) and a **Microsoft
     Fabric app** (Fabric sign-in): the same page. No server: the browser runs the queries
     itself (DuckDB-WASM) on a cached copy of the tables.
-  - a second **Fabric app**, the same page with no DuckDB: its DAX queries go to the
-    deployed model as they are written, and Power BI runs them. **Not tested yet:** it
+  - a second **Fabric app**, the same page with no DuckDB and no copy of the data:
+    **VertiPaq, Power BI's engine, is its server.** The page sends its DAX queries to the
+    deployed model as they are written, VertiPaq runs them on the tables (Direct Lake), and
+    the browser only draws the rows that come back. **Not tested yet:** it
     could not be deployed, because Fabric apps (preview) are not available yet in
     Australia Southeast, the region of the model's capacity. The code is in
     [`dashboard/fabric_app_vertipaq/`](dashboard/fabric_app_vertipaq/); it has never run
     in a browser.
-  - a **Power BI report**, on the same model in Direct Lake.
+  - a **Power BI report**, on the same model and the same server.
 - **[`compiler.js`](dashboard/github/semantic/compiler.js)** is what lets the page read a
   Power BI model without Power BI: it turns the model into DuckDB views and the page's DAX
   queries into SQL. **It is not a general-purpose DAX compiler.** It was written for this
