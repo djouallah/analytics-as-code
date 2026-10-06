@@ -1,8 +1,8 @@
 """Compact the OneLake Iceberg catalog's data files (daily maintenance).
 
-process_data commits to the catalog every 30 minutes, and every model is an insert-only
+process_data commits to the catalog every hour, and every model is an insert-only
 incremental merge (OneLake accepts one add-snapshot per commit) — so the small tables end
-up with ~48 tiny data files a day and nothing ever folds them back together. This runs
+up with ~24 tiny data files a day and nothing ever folds them back together. This runs
 iceberg_rewrite_data_files() over each table, consolidating files below the target size.
 
 iceberg_rewrite_data_files landed in duckdb/duckdb-iceberg#1035 and is not in a stable

@@ -6,7 +6,7 @@ market (AEMO).
 
 ![Architecture](architecture.svg)
 
-- **dbt + DuckDB** on GitHub Actions load the data into **Iceberg** tables, every 30 minutes.
+- **dbt + DuckDB** on GitHub Actions load the data into **Iceberg** tables, every hour.
 - **One Power BI semantic model** ([`semantic_model/`](semantic_model/)) describes those
   tables: their relationships and the measures, in DAX.
 - **Four clients** read it ([`dashboard/`](dashboard/)):

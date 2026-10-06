@@ -23,16 +23,16 @@ The entire analytics stack — ingestion, transformation, storage, and visualiza
 - **File-based incremental processing.** Fact models track which source files have been processed, reading the work list from the ingestion log table. No watermark tables, no external state database.
 - **Durable archive, no reconciliation code.** The CSV archive and its log live in object storage, not on the runner, so an interrupted run leaves nothing to repair — the next pass simply sees what is already there.
 - **CI validates SQL on every code change.** `dbt build --target ci` runs all models + tests in-memory — catches broken SQL before it reaches production.
-- **Loading skips tests.** The 30-min processing cadence is too frequent for expensive test runs against live tables, so `process_data` only runs `dbt run`.
+- **Loading skips tests.** The hourly processing cadence is too frequent for expensive test runs against live tables, so `process_data` only runs `dbt run`.
 - **Tests run daily.** Once every 24 hours, `dbt test --target prod` runs the complete suite against live Iceberg tables — uniqueness, not_null, accepted_values, and file completeness checks.
-- **Tables are maintained daily.** The same workflow compacts each table's small data files and then expires snapshots older than a day, so a 30-minute commit cadence doesn't leave the tables fragmented and their metadata unbounded.
+- **Tables are maintained daily.** The same workflow compacts each table's small data files and then expires snapshots older than a day, so an hourly commit cadence doesn't leave the tables fragmented and their metadata unbounded.
 
 ## Grain Reduction
 
 Source data arrives at 5-minute resolution (rooftop solar every half hour). The raw Iceberg tables store everything at the grain it arrives in — no data is lost. What the clients read is a second set of tables built from them (`mart`): one row per unit and 5 minutes with its price on it, and the aggregates, per day and per hour of day by month. To give a sense of scale: ~1 billion raw records, ~300 million rows in the largest raw table, ~13 million 5-minute rows in one half-year dashboard file.
 
 - **In dbt:** every table a chart reads is a dbt model, the aggregates included. Rooftop solar is stored half-hourly, as published; the 5-minute values a chart draws are worked out when it asks.
-- **At import time:** `scripts/cache_catalog.py` copies those tables as they are into DuckDB files for the browser, with no rule of its own. It only decides the split: the 5-minute history as one file per half-year (each under GitHub's 100 MB per-file limit), the last 14 days as a small file refreshed every 30 minutes, the aggregates in one file.
+- **At import time:** `scripts/cache_catalog.py` copies those tables as they are into DuckDB files for the browser, with no rule of its own. It only decides the split: the 5-minute history as one file per half-year (each under GitHub's 100 MB per-file limit), the last 14 days as a small file refreshed every hour, the aggregates in one file.
 - **At query time:** The dashboard adapts granularity to the selected date range: 5-minute resolution up to 30 days (downloading only the half-years the range touches, and none for the default last 3 days), daily and hour-of-day aggregates beyond. This keeps queries fast in single-threaded DuckDB-WASM.
 - **Dashboard CSV download uses one consistent grain** — when users export data from the dashboard, it always uses a single time resolution, no mixing.
 

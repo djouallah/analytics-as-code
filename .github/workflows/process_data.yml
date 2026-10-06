@@ -1,16 +1,16 @@
 name: Process Data
 
-# Every 30 minutes. There is no daily/intraday split any more: the staging model does every
+# Every hour. There is no daily/intraday split any more: the staging model does every
 # feed (daily archive, intraday SCADA, intraday DispatchIS, rooftop, the monthly archives)
 # plus the DUID reference on every pass, and self-gates the slow parts on data rather than on
 # a schedule —
 #   * a DUID reference file is downloaded when its last download is 24h old
 #   * the backfills (GitHub historical listing, monthly and weekly archives) only run when
 #     AEMO returned fewer than download_limit new daily files
-# so a 30-minute cadence costs nothing extra over an hourly one.
+# so the cadence is a choice of freshness, not of cost.
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
       download_limit:
@@ -57,12 +57,12 @@ jobs:
       # anonymous calls share the runner IP's 60 req/h quota and get rate-limited.
       GITHUB_TOKEN: ${{ github.token }}
       # The same cap for every feed, applied to each on its own (daily, scada_today,
-      # price_today, rooftop, the monthly archives), and a CAP rather than a workload: a 30-minute slot only publishes ~6 intraday files per
+      # price_today, rooftop, the monthly archives), and a CAP rather than a workload: an hourly slot only publishes ~12 intraday files per
       # feed and at most one daily file, so in steady state this never binds — it only sets
       # how fast the historical backfill drains.
       #
       # 200 is sized to the cadence, not to appetite: staging runs at roughly 5s/file
-      # (60 files took ~5min), so ~200 keeps a run near ~17min, inside the 30-minute slot.
+      # (60 files took ~5min), so ~200 keeps a run near ~17min, well inside the hourly slot.
       # Going much higher makes a run outlast its slot and the next tick queues behind it
       # (concurrency group `process-data`, cancel-in-progress: false), which stalls the
       # intraday feeds rather than speeding anything up. Burst higher via dispatch when you

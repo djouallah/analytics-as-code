@@ -1,6 +1,6 @@
 """Expire old Iceberg snapshots (daily maintenance, immediately after compaction).
 
-process_data commits every 30 minutes and duckdb-iceberg has no snapshot expiry, so nothing
+process_data commits every hour and duckdb-iceberg has no snapshot expiry, so nothing
 on the write path ever drops a snapshot. Compaction makes that worse before it makes it
 better — iceberg_rewrite_data_files() adds one more snapshot and leaves every previous one
 pointing at the small files it just replaced. So this runs *after* compact_iceberg.py, on
@@ -99,7 +99,7 @@ def allow_table_updates(catalog):
     isn't advertised. Microsoft's docs describe the OneLake IRC endpoint as read-only and
     show a config response carrying GET/HEAD only, which would veto this script client-side
     — but the live catalog advertises 13 endpoints including update-table (checked
-    2026-08-25), matching the fact that duckdb commits to it every 30 minutes. So the
+    2026-08-25), matching the fact that duckdb commits to it every hour. So the
     override below is a fallback that normally doesn't fire; the printed endpoint list is
     the evidence for which case we're in. If OneLake ever does refuse the update, we want
     its 4xx in the report rather than a client-side guess.

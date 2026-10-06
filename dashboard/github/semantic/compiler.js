@@ -748,7 +748,7 @@ const isDax = q => /^\s*EVALUATE\b/i.test(q);
 
 // A table of the model is a table of the lakehouse, copied into the files as it is
 // (scripts/cache_catalog.py): whole in `dim` or `agg`, or split by date over `today` (the
-// newest days, refreshed every 30 minutes) and the half-year files. v_<table> is that table
+// newest days, refreshed every hour) and the half-year files. v_<table> is that table
 // over what is attached; where two files hold a day, `today` has it. One split table is also
 // whole in `agg` (fct_rooftop: the daily charts read it over any range, with no half-year
 // attached): its older days are then read from there.

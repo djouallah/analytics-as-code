@@ -54,7 +54,7 @@ Four deliberate local differences, all of which must survive a port:
    gzipped CSVs **to OneLake Files** (`FILES_PATH`, i.e. the `nem` lakehouse's `Files/csv/`),
    alongside a durable `Files/csv_archive_log.parquet`. The archive is durable, so there is no
    reconciliation code: an interrupted run is picked up by the next one.
-2. **No daily/intraday split.** Every 30-minute pass does every feed (the daily files,
+2. **No daily/intraday split.** Every hourly pass does every feed (the daily files,
    intraday SCADA, intraday DispatchIS, the monthly interconnector archive, rooftop current /
    weekly / monthly) plus the DUID reference, self-gated on data rather than on a schedule:
    each DUID reference file is downloaded when its log row is 24h old, and the backfills (the
@@ -443,7 +443,7 @@ touched older data. The manifest of half-year files is built last, from the file
 in the deploy repo; an empty listing fails the step instead of publishing an empty manifest.
 `squash_deploy_repo.yml` (weekly, Sunday 17:00 UTC, also dispatchable) replaces the deploy
 repo's history with one commit of its current tree (`scripts/squash_deploy_repo.sh`,
-force-with-lease): `mart_today.duckdb` is redeployed every 30 min, and the kept copies would
+force-with-lease): `mart_today.duckdb` is redeployed every hour, and the kept copies would
 otherwise grow the repo by gigabytes a week. The site is unchanged; GitHub reclaims the
 space on its own schedule.
 A half-year must stay under 100 MB (GitHub's limit for a file; the build fails over it) and
