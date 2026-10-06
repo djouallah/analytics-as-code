@@ -13,8 +13,10 @@ learned. Where the two overlap, AGENTS.md is the reference.
 
 1. **A durable archive plus an append-only log removes reconciliation code.** An interrupted
    run is just picked up by the next one.
-2. **A catalog that can't DELETE shapes everything downstream.** Insert-only merges, values
-   that are never revised, rebuilds by DROP and CTAS. Design for it from day one.
+2. **A catalog that refuses an upsert in one commit shapes everything downstream.** OneLake
+   takes a DELETE, but not a commit that mixes delete files with data files. Hence
+   insert-only merges, values that are never revised, rebuilds by DROP and CTAS. Probe the
+   catalog's write path and design for it from day one.
 3. **Decide time semantics on day one.** A wall-clock time stored as UTC is now a rule every
    reader has to follow forever, because fixing it at the writer means rebuilding seven
    facts.
@@ -77,8 +79,10 @@ learned. Where the two overlap, AGENTS.md is the reference.
   pre-hooks.
 - **The empty `MERGE`.** A fact with no new file still builds its temp table and runs a MERGE
   (5-7 s each, seven facts a run). Skipping it needs a custom incremental strategy.
-- **Intraday tables are never trimmed** (no DELETE). Their scans are bounded now, but the
-  tables grow by a month of intervals a month.
+- **Intraday tables are never trimmed.** The catalog takes a DELETE, but the pipeline was
+  designed never to need one. Their scans are bounded now, but the tables grow by a month of
+  intervals a month. A scheduled DELETE of the rows older than the newest daily date, with a
+  re-count to confirm it landed, would trim them.
 - **The refill path is not exercised by CI.** The next `rebuild=` of a mart fact is the
   first time it runs on the real catalog.
 
@@ -95,9 +99,10 @@ learned. Where the two overlap, AGENTS.md is the reference.
   against its matrix, not remembered.
 
 ### What it cost
-- **One add-snapshot per commit; delete files plus data files is rejected (400).** Every
-  write became an insert-only merge (`WHEN MATCHED DO NOTHING`), and the consequences go all
-  the way to the dashboard:
+- **One add-snapshot per commit; a commit mixing delete files with data files is rejected
+  (400).** A DELETE on its own is accepted. What is refused is an upsert: a `MERGE` that
+  updates matched rows. Every write became an insert-only merge (`WHEN MATCHED DO NOTHING`),
+  and the consequences go all the way to the dashboard:
   - a stored value is never revised, so a late correction from AEMO never lands;
   - `dim_duid`'s attributes never change in place, so a changed rule needs a
     `rebuild=dim_duid`;
@@ -119,8 +124,10 @@ learned. Where the two overlap, AGENTS.md is the reference.
   only in a log.
 
 ### Could be better
-- **A catalog with row-level deletes** (or merge-on-read that OneLake accepts) would remove
-  most of the workarounds above: corrections, trimming, attribute updates.
+- **A catalog that accepts a `MERGE` with updates in one commit** would remove most of the
+  workarounds above: corrections and attribute updates. Until then, a DELETE commit followed
+  by an INSERT commit could do a correction. It is not atomic, so it needs a re-count after
+  each step.
 - **Write the instant correctly from the start** (a TIMESTAMP in the market's zone, or
   real UTC) and the "every reader in UTC" rule disappears.
 - **One DuckDB version end to end** once 2.0 is stable and DuckDB-WASM follows.
