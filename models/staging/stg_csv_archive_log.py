@@ -42,15 +42,12 @@ def model(dbt, session):
                 WHERE csv_filename IS NOT NULL
             """)
         else:
-            # Old-format log without csv_filename — start fresh
-            session.sql("""
-                CREATE OR REPLACE TEMP TABLE _csv_archive_log (
-                    source_type VARCHAR, source_filename VARCHAR,
-                    archive_path VARCHAR, archived_at TIMESTAMPTZ,
-                    row_count BIGINT, source_url VARCHAR, etag VARCHAR,
-                    csv_filename VARCHAR
-                )
-            """)
+            # Never start an empty log over this one: it would be saved over the durable
+            # log, the only source of truth, and every file downloaded again.
+            raise RuntimeError(
+                f"{csv_log_path} has no csv_filename column ({', '.join(cols)}); "
+                "refusing to replace the archive log"
+            )
     else:
         session.sql("""
             CREATE OR REPLACE TEMP TABLE _csv_archive_log (

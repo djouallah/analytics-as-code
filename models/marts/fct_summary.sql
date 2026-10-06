@@ -22,12 +22,15 @@
 -- non-scheduled units publish SCADA telemetry and never appear in the next-day files.
 -- Treat any edit to dispatch_duids as load-bearing.
 --
--- THE ONE LOCAL DIFFERENCE: the catch-up obeys process_limit, like the facts. In the repos
+-- TWO LOCAL DIFFERENCES. First, the catch-up obeys process_limit, like the facts. In the repos
 -- this comes from, the facts fill process_limit files per run and the summary follows them,
 -- so it needs no cap of its own. Here the facts already hold 8 years: an uncapped first
 -- build is 230M rows in one statement and ran the runner out of memory (12.4 GiB,
 -- 2026-10-05). So the dates never seen before are taken newest first, process_limit of them
 -- per run (a daily file is about a date), the first build included, until none is left.
+-- Second, "still in flux" takes the intraday dates from the newest daily date on. The
+-- intraday table is never trimmed (no DELETE on OneLake), so taken whole its dates are
+-- recomputed every run, one more each day. The older ones are settled, and the 6-day window covers the newest of them anyway.
 --
 -- Tagged `powerbi`: process_data.yml builds the mart tables in a step of their own, after
 -- the landing facts they read, so a failure here cannot fail the load of those.
@@ -85,7 +88,9 @@ rebuild_dates AS (
   WHERE s.DATE >= (SELECT MAX(DATE) - INTERVAL 6 DAY FROM {{ ref('fct_scada') }})
   UNION
   -- Still in flux: the intraday feed keeps extending these until their daily file lands.
+  -- From the newest daily date on (the second local difference, see the header).
   SELECT DISTINCT s.DATE FROM {{ ref('fct_scada_today') }} s
+  WHERE s.DATE >= (SELECT MAX(DATE) FROM {{ ref('fct_scada') }})
   UNION
   -- Partially written and never completed. A calendar date straddles TWO PUBLIC_DAILY files
   -- (they roll at 04:00), so a date first computed when only one had landed holds ~48 or
