@@ -1,3 +1,6 @@
+# The `connectors:` entry (the semantic model `nem`, type fabric-semanticmodel, delegated,
+# executeQuery) is not here: it holds the workspace and model ids, and deploy_fabric.yml
+# writes it at deploy with `rayfin connector add`, under the name `nem`.
 id: vertipaq
 name: vertipaq
 version: 1.0.0

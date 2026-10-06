@@ -1,17 +1,27 @@
 name: Deploy Fabric
 
-# The dashboard's second target. build.yml publishes the page to GitHub Pages; this deploys
-# the same page as a Fabric app (dashboard/fabric_app_wasm/, Rayfin: static hosting, Fabric sign-in, and the
-# function that signs the read-only SAS for the data). build.mjs there puts the shared page
-# files and the Fabric host's own (site/) into dist/.
+# The dashboard as a Fabric app, either of the two (Rayfin: static hosting, Fabric sign-in).
+# build.yml publishes the page to GitHub Pages; this deploys the same page with a Fabric
+# host's own files over it (dashboard/fabric_app_wasm/build.mjs puts both into dist/).
+#   vertipaq   dashboard/fabric_app_vertipaq/: the page's DAX is run by the deployed semantic
+#              model. Deployed next to the model, into the catalog's workspace, as the
+#              catalog's identity (the login of deploy_model.yml): item `vertipaq`.
+#   wasm       dashboard/fabric_app_wasm/: DuckDB-WASM over files in a lakehouse, with the
+#              function that signs their read-only SAS. Into the app's tenant: item
+#              `nemtracker`. The deploy works; the app it makes does not yet: Fabric answers
+#              500 to every function call on an item owned by a service principal
+#              (microsoft/rayfin#89, open). Until that is fixed the app people use is `wasm`,
+#              deployed from the owner's laptop.
 # On dispatch only. Only an item's owner can deploy to it (the page alone included: 403), so
-# CI deploys into an item of its own, `nemtracker`, next to the one deployed from the owner's
-# laptop (`wasm`). The deploy works; the app it makes does not yet: Fabric answers 500 to
-# every function call on an item owned by a service principal (microsoft/rayfin#89, open).
-# Until that is fixed the app people use is `wasm`.
+# CI deploys into items of its own.
 on:
   workflow_dispatch:
     inputs:
+      app:
+        description: 'Which app'
+        type: choice
+        options: [vertipaq, wasm]
+        required: true
       dry_run:
         description: 'Preview only (rayfin up -n): resolve the target and plan, deploy nothing'
         type: boolean
@@ -21,17 +31,26 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 concurrency:
-  group: deploy-fabric
+  group: deploy-fabric-${{ inputs.app }}
   cancel-in-progress: false
 
 permissions:
   contents: read
-  id-token: write   # OIDC federated login to the app's tenant; no secret
+  id-token: write   # OIDC federated login; no secret
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: dashboard/fabric_app_${{ inputs.app }}
+    env:
+      # The item is CI's own: Rayfin lets only the owner of an app item deploy to it, and the
+      # owner is whoever created it. An item made from a laptop (`rayfin up` under a user
+      # login) refuses this login with 403.
+      ITEM: ${{ inputs.app == 'wasm' && 'nemtracker' || 'vertipaq' }}
+      RAYFIN_WORKSPACE_ID: ${{ inputs.app == 'wasm' && vars.FABRIC_APP_WORKSPACE_ID || vars.WS_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -40,16 +59,17 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            dashboard/fabric_app_wasm/package-lock.json
+            dashboard/fabric_app_${{ inputs.app }}/package-lock.json
             dashboard/fabric_app_wasm/rayfin/functions/package-lock.json
 
-      # The app's tenant, not the catalog's: the Entra app that import_onelake.yml uploads the
-      # data with (LAKE_*). It is a member of the app's workspace.
+      # wasm: the app's tenant, not the catalog's: the Entra app that import_onelake.yml
+      # uploads the data with (LAKE_*), a member of the app's workspace.
+      # vertipaq: the catalog's identity, which owns the model it sits next to.
       - name: Azure federated login
         uses: azure/login@v2
         with:
-          client-id: ${{ vars.LAKE_CLIENT_ID }}
-          tenant-id: ${{ vars.LAKE_TENANT_ID }}
+          client-id: ${{ inputs.app == 'wasm' && vars.LAKE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ inputs.app == 'wasm' && vars.LAKE_TENANT_ID || vars.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
       - name: Mint Fabric token
@@ -60,20 +80,38 @@ jobs:
           echo "RAYFIN_TOKEN=$TOKEN" >> "$GITHUB_ENV"
 
       - name: Install
-        working-directory: dashboard/fabric_app_wasm
         run: |
           npm ci
-          npm ci --prefix rayfin/functions
+          if [ -d rayfin/functions ]; then npm ci --prefix rayfin/functions; fi
 
-      # The item is CI's own: Rayfin lets only the owner of an app item deploy to it, and the
-      # owner is whoever created it. This login created `nemtracker`, so it can deploy to it;
-      # an item made from a laptop (`rayfin up` under a user login) refuses it with 403.
-      # --yes: reuse that item on every later run, never ask.
+      - name: Declare the connector to the semantic model
+        # rayfin.yml in the repo has no `connectors:` entry: it names the workspace and the
+        # model by id, and `connector add` takes literals only. So the entry is written here,
+        # as model.bim's ids are at its deploy. The model is found by its name.
+        if: ${{ inputs.app == 'vertipaq' }}
+        run: |
+          set -euo pipefail
+          MODEL_ID=$(curl -sf -H "Authorization: Bearer $RAYFIN_TOKEN" \
+            "https://api.fabric.microsoft.com/v1/workspaces/$RAYFIN_WORKSPACE_ID/semanticModels" \
+            | jq -r '.value[] | select(.displayName == "nem") | .id')
+          test -n "$MODEL_ID" || { echo "::error::no semantic model named nem in the workspace"; exit 1; }
+          npx rayfin connector add --type fabric-semanticmodel --workspace-id "$RAYFIN_WORKSPACE_ID" \
+            --item-id "$MODEL_ID" --name nem --yes
+          sed -n '/^connectors:/,$p' rayfin/rayfin.yml | sed -E 's/[0-9a-f]{8}-[0-9a-f-]{27}/<id>/g'
+
+      - name: One query through the connector, from here
+        # Under this login, straight to Power BI: it says whether the model answers DAX on
+        # this route at all. It is not the app's route (that one runs as the signed-in
+        # reader), so a refusal here does not stop the deploy: the log is the evidence.
+        if: ${{ inputs.app == 'vertipaq' && !inputs.dry_run }}
+        continue-on-error: true
+        run: |
+          echo '{"query": "EVALUATE ROW(\"newest\", MAX(fct_summary[date]), \"rows\", COUNTROWS(dim_region))"}' > probe.query.json
+          npx rayfin connector invoke nem executeQuery --file ./probe.query.json
+
+      # --yes: reuse the item on every later run, never ask.
       - name: Deploy
-        working-directory: dashboard/fabric_app_wasm
-        env:
-          RAYFIN_WORKSPACE_ID: ${{ vars.FABRIC_APP_WORKSPACE_ID }}
-        run: npx rayfin up --item-name nemtracker --workspace-id "$RAYFIN_WORKSPACE_ID" --yes --output json ${{ inputs.dry_run && '-n' || '' }}
+        run: npx rayfin up --item-name "$ITEM" --workspace-id "$RAYFIN_WORKSPACE_ID" --yes --output json ${{ inputs.dry_run && '-n' || '' }}
 
       - name: Set the function's secret, on a new item
         # Where getDataSas signs: the Files folder of the lakehouse import_onelake.yml fills.
@@ -81,8 +119,7 @@ jobs:
         # item that lacks it gets it, followed by the function once more: the first deploy
         # went out before the secret existed, and the app that works was deployed in this
         # order (deploy, secret, deploy).
-        if: ${{ !inputs.dry_run }}
-        working-directory: dashboard/fabric_app_wasm
+        if: ${{ inputs.app == 'wasm' && !inputs.dry_run }}
         env:
           ONELAKE_FILES_URL: ${{ vars.ONELAKE_FILES_URL }}
         run: |
@@ -97,7 +134,7 @@ jobs:
       # OneLake for a user delegation key; ask for one here, so a deploy says so when OneLake
       # refuses this identity, instead of the app answering 500 to every visitor.
       - name: Check the app's identity can sign a SAS
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.app == 'wasm' && !inputs.dry_run }}
         run: |
           TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
           echo "::add-mask::$TOKEN"
