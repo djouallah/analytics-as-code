@@ -29,7 +29,8 @@ only: a finished item is removed, not ticked.
   counts the temp table first. Worth it only if the run total still matters after
   2026-10-06.
 - [ ] **The intraday tables are never trimmed** (`fct_scada_today`, `fct_price_today`,
-  `fct_regionsum_today`: no DELETE on OneLake). Since 2026-10-06 the scans that read them
+  `fct_regionsum_today`: the pipeline was designed never to DELETE, though the catalog
+  accepts one on its own). Since 2026-10-06 the scans that read them
   are bounded by the newest daily date, so growth costs file pruning, not rows; the
   tables themselves still grow by about a month's intervals a month, and a
   `rebuild=<table>` of one re-reads every intraday file in the log. If that ever hurts, the
@@ -69,5 +70,11 @@ only: a finished item is removed, not ticked.
   `import_data.yml` and `import_onelake.yml` together.
 - [ ] duckdb-iceberg#1341 (snapshot expiry) merged → replace pyiceberg in
   `scripts/expire_snapshots.py`.
+- [ ] OneLake accepts a commit mixing delete files with data files (fixed upstream, rolling
+  out) → re-run the capability probe; once its matrix shows a `MERGE` with
+  `WHEN MATCHED UPDATE` passing, the merges no longer have to be insert-only: AEMO's late
+  corrections can land, `dim_duid` can update in place instead of needing a rebuild, and
+  `fct_summary` can take the next-day value over the intraday one. Update AGENTS.md's
+  "insert-only" sections with it.
 - [ ] AEMO publishes `ROOFTOP_PV_ACTUAL_PRED`/`_RUN` (5-minute rooftop estimate) → move
   `fct_rooftop_pv` to it; the half-hourly record it replaces is to be removed (see AGENTS.md).
