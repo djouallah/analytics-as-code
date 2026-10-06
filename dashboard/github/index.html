@@ -1560,12 +1560,14 @@
       const regionIs = column => region ? [`${column} = ${daxStr(region)}`] : [];
       const [units, held, prices] = await Promise.all([
         // Per fuel: its output, and what of it is charging, renewable and a generator's.
+        // KEEPFILTERS: GENERATOR is on the fuel, the column grouped by, and in DAX a filter
+        // inside CALCULATE replaces the row's own: every fuel would get all generators' MW.
         now?.date ? runQuery(`
           EVALUATE UNION(
             SELECTCOLUMNS(
               CALCULATETABLE(
                 SUMMARIZECOLUMNS(${FUEL}, "mw", [Generation MW], "charging", [Charging MW],
-                  "renewable", CALCULATE([Generation MW], ${RENEWABLE}), "generator", CALCULATE([Generation MW], ${GENERATOR})),
+                  "renewable", CALCULATE([Generation MW], ${RENEWABLE}), "generator", CALCULATE([Generation MW], KEEPFILTERS(${GENERATOR}))),
                 ${[`fct_summary[date] = ${daxDate(now.date)}`, `fct_summary[time] = ${now.time}`, ...regionIs('dim_duid[Region]')].join(', ')}),
               "fuel", [FuelSourceDescriptor], "mw", [mw], "charging", [charging], "renewable", [renewable], "generator", [generator]),
             SELECTCOLUMNS(
@@ -2576,11 +2578,13 @@
       // The model's [Capacity factor] at two grains in one query: per fuel (the subtotal
       // rows), and per unit. Energy over what the registered capacity of the units with
       // output ([Capacity MW]) could make in the hours the price data holds for the range.
-      // Sorted by factor, so the top units are the last ones.
+      // Sorted by factor, so the top units are the last ones. Grouped by dim_duid[DUID], not
+      // the fact's: in DAX a fact's column does not filter dim_duid, and the station would be
+      // blank. The compiler reads that key off the fact, so it costs no join.
       const rows = (await runQuery(`
         EVALUATE SELECTCOLUMNS(
           CALCULATETABLE(
-            SUMMARIZECOLUMNS(${FUEL}, ROLLUPADDISSUBTOTAL(${grain().unit}[DUID], "allUnits"),
+            SUMMARIZECOLUMNS(${FUEL}, ROLLUPADDISSUBTOTAL(dim_duid[DUID], "allUnits"),
               "station", SELECTEDVALUE(dim_duid[StationName]), "cap", [Capacity MW], "cf", [Capacity factor]),
             ${[...dax.whereAll(), 'dim_duid[RegCapMW] > 0', generatorUnits()].join(', ')}),
           "DUID", [DUID], "fuel", [FuelSourceDescriptor], "total", [allUnits], "station", [station], "cap", [cap], "cf", [cf])
@@ -2675,7 +2679,7 @@
             FILTER(
               SELECTCOLUMNS(
                 CALCULATETABLE(
-                  SUMMARIZECOLUMNS(fct_curtailment[DUID], ${FUEL}, "station", SELECTEDVALUE(dim_duid[StationName]),
+                  SUMMARIZECOLUMNS(dim_duid[DUID], ${FUEL}, "station", SELECTEDVALUE(dim_duid[StationName]),
                     "cur", [Curtailed MWh], "rate", [Curtailment rate]),
                   ${[...dax.dates('fct_curtailment', from, to), ...dax.unitFilters('fct_curtailment')].join(', ')}),
                 "DUID", [DUID], "fuel", [FuelSourceDescriptor], "station", [station], "cur", [cur], "rate", [rate]),
