@@ -175,20 +175,29 @@ applies one, when a join is needed (below). Which table a measure reads is the m
 which the compiler answers from the query; which grain a date range gets, and MW to MWh, are
 still the page's.
 
-**A figure is a measure of the model, the one Power BI calls** (the owner's, 2026-10-05,
-angrily, on finding that the page worked most of its figures out itself: "the whole point is
-to use the same semantic model"). No query in `index.html` aggregates a column of the model.
-A query groups, filters and names measures. What it may do besides:
-- shape rows: rename, `UNION` with rooftop, add up the units of a station or an owner;
-- list rows as they are stored: the filter lists, the newest interval, the Flows rows, the
-  first and last key of a table;
-- divide one measure by another, and turn a day's MWh into MW;
+**A figure the model can express is a measure there, the one Power BI calls, and the page
+asks for it** (the owner's, 2026-10-05, angrily, on finding that the page worked most of its
+figures out itself: "the whole point is to use the same semantic model"; and 2026-10-06, on
+finding it still divided measures itself: "if something makes sense to be done using custom
+formula then it is fine, but the rule is if the measure can be expressed upstream in the
+semantic model then it should be there"). An average, a share, a rate or a factor is never
+rebuilt in `index.html` from its parts, least of all one the model already has: for a day
+the page bypassed `[Capacity factor]`, `[Renewable share]` and `[Curtailment rate]` because
+the compiler could not translate a measure over two facts. When that happens the compiler
+gets the case, not the page the formula. A query groups, filters and names measures. What
+stays the page's, each for its reason:
 - what the model does not hold: rooftop's newest half hour carried forward, and so the
-  renewable share and the average day, which are divided in JS.
-A figure that is not a measure yet becomes one in `model.bim` first. The one exception is
-the capacity factor: the model's `[Capacity factor]` reads the units' table and the regions'
-in one measure, which the compiler does not write as one SELECT, so the page divides
-`[Generation MWh]` by the registered capacity and `[Hours]` itself. Analyze is not part of
+  renewable share up to 30 days, "Right now" and rooftop's average day (their parts are
+  measures, the division is in JS);
+- the curtailment total in the chart's title: the farms' table to its newest day plus
+  AEMO's regional figures after it, two tables the model has no one measure for;
+- shaping rows: rename, `UNION` with rooftop, add up the rows of an additive measure (the
+  units of a station or an owner, the stack for a sparkline, the series' averages for the
+  total);
+- rows as they are stored, which are not figures: the filter lists, the newest interval,
+  the Flows rows, the first and last key of a table;
+- presentation: a share of what is shown, the change between two values of a measure.
+A figure that is not a measure yet becomes one in `model.bim` first. Analyze is not part of
 this: it is SQL.
 
 **The Analyze tab is SQL, and only SQL**: its box, the two builders that fill it
@@ -264,6 +273,24 @@ and anything that serves the page from the repo has to do the same.
     keys and filters name around the measure, and an `IF` on one keeps the side it picks;
     the other is never translated. (Until 2026-10-05 it was always `a`, and the page named
     the daily table itself, with figures of its own.)
+  - **A measure of another table is a subquery of its own** (2026-10-06). A SELECT is about
+    one table, the one its first measure is defined on. A measure defined on another
+    (`[Hours]`, the regions', inside `[Capacity factor]`; `[Rooftop MWh]` inside
+    `[Renewable share]`; `[Month days]` inside `[Average MW at hour]`) is written as a
+    subquery: that measure under the filters around it that reach its table along the
+    relationships, grouped by the keys that do and matched on them. It is what the filter
+    context does: a filter on `dim_calendar` reaches every fact, one on `dim_duid` or on
+    `fct_summary[date]` only the units. For the same reason a filter on another fact is
+    left out of the SELECT it does not reach. So a query that calls a two-fact measure
+    filters each fact (`dax.whereAll`): up to 30 days `fct_summary[date]`,
+    `fct_region[date]` and `dim_calendar[date]`, beyond `dim_calendar[date]` with
+    `wholeDays`; and the region on `dim_region[Region]`, which reaches all three.
+    The subquery is a CTE, read once per query and looked up per row of the result:
+    `[Rooftop MWh]` is on both sides of `[Renewable share]`, and written inline the share
+    per day of the whole history took 1.3 s against 0.25.
+    A blank from such a subquery is 0, as DAX adds it. Not supported: under a subtotal of
+    a key that reaches it. In a measure of the model `<>` is DAX's (`IS DISTINCT FROM`: a
+    blank fuel is not "Grid"); in the page's own filters it stays SQL's.
   - Its fixed cases for this model: `[Rooftop MW]` is `SUM(mw)` over `v_fct_rooftop_5min`,
     a view whose SQL is in the file (a half hour and the five times after it on the line
     to the next half hour). The days the daily table lacks, which a measure adds from the
@@ -275,7 +302,14 @@ and anything that serves the page from the repo has to do the same.
     semi-join it cost 100 ms a query to keep every row. `MAX(column, 0)` and
     `MIN(column, 0)` read the column as DOUBLE: a sum of fixed decimals is 128-bit, and
     two of them (output and charging) made the 30-day generation query slower than the
-    one sum by sign it replaced (623 ms against 452; 335 as DOUBLE).
+    one sum by sign it replaced (623 ms against 452; 335 as DOUBLE). `[Capacity MW]`,
+    the capacity of the units that have rows
+    (`CALCULATE(SUM(dim_duid[RegCapMW]), SUMMARIZE(fact, dim_duid[DUID]))`), makes its
+    SELECT two levels: the rows per unit first (its sums, its capacity once), then the
+    groups asked for (`perUnit`). In one level, as `list(DISTINCT {DUID, RegCapMW})`, the
+    capacity factor of 30 days took 2.7 s in the browser against 0.8. And a table's own
+    values put on a dimension (`wholeDays`) are a CTE, read once per query: a two-fact
+    measure puts that filter on each of its subqueries.
 - `storage/data.js` is the host: how the `.duckdb` files are fetched, cached and attached
   (`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `query`). It attaches `dim`,
   `today`, `agg` and the 5-minute history, and builds no view. On both the files are
@@ -515,6 +549,13 @@ they are what these tables are built from.
   not switched to: `[Output MWh hourly]`, `[Average MW at hour]` and `[Price at hour]` name
   them, as `[Negative price days share]`, `[Lowest daily price]` and `[Average MWh a day]`
   name the daily tables: a share of days is not a share of intervals.
+  **An average MW is energy over `[Hours]`** (2026-10-06): `[Average generation MW]`,
+  `[Average total generation MW]` (with rooftop), `[Average rooftop MW]`,
+  `[Average demand MW]`. The hours are the regions' (the intervals the price data holds),
+  nights included, so rooftop's average over 3 days is its energy over 72 hours, not over
+  its daylight intervals as the page's KPI had it. `[Capacity MW]` is the registered
+  capacity of the units with output, which `[Capacity factor]` divides by;
+  `[Renewable share of units]` is the share without rooftop, for when units are picked.
 - **Rooftop at 5 minutes is a measure**, `[Rooftop MW]`: only the half-hourly estimate is
   stored, and the measure draws the straight line between two consecutive half hours
   (nothing across a missing one). The newest value is not held forward: that is the chart's.

@@ -358,16 +358,35 @@
             "description": "Renewable share of the output, %, rooftop solar included. Batteries (fuel Grid) are in neither the renewables nor the total. Slice it by region or date."
           },
           {
-            "name": "Capacity factor",
+            "name": "Renewable share of units",
             "formatString": "0.0",
             "expression": [
+              "DIVIDE(",
+              "    100 * COALESCE(CALCULATE([Generation MWh], dim_duid[Renewable] = TRUE()), 0),",
+              "    CALCULATE([Generation MWh], dim_duid[FuelSourceDescriptor] <> \"Grid\")",
+              ")"
+            ],
+            "description": "Renewable share of the units' output alone, %, without rooftop solar: the one to use when units are picked, which no filter on rooftop follows. Batteries (fuel Grid) are in neither side. 0 when the units ran and none is renewable, blank when no generator ran."
+          },
+          {
+            "name": "Capacity MW",
+            "formatString": "#,##0",
+            "expression": [
               "VAR late = EXCEPT(VALUES(dim_calendar[date]), CALCULATETABLE(VALUES(fct_summary_daily[date]), REMOVEFILTERS(dim_duid), REMOVEFILTERS(dim_region)))",
-              "VAR hours = [Hours]",
-              "VAR capacity =",
+              "RETURN",
               "    IF([Reads 5 minutes],",
               "        CALCULATE(SUM(dim_duid[RegCapMW]), SUMMARIZE(fct_summary, dim_duid[DUID])),",
               "        CALCULATE(SUM(dim_duid[RegCapMW]),",
-              "            DISTINCT(UNION(SUMMARIZE(fct_summary_daily, dim_duid[DUID]), CALCULATETABLE(SUMMARIZE(fct_summary, dim_duid[DUID]), late)))))",
+              "            DISTINCT(UNION(SUMMARIZE(fct_summary_daily, dim_duid[DUID]), CALCULATETABLE(SUMMARIZE(fct_summary, dim_duid[DUID]), late)))))"
+            ],
+            "description": "The registered capacity of the units that have output in the selection, MW: what [Capacity factor] divides by. [Registered MW] is every unit on the list, whether it ran or not."
+          },
+          {
+            "name": "Capacity factor",
+            "formatString": "0.0",
+            "expression": [
+              "VAR hours = [Hours]",
+              "VAR capacity = [Capacity MW]",
               "RETURN DIVIDE(100 * CALCULATE([Generation MWh], dim_duid[RegCapMW] > 0), capacity * hours)"
             ],
             "description": "Energy over what the registered capacity could make in the hours of the selection, %. The capacity is that of the units with output or charging in the selection (found in the daily table when no time of day is asked for); a unit without a registered capacity is left out. The hours are [Hours]."
