@@ -400,7 +400,7 @@ Three things in that design are there for speed and must survive an edit:
   With a fuel picked the page writes the bare rule (`generatorUnits()`); with none it adds
   `|| ISBLANK(fuel)`, because a unit with no fuel is a generator and SQL would drop it.
 
-How the page looks is decided in four places of `index.html`, and a chart goes through them
+How the page looks is decided in five places of `index.html`, and a chart goes through them
 rather than round them:
 - The chrome is monochrome: surfaces, ink and hairlines are CSS tokens on `:root` (light under
   `[data-theme="light"]`, set by the `<head>` script before first paint: the stored choice,
@@ -416,7 +416,18 @@ rather than round them:
   bands on purpose. A region keeps its colour on every chart.
 - The Dashboard tab leads with "Right now" (`renderNow`): the newest interval from
   `fct_summary` and `fct_region`, with rooftop's newest half hour carried forward, following
-  the region filter only.
+  the region filter only. With the pointer on the generation or the price chart (the fuel
+  view only) it shows that interval instead (`scrubHero`), from what those charts and the
+  Renewables KPI already read: no query of its own.
+- **One screen per tab on a desktop** (the owner's, 2026-10-06: no scrolling page). At 1100 px
+  wide and 600 tall or more the page does not scroll: each tab is a flex/grid that fills the
+  window under the header, and a chart takes its cell's height (`--h` is its height only where
+  the page scrolls, below that size). Under 960 tall a compact layout applies (the hero one
+  band, the Dashboard's three charts side by side). Charts follow their boxes through a
+  `ResizeObserver`. Insights is three sub-pages of four charts (`INSIGHTS_PAGES`) and only the
+  one shown is drawn; the Flows board holds each link's small chart in its row; the History
+  calendar lays its years out to fill the card; a tab's notes are an (i) popover. A new chart
+  goes into a cell of that grid, not under it.
 
 **Checking a change to `model.bim`, `compiler.js`, a `data.js` or the page:** in headless Chrome, the page before against
 the page after on one copy of the deployed files, through the same page states; compare what

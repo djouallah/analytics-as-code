@@ -112,7 +112,7 @@
       /* --glow is the colour of the fuel generating the most right now (renderNow). */
       background: radial-gradient(120% 150% at 0% 0%, color-mix(in srgb, var(--glow, transparent) 18%, transparent), transparent 60%), var(--card); }
     .hero-eyebrow { font-size: 0.74rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
-    .hero-eyebrow span { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--faint); margin-left: 0.35rem; }
+    .hero-eyebrow #heroAsOf { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--faint); margin-left: 0.35rem; }
     .hero-figure { font-size: clamp(3.2rem, 5.6vw, 5rem); font-weight: 800; letter-spacing: -0.04em; line-height: 1; margin-top: 0.35rem; white-space: nowrap; }
     .hero-figure small { font-size: 0.42em; font-weight: 700; letter-spacing: 0; margin-left: 0.12em; color: var(--muted); }
     .hero-caption { font-size: 1rem; font-weight: 600; margin-top: 0.3rem; }
@@ -177,14 +177,26 @@
     .chart-card h2 .chart-note { font-weight: 400; letter-spacing: 0; color: var(--muted); font-size: 0.8rem; }
     .chart-card .chart-header { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; margin-bottom: 0.6rem; }
     .chart-card.full-width { grid-column: 1 / -1; }
-    .chart-container { width: 100%; }
+    /* A chart's height is its --h while the page scrolls; on one screen its cell gives it one. */
+    .chart-container { width: 100%; height: var(--h, 300px); }
+    .chart-card .chart-tools { display: inline-flex; align-items: center; gap: 0.6rem; }
+    .charts.single { grid-template-columns: 1fr; }
     .chart-toggle { font-size: 0.78rem; color: var(--muted); display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; white-space: nowrap; }
     .chart-toggle select, .flows-bar select { background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.2rem 0.4rem; font-size: 0.78rem; }
-    /* What the charts of a tab mean, folded away under them. */
-    .notes { margin: 0 var(--gutter) 1.5rem; border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--card); }
-    .notes summary { cursor: pointer; padding: 0.75rem 1.1rem; font-size: 0.85rem; font-weight: 600; color: var(--muted); }
-    .notes summary:hover { color: var(--text); }
-    .notes p { padding: 0 1.1rem 1rem; font-size: 0.85rem; color: var(--muted); line-height: 1.65; max-width: 100ch; }
+    /* What the charts of a tab mean: an (i) at the end of its top row, opening over the page. */
+    .info { position: relative; flex: none; }
+    .info summary { list-style: none; cursor: pointer; width: 1.6rem; height: 1.6rem; border-radius: 50%; border: 1px solid var(--border); display: grid; place-items: center; font: italic 700 0.8rem/1 Georgia, serif; color: var(--muted); transition: color 0.15s, border-color 0.15s; }
+    .info summary::-webkit-details-marker { display: none; }
+    .info summary:hover, .info[open] summary { color: var(--text); border-color: var(--muted); }
+    .info-panel { position: absolute; right: 0; top: calc(100% + 8px); z-index: 900; width: min(560px, calc(100vw - 2rem)); max-height: 60vh; overflow: auto; background: var(--raised); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 0.9rem 1.1rem; }
+    .info-panel p { font-size: 0.84rem; color: var(--muted); line-height: 1.65; }
+
+    /* --- Insights: three pages of four charts --- */
+    .subtab-bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: var(--gap) var(--gutter) 0; }
+    .subtabs { display: flex; gap: 0.15rem; padding: 0.2rem; background: var(--card); border: 1px solid var(--hairline); border-radius: 999px; }
+    .subtab { padding: 0.32rem 0.9rem; font-size: 0.8rem; font-weight: 600; color: var(--muted); background: none; border: none; border-radius: 999px; cursor: pointer; transition: color 0.15s, background 0.15s; }
+    .subtab:hover { color: var(--text); }
+    .subtab.active { color: var(--on-accent); background: var(--accent); }
 
     /* --- Analyze and Logs --- */
     .analyze-controls { display: flex; gap: 0.8rem; padding: var(--gap) var(--gutter) 0.8rem; align-items: center; flex-wrap: wrap; }
@@ -216,10 +228,13 @@
     .ic-dead .ic-util { font-weight: 600; }
     .ic-dead .ic-bar span { background: repeating-linear-gradient(135deg, var(--bad) 0 6px, transparent 6px 12px); }
     .flows-bar input[type=range] { flex: 1; min-width: 160px; }
-    .flows-main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); gap: var(--gap); padding: 0.5rem var(--gutter); }
+    .flows-main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr); gap: var(--gap); padding: 0.5rem var(--gutter) var(--gap); }
     .flows-board h3 { font-size: 0.78rem; font-weight: 600; color: var(--muted); margin: 0.2rem 0 0.4rem; }
-    .ic-row { display: grid; grid-template-columns: 1fr auto; gap: 0.1rem 0.6rem; padding: 0.5rem 0; border-bottom: 1px solid var(--row-line); }
-    .ic-row:last-child { border-bottom: none; }
+    /* A link: its readout on the left, its flow over the range on the right (the small chart). */
+    .ic-item { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 46%); gap: 0 0.9rem; align-items: center; padding: 0.4rem 0; border-bottom: 1px solid var(--row-line); }
+    .ic-item:last-child { border-bottom: none; }
+    .ic-row { display: grid; grid-template-columns: 1fr auto; gap: 0.1rem 0.6rem; }
+    .ic-mini { height: 58px; min-width: 0; }
     .ic-name { font-size: 0.86rem; font-weight: 600; }
     .ic-name span { font-weight: 500; color: var(--muted); margin-left: 0.3rem; }
     .ic-mw { font-size: 0.92rem; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
@@ -234,7 +249,6 @@
     .price-legend { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.76rem; color: var(--muted); padding: 0.4rem 0.2rem 0; }
     .price-legend > div > span { margin-right: 0.6rem; white-space: nowrap; }
     .price-legend b { color: var(--text); margin-right: 0.3rem; }
-    .flows-minis { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: var(--gap); padding: 0.5rem var(--gutter) var(--gap); }
 
     /* --- History page --- */
     .kpi-row.records { grid-template-columns: repeat(6, minmax(0, 1fr)); }
@@ -262,7 +276,91 @@
       .kpi-card .kpi-value { font-size: 1.4rem; }
       .brand .subtitle { display: none; }
       .flows-time { font-size: 1.3rem; }
+      .info-panel { position: fixed; left: 1rem; right: 1rem; top: 6rem; width: auto; }
     }
+    /* --- One screen. On a desktop the page does not scroll: the header is one band (two lines
+       when it doesn't fit on one), each tab fills what it leaves, and a chart takes the height
+       of its cell. Smaller than this, the page scrolls as above. --- */
+    .chrome { display: contents; }
+    @media (min-width: 1100px) and (min-height: 600px) {
+      body { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+      .chrome { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.2rem; padding: 0.6rem var(--gutter); border-bottom: 1px solid var(--hairline); }
+      .topbar { display: contents; }
+      .tab-bar { order: 1; }
+      .top-actions { order: 2; }
+      .filter-bar { order: 3; flex-basis: 100%; position: static; padding: 0; gap: 0.5rem 0.9rem; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; border: none; }
+      .active-filters { order: 4; flex-basis: 100%; padding: 0; }
+      [role=tabpanel] { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+      .charts { flex: 1 1 0; min-height: 0; grid-auto-rows: minmax(0, 1fr); }
+      .chart-card { display: flex; flex-direction: column; min-height: 0; }
+      .chart-card .chart-header { flex: none; }
+      .chart-container { flex: 1 1 0; min-height: 0; height: auto; }
+
+      /* Dashboard: the hero and the KPIs as two bands, then the generation chart beside price over map. */
+      .hero { flex: none; padding: 0.9rem 1.3rem; gap: 0.8rem 2rem; }
+      .hero-figure { font-size: clamp(2.6rem, 3.4vw, 3.6rem); }
+      .mix-bar { height: 34px; }
+      .mix-legend { margin-top: 0.6rem; }
+      .region-tile { padding: 0.45rem 0.7rem 0.5rem; }
+      .rt-price { font-size: 1.1rem; }
+      .rt-band { margin: 0.3rem 0; }
+      .kpi-row { flex: none; }
+      .kpi-card { padding: 0.6rem 0.9rem; }
+      .kpi-card .kpi-value { font-size: 1.4rem; }
+      #view-dashboard .charts { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+      #view-dashboard .charts > .full-width { grid-column: 1; grid-row: span 2; }
+
+      .subtab-bar, .kpi-row.records, .flows-bar, .analyze-controls, .analyze-sql, .analyze-info { flex: none; }
+      .flows-main { flex: 1 1 0; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+      .flows-map { display: flex; flex-direction: column; }
+      .flows-board { overflow-y: auto; }
+      .analyze-sql textarea { height: 16vh; min-height: 80px; }
+      .analyze-table-wrap { flex: 1 1 0; min-height: 0; max-height: none; }
+    }
+    /* Wide enough, the regions sit beside the mix: the hero is one band. */
+    @media (min-width: 1500px) and (min-height: 600px) {
+      .hero { grid-template-columns: auto minmax(0, 1fr) minmax(0, 1.15fr); }
+      .hero-regions { grid-column: auto; }
+    }
+    /* Short screens (a laptop, or a 1080p screen scaled up): the hero is one band with the
+       regions as a list, the KPIs are smaller, and the Dashboard's three charts sit side by side. */
+    @media (min-width: 1100px) and (min-height: 600px) and (max-height: 959px) {
+      .brand .subtitle { display: none; }
+      .chrome { padding: 0.45rem var(--gutter); }
+      .hero { grid-template-columns: auto minmax(0, 1.5fr) minmax(250px, 1fr); padding: 0.7rem 1.1rem; gap: 0.6rem 1.6rem; margin-top: 0.7rem; }
+      .hero-figure { font-size: 2.6rem; }
+      .hero-caption { font-size: 0.9rem; }
+      .hero-sub { font-size: 0.8rem; }
+      .mix-title { margin-bottom: 0.35rem; }
+      .mix-bar { height: 26px; }
+      .mix-legend { margin-top: 0.45rem; gap: 0.25rem 0.3rem; }
+      .mix-chip { font-size: 0.74rem; padding: 0.1rem 0.5rem; }
+      .hero-regions { grid-column: auto; grid-template-columns: 1fr; gap: 3px; }
+      .region-tile { display: flex; align-items: center; gap: 0.6rem; padding: 0.15rem 0.6rem; border-radius: 8px; }
+      .region-tile:hover { transform: none; }
+      .region-tile .rt-row { display: contents; }
+      .rt-band { order: -1; flex: none; width: 4px; height: 14px; margin: 0; }
+      .rt-code { width: 2.4rem; }
+      .rt-price { font-size: 0.92rem; }
+      .rt-meta { display: none; }
+      .rt-net { margin-left: auto; }
+      .kpi-row { padding-top: 0.7rem; }
+      .kpi-card { padding: 0.45rem 0.8rem; }
+      .kpi-card .kpi-label { font-size: 0.72rem; }
+      .kpi-card .kpi-value { font-size: 1.2rem; margin-top: 0.1rem; }
+      .kpi-card .kpi-sub { font-size: 0.7rem; margin-top: 0.05rem; }
+      .kpi-spark { height: 24px; }
+      .charts { padding-top: 0.7rem; }
+      #view-dashboard .charts { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); }
+      #view-dashboard .charts > .full-width { grid-row: auto; }
+      .subtab-bar { padding-top: 0.7rem; }
+      .flows-time { font-size: 1.3rem; }
+      .flows-time small { display: none; }
+    }
+    /* A chart under the pointer shows its interval in the hero (scrubHero). */
+    .hero.scrubbing .hero-eyebrow { color: var(--text); }
+    .hero.scrubbing .mix-seg { transition-duration: 0.12s; }
+
     @media (prefers-reduced-motion: reduce) {
       .skeleton, #status.loading .dot { animation: none; }
       .mix-seg, .region-tile, .record-card { transition: none; }
@@ -270,6 +368,7 @@
   </style>
 </head>
 <body>
+  <div class="chrome">
   <header class="topbar">
     <div class="brand">
       <svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="brandMark" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f1c93b"/><stop offset=".55" stop-color="#19b394"/><stop offset="1" stop-color="#4b8ff0"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#brandMark)"/><path d="M18.2 4.5 8.5 17.6h6.1l-1.6 9.9 9.7-13.3h-6.2z" fill="#0a0c10"/></svg>
@@ -329,12 +428,13 @@
     </div>
   </div>
   <div class="active-filters" id="activeFilters"></div>
+  </div>
 
   <div id="view-dashboard" role="tabpanel" aria-labelledby="tab-dashboard">
   <!-- The newest interval, whatever the date range (renderNow). -->
   <section class="hero" id="hero" aria-label="The grid right now">
     <div>
-      <div class="hero-eyebrow">Right now<span id="heroAsOf"></span></div>
+      <div class="hero-eyebrow"><span id="heroWhen">Right now</span><span id="heroAsOf"></span></div>
       <div class="hero-figure skeleton" id="heroFigure"><span id="heroValue">--</span><small id="heroUnit"></small></div>
       <div class="hero-caption" id="heroCaption">&nbsp;</div>
       <div class="hero-sub" id="heroSub"></div>
@@ -360,15 +460,15 @@
       <div class="chart-header"><h2 id="title-generation">Generation by Fuel Type (MW)</h2>
         <label class="chart-toggle" id="drillLevelWrap" hidden>Show
           <select id="drillLevel" aria-label="Group the drilled fuel by unit or by power station"><option value="unit">Units</option><option value="station">Stations</option></select></label></div>
-      <div class="chart-container" id="chart-generation" style="height:340px;"></div>
+      <div class="chart-container" id="chart-generation" style="--h:340px"></div>
     </div>
     <div class="chart-card">
       <div class="chart-header"><h2>Average Price by Region ($/MWh)</h2><label class="chart-toggle"><input type="checkbox" id="clipSpikes" checked> Clip spikes</label></div>
-      <div class="chart-container" id="chart-price" style="height:300px;"></div>
+      <div class="chart-container" id="chart-price" style="--h:300px"></div>
     </div>
     <div class="chart-card">
       <div class="chart-header"><h2 id="title-map">Generators (average MW)</h2></div>
-      <div class="chart-container" id="chart-map" style="height:300px;"></div>
+      <div class="chart-container" id="chart-map" style="--h:300px"></div>
     </div>
   </div>
   </div>
@@ -381,10 +481,22 @@
       <select id="icSpeed"><option value="0.5">0.5&times;</option><option value="1" selected>1&times;</option><option value="2">2&times;</option><option value="4">4&times;</option></select>
       <input type="range" id="icFrame" min="0" max="0" value="0" aria-label="Dispatch interval shown">
       <label class="chart-toggle"><input type="checkbox" id="icGens" checked> Generators</label>
+      <label class="chart-toggle"><input type="checkbox" id="icNight" checked> Day/night</label>
+      <details class="info"><summary title="How to read this page" aria-label="How to read this page">i</summary><div class="info-panel"><p>
+        MW is power at that moment; $/MWh is the wholesale spot price, not the cost of the flow.
+        AEMO 5-minute dispatch since 2018, up to 30 days at a time. Arrows point the way power flows; their thickness is the
+        flow and their colour how close the link runs to its limit (green &lt; 70% &le; amber &lt; 90%
+        &le; red). Regions are shaded by their price in that interval. Bubbles are the generating
+        units, sized by their output in that interval and coloured by fuel; a ring is a unit
+        charging (batteries, pumped hydro). The dark side of the map is night at that interval,
+        from the sun's position (with dusk and dawn shaded lighter). In each link's small chart the band is
+        the link's import&ndash;export limit and the line the flow, positive from the first region in
+        the name to the second. Hover a small chart to move the map; Play steps through the range.
+      </p></div></details>
     </div>
     <div class="flows-main">
-      <div class="chart-card">
-        <div class="chart-container" id="chart-flowmap" style="height:540px;"></div>
+      <div class="chart-card flows-map">
+        <div class="chart-container" id="chart-flowmap" style="--h:540px"></div>
         <div class="price-legend" id="priceLegend" aria-label="Map key"></div>
       </div>
       <div class="chart-card flows-board">
@@ -394,120 +506,121 @@
         <div id="regionBoard"></div>
       </div>
     </div>
-    <div class="flows-minis" id="icMinis"></div>
-    <details class="notes"><summary>How to read this page</summary><p>
-      MW is power at that moment; $/MWh is the wholesale spot price, not the cost of the flow.
-      AEMO 5-minute dispatch since 2018, up to 30 days at a time. Arrows point the way power flows; their thickness is the
-      flow and their colour how close the link runs to its limit (green &lt; 70% &le; amber &lt; 90%
-      &le; red). Regions are shaded by their price in that interval. Bubbles are the generating
-      units, sized by their output in that interval and coloured by fuel; a ring is a unit
-      charging (batteries, pumped hydro). In the small charts the band is
-      the link's import&ndash;export limit and the line the flow, positive from the first region in
-      the name to the second. Hover any small chart to move the map; Play steps through the range.
-    </p></details>
   </div>
 
   <div id="view-insights" role="tabpanel" aria-labelledby="tab-insights" style="display:none">
-    <div class="charts">
-      <div class="chart-card full-width">
-        <div class="chart-header"><h2 id="title-re">Renewable share of generation (%)</h2></div>
-        <div class="chart-container" id="chart-re" style="height:240px;"></div>
+    <!-- Three pages of four charts: only the page shown is drawn (renderInsights). -->
+    <div class="subtab-bar">
+      <div class="subtabs" role="tablist" aria-label="Insights pages">
+        <button type="button" class="subtab active" data-page="renewables" role="tab" aria-selected="true">Renewables</button>
+        <button type="button" class="subtab" data-page="market" role="tab" aria-selected="false" tabindex="-1">Market</button>
+        <button type="button" class="subtab" data-page="fleet" role="tab" aria-selected="false" tabindex="-1">Fleet</button>
       </div>
+      <details class="info"><summary title="How to read these charts" aria-label="How to read these charts">i</summary><div class="info-panel"><p>
+        Rooftop solar is included, per region, from 6 March 2018. It is not a unit (no DUID: it
+        is not in the unit picker, the map or the unit count) and it is not metered: AEMO estimates
+        it every half hour, and the 5-minute values here are a straight line between two
+        estimates, the newest one held for up to 55 minutes until the next arrives. Deselect
+        "Rooftop solar" in the fuel filter for the utility-scale picture. Renewables = solar, wind, hydro and bioenergy; batteries
+        ("Grid") are storage and count on neither side. Capture price = generation-weighted price the
+        fuel earned in its region (5-minute prices for ranges up to 30 days, daily averages beyond;
+        rooftop solar's is weighted by its half hours).
+        Capacity factor = energy / (registered capacity &times; hours), over units that generated in
+        the range. Net exports = AEMO's net interconnector flow out of each region. Beyond 30 days
+        the price heatmap and the average day are hourly, over the whole months the range touches.
+        The dashed Demand line on the generation chart is AEMO's operational demand plus the
+        rooftop solar in the stack (operational demand alone leaves out what rooftop supplies); with
+        a region selected, the gap between it and the stack is roughly that region's net exports.
+        Batteries: the average day of the battery fleet, output above the
+        axis and charging below, with the price it saw; "bought" and "sold" are the prices weighted
+        by the energy charged and discharged (5-minute ranges only, since a day's total nets one
+        against the other). Who generated it: energy by owner and power station, coloured by fuel;
+        click an owner to zoom in. Curtailment: what the wind and solar farms AEMO dispatches as
+        semi-scheduled could have made and were not dispatched for (available MW less the dispatch
+        target, each 5 minutes), whether for network limits or economic spill at low prices. Per
+        farm it comes from the next-day files, so it ends a day or two ago; the days after come
+        from AEMO's regional figures (lighter bars), which the farms add up to. It leaves out
+        rooftop solar and the small non-scheduled farms. All charts follow the header filters.
+      </p></div></details>
+    </div>
+    <div class="charts quad" data-page="renewables">
       <div class="chart-card">
-        <div class="chart-header"><h2 id="title-heat">Price heatmap ($/MWh)</h2></div>
-        <div class="chart-container" id="chart-heat" style="height:300px;"></div>
+        <div class="chart-header"><h2 id="title-re">Renewable share of generation (%)</h2></div>
+        <div class="chart-container" id="chart-re" style="--h:300px"></div>
       </div>
       <div class="chart-card">
         <div class="chart-header"><h2 id="title-profile">Average day by fuel (MW)</h2></div>
-        <div class="chart-container" id="chart-profile" style="height:300px;"></div>
+        <div class="chart-container" id="chart-profile" style="--h:300px"></div>
       </div>
       <div class="chart-card">
-        <div class="chart-header"><h2 id="title-capture">Capture price by fuel ($/MWh)</h2></div>
-        <div class="chart-container" id="chart-capture" style="height:300px;"></div>
-      </div>
-      <div class="chart-card">
-        <div class="chart-header"><h2 id="title-neg">Negative prices by region</h2></div>
-        <div class="chart-container" id="chart-neg" style="height:300px;"></div>
-      </div>
-      <div class="chart-card full-width">
-        <div class="chart-header"><h2 id="title-net">Net exports by region (MW; below zero = importing)</h2></div>
-        <div class="chart-container" id="chart-net" style="height:260px;"></div>
-      </div>
-      <div class="chart-card">
-        <div class="chart-header"><h2 id="title-cf">Capacity factor by fuel (%)</h2></div>
-        <div class="chart-container" id="chart-cf" style="height:320px;"></div>
-      </div>
-      <div class="chart-card">
-        <div class="chart-header"><h2 id="title-cfunits">Capacity factor, top units (%)</h2></div>
-        <div class="chart-container" id="chart-cfunits" style="height:320px;"></div>
-      </div>
-      <div class="chart-card full-width">
         <div class="chart-header"><h2 id="title-curtail">Wind and solar curtailment (MWh)</h2></div>
-        <div class="chart-container" id="chart-curtail" style="height:280px;"></div>
+        <div class="chart-container" id="chart-curtail" style="--h:300px"></div>
       </div>
       <div class="chart-card">
         <div class="chart-header"><h2 id="title-curtailunits">Most curtailed farms (MWh)</h2></div>
-        <div class="chart-container" id="chart-curtailunits" style="height:320px;"></div>
+        <div class="chart-container" id="chart-curtailunits" style="--h:300px"></div>
+      </div>
+    </div>
+    <div class="charts quad" data-page="market" hidden>
+      <div class="chart-card">
+        <div class="chart-header"><h2 id="title-heat">Price heatmap ($/MWh)</h2></div>
+        <div class="chart-container" id="chart-heat" style="--h:300px"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header"><h2 id="title-capture">Capture price by fuel ($/MWh)</h2></div>
+        <div class="chart-container" id="chart-capture" style="--h:300px"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header"><h2 id="title-neg">Negative prices by region</h2></div>
+        <div class="chart-container" id="chart-neg" style="--h:300px"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header"><h2 id="title-net">Net exports by region (MW; below zero = importing)</h2></div>
+        <div class="chart-container" id="chart-net" style="--h:300px"></div>
+      </div>
+    </div>
+    <div class="charts quad" data-page="fleet" hidden>
+      <div class="chart-card">
+        <div class="chart-header"><h2 id="title-cf">Capacity factor by fuel (%)</h2></div>
+        <div class="chart-container" id="chart-cf" style="--h:300px"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header"><h2 id="title-cfunits">Capacity factor, top units (%)</h2></div>
+        <div class="chart-container" id="chart-cfunits" style="--h:300px"></div>
       </div>
       <div class="chart-card">
         <div class="chart-header"><h2 id="title-battery">Batteries: average day (MW) and price</h2></div>
-        <div class="chart-container" id="chart-battery" style="height:320px;"></div>
+        <div class="chart-container" id="chart-battery" style="--h:300px"></div>
       </div>
-      <div class="chart-card full-width">
+      <div class="chart-card">
         <div class="chart-header"><h2 id="title-owners">Who generated it: energy by owner and station</h2></div>
-        <div class="chart-container" id="chart-owners" style="height:320px;"></div>
+        <div class="chart-container" id="chart-owners" style="--h:300px"></div>
       </div>
     </div>
-    <details class="notes"><summary>How to read these charts</summary><p>
-      Rooftop solar is included, per region, from 6 March 2018. It is not a unit (no DUID: it
-      is not in the unit picker, the map or the unit count) and it is not metered: AEMO estimates
-      it every half hour, and the 5-minute values here are a straight line between two
-      estimates, the newest one held for up to 55 minutes until the next arrives. Deselect
-      "Rooftop solar" in the fuel filter for the utility-scale picture. Renewables = solar, wind, hydro and bioenergy; batteries
-      ("Grid") are storage and count on neither side. Capture price = generation-weighted price the
-      fuel earned in its region (5-minute prices for ranges up to 30 days, daily averages beyond;
-      rooftop solar's is weighted by its half hours).
-      Capacity factor = energy / (registered capacity &times; hours), over units that generated in
-      the range. Net exports = AEMO's net interconnector flow out of each region. Beyond 30 days
-      the price heatmap and the average day are hourly, over the whole months the range touches.
-      The dashed Demand line on the generation chart is AEMO's operational demand plus the
-      rooftop solar in the stack (operational demand alone leaves out what rooftop supplies); with
-      a region selected, the gap between it and the stack is roughly that region's net exports.
-      Batteries: the average day of the battery fleet, output above the
-      axis and charging below, with the price it saw; "bought" and "sold" are the prices weighted
-      by the energy charged and discharged (5-minute ranges only, since a day's total nets one
-      against the other). Who generated it: energy by owner and power station, coloured by fuel;
-      click an owner to zoom in. Curtailment: what the wind and solar farms AEMO dispatches as
-      semi-scheduled could have made and were not dispatched for (available MW less the dispatch
-      target, each 5 minutes), whether for network limits or economic spill at low prices. Per
-      farm it comes from the next-day files, so it ends a day or two ago; the days after come
-      from AEMO's regional figures (lighter bars), which the farms add up to. It leaves out
-      rooftop solar and the small non-scheduled farms. All charts follow the header filters.
-    </p></details>
   </div>
 
   <div id="view-history" role="tabpanel" aria-labelledby="tab-history" style="display:none">
     <div class="kpi-row records" id="historyRecords"></div>
-    <div class="charts">
-      <div class="chart-card full-width">
+    <div class="charts single">
+      <div class="chart-card">
         <div class="chart-header"><h2 id="title-calendar">Every day of the history</h2>
-          <label class="chart-toggle">Show
+          <span class="chart-tools"><label class="chart-toggle">Show
             <select id="calMetric" aria-label="Measure shown in the calendar">
               <option value="re">Renewable share</option>
               <option value="price">Average price</option>
               <option value="demand">Demand</option>
               <option value="solar">Solar output</option>
               <option value="wind">Wind output</option>
-            </select></label></div>
-        <div class="chart-container" id="chart-calendar" style="height:300px;"></div>
+            </select></label>
+          <details class="info"><summary title="How to read this page" aria-label="How to read this page">i</summary><div class="info-panel"><p>
+            One cell per day, over all of the history. This page follows the region filter only: the
+            date range and the other filters don't apply. The records are daily figures (a share or an
+            average over a whole day), not 5-minute peaks. The newest day is still filling and is left
+            out. Click a day or a record to open it on the Dashboard at 5-minute detail.
+          </p></div></details></span></div>
+        <div class="chart-container" id="chart-calendar" style="--h:300px"></div>
       </div>
     </div>
-    <details class="notes"><summary>How to read this page</summary><p>
-      One cell per day, over all of the history. This page follows the region filter only: the
-      date range and the other filters don't apply. The records are daily figures (a share or an
-      average over a whole day), not 5-minute peaks. The newest day is still filling and is left
-      out. Click a day or a record to open it on the Dashboard at 5-minute detail.
-    </p></details>
   </div>
 
   <div id="view-analyze" role="tabpanel" aria-labelledby="tab-analyze" style="display:none">
@@ -611,6 +724,17 @@
     }
     // The plot area of every chart: the axis labels are measured (containLabel), so no chart
     // sets a left margin of its own and neighbouring cards line up.
+    // A chart's notable point, written on the chart rather than left to the tooltip (the peak
+    // demand, the highest price): a dot in the ink and a label card beside it, on the side
+    // with room. `x` is the index on the category axis, `n` the axis length.
+    const pinAt = (x, y, n, text) => ({ silent: true, animation: false, symbol: 'circle', symbolSize: 7,
+      itemStyle: { color: cssVar('--text'), borderColor: cssVar('--card'), borderWidth: 2 },
+      label: { show: true, position: x > n / 2 ? 'left' : 'right', distance: 6, formatter: text,
+        color: cssVar('--text'), fontSize: 11, fontWeight: 600, backgroundColor: cssVar('--raised'),
+        borderColor: cssVar('--border'), borderWidth: 1, borderRadius: 6, padding: [3, 7] },
+      data: [{ coord: [x, y] }] });
+    // The desktop layout where the page fits the window and does not scroll (the CSS's own test).
+    const onOneScreen = () => matchMedia('(min-width: 1100px) and (min-height: 600px)').matches;
     const plot = ({ legend = false, zoom = false, bottom = 4 } = {}) =>
       ({ left: 4, right: 16, top: legend ? 36 : 10, bottom: zoom ? 34 : bottom, containLabel: true });
 
@@ -1239,7 +1363,9 @@
     const charts = {};
     function getChart(id) {
       if (!charts[id]) {
-        const chart = charts[id] = echarts.init(document.getElementById(id), chartTheme());
+        const el = document.getElementById(id);
+        const chart = charts[id] = echarts.init(el, chartTheme());
+        _resized.observe(el);
         chart.on('georoam', () => {
           const geo = chart.getOption().geo?.[0];
           if (geo) _geoView.set(id, { center: geo.center, zoom: geo.zoom });
@@ -1268,7 +1394,14 @@
       for (const id of Object.keys(charts)) { charts[id].dispose(); delete charts[id]; }
       renderAll();
     });
-    window.addEventListener('resize', () => { Object.values(charts).forEach(c => c.resize()); });
+    // A chart follows its box, not the window: on one screen a cell changes size when the
+    // header wraps or a tab's layout changes, with the window as it was.
+    const _resized = new ResizeObserver(entries => {
+      for (const { target } of entries) {
+        const chart = echarts.getInstanceByDom(target);
+        if (chart && target.clientWidth && target.clientHeight) chart.resize();
+      }
+    });
 
     // An empty result replaces the chart with a message instead of leaving the previous
     // render (and its KPIs) on screen as if it still matched the filters.
@@ -1405,6 +1538,7 @@
       }
       for (const h of held) data.push({ date: h.date, time: h.time, series: rooftopDrill ? rooftopIn(h.region) : ROOFTOP, total_mw: h.mw });
       if (!data.length) {
+        _scrub.gen = null;
         showEmpty('chart-generation');
         setKpi('kpiGen', '--'); setKpi('kpiTopFuel', '--');
         setSpark('kpiGenSpark', []);
@@ -1465,11 +1599,17 @@
       const demandAt = buildLookup(demandRows,
         r => intraday ? `${r.date}|${padTime(r.time)}` : r.date, r => r.demand);
       const hasDemand = demandRows.length > 0;
-      if (hasDemand) series.push({
-        name: DEMAND, type: 'line', symbol: 'none', z: 5, sampling: 'average',
-        lineStyle: { width: 1.5, type: 'dashed', color: cssVar('--text') }, itemStyle: { color: cssVar('--text') },
-        data: xKeys.map(k => demandAt.has(k) ? demandAt.get(k) + (lookup.get(`${k}|${ROOFTOP}`) || 0) : null),
-      });
+      if (hasDemand) {
+        const demand = xKeys.map(k => demandAt.has(k) ? demandAt.get(k) + (lookup.get(`${k}|${ROOFTOP}`) || 0) : null);
+        const peak = demand.reduce((best, v, i) => v != null && (best < 0 || v > demand[best]) ? i : best, -1);
+        series.push({
+          name: DEMAND, type: 'line', symbol: 'none', z: 5, sampling: 'average',
+          lineStyle: { width: 1.5, type: 'dashed', color: cssVar('--text') }, itemStyle: { color: cssVar('--text') },
+          data: demand,
+          markPoint: peak < 0 ? undefined : pinAt(peak, demand[peak], xKeys.length,
+            `Peak demand ${Math.round(demand[peak]).toLocaleString()} ${unit} · ${xLabels[peak]}`),
+        });
+      }
 
       let hoveredSeries = '';
       const chart = getChart('chart-generation');
@@ -1502,6 +1642,17 @@
         animationDuration: 600,
         animationEasing: 'cubicOut',
       }, true);
+
+      // The hero follows the pointer while this is the fuel view (scrubHero).
+      const labelAt = new Map(xKeys.map((k, i) => [k, intraday ? `${xLabels[i]} AEST` : xLabels[i]]));
+      const outputs = seriesNames.filter(n => !n.endsWith(CHARGING)), charges = seriesNames.filter(n => n.endsWith(CHARGING));
+      _scrub.gen = drillFuel || crossFilter.duids.length ? null : { unit, at: k => {
+        if (!labelAt.has(k)) return null;
+        const mix = outputs.map(n => ({ fuel: n, mw: valueAt(k, n) }));
+        return { label: labelAt.get(k), mix, total: mix.reduce((s, r) => s + r.mw, 0),
+          charging: -charges.reduce((s, n) => s + valueAt(k, n), 0) };
+      } };
+      scrubFrom(chart, xKeys);
 
       // Click: fuel view -> drill into fuel; DUID view -> select DUID
       chart.off('click');
@@ -1592,28 +1743,51 @@
         mix.push({ fuel: ROOFTOP, mw: heldNow.mw, charging: 0, renewable: heldNow.mw, generator: heldNow.mw });
       }
       const sum = column => mix.reduce((s, r) => s + (r[column] ?? 0), 0);
-      const total = sum('mw'), renewable = sum('generator') ? 100 * sum('renewable') / sum('generator') : null;
-      const figure = document.getElementById('heroFigure');
-      figure.classList.remove('skeleton');
-      document.getElementById('heroAsOf').textContent = now?.date
-        ? `as of ${formatDate(now.date).replace(/ \d{4}$/, '')}, ${formatTime(now.time)} AEST` : '';
+      _heroNow = {
+        when: 'Right now',
+        asOf: now?.date ? `as of ${formatDate(now.date).replace(/ \d{4}$/, '')}, ${formatTime(now.time)} AEST` : '',
+        unit: 'MW', mix: mix.map(r => ({ fuel: r.fuel, mw: r.mw })), total: sum('mw'), charging: -sum('charging'),
+        share: sum('generator') ? 100 * sum('renewable') / sum('generator') : null,
+        regions: prices,
+      };
+      if (!_scrub.key) paintHero(_heroNow, true);
+    }
+
+    // The hero draws one interval: the newest (renderNow), or the one under the pointer on the
+    // generation or the price chart (scrubHero). `state` holds what it shows: the mix as
+    // { fuel, mw } and its total, what is charging, the renewable share, and the regions as { region,
+    // price, demand, net } (an interval under the pointer has no demand or net).
+    let _heroNow = null;
+    function paintHero(state, animate) {
+      const region = activeRegion(), { unit } = state;
+      const { total, share: renewable } = state;
+      document.getElementById('heroFigure').classList.remove('skeleton');
+      document.getElementById('heroWhen').textContent = state.when;
+      document.getElementById('heroAsOf').textContent = state.asOf;
       const where = region ? `in ${regionName(region)}` : 'across the NEM';
-      const mwText = v => `${Math.round(v).toLocaleString()} MW`;
+      const mwText = v => `${Math.round(v).toLocaleString()} ${unit}`;
+      const figure = (v, format) => {
+        if (animate) return setKpiNumber('heroValue', v, format);
+        const el = document.getElementById('heroValue');
+        cancelAnimationFrame(_kpiAnim.get('heroValue'));
+        el.dataset.value = v;
+        el.textContent = format(v);
+      };
       // The share leads; with no generator's output there is none, and the output does.
       if (renewable != null) {
-        setKpiNumber('heroValue', renewable, v => v.toFixed(0));
+        figure(renewable, v => v.toFixed(0));
         document.getElementById('heroUnit').textContent = '%';
         document.getElementById('heroCaption').textContent = `renewable ${where}`;
-        document.getElementById('heroSub').textContent = `${mwText(total)} generating`;
+        document.getElementById('heroSub').textContent = `${mwText(total)} ${unit === 'MW' ? 'generating' : 'generated'}`;
       } else {
-        if (total) setKpiNumber('heroValue', total, v => Math.round(v).toLocaleString()); else setKpi('heroValue', '--');
-        document.getElementById('heroUnit').textContent = total ? 'MW' : '';
-        document.getElementById('heroCaption').textContent = `generating ${where}`;
+        if (total) figure(total, v => Math.round(v).toLocaleString()); else setKpi('heroValue', '--');
+        document.getElementById('heroUnit').textContent = total ? unit : '';
+        document.getElementById('heroCaption').textContent = `${unit === 'MW' ? 'generating' : 'generated'} ${where}`;
         document.getElementById('heroSub').textContent = '';
       }
 
       // --- the mix bar and its legend ---
-      const fuels = mix.filter(r => r.mw > 0).sort((a, b) => b.mw - a.mw);
+      const fuels = state.mix.filter(r => r.mw > 0).sort((a, b) => b.mw - a.mw);
       const shown = fuels.filter(r => r.mw >= MIX_MIN_SHARE * total), rest = fuels.filter(r => r.mw < MIX_MIN_SHARE * total);
       const label = fuel => fuel === 'Grid' ? 'Battery' : fuel;
       const share = v => total ? `${(100 * v / total).toFixed(v >= 0.1 * total ? 0 : 1)}%` : '';
@@ -1625,24 +1799,76 @@
       const tipOf = it => it.tip ?? `<b>${escapeHtml(it.name)}</b> ${mwText(it.mw)} <i>${share(it.mw)}</i>`;
       const attrs = it => `${it.fuel ? `data-fuel="${escapeHtml(it.fuel)}"` : 'tabindex="-1"'} data-tip="${escapeHtml(tipOf(it))}"`;
       document.getElementById('hero').style.setProperty('--glow', items[0]?.color ?? 'transparent');
-      document.getElementById('mixTitle').textContent = `Generation by fuel ${where} (MW)`;
-      document.getElementById('mixBar').innerHTML = items.map(it =>
-        `<button type="button" class="mix-seg${it.fuel ? '' : ' static'}" style="flex-grow:${Math.round(it.mw)};background:${it.color}" ${attrs(it)} aria-label="${escapeHtml(it.name)} ${mwText(it.mw)}"></button>`).join('');
-      const charging = -sum('charging');
+      document.getElementById('mixTitle').textContent = `Generation by fuel ${where} (${unit})`;
+      // The segments are kept, and their size changed, while the fuels are the same ones in the
+      // same order: the bar then moves from one interval to the next instead of being redrawn.
+      const bar = document.getElementById('mixBar'), names = items.map(it => it.name).join('|');
+      if (bar.dataset.names === names) {
+        [...bar.children].forEach((seg, i) => {
+          seg.style.flexGrow = Math.round(items[i].mw);
+          seg.dataset.tip = tipOf(items[i]);
+          seg.setAttribute('aria-label', `${items[i].name} ${mwText(items[i].mw)}`);
+        });
+      } else {
+        bar.dataset.names = names;
+        bar.innerHTML = items.map(it =>
+          `<button type="button" class="mix-seg${it.fuel ? '' : ' static'}" style="flex-grow:${Math.round(it.mw)};background:${it.color}" ${attrs(it)} aria-label="${escapeHtml(it.name)} ${mwText(it.mw)}"></button>`).join('');
+      }
+      const charging = state.charging;
       document.getElementById('mixLegend').innerHTML = items.map(it =>
         `<button type="button" class="mix-chip${it.fuel ? '' : ' static'}${it.fuel && it.fuel === picked ? ' active' : ''}" ${attrs(it)}>
           <span class="sw" style="background:${it.color}"></span>${escapeHtml(it.name)} <b>${Math.round(it.mw).toLocaleString()}</b> <i>${share(it.mw)}</i></button>`).join('')
         + (charging >= 1 ? `<span class="mix-chip static" data-tip="Batteries and pumped hydro taking power from the grid"><span class="sw ring" style="border-color:${fuelColor('Grid')}"></span>Charging <b>${Math.round(charging).toLocaleString()}</b></span>` : '');
 
       // --- the regions ---
-      document.getElementById('heroRegions').innerHTML = prices.map(p => {
+      document.getElementById('heroRegions').innerHTML = state.regions.map(p => {
         const net = p.net == null ? '' : `<span class="rt-net ${p.net >= 0 ? 'export' : 'import'}">${p.net >= 0 ? '&#9650; exports' : '&#9660; imports'} ${mwText(Math.abs(p.net))}</span>`;
         return `<button type="button" class="region-tile${p.region === region ? ' active' : ''}" data-region="${escapeHtml(p.region)}" title="${p.region === crossFilter.region ? 'Show all regions' : `Show ${escapeHtml(regionName(p.region))} only`}">
           <div class="rt-row"><span class="rt-code">${escapeHtml(short(p.region))}</span><span class="rt-price">${fmtPrice(p.price)}<small>/MWh</small></span></div>
-          <div class="rt-band" style="background:${priceColor(p.price)}"></div>
-          <div class="rt-row">${p.demand == null ? '' : `<span class="rt-meta">${mwText(p.demand)} demand</span>`}${net}</div>
+          <div class="rt-band" style="background:${p.price == null ? 'var(--row-line)' : priceColor(p.price)}"></div>
+          <div class="rt-row">${p.demand == null ? '' : `<span class="rt-meta">${mwText(p.demand)} demand</span>`}${net}${p.demand == null && p.net == null ? '<span class="rt-meta">&nbsp;</span>' : ''}</div>
         </button>`;
       }).join('');
+    }
+
+    // --- Scrubbing: the interval under the pointer, in the hero ---
+    // Where the professional trackers have the summary follow the chart, here the hero does:
+    // the generation chart's stack at that point (a share is of what it shows), the renewable
+    // share the Renewables KPI read for it, and each region's price on the price chart. It
+    // reads what those charts drew, and queries nothing. Only while the generation chart is
+    // by fuel: a drill or a unit pick is not what the hero is about. Off the charts, back to
+    // the newest interval.
+    const _scrub = { key: null, gen: null, share: new Map(), price: null, frame: 0 };
+    function scrubHero(key) {
+      if (key === _scrub.key) return;
+      _scrub.key = key;
+      cancelAnimationFrame(_scrub.frame);
+      _scrub.frame = requestAnimationFrame(() => {
+        const hero = document.getElementById('hero');
+        const at = key && _scrub.gen?.at(key);
+        if (!at || !_heroNow) {
+          _scrub.key = null;
+          hero.classList.remove('scrubbing');
+          if (_heroNow) paintHero(_heroNow, false);
+          return;
+        }
+        hero.classList.add('scrubbing');
+        paintHero({
+          when: 'At', asOf: at.label, unit: _scrub.gen.unit, mix: at.mix, total: at.total, charging: at.charging,
+          share: _scrub.share.get(key) ?? null,
+          regions: _heroNow.regions.map(p => ({ region: p.region, price: _scrub.price?.get(`${key}|${p.region}`) ?? null })),
+        }, false);
+      });
+    }
+    // The charts call this with their x keys: an index on the axis, or none when the pointer left.
+    function scrubFrom(chart, xKeys) {
+      chart.off('updateAxisPointer');
+      chart.on('updateAxisPointer', e => {
+        const i = e.axesInfo?.[0]?.value;
+        scrubHero(Number.isInteger(i) ? xKeys[i] : null);
+      });
+      chart.off('globalout');
+      chart.on('globalout', () => scrubHero(null));
     }
     // A click on the mix filters the page to that fuel, like a click on the generation chart;
     // a click on a region does what a click on its price line does. A second click undoes it.
@@ -1674,6 +1900,7 @@
       if (seq !== _renderSeq) return;
       const data = found.filter(r => !r.total), together = found.filter(r => r.total);
       if (!data.length) {
+        _scrub.price = null;
         showEmpty('chart-price');
         setKpi('kpiPrice', '--');
         setSpark('kpiPriceSpark', []);
@@ -1715,6 +1942,21 @@
       const yMax = clip ? nice(pct(0.99)) : null;
       const yMin = clip ? Math.min(0, nice(pct(0.01))) : null;
 
+      // On the chart itself: its highest price (at the top edge, with an arrow, when the axis
+      // is clipped below it), and the band below $0 when a price went there.
+      let top = null;
+      series.forEach((sr, si) => sr.data.forEach((v, i) => { if (v != null && (!top || v > top.v)) top = { si, i, v }; }));
+      if (top) {
+        const off = yMax != null && top.v > yMax;
+        series[top.si].markPoint = pinAt(top.i, off ? yMax : top.v, xKeys.length,
+          `${off ? '↑ ' : ''}${fmtPrice(top.v)} ${short(regions[top.si])} · ${xLabels[top.i]}`);
+      }
+      const lowest = vals[0];
+      if (lowest < 0 && series.length) series[0].markArea = { silent: true, animation: false,
+        itemStyle: { color: PRICE_BANDS[0].color, opacity: isLight() ? 0.08 : 0.12 },
+        label: { show: true, position: 'insideBottomLeft', formatter: 'below $0', color: cssVar('--muted'), fontSize: 10 },
+        data: [[{ yAxis: yMin ?? lowest }, { yAxis: 0 }]] };
+
       const chart = getChart('chart-price');
       chart.setOption({
         tooltip: { trigger: 'axis', axisPointer: { type: 'line' }, valueFormatter: v => v == null ? '-' : fmtPrice(v, 2) },
@@ -1726,6 +1968,9 @@
         series,
         animationDuration: 600,
       }, true);
+
+      _scrub.price = lookup;
+      scrubFrom(chart, xKeys);
 
       chart.off('click');
       chart.on('click', (params) => {
@@ -1809,6 +2054,7 @@
     async function updateRenewablesKpi(seq) {
       const { rows, overall } = await renewableShare();
       if (seq !== _renderSeq) return;
+      _scrub.share = new Map(rows.map(r => [r.time != null ? `${r.date}|${padTime(r.time)}` : r.date, r.share]));
       setSpark('kpiRESpark', rows.map(r => r.share));
       if (overall == null) return setKpi('kpiRE', '--', 'share of generation');
       const peak = rows.reduce((best, r) => r.share != null && (!best || r.share > best.share) ? r : best, null);
@@ -1872,10 +2118,33 @@
       if (r1 == null || r0 == null) show(ids[2]);
       else delta(ids[2], r1 - r0, s => `${s} pts`, 'coloured');
     }
+    // Insights is three pages of four charts, and only the page shown is drawn.
+    const INSIGHTS_PAGES = {
+      renewables: [renderRenewables, renderProfile, renderCurtailment],
+      market: [renderHeatmap, renderCapture, renderNegative, renderNetExports],
+      fleet: [renderCapacityFactor, renderBattery, renderOwners],
+    };
+    const insightsPage = () => document.querySelector('.subtab.active').dataset.page;
     async function renderInsights(seq) {
-      await Promise.all([renderRenewables(seq), renderHeatmap(seq),
-        renderProfile(seq), renderCapture(seq), renderNegative(seq), renderNetExports(seq), renderCapacityFactor(seq),
-        renderCurtailment(seq), renderBattery(seq), renderOwners(seq)]);
+      await Promise.all(INSIGHTS_PAGES[insightsPage()].map(render => render(seq)));
+    }
+    const subtabs = [...document.querySelectorAll('.subtab')];
+    for (const btn of subtabs) {
+      btn.addEventListener('keydown', e => {
+        if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+        const next = subtabs[(subtabs.indexOf(btn) + (e.key === 'ArrowRight' ? 1 : subtabs.length - 1)) % subtabs.length];
+        next.focus(); next.click();
+      });
+      btn.addEventListener('click', () => {
+        for (const b of subtabs) {
+          const on = b === btn;
+          b.classList.toggle('active', on);
+          b.setAttribute('aria-selected', String(on));
+          b.tabIndex = on ? 0 : -1;
+        }
+        for (const page of document.querySelectorAll('.charts[data-page]')) page.hidden = page.dataset.page !== btn.dataset.page;
+        if (_ready) guarded(renderInsights(_renderSeq));
+      });
     }
 
     // =========================================================================
@@ -1987,13 +2256,18 @@
       icStop();
       const { from, to } = getDateRange();
       const region = activeRegion();
-      const minis = document.getElementById('icMinis');
+      const board = document.getElementById('icBoard');
+      const disposeMinis = () => {
+        for (const id of Object.keys(charts).filter(k => k.startsWith('chart-mini-'))) {
+          _resized.unobserve(document.getElementById(id));
+          charts[id].dispose(); delete charts[id];
+        }
+      };
       const empty = msg => {
         showEmpty('chart-flowmap', msg);
-        document.getElementById('icBoard').innerHTML = '';
+        disposeMinis();
+        board.innerHTML = '';
         document.getElementById('regionBoard').innerHTML = '';
-        for (const id of Object.keys(charts).filter(k => k.startsWith('chart-mini-'))) { charts[id].dispose(); delete charts[id]; }
-        minis.innerHTML = '';
         document.getElementById('flowsTime').firstChild.textContent = '--';
         document.getElementById('flowsNow').textContent = '';
         document.getElementById('flowsEvent').textContent = '';
@@ -2078,28 +2352,27 @@
         `<div><b>Shading</b> spot price ($/MWh) ` + PRICE_BANDS.map(b => swatch(b.color, b.label)).join(' ') + '</div>';
       icState.ids = Object.keys(INTERCONNECTORS).filter(id => shown.some(r => r.id === id));
 
-      // Small multiples: one chart per link, flow line over its limit band, all sharing a cursor.
-      for (const id of Object.keys(charts).filter(k => k.startsWith('chart-mini-'))) { charts[id].dispose(); delete charts[id]; }
-      minis.innerHTML = icState.ids.map(id => {
-        const ic = INTERCONNECTORS[id];
-        return `<div class="chart-card"><div class="chart-header"><h2>${ic.name} <span class="chart-note">${short(ic.from)} &rarr; ${short(ic.to)} (MW)</span></h2></div>
-          <div class="chart-container" id="chart-mini-${id}" style="height:170px;"></div></div>`;
-      }).join('');
+      // The board: a row per link, its readout (icShow fills it) beside a small chart of its
+      // flow over the range, the line over its limit band; the small charts share a cursor.
+      disposeMinis();
+      board.innerHTML = icState.ids.map(id =>
+        `<div class="ic-item"><div class="ic-row" id="icrow-${id}"></div><div class="ic-mini" id="chart-mini-${id}"></div></div>`).join('');
       const lookup = buildLookup(shown, r => `${r.date}|${padTime(r.time)}|${r.id}`, r => r);
       for (const id of icState.ids) {
         const ser = xKeys.map(k => lookup.get(`${k}|${id}`));
         const chart = getChart(`chart-mini-${id}`);
         chart.group = 'ic-minis';
         chart.setOption({
-          tooltip: { trigger: 'axis', formatter: ps => {
+          tooltip: { trigger: 'axis', confine: true, formatter: ps => {
             const r = ser[ps[0].dataIndex];
             if (!r) return '';
             const ic = INTERCONNECTORS[id], [a, b] = r.mw >= 0 ? [ic.from, ic.to] : [ic.to, ic.from];
             return `<div style="color:${cssVar('--muted')}">${ps[0].axisValueLabel}</div><b>${Math.round(Math.abs(r.mw))} MW</b> ${short(a)}&rarr;${short(b)}<br>limits ${Math.round(r.import_limit)} / ${Math.round(r.export_limit)} MW`;
           } },
-          grid: plot(),
-          xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true, fontSize: 10 } },
-          yAxis: { type: 'value', splitNumber: 3, axisLabel: { fontSize: 10, formatter: v => Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + 'k' : v } },
+          // A sparkline: the readout beside it carries the numbers, the tooltip the rest.
+          grid: { left: 2, right: 2, top: 4, bottom: 4 },
+          xAxis: { type: 'category', data: xLabels, boundaryGap: false, show: false },
+          yAxis: { type: 'value', show: false },
           series: [
             // The band: an invisible base at the import limit, then the gap up to the export limit.
             // stackStrategy 'all': the default stacks negatives and positives apart, which
@@ -2126,6 +2399,47 @@
       document.getElementById('icFrame').max = String(icState.frames.length - 1);
       if (!mapReady) showEmpty('chart-flowmap', 'Map outline unavailable');
       icShow(icState.frames.length - 1);   // the latest interval in the range
+    }
+
+    // --- Night on the Flows map ---
+    // Where the sun is below the horizon at an interval (NEM time, UTC+10): from the sun's
+    // declination and the equation of time, astronomy, not data. One polygon per band, the
+    // sun 0, 6 and 12 degrees under the horizon, each drawn over the last, so dusk and dawn
+    // are lighter than the night. Along a parallel of this window the night is one end of
+    // it (the window is too narrow to hold both a sunset and a sunrise): the polygon is that
+    // end, cut where the sun sets, found by bisection.
+    const NIGHT_LON = [95, 175], NIGHT_LAT = [-60, 5];
+    function nightBands(date, hhmm) {
+      const rad = Math.PI / 180;
+      const [y, m, d] = date.split('-').map(Number);
+      const utc = Date.UTC(y, m - 1, d, +hhmm.slice(0, 2) - 10, +hhmm.slice(2));
+      const day = (utc - Date.UTC(y, 0, 1)) / 86400000;
+      const decl = -23.44 * rad * Math.cos(2 * Math.PI * (day + 10) / 365);
+      const b = 2 * Math.PI * (day - 81) / 364;
+      const eot = 9.87 * Math.sin(2 * b) - 7.53 * Math.cos(b) - 1.5 * Math.sin(b);   // minutes
+      const hours = ((utc / 3600000) % 24 + 24) % 24;
+      const sunLon = -15 * (hours - 12 + eot / 60);
+      const elevation = (lon, lat) => Math.asin(Math.sin(lat * rad) * Math.sin(decl)
+        + Math.cos(lat * rad) * Math.cos(decl) * Math.cos((lon - sunLon) * rad)) / rad;
+      const [w, e] = NIGHT_LON, lats = [];
+      for (let lat = NIGHT_LAT[0]; lat <= NIGHT_LAT[1]; lat += 0.5) lats.push(lat);
+      return [0, -6, -12].map(below => {
+        const dark = (lon, lat) => elevation(lon, lat) < below;
+        const rows = lats.map(lat => ({ lat, w: dark(w, lat), e: dark(e, lat) }));
+        const east = rows.filter(r => r.e && !r.w).length, west = rows.filter(r => r.w && !r.e).length;
+        if (!east && !west) return rows.some(r => r.w) ? [[w, lats[0]], [e, lats[0]], [e, lats.at(-1)], [w, lats.at(-1)]] : null;
+        const sunset = r => {
+          let lo = w, hi = e;
+          for (let k = 0; k < 18; k++) { const mid = (lo + hi) / 2; if (dark(mid, r.lat) === r.w) lo = mid; else hi = mid; }
+          return (lo + hi) / 2;
+        };
+        // Night on the east end: from the sunset line to the east edge; on the west, the mirror.
+        const cut = east >= west
+          ? rows.map(r => [r.w && r.e ? w : !r.e ? e : sunset(r), r.lat])
+          : rows.map(r => [r.w && r.e ? e : !r.w ? w : sunset(r), r.lat]);
+        const edge = (east >= west ? [...rows].reverse().map(r => [e, r.lat]) : [...rows].reverse().map(r => [w, r.lat]));
+        return [...cut, ...edge];
+      }).filter(Boolean);
     }
 
     function icShow(i) {
@@ -2197,20 +2511,26 @@
       }).sort((x, y) => Object.keys(INTERCONNECTORS).indexOf(x.r.id) - Object.keys(INTERCONNECTORS).indexOf(y.r.id));
       const spikes = Object.keys(REGION_ANCHORS).filter(code => price(code) >= SPIKE_PRICE);
 
-      // --- board ---
-      document.getElementById('icBoard').innerHTML = enriched.map(({ r, ic, a, b, dead, since, util }) => dead ? `
-        <div class="ic-row ic-dead">
+      // --- board: each link's readout, beside its small chart (renderFlows built the rows) ---
+      for (const id of icState.ids) {
+        const el = document.getElementById(`icrow-${id}`), e = enriched.find(x => x.r.id === id);
+        if (!el) continue;
+        const ic = INTERCONNECTORS[id];
+        el.classList.toggle('ic-dead', !!e?.dead);
+        el.innerHTML = !e ? `
+          <div class="ic-name">${ic.name}<span>${short(ic.from)} &ndash; ${short(ic.to)}</span></div>
+          <div class="ic-mw">--</div>
+          <div class="ic-bar"></div>
+          <div class="ic-util">no data in this interval</div>` : e.dead ? `
           <div class="ic-name">${ic.name}<span>${short(ic.from)} &ndash; ${short(ic.to)}</span></div>
           <div class="ic-mw">0 MW</div>
           <div class="ic-bar"><span style="width:100%"></span></div>
-          <div class="ic-util">&#10005; No flow for ${since}</div>
-        </div>` : `
-        <div class="ic-row">
-          <div class="ic-name">${ic.name}<span>${short(a)} &rarr; ${short(b)}</span></div>
-          <div class="ic-mw">${Math.round(Math.abs(r.mw)).toLocaleString()} MW</div>
-          <div class="ic-bar"><span style="width:${Math.min(100, Math.round(100 * util))}%;background:${utilColor(util)}"></span></div>
-          <div class="ic-util">${Math.round(100 * util)}% of its ${short(a)}&rarr;${short(b)} limit</div>
-        </div>`).join('');
+          <div class="ic-util">&#10005; No flow for ${e.since}</div>` : `
+          <div class="ic-name">${ic.name}<span>${short(e.a)} &rarr; ${short(e.b)}</span></div>
+          <div class="ic-mw">${Math.round(Math.abs(e.r.mw)).toLocaleString()} MW</div>
+          <div class="ic-bar"><span style="width:${Math.min(100, Math.round(100 * e.util))}%;background:${utilColor(e.util)}"></span></div>
+          <div class="ic-util">${Math.round(100 * e.util)}% of its ${short(e.a)}&rarr;${short(e.b)} limit</div>`;
+      }
       document.getElementById('regionBoard').innerHTML = Object.keys(REGION_ANCHORS).map(code => {
         const p = price(code), n = Math.round(net[code] || 0);
         return `<div class="rg-row"><div><span class="rg-swatch" style="background:${priceColor(p)}"></span>${escapeHtml(regionName(code))}</div>
@@ -2221,6 +2541,7 @@
       // --- map ---
       if (!australiaMapRegistered) return;
       const ink = cssVar('--text'), halo = cssVar('--card'), land = cssVar('--map-land');
+      const night = document.getElementById('icNight').checked ? nightBands(day, hhmm) : [];
       getChart('chart-flowmap').setOption({
         tooltip: { trigger: 'item', formatter: p => {
           if (p.seriesType === 'lines' && p.data.dead) return `<b>${p.data.name}</b><br>no flow for ${p.data.since}`;
@@ -2266,6 +2587,11 @@
               name: ic.name, dead: true, since, coords: [REGION_ANCHORS[ic.from], REGION_ANCHORS[ic.to]],
               lineStyle: { width: 3, type: 'dashed', color: OUT_COLOR, curveness: ic.curve, opacity: 0.95 },
             })) },
+          // Night, under everything drawn on the land (nightBands).
+          { type: 'custom', coordinateSystem: 'geo', silent: true, animation: false, z: 1,
+            renderItem: (params, api) => ({ type: 'polygon', shape: { points: night[params.dataIndex].map(p => api.coord(p)) },
+              style: { fill: isLight() ? '#0b1d3a' : '#000000', opacity: isLight() ? 0.06 : 0.17 } }),
+            data: night.map((_, i) => [i]) },
           // A region at a spike price pulses under its dot.
           { type: 'effectScatter', coordinateSystem: 'geo', zlevel: 2, silent: true, symbolSize: 26,
             rippleEffect: { scale: 5, period: 1.6, number: 3, brushType: 'stroke' }, itemStyle: { color: SPIKE_COLOR },
@@ -2312,6 +2638,7 @@
     });
     document.getElementById('icFrame').addEventListener('input', e => { icStop(); icShow(+e.target.value); });
     document.getElementById('icGens').addEventListener('change', () => icShow(icState.frame));
+    document.getElementById('icNight').addEventListener('change', () => icShow(icState.frame));
 
     async function renderRenewables(seq) {
       const intraday = isIntradayMode();
@@ -2948,8 +3275,26 @@
       document.getElementById('title-calendar').textContent =
         `Every day since ${formatDate(shown[0][0])}: ${metric.title}${region ? `, ${regionName(region)}` : ''}`;
       const years = [...new Set(shown.map(d => d[0].slice(0, 4)))].sort().reverse();
-      const STRIP = 140;
-      document.getElementById('chart-calendar').style.height = `${55 + years.length * STRIP}px`;
+      // Where the page scrolls, a strip per year, as tall as it needs. On one screen the years
+      // fill the card, in as many columns as keep the day cells closest to square.
+      const box = document.getElementById('chart-calendar');
+      const fit = onOneScreen();
+      let layout;
+      if (fit) {
+        box.style.height = '';
+        const W = box.clientWidth, H = box.clientHeight - 60;
+        const cols = [1, 2, 3].map(c => {
+          const rows = Math.ceil(years.length / c);
+          return { c, rows, cell: Math.min((W / c - 70) / 53, (H / rows - 36) / 7) };
+        }).reduce((a, b) => b.cell > a.cell ? b : a);
+        const cw = W / cols.c, rh = H / cols.rows;
+        layout = (i => ({ left: Math.round((i % cols.c) * cw + 60), top: Math.round(60 + Math.floor(i / cols.c) * rh + 22),
+          width: Math.round(cw - 74), height: Math.round(rh - 34) }));
+      } else {
+        const STRIP = 140;
+        box.style.height = `${55 + years.length * STRIP}px`;
+        layout = (i => ({ top: 70 + i * STRIP, left: 70, right: 20, cellSize: ['auto', 15] }));
+      }
       const chart = getChart('chart-calendar');
       chart.resize();
       // Scale clipped to the 2nd-98th percentile so one extreme day doesn't wash out the rest.
@@ -2962,7 +3307,7 @@
           left: 'center', top: 0, itemHeight: 160, textStyle: { fontSize: 10, color: muted },
           formatter: v => metric.fmt(v), seriesIndex: years.map((_, i) => i), inRange: { color: metric.ramp() } },
         calendar: years.map((year, i) => ({
-          range: year, top: 70 + i * STRIP, left: 70, right: 20, cellSize: ['auto', 15],
+          range: year, ...layout(i),
           itemStyle: { color: 'transparent', borderColor: cssVar('--row-line'), borderWidth: 1 },
           splitLine: { lineStyle: { color: cssVar('--border'), width: 1 } },
           yearLabel: { color: muted, fontSize: 14 }, monthLabel: { color: muted, fontSize: 10 },
@@ -3124,6 +3469,13 @@
     });
     document.getElementById('duidPanel').addEventListener('click', e => e.stopPropagation());
     document.addEventListener('click', closeAllPanels);
+    // An (i) closes on a click anywhere else, and on Escape.
+    document.addEventListener('click', e => {
+      for (const info of document.querySelectorAll('.info[open]')) if (!info.contains(e.target)) info.open = false;
+    });
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') document.querySelectorAll('.info[open]').forEach(info => { info.open = false; });
+    });
     document.getElementById('duidSearch').addEventListener('input', e => renderDuidList(e.target.value));
 
     // --- Tab switching ---
@@ -3154,8 +3506,9 @@
         }
         // Populate the SQL box the first time Analyze is opened; don't clobber manual edits after.
         if (tab === 'analyze' && !document.getElementById('analyzeSql').value.trim()) syncAnalyzeSql();
-        // Charts drawn while hidden have zero size; resize once visible again.
-        if (tab !== 'analyze') Object.values(charts).forEach(c => c.resize());
+        // Charts drawn while hidden have zero size; resize once visible again. Not the hidden
+        // ones: a chart resized to nothing keeps animating (the flow arrows) and draws errors.
+        if (tab !== 'analyze') Object.values(charts).forEach(c => { const el = c.getDom(); if (el.clientWidth && el.clientHeight) c.resize(); });
       });
     }
 
@@ -3601,7 +3954,7 @@ ORDER BY ALL`;
         updateKpiDeltas(_renderSeq).catch(e => console.warn('[KPI] deltas unavailable:', e));
         if (document.getElementById('view-history').style.display !== 'none') guarded(renderHistory(_renderSeq));
         // Curtailment reads agg whatever the range.
-        if (document.getElementById('view-insights').style.display !== 'none') guarded(renderCurtailment(_renderSeq));
+        if (document.getElementById('view-insights').style.display !== 'none' && insightsPage() === 'renewables') guarded(renderCurtailment(_renderSeq));
       })
         .catch(e => console.warn('[OPFS] Agg load failed:', e));
     } catch (e) {
