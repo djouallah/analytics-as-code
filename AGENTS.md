@@ -146,7 +146,7 @@ transport fails the OneLake TLS handshake).
 ## Dashboard
 **The layout says who reads the model** (the owner's, 2026-10-05): `semantic_model/` at the
 top of the repo is the one semantic model, and `dashboard/` holds its three clients:
-`github/` (the page, on GitHub Pages), `fabric_app/` (the same page as a Fabric app) and
+`github/` (the page, on GitHub Pages), `fabric_app_wasm/` (the same page as a Fabric app) and
 `powerbi/` (`nem.Report`, a report over the deployed model).
 **The GitHub page is the critical one: it is public and must never break** (the owner's,
 2026-10-05). The Fabric app and Power BI are internal: they should not break either, but it
@@ -208,7 +208,7 @@ starts with `EVALUATE`, and only the page's own queries do. Don't make the box a
 `index.html` is the one file at the top of `dashboard/github/`: it is the site's URL, and `data.js`
 finds `data/` from the page's URL. The deployed tree is the repo tree, so a relative import
 resolves the same locally and deployed, with one exception: `model.bim` is not in this
-folder. Both builds (`build.yml`, `dashboard/fabric_app/build.mjs`) copy
+folder. Both builds (`build.yml`, `dashboard/fabric_app_wasm/build.mjs`) copy
 `semantic_model/model.bim` to `semantic/model.bim`, next to the compiler that fetches it,
 and anything that serves the page from the repo has to do the same.
 - `dashboard/github/index.html` is the page: charts, and DAX that names the model's tables, columns
@@ -317,7 +317,7 @@ and anything that serves the page from the repo has to do the same.
   ones a range needs. There are two, with the same members:
   - `dashboard/github/storage/data.js`, GitHub Pages: the files sit in `data/` (`mart_dim`, `mart_today`,
     `mart_agg`, `mart_<YYYY>_h<N>`), with `mart_manifest.json` listing the half-years.
-  - `dashboard/fabric_app/site/storage/data.js`, the Fabric app: the files are in a lakehouse behind a
+  - `dashboard/fabric_app_wasm/site/storage/data.js`, the Fabric app: the files are in a lakehouse behind a
     Fabric sign-in, read with a short-lived read-only SAS, and downloaded as 2 MB Range
     requests, 6 at a time. Its own, and unknown to the page: the sign-in gate (`auth.js`,
     next to it).
@@ -358,7 +358,7 @@ rather than round them:
   `[data-theme="light"]`, set by the `<head>` script before first paint: the stored choice,
   else the system's). Colour is for the data and for status, and status comes with an arrow
   or a label. The CSS stays inline: a separate file next to `index.html` would need both
-  deploy copy lists (`build.yml`, `dashboard/fabric_app/build.mjs`).
+  deploy copy lists (`build.yml`, `dashboard/fabric_app_wasm/build.mjs`).
 - `chartTheme()` builds one ECharts theme per scheme from those tokens (font, label size,
   tooltip, legend, zoom slider, colour scale) and `plot()` is every chart's plot area, with
   measured axis labels. A chart sets no margin, font or tooltip style of its own.
@@ -417,24 +417,24 @@ of two imports are kept so that an open page keeps reading the one it attached. 
 OPFS cache keeps one import, so each daily import downloads a half-year again the first time
 it is viewed.
 
-**The Fabric app is `dashboard/fabric_app/`**, a Rayfin project: static hosting, Fabric sign-in, and one
-function, `getDataSas` (`dashboard/fabric_app/rayfin/functions`), which signs a read-only SAS on the data
-folder so that the browser never holds a storage token. `dashboard/fabric_app/build.mjs` assembles
-`dashboard/fabric_app/dist`: `index.html`, the three folders and `dag/` from `dashboard/github/`,
+**The Fabric app is `dashboard/fabric_app_wasm/`**, a Rayfin project: static hosting, Fabric sign-in, and one
+function, `getDataSas` (`dashboard/fabric_app_wasm/rayfin/functions`), which signs a read-only SAS on the data
+folder so that the browser never holds a storage token. `dashboard/fabric_app_wasm/build.mjs` assembles
+`dashboard/fabric_app_wasm/dist`: `index.html`, the three folders and `dag/` from `dashboard/github/`,
 `semantic_model/model.bim`, with
-`dashboard/fabric_app/site/` copied over them (`storage/data.js`, its own, and `storage/auth.js`), and
+`dashboard/fabric_app_wasm/site/` copied over them (`storage/data.js`, its own, and `storage/auth.js`), and
 `?v=<build>` added to every relative import; `compiler.js` passes its own on to `model.bim`.
 
 **It is deployed from the owner's laptop**, under their own login:
 ```
-cd dashboard/fabric_app
+cd dashboard/fabric_app_wasm
 npm ci && npm ci --prefix rayfin/functions
 export RAYFIN_TOKEN=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv)
 npx rayfin up --yes --output json
 ```
 The item is `wasm` in workspace `app`, created that way on 2026-10-04;
-`dashboard/fabric_app/rayfin/.deployments.json` (untracked) records it, and its URL is in
-`dashboard/fabric_app/rayfin/rayfin.yml` (`allowedRedirectUris`; the deploy adds it). On a machine without
+`dashboard/fabric_app_wasm/rayfin/.deployments.json` (untracked) records it, and its URL is in
+`dashboard/fabric_app_wasm/rayfin/rayfin.yml` (`allowedRedirectUris`; the deploy adds it). On a machine without
 that record, add `--workspace-id <app>`. A new item needs its secret once, then one more
 deploy: `echo <Files URL> | npx rayfin secret set ONELAKE_FILES_URL --stdin`.
 
@@ -454,7 +454,7 @@ checks it). The page-only deploy into the owner's item (`rayfin up staticapp dep
 way round it: owner-only too, the same 403. When #89 is fixed: dispatch the workflow, open
 `nemtracker`, read its Logs tab. Keep that item until then: the comment on #89 says it is
 there for re-testing. What the workflow took:
-- `dashboard/fabric_app/rayfin/functions/host.json` is committed: the deploy refuses without it, and the
+- `dashboard/fabric_app_wasm/rayfin/functions/host.json` is committed: the deploy refuses without it, and the
   Rayfin scaffold's `.gitignore` leaves it out.
 - The lock files resolve from `registry.npmjs.org`: generated on a laptop they name a
   private feed the runner cannot read.

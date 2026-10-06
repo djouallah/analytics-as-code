@@ -48,7 +48,7 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 
 One semantic model (`semantic_model/model.bim`), three clients under `dashboard/`:
 
-- `github/` and `fabric_app/` are one page (`dashboard/github/index.html`) on two hosts. A
+- `github/` and `fabric_app_wasm/` are one page (`dashboard/github/index.html`) on two hosts. A
   host only decides where the data files live and how the browser gets them
   (`storage/data.js`), so a chart is written once and reaches both.
 - `powerbi/` is a Power BI report (`nem.Report`, as JSON) on the model as deployed to Fabric,
@@ -62,8 +62,8 @@ A measure is written once, in the model, and reaches all three.
 | Who can open it | anyone | people the app is shared with, after Fabric sign-in |
 | Data files | next to the page | a lakehouse, under `Files/data` |
 | 5-minute history | one file per half-year (GitHub's 100 MB limit), downloaded | the same half-year files, downloaded as parallel range requests |
-| Host code | `dashboard/github/storage/data.js` | `dashboard/fabric_app/site/storage/` |
-| Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `dashboard/fabric_app/` (page), `import_onelake.yml` (data) |
+| Host code | `dashboard/github/storage/data.js` | `dashboard/fabric_app_wasm/site/storage/` |
+| Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `dashboard/fabric_app_wasm/` (page), `import_onelake.yml` (data) |
 
 ### The layers of the dashboard
 
@@ -98,9 +98,9 @@ Built with [Rayfin](https://www.npmjs.com/package/@microsoft/rayfin-cli). Fabric
 page and signs you in, and the page reads its data directly from OneLake: no backend to run,
 no query service.
 
-![The dashboard as a Fabric app](dashboard/fabric_app/screenshots.png)
+![The dashboard as a Fabric app](dashboard/fabric_app_wasm/screenshots.png)
 
-![Architecture of the Fabric app](dashboard/fabric_app/architecture.svg)
+![Architecture of the Fabric app](dashboard/fabric_app_wasm/architecture.svg)
 
 - **Hosting:** `rayfin up` deploys the page to Fabric static hosting.
 - **Sign-in:** Fabric single sign-on. Inside the Fabric portal there is no extra login; in
@@ -123,7 +123,7 @@ no query service.
 ├── semantic_model/       # The one semantic model (model.bim): what every dashboard reads, and a Fabric item
 ├── dashboard/            # Its three clients
 │   ├── github/           # The page, and a folder per layer: frontend/, semantic/ (the compiler), storage/ (the GitHub Pages host)
-│   ├── fabric_app/       # The same page as a Fabric app: its host code, sign-in, and the Rayfin project
+│   ├── fabric_app_wasm/       # The same page as a Fabric app: its host code, sign-in, and the Rayfin project
 │   └── powerbi/          # A report over the deployed model
 ├── tests/                # dbt data tests
 ├── .github/workflows/    # CI/CD pipelines
@@ -200,7 +200,7 @@ Everything else is Rayfin — see the
 [Rayfin documentation](https://learn.microsoft.com/fabric/embedded/rayfin/overview):
 
 ```bash
-cd dashboard/fabric_app
+cd dashboard/fabric_app_wasm
 npm ci && npm ci --prefix rayfin/functions
 npx rayfin login      # sign in to Fabric
 npx rayfin up         # build + deploy to Fabric static hosting; prints the hosting URL
