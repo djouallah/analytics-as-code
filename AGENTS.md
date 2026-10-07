@@ -246,8 +246,6 @@ gets the case, not the page the formula. A query groups, filters and names measu
 stays the page's, each for its reason:
 - the Flows readout: the renewable share of the frame being played, from the unit rows
   the animation already holds (a measure would be a query per frame);
-- the curtailment total in the chart's title: the farms' table to its newest day plus
-  AEMO's regional figures after it, two tables the model has no one measure for;
 - shaping rows: rename, add up the rows of an additive measure (the
   units of a station or an owner, the stack for a sparkline, the series' averages for the
   total);
@@ -592,10 +590,10 @@ into `cache_catalog.py`'s lists once it is a dbt model and a table of `model.bim
 What the charts read beyond 30 days: `fct_summary_daily` and `fct_region_daily` (whole
 days: a day is written once the next-day files hold it, so a long range ends on the newest
 whole day), `fct_summary_hourly`, `fct_region_hourly` and `dim_month` (hour of day by whole
-month, for the daily profile and the price heatmap), and `fct_curtailment` per
-semi-scheduled unit and day. After its newest day the curtailment chart reads AEMO's
-regional figures from `fct_region` (`wind_available`, `wind_curtailed`, `solar_available`,
-`solar_curtailed`), draws those days lighter and leaves them out when units are picked.
+month, for the daily profile and the price heatmap), and the curtailment tables:
+`fct_curtailment_region` (per region, day and fuel: the semi-scheduled farms to their
+newest day, AEMO's regional figures from `fct_region` after it, drawn lighter) and, when
+units are picked, `fct_curtailment` (per semi-scheduled unit and day, the farms alone).
 Only units on the current registration list have a classification, so semi-scheduled farms
 that have left the list are not counted.
 
@@ -738,6 +736,7 @@ they are what these tables are built from.
 | fct_region | mart | incremental insert-only merge on (REGIONID, date, time) — for Power BI: price, demand, net interchange and the regional semi-scheduled wind and solar. The intraday record where `fct_price_today` and `fct_regionsum_today` both have the interval, else `fct_price`'s. Recomputed whole every run (4.5M rows); the merge adds what is missing |
 | fct_rooftop | mart | incremental insert-only merge on (REGIONID, date, time) — the source `fct_summary`'s rooftop units are built from (not a table of the semantic model since 2026-10-07): the `MEASUREMENT` estimate per region and half hour as published (zeros kept, blanks out), with the half hour's average price from `fct_region`; written once its six prices exist |
 | fct_interconnector | mart | incremental insert-only merge on (interconnector, date, time) — for Power BI: `MWFLOW` and the two limits, the pricing run, one row per interval |
+| fct_curtailment_region | mart | incremental insert-only merge on (REGIONID, date, fuel) — for Power BI and the curtailment chart: curtailed and available MWh per region, day and fuel (Wind, Solar), `source` `farms` (`fct_curtailment` added up by the unit's region and fuel) or `aemo` (`fct_region`'s regional semi-scheduled figures, the days after the farms' newest). Each run a pre-hook DELETEs the `aemo` rows in a commit of its own (2026-10-07), then the merge adds the missing farm days and the current `aemo` days |
 | fct_curtailment | mart | incremental insert-only merge on (DUID, date) — for Power BI: curtailed and available MWh per semi-scheduled unit and day. A day is written once `fct_scada` holds its 288 intervals: the days after the newest one here, and in a refill `process_limit` days below the oldest, newest first (`macros/whole_days.sql`) |
 | dim_region | mart | incremental insert-only merge on Region — for Power BI: the regions of `dim_duid`, the one filter that reaches the units and the regional data |
 | dim_interconnector | mart | incremental insert-only merge on interconnector — the links between regions of `dim_region` (from MMSDM `INTERCONNECTOR`): `from_region`/`to_region` (a positive `mw` flows from the first to the second) and AEMO's `description`. The Flows page names a link by its id on the map and by the description on its board; only the bend of each arc is typed there (`LINK_CURVES`) |

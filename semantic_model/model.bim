@@ -973,6 +973,96 @@
         ]
       },
       {
+        "name": "fct_curtailment_region",
+        "description": "Curtailment per region, day and fuel (Wind, Solar): the semi-scheduled farms (fct_curtailment) added up to their newest day, AEMO's regional figures after it (source). What the curtailment chart reads when no unit is picked.",
+        "sourceLineageTag": "[mart].[fct_curtailment_region]",
+        "columns": [
+          {
+            "name": "REGIONID",
+            "dataType": "string",
+            "description": "NEM region.",
+            "sourceColumn": "REGIONID",
+            "sourceLineageTag": "REGIONID",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "date",
+            "dataType": "dateTime",
+            "description": "Date, NEM time (AEST all year).",
+            "sourceColumn": "date",
+            "sourceLineageTag": "date",
+            "summarizeBy": "none",
+            "formatString": "yyyy-MM-dd"
+          },
+          {
+            "name": "fuel",
+            "dataType": "string",
+            "description": "Wind or Solar.",
+            "sourceColumn": "fuel",
+            "sourceLineageTag": "fuel",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "curtailed_mwh",
+            "dataType": "decimal",
+            "description": "Energy available and not dispatched.",
+            "sourceColumn": "curtailed_mwh",
+            "sourceLineageTag": "curtailed_mwh",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "available_mwh",
+            "dataType": "decimal",
+            "description": "Energy available.",
+            "sourceColumn": "available_mwh",
+            "sourceLineageTag": "available_mwh",
+            "summarizeBy": "none",
+            "formatString": "#,##0.00"
+          },
+          {
+            "name": "source",
+            "dataType": "string",
+            "description": "farms (the units' next-day data, added up) or aemo (AEMO's regional figures, the days after the farms' newest).",
+            "sourceColumn": "source",
+            "sourceLineageTag": "source",
+            "summarizeBy": "none"
+          }
+        ],
+        "measures": [
+          {
+            "name": "Wind and solar curtailed MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_curtailment_region[curtailed_mwh])",
+            "description": "Energy the semi-scheduled wind and solar farms could have made and were not dispatched for: the farms' own figures to their newest day, AEMO's regional ones after."
+          },
+          {
+            "name": "Wind and solar available MWh",
+            "formatString": "#,##0",
+            "expression": "SUM(fct_curtailment_region[available_mwh])",
+            "description": "Energy those farms could have made, from the same sources."
+          },
+          {
+            "name": "Wind and solar curtailment rate",
+            "formatString": "0.0",
+            "expression": "DIVIDE(100 * [Wind and solar curtailed MWh], [Wind and solar available MWh])",
+            "description": "Curtailed energy over available energy, %."
+          }
+        ],
+        "partitions": [
+          {
+            "name": "fct_curtailment_region",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "fct_curtailment_region",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
         "name": "fct_summary_daily",
         "description": "Energy per unit and day: fct_summary one grain up, whole days only (a day is written once the next-day files hold all of it). The measures of fct_summary read this table when no time of day is asked for: output_mwh, charging_mwh and revenue are the day's sums of what they sum at 5 minutes, so the answer is the same. mwh (net) and price (the day's average) are not the same numbers and no measure reads them: they are kept for the dashboard's Analyze tab, which is SQL.",
         "sourceLineageTag": "[mart].[fct_summary_daily]",
@@ -1375,6 +1465,20 @@
       {
         "name": "fct_curtailment_to_dim_calendar",
         "fromTable": "fct_curtailment",
+        "fromColumn": "date",
+        "toTable": "dim_calendar",
+        "toColumn": "date"
+      },
+      {
+        "name": "fct_curtailment_region_to_dim_region",
+        "fromTable": "fct_curtailment_region",
+        "fromColumn": "REGIONID",
+        "toTable": "dim_region",
+        "toColumn": "Region"
+      },
+      {
+        "name": "fct_curtailment_region_to_dim_calendar",
+        "fromTable": "fct_curtailment_region",
         "fromColumn": "date",
         "toTable": "dim_calendar",
         "toColumn": "date"

@@ -718,8 +718,7 @@
     // A FIGURE THE MODEL CAN EXPRESS IS A MEASURE THERE, the one Power BI calls, and the page
     // asks for it: an average, a share, a rate, a factor is never worked out here from its
     // parts. A query groups, filters and names measures. What stays the page's is what the
-    // model does not hold or what is not a figure: the curtailment total that mixes the
-    // farms' table with AEMO's regional figures, shaping rows (rename, add up the rows of a
+    // model does not hold or what is not a figure: shaping rows (rename, add up the rows of a
     // station or of a stack), the rows as they are stored (the filter lists, the newest
     // interval, the Flows rows), and presentation (a share of what is shown, the change
     // between two values).
@@ -1035,33 +1034,36 @@
           ORDER BY [fuel], [time]`,
 
       // --- Insights, renewables: curtailment ---
-      // The farms, per day (per month with `byMonth`) and fuel, under the header's filters;
-      // and with `recent`, under the same names the regional figures: a region's
-      // semi-scheduled wind, or solar, on the days after the farms' newest. All four are the
-      // model's measures; the two tables are then one.
-      curtailment(byMonth, recent) {
+      // Per day (per month with `byMonth`, by year and month of the calendar) and fuel: the
+      // curtailed and available energy and the rate, the model's measures. With no unit picked
+      // they are fct_curtailment_region's (the farms to their newest day, AEMO's regional
+      // figures after); with units picked, the farms' own (fct_curtailment), under the unit
+      // filters. `curtailmentTotal` is the same over the range.
+      curtailmentFrom() {
         const { from, to } = getDateRange(), region = activeRegion(), fuel = activeFuel();
-        const period = byMonth ? 'DATE(YEAR([date]), MONTH([date]), 1)' : '[date]';
-        const farms = `SELECTCOLUMNS(
-            CALCULATETABLE(
-              SUMMARIZECOLUMNS(fct_curtailment[date], ${FUEL}, "c", [Curtailed MWh], "a", [Available MWh]),
-              ${[...dax.dates('fct_curtailment', from, to), ...dax.unitFilters('fct_curtailment')].join(', ')}),
-            "date", [date], "fuel", [FuelSourceDescriptor], "c", [c], "a", [a])`;
-        const regional = of => `SELECTCOLUMNS(
-            CALCULATETABLE(
-              SUMMARIZECOLUMNS(fct_region[date],
-                "c", [Regional ${of.toLowerCase()} curtailed MWh], "a", [Regional ${of.toLowerCase()} available MWh]),
-              ${['fct_region[date] > lastFarmDay', ...dax.dates('fct_region', from, to),
-                ...(region ? [`fct_region[REGIONID] = ${daxStr(region)}`] : [])].join(', ')}),
-            "date", [date], "fuel", ${daxStr(of)}, "c", [c], "a", [a])`;
-        const regionals = recent ? CURTAIL_FUELS.filter(f => !fuel || f === fuel).map(regional) : [];
+        const dates = dax.dates('dim_calendar', from, to);
+        return crossFilter.duids.length
+          ? { fuel: FUEL, name: '[FuelSourceDescriptor]', cur: '[Curtailed MWh]', avail: '[Available MWh]', rate: '[Curtailment rate]',
+              filters: [...dates, ...dax.unitFilters('fct_curtailment')] }
+          : { fuel: 'fct_curtailment_region[fuel]', name: '[fuel]', cur: '[Wind and solar curtailed MWh]',
+              avail: '[Wind and solar available MWh]', rate: '[Wind and solar curtailment rate]',
+              filters: [...dates, ...(region ? [`fct_curtailment_region[REGIONID] = ${daxStr(region)}`] : []),
+                ...(fuel ? [`fct_curtailment_region[fuel] = ${daxStr(fuel)}`] : [])] };
+      },
+      curtailment(byMonth) {
+        const f = dax.curtailmentFrom();
+        const keys = byMonth ? ['dim_calendar[year]', 'dim_calendar[month]'] : ['dim_calendar[date]'];
         return `
-          EVALUATE ${regionals.length ? 'VAR lastFarmDay = MAX(fct_curtailment[date]) RETURN ' : ''}GROUPBY(
-            SELECTCOLUMNS(
-              ${regionals.length ? `UNION(${farms}, ${regionals.join(', ')})` : farms},
-              "period", ${period}, "fuel", [fuel], "c", [c], "a", [a]),
-            [period], [fuel], "cur", SUMX(CURRENTGROUP(), [c]), "avail", SUMX(CURRENTGROUP(), [a]))
-          ORDER BY [period], [fuel]`;
+          EVALUATE SELECTCOLUMNS(
+            CALCULATETABLE(
+              SUMMARIZECOLUMNS(${keys.join(', ')}, ${f.fuel}, "cur", ${f.cur}, "avail", ${f.avail}, "rate", ${f.rate}),
+              ${f.filters.join(', ')}),
+            ${byMonth ? '"year", [year], "month", [month]' : '"date", [date]'}, "fuel", ${f.name}, "cur", [cur], "avail", [avail], "rate", [rate])
+          ORDER BY ${byMonth ? '[year], [month]' : '[date]'}, [fuel]`;
+      },
+      curtailmentTotal() {
+        const f = dax.curtailmentFrom();
+        return `EVALUATE CALCULATETABLE(ROW("cur", ${f.cur}, "rate", ${f.rate}), ${f.filters.join(', ')})`;
       },
       // The 15 farms that lost the most.
       curtailedFarms() {
@@ -3031,7 +3033,7 @@
     // titles and tooltips, not on a second axis. Whatever the range's grain elsewhere, this
     // reads the daily table, which ends with the newest complete next-day file.
     const CURTAIL_FUELS = ['Wind', 'Solar'];
-    const pct = (part, whole) => whole ? `${(100 * part / whole).toFixed(1)}%` : '--';
+    const rate = v => v == null ? '--' : `${v.toFixed(1)}%`;
     const fmtMwh = v => v >= 1e6 ? `${(v / 1e6).toFixed(2)} TWh` : v >= 10000 ? fmtGwh(v) : `${Math.round(v).toLocaleString()} MWh`;
     const mwhAxis = v => v >= 1e6 ? `${v / 1e6}M` : v >= 1000 ? `${v / 1000}k` : v;
     async function renderCurtailment(seq) {
@@ -3039,21 +3041,26 @@
       const titles = { curtail: document.getElementById('title-curtail'), units: document.getElementById('title-curtailunits') };
       titles.curtail.textContent = 'Wind and solar curtailment (MWh)';
       titles.units.textContent = 'Most curtailed farms (MWh)';
-      if (!data.has('v_fct_curtailment')) return ids.forEach(id => showEmpty(id, aggLoaded ? 'Curtailment not deployed yet' : 'Loading history...'));
+      if (!data.has('v_fct_curtailment') || !data.has('v_fct_curtailment_region'))
+        return ids.forEach(id => showEmpty(id, aggLoaded ? 'Curtailment not deployed yet' : 'Loading history...'));
       const fuel = activeFuel();
       if (fuel && !CURTAIL_FUELS.includes(fuel)) return ids.forEach(id => showEmpty(id, 'Curtailment is measured on wind and solar farms'));
       const { from } = getDateRange();
       const byMonth = rangeDays() > 120;
       // Past the newest next-day file, AEMO's regional figures carry it on: per region, so not
       // when units are picked.
-      const recent = data.has('v_fct_region', 'wind_curtailed') && !crossFilter.duids.length;
-      const [rows, found, last] = await Promise.all([
-        runQuery(dax.curtailment(byMonth, recent)),
-        runQuery(dax.curtailedFarms()),
+      const recent = !crossFilter.duids.length;
+      const [found, totals, last, units] = await Promise.all([
+        runQuery(dax.curtailment(byMonth)),
+        runQuery(dax.curtailmentTotal()),
         runQuery(dax.curtailmentLastDay),
+        runQuery(dax.curtailedFarms()),
       ]);
       if (seq !== _renderSeq) return;
-      const units = found.map(r => ({ ...r, fuel: fuelName(r.fuel) }));
+      const pad2 = n => String(n).padStart(2, '0');
+      const rows = found.map(r => ({ ...r, period: byMonth ? `${r.year}-${pad2(r.month)}-01` : r.date }));
+      const total = totals[0] ?? {};
+      for (const u of units) u.fuel = fuelName(u.fuel);
       const lastDay = last[0]?.d;
       const note = !lastDay ? '' : recent
         ? ` <span class="chart-note">per farm to ${formatDate(lastDay)}, AEMO's regional figures after (lighter)</span>`
@@ -3062,9 +3069,7 @@
         titles.curtail.innerHTML = 'Wind and solar curtailment' + note;
         return ids.forEach(id => showEmpty(id, !recent && lastDay && from > lastDay ? `No next-day data yet: it ends ${formatDate(lastDay)}` : undefined));
       }
-      const total = { cur: 0, avail: 0 };
-      for (const r of rows) { total.cur += r.cur; total.avail += r.avail; }
-      titles.curtail.innerHTML = `Wind and solar curtailment: ${fmtMwh(total.cur)}, ${pct(total.cur, total.avail)} of what the farms could have made` + note;
+      titles.curtail.innerHTML = `Wind and solar curtailment: ${fmtMwh(total.cur ?? 0)}, ${rate(total.rate)} of what the farms could have made` + note;
 
       const periods = [...new Set(rows.map(r => r.period))];
       const at = new Map(rows.map(r => [`${r.period}|${r.fuel}`, r]));
@@ -3074,7 +3079,7 @@
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => {
           const p = periods[ps[0].dataIndex];
           const lines = fuels.map(f => at.get(`${p}|${f}`)).filter(Boolean)
-            .map(r => `${escapeHtml(r.fuel)}: <b>${fmtMwh(r.cur)}</b> (${pct(r.cur, r.avail)})`);
+            .map(r => `${escapeHtml(r.fuel)}: <b>${fmtMwh(r.cur)}</b> (${rate(r.rate)})`);
           const regional = !byMonth && lastDay && p > lastDay ? `<br><span style="color:var(--muted)">AEMO's regional figures</span>` : '';
           return `${label(p)}<br>${lines.join('<br>')}${regional}`;
         } },
