@@ -309,4 +309,6 @@ browser, is the natural place.
   estimate.
 
 **Ideas**
-- Emissions on the page: `[Emissions t]` and `[Emissions intensity]` are in the model.
+- Emissions on the page. The data and the measures are deployed (`dim_duid.CO2eFactor`,
+  `[Emissions t]`, `[Emissions intensity]`); left: where it goes (a KPI or an Insights chart)
+  and a check that the compiler translates the measures.
