@@ -294,11 +294,16 @@ there are no rows (`[No flow]` is 1 or 0, not a boolean: a boolean measure is ne
 A result above 20,000 rows is not asked of the model, only listed (`not asked`) with its
 count: a few results of 2 million rows throttled the capacity (20 s on every query after
 them), fetched or under `COUNTROWS`, which computes the rows all the same. The same DAX is
-compared at the states where it is smaller. Dispatched with `since=<commit>`, the check
-asks only the queries whose key changed since that commit: the DAX and SQL without their
-literals, and the DAX of every measure the query reaches (a changed measure counts whichever
-side of an `IF` the query takes, so it asks more than it must, never less). All 409 under
-throttling did not fit in 30 minutes (run 37611743795).
+compared at the states where it is smaller. The check asks only the queries whose key
+changed since the commit of the last green run of `deploy_model.yml` (dispatch `since` to
+name another commit, `since=all` for every query): the DAX and SQL without their literals,
+and the DAX of every measure the query reaches (a changed measure counts whichever side of
+an `IF` the query takes, so it asks more than it must, never less). The queries are built
+again from that commit's own `queries.js`, compiler and model; one it does not have counts
+as changed. All 409 under throttling did not fit in 30 minutes (run 37611743795); a query
+over 20 s means the capacity is throttling, and the check waits 5 minutes after it.
+`publish=false` runs the check alone, on the model as deployed: publishing needs memory the
+model may not have left (3,069 MB of a 3 GB limit after a day of parity, run 37617689613).
 
 `index.html` is the one file at the top of `dashboard/github/`: it is the site's URL, and `data.js`
 finds `data/` from the page's URL. The deployed tree is the repo tree, so a relative import

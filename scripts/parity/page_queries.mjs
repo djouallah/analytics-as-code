@@ -75,10 +75,16 @@ const [{ d: newest }] = await rows({ select: { d: { max: 'fct_summary.date' } } 
 const [{ d: oldest }] = await rows({ select: { d: { min: 'dim_calendar.date' } } });
 const to = shiftDate(newest, -2);
 let state;
-const queries = createQueries({
+const pageQueries = createQueries({
   range: () => state.range, intraday: () => days(state.range) <= 30, region: () => state.region,
   fuel: () => state.fuel, picked: () => state.picked, newestDate: () => newest,
   shiftDate, UNKNOWN, ROOFTOP });
+// The other checkout's queries.js may not have a query this one asks, or take other
+// arguments: such a query is left out there (null), so it counts as changed.
+const queries = !other ? pageQueries : new Proxy(pageQueries, {
+  get: (t, k) => typeof t[k] !== 'function' ? (k in t ? t[k] : () => null)
+    : (...a) => { try { return t[k](...a); } catch { return null; } },
+});
 const days = ({ from, to }) => Math.round((new Date(to) - new Date(from)) / 86400000);
 await queries.readWholeDays(rows);
 
@@ -162,7 +168,9 @@ const keyOf = e => JSON.stringify([shape(e.dax), shape(e.sql), [...reached(e.dax
 const MAX_ROWS = 20000;
 const results = [], seen = new Map();
 const add = async (stateName, name, q) => {
-  const dax = model.toDax(q);
+  if (!q) return;
+  let dax;
+  try { dax = model.toDax(q); } catch (e) { if (other) return; throw e; }
   if (seen.has(dax)) { seen.get(dax).states.push(stateName); return; }
   const entry = { name, states: [stateName], keys: keysOf(q), dax };
   try {

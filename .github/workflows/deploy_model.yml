@@ -17,7 +17,7 @@ on:
         type: boolean
         default: true
       since:
-        description: "Parity: ask the model only the queries whose DAX, SQL or measures changed since this commit (empty: all)"
+        description: "Parity: ask only the queries whose DAX, SQL or measures changed since this commit (empty: the last green run's; all: every query)"
         required: false
         default: ""
 
@@ -30,6 +30,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read     # the last green run of this workflow: the commit parity compares with
   id-token: write   # OIDC federated login to Azure
 
 jobs:
@@ -42,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: ${{ inputs.since && '0' || '1' }}
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -90,6 +91,7 @@ jobs:
         env:
           PYTHONNET_RUNTIME: coreclr
           SINCE: ${{ inputs.since }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           data="$RUNNER_TEMP/data" && mkdir -p "$data"
@@ -100,8 +102,15 @@ jobs:
           done
           (cd scripts/parity && npm ci --no-audit --no-fund && node page_queries.mjs "$data" "$RUNNER_TEMP/parity.json")
           # since: the same queries built from that commit's compiler, queries and model;
-          # a query whose key is the same there is not asked again.
+          # a query whose key is the same there is not asked again. By default the commit of
+          # the last green run of this workflow: what it asked passed, and what it did not ask
+          # was unchanged since the one before. `all` asks every query.
           since=()
+          if [ -z "$SINCE" ]; then
+            SINCE=$(gh run list --workflow deploy_model.yml --status success -L 1 --json headSha --jq '.[0].headSha // ""')
+            echo "comparing with the last green run's commit: ${SINCE:-none, every query is asked}"
+          fi
+          [ "$SINCE" = all ] && SINCE=
           if [ -n "$SINCE" ]; then
             git worktree add -q "$RUNNER_TEMP/since" "$SINCE"
             (cd scripts/parity && node page_queries.mjs "$data" "$RUNNER_TEMP/since.json" "$RUNNER_TEMP/since")
