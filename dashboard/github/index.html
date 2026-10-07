@@ -1144,13 +1144,18 @@
       // Grouped by dim_duid[DUID], not the fact's: in DAX a fact's column does not filter
       // dim_duid, and the station would be blank. The compiler reads that key off the fact,
       // so it costs no join.
+      // FILTER: the station is a value for every unit, so in DAX SUMMARIZECOLUMNS keeps the units
+      // that made nothing in the range (a unit pick is on the fact, which does not filter
+      // dim_duid); they have no capacity factor.
       capacityFactor: () => `
-        EVALUATE SELECTCOLUMNS(
-          CALCULATETABLE(
-            SUMMARIZECOLUMNS(${FUEL}, ROLLUPADDISSUBTOTAL(dim_duid[DUID], "allUnits"),
-              "station", SELECTEDVALUE(dim_duid[StationName]), "cap", [Capacity MW], "cf", [Capacity factor]),
-            ${[...dax.whereAll(), 'dim_duid[RegCapMW] > 0', generatorUnits()].join(', ')}),
-          "DUID", [DUID], "fuel", [FuelSourceDescriptor], "total", [allUnits], "station", [station], "cap", [cap], "cf", [cf])
+        EVALUATE FILTER(
+          SELECTCOLUMNS(
+            CALCULATETABLE(
+              SUMMARIZECOLUMNS(${FUEL}, ROLLUPADDISSUBTOTAL(dim_duid[DUID], "allUnits"),
+                "station", SELECTEDVALUE(dim_duid[StationName]), "cap", [Capacity MW], "cf", [Capacity factor]),
+              ${[...dax.whereAll(), 'dim_duid[RegCapMW] > 0', generatorUnits()].join(', ')}),
+            "DUID", [DUID], "fuel", [FuelSourceDescriptor], "total", [allUnits], "station", [station], "cap", [cap], "cf", [cf]),
+          NOT ISBLANK([cf]))
         ORDER BY [cf]`,
 
       // --- Insights, fleet: batteries ---
@@ -2989,7 +2994,7 @@
         return showEmpty('chart-cfunits', 'Capacity data not deployed yet');
       }
       // Per fuel (the subtotal rows) and per unit, sorted by factor: the top units are the last ones.
-      const rows = (await runQuery(dax.capacityFactor())).filter(r => r.cf != null).map(r => ({ ...r, fuel: fuelName(r.fuel) }));
+      const rows = (await runQuery(dax.capacityFactor())).map(r => ({ ...r, fuel: fuelName(r.fuel) }));
       if (seq !== _renderSeq) return;
       const byFuel = rows.filter(r => r.total);
       const topAsc = rows.filter(r => !r.total).slice(-15);
