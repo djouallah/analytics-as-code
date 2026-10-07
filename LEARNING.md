@@ -158,8 +158,8 @@ Two serving paths read the same semantic model and the same DAX.
 - `compiler.js` turns the model into views and the page's DAX into one SQL query, by fixed
   cases, and throws on anything it doesn't know. It implements by hand what DAX gives for
   free: measures inlined; filters reaching another fact only along relationships (one CTE
-  per fact); `ISFILTERED` for the grain switch; `KEEPFILTERS`; blank against NULL. Where
-  DAX and SQL differ, the result is SQL's.
+  per fact); `ISFILTERED` for the grain switch; `KEEPFILTERS`; DAX's rows (`SUMMARIZECOLUMNS`
+  leaves out all-blank groups, `TOPN` keeps ties).
 - Measured in the browser: a measure of another fact as a CTE 0.25 s (1.3 s inline);
   capacity per unit in two levels 0.8 s (2.7 s); `MAX(col, 0)` as DOUBLE 335 ms (623 ms).
 
@@ -184,8 +184,6 @@ Two serving paths read the same semantic model and the same DAX.
 ### VertiPaq: limits and next
 - **Fabric apps aren't available in Australia Southeast**, the model's capacity region, so
   the VertiPaq app is built but not deployed.
-- **DAX semantics differ from the compiler's in places:** `SUMMARIZECOLUMNS` drops all-blank
-  groups, `TOPN` keeps ties. The page's queries are written for DAX.
 
 ## 6. Clients
 

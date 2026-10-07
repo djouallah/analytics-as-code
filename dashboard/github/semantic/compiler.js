@@ -16,10 +16,11 @@
 //
 // This compiler is a toy, on purpose: an example of where that layer sits, not a DAX
 // engine. It knows the constructs the page uses and throws on anything
-// else; what it cannot translate has its equivalent SQL written here, as a fixed case. Where
-// DAX and SQL differ the result is SQL's: a blank is a NULL, and a group whose measures are
-// all blank is kept. There is no filter context: a filter is a boolean argument of
-// CALCULATETABLE or CALCULATE, and becomes a WHERE.
+// else; what it cannot translate has its equivalent SQL written here, as a fixed case. A
+// blank is a NULL. Its rows are DAX's: SUMMARIZECOLUMNS leaves out a group whose measures
+// are all blank, and TOPN keeps the rows tied with the last one. There is no filter
+// context: a filter is a boolean argument of CALCULATETABLE or CALCULATE, and becomes a
+// WHERE.
 //
 // Part 1, the model. What model.bim holds and what each entry becomes:
 //   tables               a view each, v_<table>: the table of the lakehouse its partition
@@ -37,12 +38,15 @@
 //                        [Capacity MW], the units that have rows, in two levels
 //
 // Part 2, the queries (toSQL). A DAX query becomes one SELECT over those views:
-//   SUMMARIZECOLUMNS, ROW             an aggregate; ROLLUPADDISSUBTOTAL is GROUPING SETS
+//   SUMMARIZECOLUMNS, ROW             an aggregate; ROLLUPADDISSUBTOTAL is GROUPING SETS;
+//                                     HAVING drops a group whose measures are all NULL
 //   CALCULATETABLE(t, filters)        WHERE; TREATAS(VALUES(..), col) is col IN (SELECT ..)
 //   SELECTCOLUMNS, VALUES             a projection, DISTINCT
 //   GROUPBY over one of those         the grouping, in the same SELECT when it can be
 //   FILTER                            WHERE on rows, HAVING on an aggregate
-//   TOPN, ORDER BY                    ORDER BY .. LIMIT
+//   TOPN                              QUALIFY RANK() <= n: ties at the cut are kept;
+//                                     descending unless ASC
+//   ORDER BY                          ORDER BY
 //   UNION, a table VAR                UNION ALL, a CTE; a scalar VAR is a scalar subquery
 //   CALCULATE(measure, filter)        the aggregates of the measure with FILTER (WHERE ..)
 //   KEEPFILTERS(filter)               the filter: here filters only ever add up
@@ -485,7 +489,7 @@ function call(e, cx) {
 // names, which pick the view, unless `from` says what it reads (a subquery or a CTE).
 // `group` is null until it aggregates.
 const rel = o => ({ cols: [], tables: new Set(), from: null, where: [], group: null, sets: null, having: [],
-  distinct: false, order: [], limit: null, aggs: [], unit: null, ...o });
+  distinct: false, order: [], qualify: null, aggs: [], unit: null, ...o });
 const derived = c => ({ name: c.name, sql: `t.${c.name}`, type: c.type, p: P.atom });
 const named = (name, x) => ({ name, sql: x.s, type: x.t, p: x.p, agg: x.agg });
 const wrap = r => rel({ from: `(${select(r, true)})`, cols: r.cols.map(derived) });
@@ -608,8 +612,11 @@ function table(e, q) {
       r.group = [...keys, ...rollup].map(c => c.sql);
       if (rollup.length) r.sets = `(${r.group.join(', ')}), (${keys.map(c => c.sql).join(', ')})`;
       q.scope.push(Object.assign([...plain, ...rolled], { keys: plain, rolled }));
-      r.cols = [...keys, ...rollup, ...flags, ...pairs(i).map(([n, x]) => named(n, emit(x, r, q)))];
+      const measures = pairs(i).map(([n, x]) => named(n, emit(x, r, q)));
       q.scope.pop();
+      r.cols = [...keys, ...rollup, ...flags, ...measures];
+      // As DAX: a group whose measures are all blank is not a row.
+      if (measures.length) r.having.push(`(${measures.map(m => `(${m.sql}) IS NOT NULL`).join(' OR ')})`);
       return r;
     }
     case 'ROW': {
@@ -644,7 +651,7 @@ function table(e, q) {
     }
     case 'GROUPBY': {
       let r = table(a[0], q), i = 1;
-      if (r.group || r.distinct || r.limit != null) r = wrap(r);
+      if (r.group || r.distinct || r.qualify) r = wrap(r);
       const keys = [];
       for (; i < a.length && a[i].k === 'ref'; i++) {
         const c = r.cols.find(c => c.name === a[i].name);
@@ -661,9 +668,11 @@ function table(e, q) {
       return rel({ from: `(${parts.map(p => select(p, true)).join(' UNION ALL ')})`, cols: parts[0].cols.map(derived) });
     }
     case 'TOPN': {
-      const r = table(a[1], q);
-      r.order = [{ name: sortKey(a[2], r), desc: a[3]?.name?.toUpperCase() === 'DESC' }];
-      r.limit = +a[0].v;
+      // As DAX: descending unless ASC (or 1), and the rows tied with the n-th are kept.
+      const r = wrap(table(a[1], q)), name = sortKey(a[2], r);
+      const desc = !(a[3]?.name?.toUpperCase() === 'ASC' || (a[3]?.k === 'num' && +a[3].v === 1));
+      r.order = [{ name, desc }];
+      r.qualify = `RANK() OVER (ORDER BY t.${name}${desc ? ' DESC' : ''}) <= ${+a[0].v}`;
       return r;
     }
   }
@@ -694,7 +703,7 @@ function perUnit(r, raw) {
     ...keys.map((k, i) => ({ name: `g${i}`, sql: k })), ...aggs.map((a, i) => ({ name: `a${i}`, sql: a })),
     { name: 'capacity', sql: r.unit.value }] });
   return select(rel({ from: `(${select(units, true)})`, cols: r.cols.map(c => ({ ...c, sql: swap(c.sql) })),
-    group: r.group.map(swap), sets: r.sets && swap(r.sets), having: r.having.map(swap), order: r.order, limit: r.limit }), raw);
+    group: r.group.map(swap), sets: r.sets && swap(r.sets), having: r.having.map(swap), order: r.order, qualify: r.qualify }), raw);
 }
 
 function select(r, raw) {
@@ -711,8 +720,8 @@ function select(r, raw) {
     where.length && `WHERE ${where.join(' AND ')}`,
     r.group?.length && (r.sets ? `GROUP BY GROUPING SETS (${r.sets})` : `GROUP BY ${r.group.join(', ')}`),
     r.having.length && `HAVING ${r.having.join(' AND ')}`,
+    r.qualify && `QUALIFY ${r.qualify}`,
     r.order.length && `ORDER BY ${r.order.map(o => o.name + (o.desc ? ' DESC' : '')).join(', ')}`,
-    r.limit != null && `LIMIT ${r.limit}`,
   ].filter(Boolean);
   // The keys of dimensions first: one of them can add a table, and the tables pick the view.
   const settled = new Map();

@@ -202,9 +202,10 @@ the Logs tab.
 **It is a proof of concept (2026-10-05); the point is that the layers are there, in the
 formats of a real product.** The compiler is not a DAX engine. It knows the constructs the
 page uses and throws on anything else (`DAX: X is not supported`), and where DAX and SQL
-differ the result is SQL's: a blank is a NULL, a group whose measures are all blank is kept,
-and there is no filter context (a filter is a boolean argument of `CALCULATETABLE` or
-`CALCULATE`). A chart that needs a new construct gets it in `compiler.js`, as one more case;
+differ the result is SQL's: a blank is a NULL, and there is no filter context (a filter is a boolean argument of `CALCULATETABLE` or
+`CALCULATE`). Its rows are DAX's: `SUMMARIZECOLUMNS` leaves out a group whose measures are
+all blank (a `HAVING`), and `TOPN` is descending unless `ASC` and keeps the rows tied with
+the n-th (`QUALIFY RANK()`). A chart that needs a new construct gets it in `compiler.js`, as one more case;
 don't grow it into a general engine. Of the rules a query compiler applies on its own, it
 applies one, when a join is needed (below). Which table a measure reads is the model's rule,
 which the compiler answers from the query; which grain a date range gets, and MW to MWh, are
@@ -560,9 +561,8 @@ same file.
   asks for the bare name; a date comes back as a date and time and the page wants the day.
   `has` is always true: the model holds every table. There is no `needs`, which is how the
   page knows to leave the Analyze tab out (it is SQL).
-- **What differs from the other hosts, by design of DAX:** `SUMMARIZECOLUMNS` drops a group
-  whose measures are all blank, where the compiler keeps it; `TOPN` keeps ties. A long range
-  still ends on the newest whole day, because the page's own filter says so (`wholeDays`).
+- **A long range still ends on the newest whole day**, as on the other hosts, because the
+  page's own filter says so (`wholeDays`).
 - **Not deployed: Fabric refuses the item in `power`** (2026-10-06, run 37395788585):
   `403 The feature is not available` when `rayfin up` creates it. The workspace's capacity
   is in Australia Southeast, and Microsoft's region list says of that region "Not
