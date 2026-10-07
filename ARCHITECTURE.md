@@ -48,7 +48,7 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 
 One semantic model (`semantic_model/model.bim`), its clients under `dashboard/`:
 
-- `github/` and `fabric_app_wasm/` are one page (`dashboard/github-dax/index.html`) on two hosts. A
+- `github-dax/` and `fabric_app_wasm/` are one page (`dashboard/github-dax/index.html`) on two hosts. A
   host only decides where the data files live and how the browser gets them
   (`storage/data.js`), so a chart is written once and reaches both.
 - `fabric_app_vertipaq/` is to be that page again, as a Fabric app next to the deployed
@@ -148,7 +148,8 @@ no query service.
 ├── scripts/              # The cache (Iceberg → DuckDB files), table maintenance, deploy
 ├── semantic_model/       # The one semantic model (model.bim): what every dashboard reads, and a Fabric item
 ├── dashboard/            # Its four clients
-│   ├── github/           # The page, and a folder per layer: frontend/, semantic/ (the compiler), storage/ (the GitHub Pages host)
+│   ├── github-dax/       # The page, and a folder per layer: frontend/, semantic/ (the compiler), storage/ (the GitHub Pages host)
+│   ├── github-sql/       # The same page in plain SQL, no semantic layer in the browser: a TODO
 │   ├── fabric_app_wasm/     # The same page as a Fabric app on DuckDB-WASM: its host code, sign-in, and the Rayfin project
 │   ├── fabric_app_vertipaq/ # The same page as a Fabric app on the deployed model: not available yet (a README)
 │   └── powerbi/          # A report over the deployed model

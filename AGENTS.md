@@ -189,10 +189,12 @@ transport fails the OneLake TLS handshake).
 ## Dashboard
 **The layout says who reads the model** (the owner's, 2026-10-05): `semantic_model/` at the
 top of the repo is the one semantic model, and `dashboard/` holds its four clients:
-`github/` (the page, on GitHub Pages), `fabric_app_wasm/` (the same page as a Fabric app, on
+`github-dax/` (the page, on GitHub Pages), `fabric_app_wasm/` (the same page as a Fabric app, on
 DuckDB-WASM), `fabric_app_vertipaq/` (the same page as a Fabric app, its DAX run by the
 deployed model: see "The Fabric app on VertiPaq") and `powerbi/` (`nem.Report`, a report over
 the deployed model). The two Fabric apps are named by their engine (the owner's, 2026-10-06).
+`github-sql/` is not a client yet: a TODO for the same page in plain SQL, with no semantic
+layer in the browser (2026-10-08).
 **The GitHub page is the critical one: it is public and must never break** (the owner's,
 2026-10-05). The Fabric apps and Power BI are internal: they should not break either, but it
 is not the end of the world if one does. So a change that touches what they share (the
