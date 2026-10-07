@@ -1,414 +1,241 @@
-# What this project taught
+# Learning
 
-Written on 2026-10-07 by the AI agent that wrote the code, at the owner's request. It covers
-about 600 commits (2026-03-11 to 2026-10-07) and the corrections that came with them. Every
-line of code here was written by AI. These notes are about where that worked, where it
-didn't, and what would make each stage better: ingestion, storage, modelling, the semantic
-model, serving and the clients.
-
-[AGENTS.md](AGENTS.md) says how things are. This file says what they cost and what was
-learned. Where the two overlap, AGENTS.md is the reference.
+Where the project stands on 2026-10-07: what works, what limits it, and where each stage
+could be better. [AGENTS.md](AGENTS.md) is the reference for how things are built.
 
 Much of the stack is pre-release: writes to OneLake's Iceberg catalog are not released yet,
 DuckDB is a 2.0 development build, and Fabric apps are a preview. A limit below that comes
-from one of them describes the version used, at the date given. It is not a verdict on the
-product: several are already fixed upstream.
+from one of them describes the version in use today, not the product; several are already
+fixed upstream.
 
-## The short version
+## Summary
 
-1. **A durable archive plus an append-only log removes reconciliation code.** An interrupted
-   run is just picked up by the next one.
-2. **On a pre-release catalog, design for the write path it has today.** OneLake's Iceberg
-   writes are not released yet. In the version used, a DELETE works, but a commit that
-   mixes delete files with data files does not (fixed upstream, rolling out). Insert-only
-   merges kept the pipeline running meanwhile. Probe the catalog, and probe again when it
-   moves.
-3. **Decide time semantics on day one.** A wall-clock time stored as UTC is now a rule every
-   reader has to follow forever, because fixing it at the writer means rebuilding seven
-   facts.
-4. **One `NULL` in a `NOT IN` silently stops a pipeline, or makes a test permanently
-   green.** `NOT EXISTS` always.
-5. **An engine that can't prune on a subquery makes you write dates as literals.** That
-   trick took the mart step from 16 minutes to 3.5.
-6. **Direct Lake has no views, so every table a reader needs is a dbt model.** The rules
-   move out of the export and into the models, and the import becomes a plain copy.
-7. **A measure written once, read by every client, is the point of a semantic model, and
-   the hardest thing to keep.** The client always has a shortcut that works locally.
-8. **There is no open-source language and runtime with DAX's semantics.** Without one, a
-   client's "semantic layer" is SQL with WHERE clauses, and an AI agent drifts to it even
-   when told not to.
-9. **Prose rules slow an agent down. Mechanical checks stop it.** What stopped the drift
-   was a second engine running the same DAX, not the instructions.
-10. **Testing stays human.** Every serious drift here passed every automated check and was
-    caught by the owner.
+1. **A durable archive plus an append-only log needs no reconciliation code.** An
+   interrupted run is picked up by the next one.
+2. **The write path follows the catalog's current version.** A commit can't yet mix delete
+   files with data files (fixed upstream, rolling out), so every write is an insert-only
+   merge.
+3. **Every timestamp is wall-clock time stored as UTC**, so every reader must run in UTC.
+4. **The mart decides its dates from Iceberg manifests and writes them as literals**, so
+   every scan prunes. The mart step takes 3.5 minutes.
+5. **Every table a reader needs is a dbt model**, because Direct Lake has no views. The
+   import to the browser is a plain copy.
+6. **One semantic model serves four clients.** A measure is defined once, in DAX.
+7. **The browser has no DAX engine.** A small compiler turns the page's DAX into SQL for
+   DuckDB-WASM, by fixed cases.
+8. **There is no open-source language and runtime with DAX's semantics.** That is the main
+   risk for an AI-written client: SQL with WHERE clauses is always the shortest path.
+9. **A browser can authenticate to OneLake's catalog and storage directly** (CORS passes
+   with a Bearer token). What's missing is DuckDB-WASM support for Iceberg on Azure.
 
-## 1. Ingestion and ETL
+## 1. Ingestion
 
-### What worked
-- **Archive first, then load.** A dbt Python model downloads AEMO's files and archives them,
-  gzipped, to OneLake `Files/`, with a durable log (`Files/csv_archive_log.parquet`). Because
-  the archive outlives the runner, there is no reconciliation code: a run that dies halfway
-  leaves nothing to repair.
-- **Work comes from the log, not from a glob.** Each fact's pre-hook asks the log which files
-  it hasn't processed yet. DuckDB's `read_csv` takes a constant list or a glob, not a
-  subquery, and a glob lists the whole folder whatever the filter, so the list goes through
-  a DuckDB `VARIABLE`.
-- **A table of processed files instead of an anti-join on the fact.** Until 2026-10-06 the
-  "what is pending" check compared the log to the fact's own `file` column: a full scan of
-  `fct_scada` over OneLake, 80-175 s, twice per model per run, usually to find nothing.
-  `landing.processed_files` replaced it, and a fact with nothing to do now takes 5 s.
-- **Self-gated on the data, not on a schedule.** No daily or intraday split: every hourly
-  pass does every feed, and a backfill runs only when AEMO returned fewer new files than the
-  limit.
-- **A source that fails skips itself, not the run.** Every fact `ref`s the download model,
-  so one unreachable site would otherwise skip all seven facts. A failed write to OneLake
-  still raises.
+### Now
+- A dbt Python model downloads AEMO's files and archives them, gzipped, to OneLake
+  `Files/`, with a durable log (`Files/csv_archive_log.parquet`). The parquet file is the
+  source of truth; the Iceberg log table is rebuilt from it and appended with missing rows
+  only.
+- Each fact's pre-hook takes its work from the log minus `landing.processed_files`,
+  newest first, `NOT EXISTS` and `DISTINCT` (MERGE doesn't dedupe within a batch). A fact
+  with nothing to do takes 5 s.
+- Every hourly pass does every feed; backfills run only when AEMO returned fewer new files
+  than the limit.
+- A source that fails skips itself, not the run. A failed write to OneLake raises.
 
-### What it cost (each one a bug that shipped first)
-- **`NOT IN` against a column holding a `NULL` returns nothing.** One NULL `file` would have
-  stopped every load. In the sibling repo the same pattern makes the completeness tests
-  permanently green.
-- **`MERGE` dedupes against the target, never within a batch.** The log is append-only and
-  can list a file twice, so without a `DISTINCT` a backlog is read 2-N times and turns into
-  duplicate keys.
-- **Appending the whole log every run** (this repo's bug). The log table grew by its own size
-  48 times a day until the catalog answered HTTP 500 to every load and commit of that table.
-  Now only the missing
-  rows are appended, and the parquet file is the source of truth: the Iceberg table can be
-  rebuilt from it.
-
-### Could be better
-- **Downloading lives inside dbt.** It makes dbt the orchestrator of I/O to third-party
-  sites. The sibling repo downloads outside dbt and reads the log straight from parquet,
-  which is simpler to reason about.
-- **The file list goes through a `VARIABLE`** because DuckDB has no "scan these files from a
-  manifest" (asked upstream in duckdb/duckdb-aws-glue#37). A manifest scan would remove the
-  pre-hooks.
-- **The empty `MERGE`.** A fact with no new file still builds its temp table and runs a MERGE
-  (5-7 s each, seven facts a run). Skipping it needs a custom incremental strategy.
-- **Intraday tables are never trimmed.** The catalog takes a DELETE, but the pipeline was
-  designed never to need one. Their scans are bounded now, but the tables grow by a month of
-  intervals a month. A scheduled DELETE of the rows older than the newest daily date, with a
-  re-count to confirm it landed, would trim them.
-- **The refill path is not exercised by CI.** The next `rebuild=` of a mart fact is the
-  first time it runs on the real catalog.
+### Limits and next
+- **Downloading lives inside dbt.** The sibling repo downloads outside dbt and reads the log
+  from parquet, which is simpler.
+- **The file list goes through a DuckDB `VARIABLE`**, because `read_csv` takes no subquery
+  and DuckDB has no manifest scan (duckdb/duckdb-aws-glue#37).
+- **The empty MERGE:** a fact with no new file still runs a MERGE (5-7 s each, seven facts).
+  Skipping it needs a custom incremental strategy.
+- **Intraday tables are not trimmed.** Their scans are bounded; a scheduled DELETE of rows
+  older than the newest daily date, with a re-count, would keep them small.
+- **The refill path is not exercised by CI.** The next `rebuild=` of a mart fact is its
+  first run on the catalog.
 
 ## 2. Storage: Iceberg on the OneLake REST catalog (pre-release)
 
-### What worked
-- **Direct Lake reads the same tables, with no copy.** Fabric shows the Iceberg tables to
-  the semantic model on its own, so Power BI and the pipeline share one set of tables.
-- **One persistent layer.** The catalog and the archive next to it are the only state. The
-  runner, dbt and DuckDB are ephemeral, and nothing depends on a server or on the runner's
-  disk.
-- **OIDC, no secrets.** Every job mints a short-lived storage token from a federated
-  credential. The one real secret is the gh-pages deploy token.
-- **A capability probe as evidence.** CREATE/INSERT/DELETE/UPDATE/MERGE/DROP against a
-  fresh table, kept in a separate repo. Claims about what the catalog does are checked
-  against its matrix, not remembered.
+### Now
+- The catalog and the archive next to it are the only state. Runner, dbt and DuckDB are
+  ephemeral.
+- Direct Lake reads the same Iceberg tables, with no copy.
+- Auth is OIDC from GitHub Actions, no secrets.
+- A capability probe (CREATE/INSERT/DELETE/UPDATE/MERGE/DROP, separate repo) is the
+  evidence for what the catalog accepts.
+- Writes: one add-snapshot per commit; a DELETE alone is accepted; a commit mixing delete
+  files with data files is not, in the current version. So every write is an insert-only
+  merge (`WHEN MATCHED DO NOTHING`):
+  - a stored value is never revised;
+  - `dim_duid` attributes change through a `rebuild=dim_duid`;
+  - a rebuild is a scripted DROP plus CTAS, refilling at `process_limit` files per run;
+  - `--full-refresh` is not used (RENAME is unprobed).
+- `SETTLEMENTDATE` is AEST wall clock stored as TIMESTAMPTZ labelled UTC (10 hours early);
+  `date` and `time` are right. Every reader runs in UTC.
+- Two DuckDB lines: the 2.0 dev build writes the catalog (compaction needs
+  `iceberg_rewrite_data_files()`), 1.5 writes the browser's files (DuckDB-WASM is on 1.5).
+  Parquet is the handoff.
+- Maintenance: DuckDB compaction, then pyiceberg snapshot expiry (duckdb-iceberg has no
+  `expire_snapshots` yet). It never fails its workflow.
 
-### What it cost
-- **The pre-release write path: one add-snapshot per commit, and a commit that mixes delete
-  files with data files is rejected (400).** A DELETE on its own is accepted. What is
-  refused is an upsert: a `MERGE` that updates matched rows. It is fixed upstream and
-  rolling out. Until it lands, every write is an insert-only merge
-  (`WHEN MATCHED DO NOTHING`), and the consequences go all the way to the dashboard:
-  - a stored value is never revised, so a late correction from AEMO never lands;
-  - `dim_duid`'s attributes never change in place, so a changed rule needs a
-    `rebuild=dim_duid`;
-  - a rebuild is a scripted DROP and a CTAS that refills at `process_limit` files per run;
-  - `dbt run --full-refresh` is off-limits, because dbt-duckdb RENAMEs a temp table into
-    place and RENAME was never probed.
-- **The time zone.** `SETTLEMENTDATE` is AEST wall clock, stored as a TIMESTAMPTZ labelled
-  UTC, so the instant is 10 hours early. The `date` and `time` columns next to it are right.
-  Every reader must run its session in UTC, and fixing it at the writer means rebuilding all
-  seven facts. A day-one decision that is now a rule forever.
-- **Two DuckDB lines at once.** A 2.0 pre-release writes the catalog (because compaction
-  needs `iceberg_rewrite_data_files()`, not yet in a stable release). 1.5 writes the files
-  the browser reads, because DuckDB-WASM is on 1.5 and the file format must match. Parquet
-  is the handoff, because 1.5 can't read tables that 2.0 compaction rewrote.
-- **Maintenance needs two tools.** Compaction is DuckDB. Snapshot expiry is pyiceberg,
-  because duckdb-iceberg has no `expire_snapshots` yet. The script carries a fallback for a
-  catalog that doesn't advertise the commit endpoint; OneLake advertises it, so the fallback
-  never fires.
-  Maintenance must never fail its workflow, so a compaction that has stopped working shows
-  only in a log.
-
-### Could be better
-- **Merges that update, once the upstream fix rolls out.** That removes most of the
-  workarounds above: corrections and attribute updates. Until then, a DELETE commit followed
-  by an INSERT commit could do a correction. It is not atomic, so it needs a re-count after
-  each step.
-- **Write the instant correctly from the start** (a TIMESTAMP in the market's zone, or
-  real UTC) and the "every reader in UTC" rule disappears.
+### Limits and next
+- **Merges that update**, once the upstream fix rolls out: corrections land, `dim_duid`
+  updates in place, `fct_summary` can take the next-day value over the intraday one.
+- **Correct instants at the writer** would remove the "every reader in UTC" rule; it means
+  rebuilding the seven facts.
 - **One DuckDB version end to end** once 2.0 is stable and DuckDB-WASM follows.
-- **An alert when compaction or expiry stops doing anything**, not just a log line.
+- **An alert when compaction or expiry stops working**; today it shows only in a log.
 
-## 3. Modelling the mart
+## 3. The mart
 
-### What worked
-- **Every table a reader needs is a dbt model.** The raw facts can't be read by Direct Lake
-  as they are: two dispatch runs, an interval under two files, regional data over three
-  tables, no curtailment table. Direct Lake has no views to fix that in. So the rules that
-  used to live in the export (`INTERVENTION = 0`, 0 MW rows out, one row per key, `MWFLOW`
-  for interconnectors, energy as `SUM(mw) / 12`) became models in `mart`, and the import
-  became a copy with no logic.
-- **Shape for the query, not for normal form.** MW and price sit on one row at 5 minutes
-  (`fct_summary`), because joining two facts at query time was too slow.
-- **Aggregates are tables, written once when whole.** A day is written when its 288
-  intervals exist, a month when its days do. "Whole" is a property of the row, not a filter
-  every reader has to repeat.
-- **Dates from the Iceberg manifests, written into the SQL as literals.** duckdb-iceberg
-  prunes data files on a constant `DATE` filter, not on a subquery (`MAX(DATE) FROM ...`).
-  Reading `MIN`/`MAX` from the manifests and writing the chosen dates as literals took
-  `fct_summary` from 450-700 s to 47 s, and the mart step from 16 minutes to 3.5.
-- **Sort order is storage.** `fct_summary` is written by date, time, price, DUID: the price
-  is the region's, so in that order the column is runs and costs nothing. In key order the
-  files were 60% larger, and the site has a 1 GB ceiling.
+### Now
+- Every table a reader needs is a dbt model in `mart`: the raw facts can't be read by
+  Direct Lake as they are, and Direct Lake has no views. The rules (`INTERVENTION = 0`,
+  0 MW out, one row per key, `MWFLOW`, energy as `SUM(mw) / 12`) live in the models.
+- MW and price on one row at 5 minutes (`fct_summary`): joining two facts at query time is
+  too slow.
+- Aggregates per day and per month-and-hour, written once a day or month is whole.
+- Dates come from the Iceberg manifests (`macros/date_bounds.sql`) and are written as
+  literals, which duckdb-iceberg prunes on; a subquery doesn't prune. `fct_summary` takes
+  47 s, the mart step 3.5 minutes.
+- `fct_summary` is written by date, time, price, DUID: the price is the region's, so in that
+  order it compresses to nothing. Key order made the files 60% larger.
 
-### Could be better
-- **The literal-dates trick works around the engine.** Pruning on a runtime value (dynamic
-  filter pushdown into Iceberg manifests) would make a plain `WHERE date > (SELECT MAX ...)`
-  as cheap, and the macros could go.
-- **`fct_region` is recomputed whole every run** (4.5M rows). It is cheap today but scales
-  with history.
-- **Insert-only means "first value wins".** The intraday feed lands first and the next-day
-  files only add missing keys, so `fct_summary` holds a mix of two AEMO columns from two
-  reports. That is documented, but a reader comparing with AEMO's settled data will see it.
+### Limits and next
+- **Dynamic filter pushdown into Iceberg manifests** would make the literal-dates macros
+  unnecessary.
+- **`fct_region` is recomputed whole every run** (4.5M rows). Cheap now, grows with history.
+- **First value wins:** the intraday feed lands first and the next-day files add only
+  missing keys, so `fct_summary` mixes two AEMO columns from two reports.
 
-## 4. The semantic model and measures
+## 4. The semantic model
 
-### What worked
-- **One model, the file Power BI runs.** `semantic_model/model.bim` (TMSL) is deployed to
-  Fabric in Direct Lake over the `mart` tables, and the page writes its queries in DAX
-  against the same file. A measure is defined once.
-- **A quantity is one measure, and the measure picks the table.** Direct Lake has no
-  user-defined aggregations, so the switch is DAX: `IF([Reads 5 minutes], 5-minute table,
-  daily table)`. It is not only a VertiPaq optimisation: it is what lets the browser ask the
-  same measure over ten years, where it can't hold the 5-minute rows. It was removed once,
-  for a few hours, because it looked unnecessary from Power BI's side alone; judged by all
-  clients, it stays.
-- **Aggregates store the sums the 5-minute measure sums.** `output_mwh`, `charging_mwh`,
-  `revenue` per day, so either table gives the same number. A day's net energy and its
-  average price are not the same figures (a battery's day nets out), and no measure reads
-  them.
-- **An average MW is energy over hours** (`[Hours]`, nights included), not an average of
-  intervals that happen to have rows.
-- **Parity before the port.** The model was compared with the old dashboard's files at
-  every grain it draws: 25,737 values equal, none different (2026-10-05).
+### Now
+- `semantic_model/model.bim` (TMSL) is deployed to Fabric in Direct Lake over `mart`, and
+  is the file the page reads. A measure is defined once.
+- A quantity is one measure, and the measure picks the table:
+  `IF([Reads 5 minutes], 5-minute table, daily table)`. Direct Lake has no user-defined
+  aggregations, and the same switch lets the browser ask a measure over ten years.
+- The daily tables store the sums the 5-minute measure sums (`output_mwh`, `charging_mwh`,
+  `revenue`), so both grains give the same number.
+- An average MW is energy over `[Hours]`, nights included.
+- The deployed model answers DAX from the development machine; a new measure can be tried
+  as `DEFINE MEASURE ... EVALUATE` before it goes into `model.bim`.
+- CI checks every deploy (`check_model.py`) over XMLA: the REST query API refuses a service
+  principal on this model (401).
+- Parity with the old dashboard at every grain: 25,737 values equal, none different
+  (2026-10-05).
 
-### What it cost
-- **Every mistake in a measure cost a deploy, and that was the agent's fault.** The
-  deployed model could be queried from the development machine at any time, and a DAX query
-  can carry a measure of its own (`DEFINE MEASURE ... EVALUATE ...`), so a new measure can
-  be tried against the real model before it goes into `model.bim`. The agent never did
-  that. It tested its DAX through its own compiler and found the rest out by deploying
-  through CI:
-  - a measure that didn't parse because of its variable names (which one was never found
-    out);
-  - a fixed-decimal division that kept 4 decimals;
-  - a `CALCULATE` filter on one column of a dimension that left the query's filter on
-    another column in place.
-
-  Each would have been one query. A recreated table that Direct Lake couldn't see for about
-  7 minutes is the one cost a query would not have saved.
-- **The REST query API refuses a service principal on this model** (401). The check in CI
-  runs its DAX over XMLA instead, through ADOMD.NET under pythonnet on a Linux runner. That
-  is a CI problem only: from the development machine the model answers as the owner.
-
-### Could be better
-- **Try every measure against the deployed model first**, as a `DEFINE MEASURE` in a query
-  from the development machine, and put it into `model.bim` once it answers right. The
-  deploy then confirms instead of discovering.
-- **The model is a vendor format.** TMSL is open JSON, but only one engine runs it. The
-  browser path needs a hand-written compiler to read it (next section).
-- **JSON has no comments**, so the why of a measure goes in its `description`, and a long
-  expression is an array of lines. Readable, but a real source format would be better.
+### Limits and next
+- **Try measures against the deployed model before deploying them**, and the page's queries
+  too (section 7).
+- **Direct Lake takes about 7 minutes to see a recreated table**; a refresh before that
+  fails.
+- **TMSL is open JSON, but one engine runs it.** The browser needs the compiler to read it.
+- **JSON has no comments:** the why of a measure goes in its `description`.
 
 ## 5. Serving
 
-### What worked
-- **The import is a copy.** `scripts/cache_catalog.py` does `SELECT *` per table into
-  `.duckdb` files and only decides the split: a half-year per file (GitHub's 100 MB limit),
-  the newest 14 days hourly, the dimensions and aggregates whole.
-- **The browser is the server.** DuckDB-WASM, single-threaded, files downloaded whole into
+### Now
+- `scripts/cache_catalog.py` copies the `mart` tables into `.duckdb` files and only decides
+  the split: a half-year per file (GitHub's 100 MB limit), the newest 14 days hourly, the
+  dimensions and aggregates whole.
+- The browser is the server: DuckDB-WASM 1.5, single-threaded, files downloaded whole into
   OPFS and attached in place.
-  - DuckDB-WASM reads a remote file one block at a time, three round trips per block, at
-    about 700 ms a round trip from the browser to OneLake: one 2024 day took 38 s that way.
-    Downloading whole is faster. A block cache in the engine would change that.
-  - The threaded build couldn't load ICU (so no `SET TimeZone`) or share the OPFS handle,
-    and gained only about 1.4x.
-  - An `opfs://` ATTACH also opens a `.wal` that was never registered, so the plain
-    filename is registered instead.
-- **The compiler is a toy on purpose.** `compiler.js` turns the model into views and the
-  page's DAX into one SQL query per question, by fixed cases, and throws on anything it
-  doesn't know. Throwing is what kept fixes going into the language and not around it.
-- **Performance comes from what the compiler writes**, measured in the browser:
-  - a measure from another fact as a CTE read once: 0.25 s against 1.3 s inline;
-  - capacity per unit in two levels: 0.8 s against 2.7 s;
-  - `MAX(col, 0)` read as DOUBLE, not a 128-bit decimal: 335 ms against 623 ms.
+  - Remote reads go one block at a time, three round trips each, about 700 ms per round
+    trip to OneLake (one 2024 day: 38 s). Downloading whole is faster; a block cache in
+    the engine would change that.
+  - The threaded build can't load ICU or share the OPFS handle, and gains about 1.4x.
+- `compiler.js` turns the model into views and the page's DAX into one SQL query, by fixed
+  cases, and throws on anything it doesn't know. It implements by hand what DAX gives for
+  free: measures inlined; filters reaching another fact only along relationships (one CTE
+  per fact); `ISFILTERED` for the grain switch; `KEEPFILTERS`; blank against NULL.
+- Measured in the browser: a measure of another fact as a CTE 0.25 s (1.3 s inline);
+  capacity per unit in two levels 0.8 s (2.7 s); `MAX(col, 0)` as DOUBLE 335 ms (623 ms).
 
-### What it cost
-- **The site is near GitHub Pages' 1 GB limit**: about 880 MB, growing about 125 MB a year.
-  The real question is where the 5-minute history lives, and that is a decision, not code.
-- **The deploy repo is redeployed every hour**, and its history grew by gigabytes a week.
-  It is squashed to one commit weekly.
-- **The compiler had to implement, by hand, everything DAX gives for free**: measures
-  inlined at every use; a filter reaching another fact only along relationships (one
-  subquery per fact, with only the filters that reach it); `ISFILTERED` answered from the
-  query's columns so the grain switch works; `KEEPFILTERS`; blank against NULL.
-
-### Could be better
-- **An open semantic runtime would delete the compiler.** See section 9.
-- **Another host for the half-year files**, or 5-minute history for recent years only.
-- **Two `data.js` files with the same members** are fine, but a third (VertiPaq) shows the
-  interface is the real contract. It could be written down as one.
+### Limits and next
+- **The site is about 880 MB against GitHub Pages' 1 GB**, growing about 125 MB a year.
+  Where the 5-minute history lives is a decision: another host, or recent years only.
+- **The deploy repo is squashed weekly**, because the hourly file grows its history by
+  gigabytes.
+- **An open semantic runtime would replace the compiler** (section 9).
+- **The `data.js` interface is the real contract** across three hosts; it could be written
+  down as one.
 
 ## 6. Clients
 
-### What each one proved
-- **The GitHub page** is public and must never break, so every shared change is checked
-  there first.
-- **The Fabric app on DuckDB-WASM** proved the host is just `storage/data.js`: the same page
-  reads a lakehouse behind a sign-in with a short-lived read-only SAS, and the browser
-  never holds a storage token.
-- **The Fabric app on VertiPaq** sends the page's DAX to the deployed model as written.
-  Requiring it forced the page's DAX to be checked against real DAX semantics, which found
-  two queries that were right only through the compiler (`KEEPFILTERS` on a filter by the
-  grouped fuel; a unit attribute grouped by the fact's column). It has never run in a
-  browser.
-- **The Power BI report** (PBIR, a JSON file per visual) holds no measure of its own. No CI
-  sees a chart draw: a change to a visual is checked by opening it.
+### Now
+| Client | Engine | State |
+|---|---|---|
+| GitHub page (public) | DuckDB-WASM | Live. Every shared change is checked here first |
+| Fabric app, DuckDB-WASM | DuckDB-WASM | Live, deployed from the laptop (microsoft/rayfin#89). Reads the lakehouse with a short-lived read-only SAS from a function |
+| Fabric app, VertiPaq | Power BI | Built, not deployed: Fabric apps aren't available in Australia Southeast |
+| Power BI report | Power BI | Live; holds no measure of its own |
 
-### What it cost
-- **Preview platform features decided the architecture.** Rayfin lets only an item's owner
-  deploy to it. An item owned by a service principal answers 500 to every function call
-  (microsoft/rayfin#89). Fabric apps aren't available in Australia Southeast, where the
-  model's capacity is. Three blockers, none fixable from this repo.
-
-### Could be better
-- **Deploy everything from CI.** The DuckDB-WASM Fabric app is still deployed from a laptop
-  because of rayfin#89.
+### Limits and next
 - **Run the page's DAX against the deployed model** and compare its rows with the
-  compiler's. It needs no CI and no deployed app: the model answers from the development
-  machine today. That would turn "the page's DAX is DAX" from a rule into a check. The two
-  queries found by reading DAX's rules would have been found by running them.
+  compiler's. It needs no app and no CI.
+- **Deploy the DuckDB-WASM Fabric app from CI** once rayfin#89 is fixed.
+- **No CI sees a chart draw** in the report; a visual is checked by opening it.
 
 ## 7. Verification
 
-### What worked
-- **A `ci` target on plain DuckDB** that downloads real files (two per feed) and runs every
-  model and test: broken SQL never reaches the catalog.
-- **Tests that can actually fail.** The `relationships → dim_duid` test on the facts could
-  never be zero (history back to 2018, units only ever at 0 MW), so it was replaced by
-  `assert_recent_scada_duids_registered`. A test that is always red is as useless as one
-  that is always green.
-- **The dashboard check:** the page before and after, in headless Chrome, on one copy of the
-  deployed files. It compares what each chart draws (its ECharts series) and the SQL that
-  ran, reads `EXPLAIN` for a new join, and times old against new alternately in the same
-  page (two sessions differ by more than most changes).
-- **`check_model.py` at every model deploy:** a refresh, a row count per table, each
-  measure per day, the grain switch timed (0.43 s from the daily table, 1.9 s from the
-  5-minute one, the same total).
+### Now
+- `dbt build --target ci`: plain DuckDB, real downloads (two files per feed), every model
+  and test.
+- Daily `dbt test` on the live tables. The completeness tests use `NOT EXISTS`; the
+  DUID test checks recent units only (`assert_recent_scada_duids_registered`).
+- Dashboard changes: old page against new in headless Chrome, on the same deployed files,
+  comparing each chart's ECharts series, the SQL that ran, `EXPLAIN`, and alternating
+  timings.
+- Every model deploy: refresh, row counts, each measure per day, the grain switch timed
+  (0.43 s daily table, 1.9 s 5-minute table, same total).
+- The owner's review. The automated checks compare a figure before and after; none checks
+  where a figure is defined.
 
-### What only a human caught
-- The page working out its own figures instead of calling the measures (twice).
-- A grain switch that always took the same branch.
-- DAX that was right only through the compiler.
-- Hand-made rows proposed to fill a data gap; a failing piece proposed for deletion instead
-  of a fix.
-- Layout regressions: a page that scrolled, a legend that moved on hover.
-
-Every one of these passed the automated checks. The checks compare a figure before and
-after; none asks where the figure is defined.
-
-### Could be better
+### Limits and next
+- **Golden DAX queries through both engines:** the page's queries run by the compiler and
+  by the deployed model, rows compared. The real test of the compiler; it can run from the
+  development machine today.
 - **A lint on the page:** fail when `index.html` does arithmetic on measure results or
   names a view outside the Analyze tab.
-- **Golden DAX queries through both engines:** the page's queries run by the compiler and
-  by the deployed model, rows compared. That is the real test of the compiler. It doesn't
-  exist, although nothing stood in the way: the model can be queried from here.
-- **The layout measured, not eyeballed:** element boxes before and after a hover or drag.
+- **Layout measured:** element boxes before and after a hover or drag.
 
-## 8. Working with an AI agent
+## 8. Semantic layer and AI agents
 
-### The drift
-The rule since 2026-10-05: the page writes DAX, every figure is a measure of the model, and
-the page only groups, filters and names measures. The history after that:
-
-| When | What happened |
-|---|---|
-| 10-05 | The page "queries the model in DAX" |
-| 10-06 morning | Six figures still worked out in the page, now made measures |
-| 10-06 morning | Again: what the model can express, the page now asks the model for |
-| 10-06 late morning | Page DAX that real DAX would answer differently, fixed |
-| 10-07 | Each chart's DAX had been scattered through its renderer, gathered at the top of the page |
-
-Why it happened, even with the rule written down:
-- **The agent works chart by chart; the rule is about the whole page.** "The chart draws the
-  right number" is the finish line of each task, and JS arithmetic reaches it faster than
-  extending the compiler.
-- **SQL dressed as DAX.** The compiler's founding choice, "a filter is a boolean argument of
-  `CALCULATETABLE`; there is no filter context", is WHERE-clause thinking in DAX syntax.
-  The page's DAX was then written to fit the translation, not DAX.
-- **The checks couldn't see it.** They compare a figure, not where it is defined.
-- **The real engine was never asked.** The deployed model answered DAX from the development
-  machine the whole time. The agent checked the page's DAX only against its own
-  translation, and treated Power BI as something to deploy to rather than something to
-  query.
-
-What stopped it was a mechanical constraint: a second engine that runs the same DAX, where
-SQL-dressed DAX gives different answers. That engine was available from the first day.
-
-### Other patterns
-- **Working around instead of through.** Proposing hand-made rows for a gap, improvising
-  when a tool's documented path failed, theorising before searching the tool's issue
-  tracker, deleting what fails instead of diagnosing it. Each is now a standing rule.
-- **Diagnosing from inference.** A root cause has to rest on a CI log, a test or the git
-  history, not on what a table "probably" holds.
-- **Scope creep in plans.** A SQL query often beats a built feature.
-- **Reaching for CI when the answer is one query away.** The agent ran measures through
-  deploys and planned "a VertiPaq client in CI" to check the page's DAX. Querying the model
-  from the development machine would have done both in seconds.
-
-### What the instruction file became
-`AGENTS.md` is about 860 lines, and it is the real specification. It records not only how
-things are but why, with dates and the owner's words when a rule came from a correction.
-That provenance stops a later session from undoing a decision it doesn't understand: the
-grain switch, the `NOT EXISTS`, the literal dates. The cost is that it only grows, and a
-prose rule is only as good as the agent's attention on the day.
-
-### Could be better
-- **Turn each prose rule into a check where possible** (the lint, golden queries, layout
-  measurements). An instruction slows drift; a failing check ends it.
-- **Keep testing human.** An agent's tests match the agent's model of the code. Here, the
-  owner's review was the test that mattered.
+- **The risk:** an agent writing a client defaults to SQL per chart, with WHERE clauses
+  standing in for interaction. Each chart is correct on its own, so per-chart checks pass;
+  what's lost is one definition across clients.
+- **What guards against it here:**
+  - the rule in AGENTS.md: a figure the model can express is a measure, and the page only
+    groups, filters and names measures;
+  - the compiler throws on what it doesn't know, so a gap is fixed in the language;
+  - the page's DAX has to be valid DAX, because the VertiPaq app sends it to Power BI as
+    written.
+- **What would guard better:** checks rather than rules (the golden queries, the page lint
+  in section 7). A written rule depends on the agent reading it; a failing check doesn't.
+- **AGENTS.md is the real specification** (about 860 lines), with dates and the owner's
+  reasons, so a later session doesn't undo a decision it doesn't understand.
 
 ## 9. What SQL would need
 
-The drift has a structural cause: there is no open-source language and runtime with DAX's
-semantics, so SQL with WHERE parameters is always the shortest path. These are the five
-things SQL would need for the right path to also be the easy one, each mapped to what it
-would remove from `compiler.js`:
+No open-source language and runtime has DAX's semantics, so SQL with WHERE parameters is
+always the shortest path. Five additions would make the right path the easy one, each
+replacing a part of `compiler.js`:
 
-1. **Measures in the catalog.** `CREATE MEASURE fct_summary.capacity_factor AS ...`,
-   called by name from any query and evaluated in that query's context. *Removes:* inlining,
-   and the reason a client does its own division.
-2. **Relationships that carry filters.** Declared once; a filter on a dimension reaches
-   every related fact, and a filter on one fact's column stays on that fact. *Removes:* the
-   per-fact subqueries and `whereAll`, the most hand-written part of the compiler.
-3. **Context modifiers.** Calcite's `AT` ("Measures in SQL", Hyde, 2024):
-   `revenue AT (SET date = date - 1)`, `AT (ALL region)`, `AT (VISIBLE)`. *Removes:*
-   `KEEPFILTERS` and previous-period queries built in the page.
-4. **Grain inside the measure.** "Sum capacity per unit that has rows, then roll up", and
-   aggregate tables declared to the engine so it routes to the daily table on its own.
-   *Removes:* `perUnit`, `[Reads 5 minutes]`, the `ISFILTERED` answers, `wholeDays`.
-5. **A query surface for visuals:** group, filter, name measures, and nothing else. No
-   arithmetic on measure results, and filters bound as structured values, not concatenated
-   strings. *Removes:* the drift itself. If a visual query can't divide two measures, the
-   only way through is a measure in the model.
-
-A chart's query would then be:
+1. **Measures in the catalog:** `CREATE MEASURE fct_summary.capacity_factor AS ...`,
+   called by name, evaluated in the query's context. *Replaces:* inlining, and divisions
+   in the client.
+2. **Relationships that carry filters:** a filter on a dimension reaches every related
+   fact; a filter on one fact's column stays there. *Replaces:* the per-fact CTEs.
+3. **Context modifiers:** Calcite's `AT` ("Measures in SQL", Hyde, 2024),
+   `revenue AT (SET date = date - 1)`, `AT (ALL region)`. *Replaces:* `KEEPFILTERS`,
+   previous-period queries in the page.
+4. **Grain inside the measure**, and aggregate tables the engine routes to on its own.
+   *Replaces:* the per-unit two-level query, `[Reads 5 minutes]`, `wholeDays`.
+5. **A query surface for visuals:** group, filter, name measures, nothing else, with
+   filters as structured values. *Replaces:* the possibility of a client computing its own
+   figures.
 
 ```sql
 SELECT region, date, capacity_factor, renewable_share,
@@ -418,48 +245,49 @@ WHERE date BETWEEN ? AND ?          -- reaches every fact through relationships
 GROUP BY region, date;
 ```
 
-Points 1 to 4 make the right path easy. Point 5 makes the wrong one impossible. Calcite's
-proposal covers 1, 3 and part of 4 as a paper; Malloy, dbt MetricFlow and Cube cover pieces
-of 1 and 2. None ships all five in an embeddable engine. DuckDB would be the natural home:
-it already runs in the browser.
+Calcite's proposal covers 1, 3 and part of 4; Malloy, dbt MetricFlow and Cube cover parts
+of 1 and 2. None ships all five in an embeddable engine. DuckDB, which already runs in the
+browser, is the natural place.
 
-## 10. If starting again
+## 10. Reading the catalog from the browser
 
-- Decide the time semantics of every timestamp before the first write.
-- Probe the catalog first (the capability matrix), design the write path around what it
-  does today, and probe again at each release: a pre-release changes under you, mostly for
-  the better.
-- Put the rules in the models from the start; make the import a copy from the start.
-- Write the semantic model before the first chart, and have the first chart call a measure.
-- Run two engines on the same queries from the first day: the second engine is the test.
-  When it is a deployed model, query it from the development machine; don't wait for CI.
-- Write the page lint and the golden queries before the page grows.
-- Keep the AGENTS.md habit of dates and reasons. Turn what can be checked into checks.
+- **Authentication works today.** A page signs the user in with MSAL.js (PKCE, an SPA app
+  registration, no client secret) and asks for `https://storage.azure.com/user_impersonation`.
+  That one token is what the OneLake Iceberg endpoint and the storage both accept. It is the
+  reader's own, lasts about an hour, and reaches only what they can read: nothing to hide.
+- **CORS passes.** Checked 2026-10-07 in Chrome 154: a fetch with `Authorization: Bearer`
+  to the catalog (`onelake.table.fabric.microsoft.com/iceberg`), to a file with a Range
+  header (`onelake.dfs...`) and to the user-delegation-key call (`onelake.blob...`) all get
+  through the preflight.
+- **What's missing is the engine.** DuckDB-WASM's documented extensions include neither
+  `iceberg` nor `azure`. Iceberg in the browser has been shown over S3 Tables and R2 with
+  the native http extension, not over Azure. OneLake's metadata points at `abfss://` paths,
+  so it needs the azure extension in WASM, or the iceberg extension reading `https://`
+  with a Bearer header or a SAS (the page can sign one itself from a user delegation key).
+- **When it lands:** the Fabric app's SAS function and its owner-only deploy go away, and
+  recent data can come live from the catalog, with a cache in the engine for the history.
+- **Not covered:** the public page, which has no reader identity.
 
-## 11. Still open
-
-Carried over from the former `TODO.md`; the rest of it is in the "Could be better" lists
-above.
+## 11. Open items
 
 **Waiting on upstream**
-- OneLake accepting a commit that mixes delete files with data files (fixed upstream,
-  rolling out): re-run the capability probe, and once a `MERGE` with `WHEN MATCHED UPDATE`
-  passes, the merges no longer have to be insert-only. AEMO's late corrections can land,
-  `dim_duid` can update in place, `fct_summary` can take the next-day value over the
-  intraday one, and AGENTS.md's "insert-only" sections change with it.
+- OneLake accepting commits that mix delete files with data files (fixed upstream, rolling
+  out): re-run the probe, then switch the merges to updates and update AGENTS.md's
+  "insert-only" sections.
 - DuckDB 2.0.0 stable (due 2026-10-21): replace `2.0.0.dev2609250715` everywhere it is
-  pinned and re-run the capability probe against it.
-- A duckdb-wasm build on DuckDB 2.0: move the dashboard and the import's write venv together.
-- duckdb-iceberg#1341 (snapshot expiry): replace pyiceberg in `scripts/expire_snapshots.py`.
+  pinned, and re-run the probe.
+- A duckdb-wasm build on DuckDB 2.0: move the dashboard and the import's write venv
+  together.
+- DuckDB-WASM with Iceberg on Azure (section 10).
+- duckdb-iceberg#1341 (snapshot expiry): replace pyiceberg.
 - microsoft/rayfin#89: deploy the DuckDB-WASM Fabric app from CI (`deploy_fabric.yml`,
   `app=wasm`, item `nemtracker`).
 - AEMO publishing `ROOFTOP_PV_ACTUAL_PRED`/`_RUN`: move `fct_rooftop_pv` to the 5-minute
   estimate.
 
 **Ideas**
-- `rebuild=dim_duid` once the corrected `duid_unregistered.csv` (TORRB1, ADPBA1L) has been
+- `rebuild=dim_duid` once the corrected `duid_unregistered.csv` (TORRB1, ADPBA1L) is
   downloaded.
-- Interconnectors from the data: a `dim_interconnector` from MMSDM `INTERCONNECTOR` instead
-  of the names typed in `index.html`.
-- Emissions: CO2 factor per unit from `GENUNITS`/`DUALLOC`; a unit without a factor stays
-  out.
+- `dim_interconnector` from MMSDM `INTERCONNECTOR`, instead of the names typed in
+  `index.html`.
+- Emissions: CO2 factor per unit from `GENUNITS`/`DUALLOC`; a unit without one stays out.
