@@ -48,7 +48,7 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 
 One semantic model (`semantic_model/model.bim`), its clients under `dashboard/`:
 
-- `github-dax/` and `fabric_app_wasm/` are one page (`dashboard/github-dax/index.html`) on two hosts. A
+- `github/` and `fabric_app_wasm/` are one page (`dashboard/github/common/index.html`) on two hosts. A
   host only decides where the data files live and how the browser gets them
   (`storage/data.js`), so a chart is written once and reaches both.
 - `fabric_app_vertipaq/` is to be that page again, as a Fabric app next to the deployed
@@ -57,7 +57,7 @@ One semantic model (`semantic_model/model.bim`), its clients under `dashboard/`:
   available, and the folder holds a README until they are. That the page's DAX is DAX is
   checked meanwhile by `scripts/parity`: the page's queries through the compiler on the
   dashboard's files and through the deployed model, rows compared.
-- `powerbi/` is a Power BI report (`nem.Report`, as JSON) on the model as deployed to Fabric,
+- `powerbi_report/` is a Power BI report (`nem.Report`, as JSON) on the model as deployed to Fabric,
   which reads the Iceberg tables in Direct Lake. `deploy_model.yml` publishes the two together.
 
 A measure is written once, in the model, and reaches all four.
@@ -69,7 +69,7 @@ A measure is written once, in the model, and reaches all four.
 | Engine | DuckDB-WASM, in the browser | DuckDB-WASM, in the browser |
 | Data files | next to the page | a lakehouse, under `Files/data` |
 | 5-minute history | one file per half-year (GitHub's 100 MB limit), downloaded | the same half-year files, downloaded as parallel range requests |
-| Host code | `dashboard/github-dax/storage/data.js` | `dashboard/fabric_app_wasm/site/storage/` |
+| Host code | `dashboard/github/common/storage/data.js` | `dashboard/fabric_app_wasm/site/storage/` |
 | Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `dashboard/fabric_app_wasm/` (page), `import_onelake.yml` (data) |
 
 ### The layers of the dashboard
@@ -79,12 +79,12 @@ on purpose: the point is the layers, not their maturity.
 
 | Layer | Here | In a real product |
 |---|---|---|
-| Consumer | `dashboard/github-dax/index.html` | the BI tool |
+| Consumer | `dashboard/github/common/index.html` | the BI tool |
 | Query language | a query of the model's fields (`frontend/queries.js`), which the compiler writes as DAX | DAX, MDX, VizQL, Malloy, a metrics request |
 | Semantic model | `semantic_model/model.bim`, a Tabular model in TMSL | a Tabular model (TMSL, TMDL), LookML, MetricFlow YAML |
-| Compiler | `dashboard/github-dax/semantic/compiler.js` | MetricFlow, Cube's schema compiler, Malloy's compiler, Looker's SQL generator, Power BI's formula engine, Tableau's VizQL |
+| Compiler | `dashboard/github/dax/semantic/compiler.js` | MetricFlow, Cube's schema compiler, Malloy's compiler, Looker's SQL generator, Power BI's formula engine, Tableau's VizQL |
 | Engine | DuckDB-WASM | the warehouse, VertiPaq, Hyper |
-| Storage | `dashboard/github-dax/storage/` | the lakehouse or warehouse connection |
+| Storage | `dashboard/github/common/storage/` | the lakehouse or warehouse connection |
 
 
 - **The semantic model** describes the tables, their relationships and the measures, each
@@ -102,7 +102,7 @@ on purpose: the point is the layers, not their maturity.
   say, as a report visual's is; every figure is a measure, and the page draws the rows
   (`scripts/parity/page_lint.mjs` checks that its code works out none). The Analyze tab is
   the exception: it is SQL, written by whoever uses it, against the same views.
-- **The same page without the semantic layer** is `dashboard/github-sql/`, at `sql/` on the
+- **The same page without the semantic layer** is `dashboard/github/sql/`, at `sql/` on the
   site: the same `index.html` and storage, and its own `frontend/queries.js`, which asks in
   SQL, each figure written out where a chart uses it, the joins written out. It is how a
   team would build the page in practice. `scripts/parity/sql_page.mjs` holds its rows to
@@ -154,11 +154,13 @@ no query service.
 ├── scripts/              # The cache (Iceberg → DuckDB files), table maintenance, deploy
 ├── semantic_model/       # The one semantic model (model.bim): what every dashboard reads, and a Fabric item
 ├── dashboard/            # Its four clients
-│   ├── github-dax/       # The page, and a folder per layer: frontend/, semantic/ (the compiler), storage/ (the GitHub Pages host, the tables as views)
-│   ├── github-sql/       # The same page in plain SQL, no semantic layer (its frontend/queries.js), served at sql/
+│   ├── github/           # The page on GitHub Pages, and its two ways of asking
+│   │   ├── common/       # index.html, frontend/ (draws, Logs tab), storage/ (the host, the tables as views), dag/ (dbt docs)
+│   │   ├── dax/          # through the semantic model: frontend/queries.js, semantic/ (the compiler); served at /
+│   │   └── sql/          # in plain SQL, no semantic layer: frontend/queries.js; served at sql/
 │   ├── fabric_app_wasm/     # The same page as a Fabric app on DuckDB-WASM: its host code, sign-in, and the Rayfin project
 │   ├── fabric_app_vertipaq/ # The same page as a Fabric app on the deployed model: not available yet (a README)
-│   └── powerbi/          # A report over the deployed model
+│   └── powerbi_report/   # A report over the deployed model
 ├── tests/                # dbt data tests
 ├── .github/workflows/    # CI/CD pipelines
 ├── dbt_project.yml

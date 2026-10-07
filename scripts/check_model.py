@@ -9,7 +9,7 @@ columns it names are there with the types it expects. Then every measure, per da
 newest week of fct_summary, a query each (the measures of the tables by month: per month,
 over the newest three). Then the whole history by year and fuel, timed, from the daily table
 and from the 5-minute one: what the measures' switch between them is worth. Last, the report
-on it (dashboard/powerbi): that it is in the workspace and reads this model. Nothing here
+on it (dashboard/powerbi_report): that it is in the workspace and reads this model. Nothing here
 sees a chart draw.
 
 THE QUERIES GO OVER XMLA (ADOMD.NET, loaded through pythonnet), not the REST executeQueries
@@ -46,7 +46,7 @@ TABLES = [t["name"] for t in MODEL["tables"]]
 # The tables that hold whole months: dim_calendar does not reach them, dim_month does.
 MONTHLY = {"dim_month"} | {r["fromTable"] for r in MODEL["relationships"] if r["toTable"] == "dim_month"}
 MEASURES = [(m["name"], t["name"] in MONTHLY) for t in MODEL["tables"] for m in t.get("measures", [])]
-REPORT = json.loads((ITEM.parent / "dashboard" / "powerbi" / "nem.Report" / ".platform")
+REPORT = json.loads((ITEM.parent / "dashboard" / "powerbi_report" / "nem.Report" / ".platform")
                     .read_text(encoding="utf-8"))["metadata"]["displayName"]
 
 

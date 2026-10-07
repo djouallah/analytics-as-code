@@ -10,7 +10,7 @@ fabric-cicd finds an item by its .platform, whatever the folder is called. It is
 published with fabric-cicd, as the sibling repo publishes its own (dbt-fabric,
 .github/scripts/deploy.py): the item is created on the first run and updated after that.
 
-The report is dashboard/powerbi/nem.Report (PBIR). Its definition.pbir names the model by
+The report is dashboard/powerbi_report/nem.Report (PBIR). Its definition.pbir names the model by
 its path in the repo, and fabric-cicd turns that into the deployed model's id, so the two
 are copied to the same places relative to each other and nothing in the report is rewritten.
 
@@ -28,7 +28,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 ITEM = REPO / "semantic_model"
-REPORT = REPO / "dashboard" / "powerbi" / "nem.Report"
+REPORT = REPO / "dashboard" / "powerbi_report" / "nem.Report"
 
 
 def main():

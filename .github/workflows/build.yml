@@ -30,7 +30,7 @@ jobs:
       - name: The page works out no figure
         # scripts/parity/page_lint.mjs: no arithmetic in the page's script or its queries; a
         # figure is a measure of semantic_model/model.bim. How the page draws (scales, sizes,
-        # text) is in dashboard/github-dax/frontend/draw.js, which a review reads.
+        # text) is in dashboard/github/common/frontend/draw.js, which a review reads.
         run: cd scripts/parity && npm ci --no-audit --no-fund && node page_lint.mjs
       - uses: actions/setup-python@v5
         with:
@@ -53,22 +53,22 @@ jobs:
         run: |
           dbt build --target ci --profiles-dir .
           dbt docs generate --target ci --profiles-dir . --empty-catalog
-          mkdir -p dashboard/github-dax/dag
-          cp target/index.html dashboard/github-dax/dag/
-          cp target/manifest.json dashboard/github-dax/dag/
-          cp target/catalog.json dashboard/github-dax/dag/
+          mkdir -p dashboard/github/common/dag
+          cp target/index.html dashboard/github/common/dag/
+          cp target/manifest.json dashboard/github/common/dag/
+          cp target/catalog.json dashboard/github/common/dag/
       - name: Commit dbt docs
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add dashboard/github-dax/dag/
+          git add dashboard/github/common/dag/
           git diff --cached --quiet || (git commit -m "Update dbt docs" && git pull --rebase && git push)
       - name: Prepare deploy directory
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: |
-          # github-dax at the root, github-sql at sql/, stamped (the script says how).
-          bash scripts/stage_pages.sh deploy "${GITHUB_SHA::7}"
+          # The DAX page at the root, the SQL page at sql/, stamped (the script says how).
+          node scripts/stage_pages.mjs deploy "${GITHUB_SHA::7}"
       - name: Deploy to nemtracker
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:

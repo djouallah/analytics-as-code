@@ -18,10 +18,12 @@
 // queries that read the newest interval or day are left out for the same reason.
 // =============================================================================
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { engine, pageOf, states, lists, asked, keysOf, shiftDate } from './page_states.mjs';
+import { stagePage } from '../stage_pages.mjs';
 
 // [root]: another checkout to take the compiler, the queries and the model from (the commit a
 // check is compared with: parity_model.py --since); its rows are not run, only its keys kept.
@@ -35,9 +37,12 @@ globalThis.fetch = async url => {
   if (!String(url).includes('model.bim')) throw new Error(`no fetch here: ${url}`);
   return { ok: true, json: async () => bim };
 };
-// The page's folder: dashboard/github-dax, dashboard/github in a checkout from before the
-// rename (2026-10-07), which `since` can compare with.
-const PAGE = ['dashboard/github-dax', 'dashboard/github'].map(d => path.join(ROOT, d)).find(d => existsSync(d));
+// The DAX page, staged (common/ with dax/ over it, scripts/stage_pages.mjs); in a checkout
+// from before 2026-10-08, which `since` can compare with, the page as it was in the repo:
+// dashboard/github-dax, or dashboard/github before the rename of 2026-10-07.
+const PAGE = existsSync(path.join(ROOT, 'dashboard/github/dax'))
+  ? await (async dir => { await stagePage('dax', dir, ROOT); return dir; })(mkdtempSync(path.join(tmpdir(), 'page-')))
+  : ['dashboard/github-dax', 'dashboard/github'].map(d => path.join(ROOT, d)).find(d => existsSync(d));
 const { createModel } = await import(pathToFileURL(path.join(PAGE, 'semantic/compiler.js')));
 const { createQueries } = await import(pathToFileURL(path.join(PAGE, 'frontend/queries.js')));
 // The tables' views are the data source's since 2026-10-08 (storage/views.js, which data.js

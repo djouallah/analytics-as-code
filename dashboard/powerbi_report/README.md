@@ -1,6 +1,6 @@
 # Power BI
 
-A client of the semantic model (`semantic_model/`), next to `github-dax/`, `fabric_app_wasm/` and
+A client of the semantic model (`semantic_model/`), next to `github/`, `fabric_app_wasm/` and
 `fabric_app_vertipaq/`:
 a Power BI report, reading the Iceberg tables through the model in Direct Lake.
 

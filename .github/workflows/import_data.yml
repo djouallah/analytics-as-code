@@ -172,7 +172,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.with_page
         run: |
           cp deploy_data/data/* deploy_daily/data/
-          bash scripts/stage_pages.sh deploy_daily "${GITHUB_SHA::7}"
+          node scripts/stage_pages.mjs deploy_daily "${GITHUB_SHA::7}"
       - name: Upload instead of deploying
         if: github.event_name == 'workflow_dispatch' && !inputs.publish
         uses: actions/upload-artifact@v4

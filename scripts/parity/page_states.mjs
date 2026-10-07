@@ -2,8 +2,8 @@
 // page_states.mjs — a page run outside the browser: the deployed files attached as data.js
 // attaches them, the page's state as index.html gives it, and what each chart asks in it
 // =============================================================================
-// Shared by page_queries.mjs (github-dax's queries, through the compiler) and sql_page.mjs
-// (github-sql's, in SQL, against github-dax's).
+// Shared by page_queries.mjs (the DAX page's queries, through the compiler) and sql_page.mjs
+// (the SQL page's, in SQL, against the DAX page's).
 // =============================================================================
 
 import { readdirSync } from 'node:fs';
@@ -128,7 +128,7 @@ export function asked(queries, state) {
   return list;
 }
 
-// The columns a row of a github-dax query is matched on: the select's columns and the
+// The columns a row of a DAX page's query is matched on: the select's columns and the
 // totals' flags.
 export const keysOf = q => [...Object.entries(q.select).filter(([, f]) => typeof f === 'string' && f.includes('.')).map(([n]) => n),
   ...Object.keys(q.totals ?? {})];

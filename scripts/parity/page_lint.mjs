@@ -5,8 +5,8 @@
 //
 // The rule (the owner's): the page is a renderer. A figure is a measure of the model, a
 // total a `totals` row, a group a column of the model (frontend/queries.js says how to ask).
-// So the page's own code, the script of dashboard/github-dax/index.html and the
-// frontend/queries.js of both pages (github-dax, github-sql: its figures are SQL, in
+// So the page's own code, the script of dashboard/github/common/index.html and the
+// frontend/queries.js of both ways of asking (dax, sql: its figures are SQL, in
 // strings), holds no arithmetic: no + - * / % on numbers, no += -= on them, no
 // .reduce(). What numbers the page does work with is how it draws (an axis cut, a bubble's
 // size, a layout, a number written as text), and that lives in frontend/draw.js, which this
@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 import * as acorn from 'acorn';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const FILES = ['dashboard/github-dax/index.html', 'dashboard/github-dax/frontend/queries.js', 'dashboard/github-sql/frontend/queries.js'];
+const FILES = ['dashboard/github/common/index.html', 'dashboard/github/dax/frontend/queries.js', 'dashboard/github/sql/frontend/queries.js'];
 
 function source(file) {
   const text = readFileSync(path.join(ROOT, file), 'utf8');

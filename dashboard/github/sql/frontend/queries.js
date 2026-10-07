@@ -1,12 +1,12 @@
 // =============================================================================
 // queries.js — what each chart of the page asks DuckDB, in SQL
 // =============================================================================
-// The same members as ../../github-dax/frontend/queries.js, called the same way by the same
+// The same members as ../../dax/frontend/queries.js, called the same way by the same
 // index.html, and each returns one SELECT over the views of the attached files (v_<table>,
-// ../storage/views.js): no semantic model, no DAX. A figure is written in SQL where a chart
+// common/storage/views.js): no semantic model, no DAX. A figure is written in SQL where a chart
 // uses it; one that grows complicated becomes a column or a table in dbt, not page code.
 // The joins are written out: `s` is the units' fact, `d` dim_duid, `r` a regional fact.
-// The rows come back as the github-dax page gets them: a date as text, a time as a whole
+// The rows come back as the DAX page gets them: a date as text, a time as a whole
 // number, a figure as a DOUBLE, a subtotal row flagged by a column of its own.
 //
 // What a date range reads: the 5-minute tables (fct_summary, fct_region) up to 30 days, the
