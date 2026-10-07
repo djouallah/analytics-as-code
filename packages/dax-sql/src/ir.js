@@ -36,7 +36,7 @@ import { semantic } from './errors.js';
 
 let nextId = 1;
 export const newRow = (cols, kind = 'table', extra = {}) => ({ id: nextId++, cols, kind, ...extra });
-export const rowOf = (src, kind) => newRow(src.cols, kind ?? (src.base ? 'scan' : 'table'), { base: src.base ?? null });
+export const rowOf = (src, kind) => newRow(src.cols, kind ?? (src.base ? 'scan' : 'table'), { base: src.base ?? null, src });
 
 export const NUMERIC = new Set(['int', 'double', 'decimal']);
 export const isNum = t => NUMERIC.has(t);
@@ -80,12 +80,14 @@ export function op(o, ...a) {
     if (isLit(r, false)) return boolOf(l);
   }
   if (o === 'not' && l.k === 'lit' && typeof l.v === 'boolean') return lit(!l.v);
+  if (o === 'neg' && l.k === 'lit' && typeof l.v === 'number') return lit(-l.v, l.t);
   let t;
   if (['eq', 'eqs', 'ne', 'lt', 'le', 'gt', 'ge', 'and', 'or', 'not', 'in'].includes(o)) t = 'bool';
   else if (o === 'concat') t = 'string';
   else if (o === 'div' || o === 'pow') t = 'double';
   else if (o === 'neg') t = l.t;
-  else if ((o === 'add' || o === 'sub') && (l.t === 'datetime' || l.t === 'date')) t = isNum(r.t) ? l.t : 'double';
+  else if ((o === 'add' || o === 'sub') && (l.t === 'datetime' || l.t === 'date')) t = isNum(r.t) ? l.t : o === 'add' ? 'datetime' : 'double';
+  else if (o === 'add' && isNum(l.t) && (r.t === 'datetime' || r.t === 'date')) t = 'datetime';
   else t = l.t === 'int' && r.t === 'int' ? 'int' : l.t === 'decimal' && r.t === 'decimal' && o !== 'mul' ? 'decimal' : 'double';
   // Comparisons and logic never give a blank; + and - give one only when both sides do.
   const nn = t === 'bool' || o === 'concat' || (o === 'add' || o === 'sub') && (l.nn || r.nn)
@@ -137,15 +139,28 @@ export const itemOf = (row, ref, name) => {
 // The values of some model columns that the filter context keeps (VALUES, SUMMARIZE).
 // Where the context binds the one column to a value (a group key, a context transition),
 // that is the value, when a row holds it: a table of one row, with no scan to group.
-export function values(table, ctx, columns, scanOf) {
+// With `blank` (VALUES and ALL, not DISTINCT and ALLNOBLANKROW), the table's blank row is one
+// of them when it has one.
+export function values(table, ctx, columns, scanOf, blank = false) {
   const src = scanOf(table, ctx);
   if (columns.length === 1) {
     const b = ctx.filters.find(f => f.kind === 'bind' && f.cols[0] === columns[0]);
-    if (b) return oneRow([b.val], exists(src), [columns[0]]);
+    if (b) {
+      let cond = exists(src);
+      if (blank) cond = op('or', cond, op('and', fn('isblank', [b.val], 'bool', { nn: true }), { k: 'blankexists', table, ctx, t: 'bool', nn: true }));
+      return oneRow([b.val], cond, [columns[0]]);
+    }
   }
   const row = rowOf(src);
-  return distinct(project(src, row, columns.map(c => itemOf(row, c))));
+  const out = distinct(project(src, row, columns.map(c => itemOf(row, c))));
+  return blank ? withBlank(out, table, ctx) : out;
 }
+
+// The rows of `src` (of model table `table`, or values of its columns) and the table's blank
+// row, as the filter context `ctx` leaves it.
+// `lineage`: the columns of the table the blank row is read as (TREATAS may rename `cols`).
+export const withBlank = (src, table, ctx) => ({ k: 'withblank', src, table, ctx, cols: src.cols, base: src.base,
+  lineage: src.cols.map(c => c.lineage) });
 
 // A table of one row, the values `vals` in columns of lineage `lineages`, when `cond` holds;
 // of no row when it does not.
@@ -202,6 +217,11 @@ export function freeRows(x) {
     case 'sc': add(x.ctx0 && { k: 'scan', ctx: x.ctx0 }); x.levels.forEach(l => l.items.forEach(i => add(i.expr))); bound.add(x.keyRow.id); break;
     case 'currentgroup': break;
     case 'onerow': x.vals.forEach(add); add(x.cond); break;
+    case 'withblank': add(x.src); add({ k: 'scan', ctx: x.ctx }); break;
+    case 'blankexists': add({ k: 'scan', ctx: x.ctx }); break;
+    case 'window': case 'wrank':
+      add(x.rel); x.order.forEach(o => add(o.expr)); x.parts.forEach(add); x.match.forEach(m => add(m.val)); add(x.unbound?.table);
+      [x.delta, x.pos, x.from, x.to].forEach(add); bound.add(x.row.id); break;
     case 'prefix': x.vals.forEach(add); add(x.cond); add(x.src); break;
     default: throw new Error(`freeRows: ${x.k}`);
   }

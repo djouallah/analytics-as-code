@@ -6,11 +6,13 @@ import { Ctx } from '../context.js';
 import { semantic, unsupported } from '../errors.js';
 import { unitArg } from './scalar.js';
 
-// The dates argument: a date column (its visible values) or a table of dates.
+// The dates argument: a date column or a table of dates. A column is
+// CALCULATETABLE(DISTINCT(column)), as DAX reads it: in a row context, the context
+// transition applies (PREVIOUSMONTH in a calculated column of the date table).
 function datesOf(c, ast, env, what) {
   if (ast?.k === 'col') {
     const col = c.modelColumn(ast, env, `${what} needs a date column`);
-    return { col, visible: ir.values(col.table, env.ctx, [col], (t, x) => c.scan(t, x)) };
+    return { col, visible: ir.values(col.table, c.transition(env), [col], (t, x) => c.scan(t, x)) };
   }
   const t = c.table(ast, env);
   if (t.cols.length !== 1 || !t.cols[0].lineage) throw semantic(`${what} needs a date column`);
@@ -148,7 +150,23 @@ function balance(unit, side) {
   };
 }
 
+// CALENDARAUTO([fiscal year end month]): every day of the (fiscal) years the model's dates
+// span (its date columns, not calculated ones).
+function calendarAuto(c, args, env) {
+  const end = args[0] && args[0].k !== 'empty' ? Number(args[0].v) : 12;
+  if (!(end >= 1 && end <= 12)) throw semantic('CALENDARAUTO takes a month, 1 to 12');
+  const months = (12 - end) % 12;
+  const cols = [...c.model.tables.values()].filter(t => !t.calc && !t.calcGroup)
+    .flatMap(t => t.columns.filter(x => x.type === 'datetime' && !x.expr));
+  if (!cols.length) throw semantic('CALENDARAUTO: the model has no date column');
+  const each = f => cols.map(x => { const s = c.scan(x.table, new Ctx([], env.ctx.mods)), r = ir.rowOf(s); return ir.agg(f, s, r, ir.col(r, x), 'datetime'); });
+  const lo = startOfYear(ir.fn('least', each('min'), 'datetime'), months);
+  const hi = shift(shift(startOfYear(ir.fn('greatest', each('max'), 'datetime'), months), 12, 'month'), -1, 'day');
+  return { k: 'series', start: lo, end: hi, step: ir.lit(1), cols: [{ name: 'Date', lineage: null, t: 'datetime' }], base: null };
+}
+
 export const table = {
+  CALENDARAUTO: calendarAuto,
   DATESYTD: toDate('year'), DATESQTD: toDate('quarter'), DATESMTD: toDate('month'),
   DATESBETWEEN: datesBetween, DATESINPERIOD: datesInPeriod, DATEADD: dateAdd, SAMEPERIODLASTYEAR: dateAdd,
   PARALLELPERIOD: parallelPeriod,

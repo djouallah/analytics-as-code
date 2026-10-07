@@ -1,6 +1,7 @@
 // DuckDB (1.1 and later; tested on 1.5).
 import { Dialect } from './base.js';
 import { unsupported } from '../errors.js';
+import { formatNumber, formatDate, generalNumber, generalDate, dateSerial, serialDate } from './duckdb-format.js';
 
 const UNIT_SQL = { day: 'DAY', week: 'WEEK', month: 'MONTH', quarter: 'QUARTER', year: 'YEAR', hour: 'HOUR', minute: 'MINUTE', second: 'SECOND' };
 
@@ -17,10 +18,11 @@ export class DuckDBDialect extends Dialect {
   // list_sum skips blanks and is blank when all are: DAX's + in one expression, each side once.
   blankAdd(a, b, sub) { return `list_sum([${a}, ${sub ? `-(${b})` : b}])`; }
 
+  // As DAX converts: 3.0 as "3", 0.1 + 0.2 as "0.3" (15 digits), 1E+20; a date as 1/5/2024, with
+  // the time when it is not midnight; TRUE as "True".
   text(sql, t) {
-    // 3.0 joins as "3", as in DAX.
-    if (t === 'double' || t === 'decimal') return `regexp_replace(CAST(${sql} AS VARCHAR), '\\.0+$', '')`;
-    if (t === 'datetime') return `strftime(${sql}, '%Y-%m-%d')`;
+    if (t === 'double' || t === 'decimal' || t === 'bool') return generalNumber(sql, t);
+    if (t === 'datetime' || t === 'date') return `[${generalDate('dax_tv')} FOR dax_tv IN [${sql}]][1]`;
     return super.text(sql, t);
   }
 
@@ -90,12 +92,20 @@ export class DuckDBDialect extends Dialect {
       case 'unicode': return `unicode(${x})`;
       case 'containsstring': return `contains(lower(COALESCE(${x}, '')), lower(COALESCE(${y}, '')))`;
       case 'containsstringexact': return `contains(COALESCE(${x}, ''), COALESCE(${y}, ''))`;
-      case 'combinevalues': return `concat_ws(${x}, ${a.slice(1).map(v => `COALESCE(CAST(${v} AS VARCHAR), '')`).join(', ')})`;
-      case 'format_date': return `strftime(${x}, ${y})`;
-      case 'format_number': return formatNumber(x, JSON.parse(y.slice(1, -1).replace(/''/g, "'")));
+      case 'combinevalues': return `concat_ws(${x}, ${a.slice(1).map((v, i) => `COALESCE(${nodes[i + 1] ? this.text(v, nodes[i + 1].t) : `CAST(${v} AS VARCHAR)`}, '')`).join(', ')})`;
+      case 'format_date': return formatDate(x, JSON.parse(nodes[1].v));
+      case 'format_number': return formatNumber(x, JSON.parse(nodes[1].v), nodes[0].t);
+      case 'date_serial': return dateSerial(x);
+      case 'serial_date': return serialDate(x);
       // dates
       case 'date': return `CAST(make_date(CAST(${x} AS BIGINT), 1, 1) + to_months(CAST(${y} AS INTEGER) - 1) + to_days(CAST(${z} AS INTEGER) - 1) AS DATE)`;
-      case 'time': return `make_time(CAST(${x} AS BIGINT), CAST(${y} AS BIGINT), CAST(${z} AS DOUBLE))`;
+      // A time is a date and time on day zero (1899-12-30), as in DAX.
+      case 'time': return `(DATE '1899-12-30' + make_time(CAST(${x} AS BIGINT), CAST(${y} AS BIGINT), CAST(${z} AS DOUBLE)))`;
+      // A date and time plus another: the second's time since day zero added to the first.
+      case 'add_datetimes': {
+        const z0 = "TIMESTAMP '1899-12-30'", T = v => `COALESCE(CAST(${v} AS TIMESTAMP), ${z0})`;
+        return `CASE WHEN ${x} IS NULL AND ${y} IS NULL THEN NULL ELSE ${T(x)} + (${T(y)} - ${z0}) END`;
+      }
       case 'year': case 'month': case 'day': case 'hour': case 'minute': case 'second': case 'quarter':
         return `${name}(${x})`;
       case 'weekday': return `CASE CAST(${y} AS INTEGER) WHEN 2 THEN isodow(${x}) WHEN 3 THEN isodow(${x}) - 1 ELSE dayofweek(${x}) + 1 END`;
@@ -164,14 +174,4 @@ function unit(sqlStr) {
   const u = UNIT_SQL[String(sqlStr).replace(/'/g, '').toLowerCase()];
   if (!u) throw new Error(`unknown unit ${sqlStr}`);
   return u;
-}
-
-function formatNumber(x, spec) {
-  if (spec.general) return `regexp_replace(CAST(${x} AS VARCHAR), '\\.0+$', '')`;
-  if (spec.scientific) return `upper(format('{:.${spec.decimals}e}', CAST(${x} AS DOUBLE)))`;
-  const v = spec.percent ? `(${x}) * 100` : x;
-  const body = `format('{:${spec.thousands ? ',' : ''}.${spec.decimals}f}', CAST(${v} AS DOUBLE))`;
-  const lit = s => `'${s.replace(/'/g, "''").replace(/"/g, '')}'`;
-  const parts = [spec.prefix && lit(spec.prefix), body, spec.percent && "'%'", spec.suffix && lit(spec.suffix)].filter(Boolean);
-  return parts.length === 1 ? body : `(${parts.join(' || ')})`;
 }

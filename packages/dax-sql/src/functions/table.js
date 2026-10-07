@@ -29,38 +29,55 @@ function item(c, name, ast, env) {
 
 // --- reading the model ------------------------------------------------------------------
 
+// The blank row: VALUES and ALL (and its kind) list it; DISTINCT, ALLNOBLANKROW and a table
+// named on its own do not.
+const blankOf = (c, t, fn) => fn !== 'ALLNOBLANKROW' && fn !== 'DISTINCT' && c.blankRowRels(t).length > 0;
+const rowsOf = (c, t, ctx, fn) => {
+  const s = c.scan(t, ctx);
+  return blankOf(c, t, fn) ? ir.withBlank(s, t, ctx) : s;
+};
+
 function all(c, args, env, ast) {
   if (!args.length) throw semantic(`${ast.fn}() with no argument is only valid as a CALCULATE filter`);
-  if (args.length === 1 && isModelTableName(c, args[0], env)) return c.scan(c.model.table(args[0].name), noFilters(env.ctx));
+  if (args.length === 1 && isModelTableName(c, args[0], env)) return rowsOf(c, c.model.table(args[0].name), noFilters(env.ctx), ast.fn);
   // ALL(T[a], T[b]): the combinations of values the table holds, filters ignored.
   const cols = args.map(a => c.modelColumn(a, env));
   const t = cols[0].table;
   if (cols.some(x => x.table !== t)) throw semantic(`${ast.fn} takes columns of one table`);
-  return ir.values(t, noFilters(env.ctx), cols, (tb, ctx) => c.scan(tb, ctx));
+  return ir.values(t, noFilters(env.ctx), cols, (tb, ctx) => c.scan(tb, ctx), blankOf(c, t, ast.fn));
 }
 
 function allExcept(c, args, env) {
   if (!isModelTableName(c, args[0], env)) throw semantic('ALLEXCEPT(table, column, ...)');
   const t = c.model.table(args[0].name), keep = new Set(args.slice(1).map(a => c.modelColumn(a, env)));
   const exp = c.expandedColumns(t, env.ctx);
-  return c.scan(t, env.ctx.remove(x => exp.has(x) && !keep.has(x)));
+  return rowsOf(c, t, env.ctx.remove(x => exp.has(x) && !keep.has(x)), 'ALLEXCEPT');
 }
 
+// ALLSELECTED as a table. Of a table: its rows, the columns some shadow filter context covers
+// filtered as the last such says, the others as the filter context says. Of columns: their
+// values under the last shadow on them only (all their values when there is none).
 function allSelected(c, args, env) {
-  const cols = args.length ? new Set(args.flatMap(a => isModelTableName(c, a, env) ? [...c.expandedColumns(c.model.table(a.name), env.ctx)] : [c.modelColumn(a, env)])) : null;
-  const ctx = c.allSelected(env.ctx, env, cols);
-  if (args.length === 1 && isModelTableName(c, args[0], env)) return c.scan(c.model.table(args[0].name), ctx);
   if (!args.length) throw semantic('ALLSELECTED() with no argument is only valid as a CALCULATE filter');
+  if (args.length === 1 && isModelTableName(c, args[0], env)) {
+    const t = c.model.table(args[0].name);
+    return rowsOf(c, t, c.allSelected(env.ctx, env, c.expandedColumns(t, env.ctx)), 'ALLSELECTED');
+  }
   const list = args.map(a => c.modelColumn(a, env));
-  return ir.values(list[0].table, ctx, list, (tb, x) => c.scan(tb, x));
+  if (list.some(x => x.table !== list[0].table)) throw semantic('ALLSELECTED takes columns of one table');
+  const ctx = c.allSelected(noFilters(env.ctx), env, new Set(list), true);
+  return ir.values(list[0].table, ctx, list, (tb, x) => c.scan(tb, x), blankOf(c, list[0].table, 'ALLSELECTED'));
 }
 
-function valuesFn(c, args, env) {
+function valuesFn(c, args, env, ast) {
   const a = args[0];
-  if (isModelTableName(c, a, env)) return ir.distinct(c.scan(c.model.table(a.name), env.ctx));
+  if (isModelTableName(c, a, env)) {
+    const t = c.model.table(a.name), d = ir.distinct(c.scan(t, env.ctx));
+    return blankOf(c, t, ast.fn) ? ir.withBlank(d, t, env.ctx) : d;
+  }
   if (a.k === 'col' && a.table && c.model.findColumn(a.table, a.name)) {
     const col = c.modelColumn(a, env);
-    return ir.values(col.table, env.ctx, [col], (tb, ctx) => c.scan(tb, ctx));
+    return ir.values(col.table, env.ctx, [col], (tb, ctx) => c.scan(tb, ctx), blankOf(c, col.table, ast.fn));
   }
   return ir.distinct(c.table(a, env));
 }
@@ -77,16 +94,16 @@ function relatedTable(c, args, env) {
 
 function filterFn(c, args, env) {
   const src = c.table(args[0], env), row = ir.rowOf(src);
-  return ir.filter(src, row, c.scalar(args[1], { ...env, rows: [...env.rows, row] }));
+  return ir.filter(src, row, c.scalar(args[1], c.iter(env, row)));
 }
 
 function addColumns(c, args, env) {
-  const src = c.table(args[0], env), row = ir.rowOf(src), inner = { ...env, rows: [...env.rows, row] };
+  const src = c.table(args[0], env), row = ir.rowOf(src), inner = c.iter(env, row);
   return ir.project(src, row, pairs(args, 1, 'ADDCOLUMNS').map(([n, x]) => item(c, n, x, inner)), true);
 }
 
 function selectColumns(c, args, env) {
-  const src = c.table(args[0], env), row = ir.rowOf(src), inner = { ...env, rows: [...env.rows, row] };
+  const src = c.table(args[0], env), row = ir.rowOf(src), inner = c.iter(env, row);
   const items = [];
   for (let i = 1; i < args.length;) {
     if (args[i].k === 'str') { items.push(item(c, args[i].v, args[i + 1], inner)); i += 2; continue; }
@@ -131,7 +148,7 @@ function summarize(c, args, env) {
   // Its expressions, as ADDCOLUMNS over the groups, each with its group as the filter
   // context (SUMMARIZE's own context transition) and its row.
   const grow = ir.rowOf(grouped, 'table');
-  const inner = { ...env, ctx: c.transitionRow(env.ctx, grow), rows: [...env.rows, grow] };
+  const inner = { ...c.iter(env, grow), ctx: c.transitionRow(env.ctx, grow) };
   return ir.project(grouped, grow, ext.map(([n, x]) => item(c, n, x, inner)), true);
 }
 
@@ -156,7 +173,7 @@ function currentGroup(c, args, env) {
 
 function topN(c, args, env) {
   const n = c.scalar(args[0], env), src = c.table(args[1], env), row = ir.rowOf(src);
-  const inner = { ...env, rows: [...env.rows, row] }, order = [];
+  const inner = c.iter(env, row), order = [];
   for (let i = 2; i < args.length; i += 2) order.push({ expr: c.scalar(args[i], inner), desc: isDesc(args[i + 1], true) });
   if (!order.length) throw unsupported('TOPN without an order');
   return { k: 'topn', src, row, n, order, cols: src.cols, base: src.base };
@@ -213,7 +230,7 @@ function setOp(k) {
 function generate(outer) {
   return (c, args, env) => {
     const left = c.table(args[0], env), lrow = ir.rowOf(left);
-    const right = c.table(args[1], { ...env, rows: [...env.rows, lrow] });
+    const right = c.table(args[1], c.iter(env, lrow));
     return { k: 'generate', left, lrow, right, outer, cols: [...left.cols, ...right.cols], base: null };
   };
 }
@@ -263,7 +280,7 @@ function nonBlank(fn) {
     const col = c.modelColumn(args[0], env);
     const src = ir.values(col.table, env.ctx, [col], (tb, ctx) => c.scan(tb, ctx));
     const row = ir.rowOf(src, 'table');
-    const e = c.scalar(args[1], { ...env, rows: [...env.rows, row] });
+    const e = c.scalar(args[1], c.iter(env, row));
     const kept = ir.filter(src, row, ir.op('not', ir.fn('isblank', [e], 'bool', { nn: true })));
     const krow = ir.rowOf(kept, 'table');
     const v = ir.agg(fn, kept, krow, ir.col(krow, 0), col.type);
@@ -298,7 +315,10 @@ function summarizeColumns(c, args, env) {
     const active = keyCols.filter(k => on.has(k));
     let ctx = ctx0;
     for (const k of active) ctx = ctx.add({ kind: 'bind', cols: [k], val: ir.col(keyRow, keyCols.indexOf(k)) });
-    const inner = { ...env, ctx, rows: [], grouped: new Set(active), shadow: ctx0 };
+    // Its groups are a shadow filter context on the columns it groups by: their values under
+    // its filters.
+    const shadows = keyCols.length ? [...env.shadows, { cols: new Set(keyCols), src: null, ctx: ctx0 }] : env.shadows;
+    const inner = { ...env, ctx, rows: [], grouped: new Set(active), shadows };
     const items = exprs.map(([name, x]) => {
       const ignore = x.k === 'call' && (x.fn === 'IGNORE' || x.fn === 'NONVISUAL') ;
       const expr = c.scalar(ignore ? x.args[0] : x, inner);
@@ -353,9 +373,11 @@ function allExceptMod(c, args, env) {
   return { kind: 'remove', drop: ctx => { const exp = c.expandedColumns(t, ctx); return x => exp.has(x) && !keep.has(x); } };
 }
 function allSelectedMod(c, args, env) {
-  if (!args.length) return { kind: 'selected', cols: null };
+  if (!args.length) return { kind: 'selected', cols: null, clear: false };
+  const tables = args.every(a => isModelTableName(c, a, env));
   const cols = new Set(args.flatMap(a => isModelTableName(c, a, env) ? [...c.expandedColumns(c.model.table(a.name), env.ctx)] : [c.modelColumn(a, env)]));
-  return { kind: 'selected', cols };
+  // Columns no shadow covers: a table's keep their filters, named columns lose them.
+  return { kind: 'selected', cols, clear: !tables };
 }
 function useRelationship(c, args, env) {
   const a = c.modelColumn(args[0], env), b = c.modelColumn(args[1], env);

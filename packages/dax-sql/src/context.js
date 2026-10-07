@@ -2,7 +2,9 @@
 // changes of USERELATIONSHIP and CROSSFILTER. It is immutable; CALCULATE makes new ones.
 //
 // A filter constrains some model columns (`cols`) to a set of values, held one of three ways:
-//   bind  { cols: [c], val }         c is the value `val` (context transition, a group key)
+//   bind  { cols: [c], val }         c is the value `val` (context transition, a group key);
+//                                    with `implied`, a bind on a key that says as much while
+//                                    the context holds it
 //   pred  { cols, row, pred }        the values for which `pred` holds, `pred` reading them
 //                                    through `row` (a CALCULATE filter like T[c] > 5)
 //   rel   { cols, src, idx, base }   the rows of table `src`: cols[i] is its column idx[i];

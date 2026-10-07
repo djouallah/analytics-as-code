@@ -13,7 +13,7 @@
 // the foreign key when the relationship relies on referential integrity), and the filters
 // that reach it over bidirectional or many-to-many relationships, as semi-joins.
 import * as ir from './ir.js';
-import { Ctx, narrow } from './context.js';
+import { Ctx, narrow, EMPTY_CTX as EMPTY } from './context.js';
 import { semantic } from './errors.js';
 
 const lc = s => String(s).toLowerCase();
@@ -35,7 +35,7 @@ export class Emitter {
 
   // --- the query -------------------------------------------------------------------------
 
-  query({ table, row, order }) {
+  query({ table, row, order, start = [] }) {
     const b = this.table(table, new Map());
     const inner = b.render(), names = b.names();
     const r = this.alias('q');
@@ -51,13 +51,30 @@ export class Emitter {
     if (order.length) {
       const res = new WrapRes(this, null, names.map((n, i) => ({ sql: `${r}.${this.ident(n)}`, lineage: table.cols[i].lineage })), this.model.state(null));
       const scope = new Map([[row.id, res]]);
-      sql += ` ORDER BY ${order.map(o => `${this.scalar(o.expr, scope)} ${o.desc ? 'DESC NULLS LAST' : 'ASC NULLS FIRST'}`).join(', ')}`;
+      const keys = order.map(o => this.scalar(o.expr, scope));
+      if (start.length) sql += ` WHERE ${this.startAt(keys, order, start.map(v => this.scalar(v, scope)), start)}`;
+      sql += ` ORDER BY ${keys.map((k, i) => `${k} ${order[i].desc ? 'DESC NULLS LAST' : 'ASC NULLS FIRST'}`).join(', ')}`;
     }
     if (this.ctes.length) sql = `WITH ${this.ctes.join(',\n')}\n${sql}`;
     return {
       sql,
       columns: table.cols.map((c, i) => ({ name: outNames[i], dax: daxName(c), type: c.t, lineage: c.lineage ? `'${c.lineage.table.name}'[${c.lineage.name}]` : null })),
     };
+  }
+
+  // START AT: the rows from the first that is at or after the values, in the order (a blank
+  // comes first ascending, last descending). Each value counts within the rows equal on the
+  // ones before it.
+  startAt(keys, order, vals, lits) {
+    const after = i => {
+      const k = keys[i], v = vals[i], blank = lits[i].v === null;
+      if (order[i].desc) return blank ? 'FALSE' : `(${k} < ${v} OR ${k} IS NULL)`;
+      return blank ? `${k} IS NOT NULL` : `${k} > ${v}`;
+    };
+    const same = i => this.d.isNotDistinct(keys[i], vals[i]);
+    const alts = vals.map((_, i) => [...vals.slice(0, i).map((__, j) => same(j)), after(i)].join(' AND '));
+    alts.push(vals.map((_, i) => same(i)).join(' AND '));
+    return `(${alts.map(paren).join(' OR ')})`;
   }
 
   // --- tables ----------------------------------------------------------------------------
@@ -144,6 +161,19 @@ export class Emitter {
         return this.fromSql(`${name} AS ${a}`, x.cols, this.memo.get(name), a);
       }
       case 'sc': return this.summarizeColumns(x, scope);
+      case 'window': return this.windowRows(x, scope);
+      case 'withblank': {
+        // VALUES, ALL: the rows, and the table's blank row when it has one.
+        const b = this.table(x.src, scope), names = b.names();
+        const blank = this.blankRow(x.table, x.ctx, scope, bb => {
+          bb.setOut(x.cols, x.lineage.map(l => bb.res.meta(l)));
+          bb._names = names;
+          bb.out.forEach((o, i) => { o.name = names[i]; });
+          return bb.render();
+        });
+        if (!blank) return b;
+        return this.fromSql(`(${b.render()} UNION ${blank})`, x.cols, names);
+      }
       case 'prefix': {
         const b = this.wrap(this.table(x.src, scope));
         const vals = x.vals.map(v => this.scalar(v, scope));
@@ -172,19 +202,75 @@ export class Emitter {
     const a = this.alias('t');
     const b = new Block(this, `${from ?? this.source(table)} AS ${a}`, table.columns.map(c => ({ name: c.name, lineage: c, t: c.type })));
     b.res = new ScanRes(this, b, table, a, this.model.state(ctx.mods));
+    b.res.blankRow = !!from;
     if (self) {
       const [row, cols] = self, res = b.res;
       scope = withRow(scope, row, { col: i => res.meta(cols[i]), meta: m => res.meta(m) });
     }
     // The same condition once: a date range on a fact and on its date table is one.
-    b.where.push(...new Set(this.conds(table, ctx, b.res, scope, excluded)));
+    b.where.push(...new Set([...this.conds(table, ctx, b.res, scope, excluded), ...this.securityConds(table, b.res, scope)]));
     return b;
   }
 
   source(table) {
+    if (table.calc) return this.calcTableSource(table);
+    if (table.calcGroup) return this.calcGroupSource(table);
     if (this.options.tableSource) return this.options.tableSource(table);
     const s = table.source;
     return s.schema ? `${this.ident(s.schema)}.${this.ident(s.entity)}` : this.ident(s.entity);
+  }
+
+  // A calculated table: its expression, evaluated as at refresh (no filter, no security), as
+  // a CTE with the model's columns (matched to the expression's by their source names).
+  calcTableSource(table) {
+    let name = this.memo.get(table);
+    if (name) return name;
+    const x = this.options.calcTable(table);
+    const b = this.unsecured(() => this.isolated(() => this.table(x, new Map())));
+    const inner = b.names(), a = this.alias('c');
+    const strip = s => lc(String(s).replace(/^.*\[(.*)\]$/, '$1'));
+    const cols = table.columns.filter(c => !c.expr);
+    const sel = cols.map((c, i) => {
+      let j = x.cols.findIndex(o => lc(o.name) === strip(c.source));
+      if (j < 0) j = x.cols.findIndex(o => lc(o.name) === lc(c.name));
+      if (j < 0 && x.cols.length === cols.length) j = i;
+      if (j < 0) throw semantic(`calculated table '${table.name}': its expression has no column ${c.source}`);
+      return `${a}.${this.ident(inner[j])} AS ${this.ident(c.source)}`;
+    });
+    name = this.alias('ct');
+    this.ctes.push(`${name} AS ${this.d.materialized}(SELECT ${sel.join(', ')} FROM (${b.render()}) AS ${a})`);
+    this.memo.set(table, name);
+    return name;
+  }
+
+  // A calculation group: a row per item, its name and its ordinal.
+  calcGroupSource(table) {
+    const g = table.calcGroup;
+    const cols = [g.column, g.ordinal].filter(Boolean);
+    const rows = g.items.map(it => `(${this.d.str(it.name)}${g.ordinal ? `, ${this.d.num(it.ordinal)}` : ''})`);
+    if (!rows.length) return `(SELECT ${cols.map(c => `NULL AS ${this.ident(c.source)}`).join(', ')} WHERE FALSE)`;
+    return `(SELECT * FROM (VALUES ${rows.join(', ')}) AS v(${cols.map(c => this.ident(c.source)).join(', ')}))`;
+  }
+
+  // Code that writes what is evaluated without row-level security (calculated tables and
+  // columns, the security filters themselves).
+  unsecured(f) {
+    const was = this.insecure;
+    this.insecure = true;
+    try { return f(); } finally { this.insecure = was; }
+  }
+
+  // Row-level security on a scan of `table`: each role's filters, as a filter context whose
+  // relationships are those security moves along (model.securityState), so they reach the
+  // scan as other filters do: from its expanded table, and as semi-joins across relationships
+  // that filter both ways for security and many-to-many ones. A row is kept when some role
+  // keeps it.
+  securityConds(table, res, scope) {
+    const roles = this.options.security;
+    if (!roles?.length || this.insecure) return [];
+    const per = roles.map(role => this.unsecured(() => this.conds(table, role.ctx, res, scope)));
+    if (per.some(c => !c.length)) return [];
+    return [per.length === 1 ? per[0].join(' AND ') : `(${per.map(c => `(${c.join(' AND ')})`).join(' OR ')})`];
   }
 
   // A block whose input row is its output: extend it, or wrap it if it is not.
@@ -246,6 +332,72 @@ export class Emitter {
     try { return f(); } finally { this.fusions.pop(); }
   }
 
+  // --- window functions -------------------------------------------------------------------
+
+  // The relation's rows with their ordering values (__o<i>), partition values (__p<i>), and
+  // their number in the partition (__rn, ties broken by every column), its size (__n), and
+  // their rank (__rank, __drank).
+  numbered(x, scope) {
+    const b = this.wrap(this.table(x.rel, scope));
+    const s2 = withRow(scope, x.row, b.res);
+    const base = b.outList();
+    const os = x.order.map(o => this.scalar(o.expr, s2)), ps = x.parts.map(p => this.scalar(p, s2));
+    b.setOut([...x.rel.cols, ...os.map((_, i) => ({ name: `__o${i}` })), ...ps.map((_, i) => ({ name: `__p${i}` }))],
+      [...base.map(o => o.sql), ...os, ...ps]);
+    const names = b.names(), n = this.alias('w'), q = v => `${n}.${this.ident(v)}`;
+    const part = ps.length ? `PARTITION BY ${ps.map((_, i) => q(`__p${i}`)).join(', ')} ` : '';
+    const order = x.order.map((o, i) => orderTerm(q(`__o${i}`), o)).join(', ');
+    const ties = x.rel.cols.map((_, i) => `${q(names[i])} ASC NULLS FIRST`).join(', ');
+    const num = `SELECT ${n}.*, ROW_NUMBER() OVER (${part}ORDER BY ${[order, ties].filter(Boolean).join(', ')}) AS "__rn",
+      COUNT(*) OVER (${part.trim()}) AS "__n", RANK() OVER (${part}ORDER BY ${order || ties}) AS "__rank",
+      DENSE_RANK() OVER (${part}ORDER BY ${order || ties}) AS "__drank" FROM (${b.render()}) AS ${n}`;
+    return { num, names };
+  }
+
+  // The rows of the numbered relation that are the current row: its columns hold the outer
+  // values, and those with none hold a value they have in the filter context.
+  currentRows(x, scope, num, names) {
+    const y = this.alias('y'), q = i => `${y}.${this.ident(names[i])}`;
+    const conds = x.match.map(m => this.d.isNotDistinct(q(m.i), this.scalar(m.val, scope)));
+    if (x.unbound) {
+      const u = this.isolated(() => this.table(x.unbound.table, scope)), un = u.names(), a = this.alias('u');
+      conds.push(`EXISTS (SELECT 1 FROM (${u.render()}) AS ${a} WHERE ${x.unbound.idx.map((i, j) => this.d.isNotDistinct(`${a}.${this.ident(un[j])}`, q(i))).join(' AND ')})`);
+    }
+    return `SELECT * FROM (${num}) AS ${y}${conds.length ? ` WHERE ${conds.join(' AND ')}` : ''}`;
+  }
+
+  // INDEX, OFFSET, WINDOW: the rows of the relation at the position, the offset or within the
+  // window, in the current row's partition.
+  windowRows(x, scope) {
+    const { num, names } = this.numbered(x, scope);
+    const r = this.alias('x'), c = this.alias('c');
+    const xr = v => `${r}.${this.ident(v)}`, cr = v => `${c}.${this.ident(v)}`;
+    const abs = v => `CASE WHEN ${v} > 0 THEN ${v} WHEN ${v} = 0 THEN 1 ELSE ${xr('__n')} + ${v} + 1 END`;
+    let cond;
+    if (x.fn === 'offset') cond = `${xr('__rn')} = ${cr('__rn')} + ${this.scalar(x.delta, scope)}`;
+    else if (x.fn === 'index') {
+      const p = this.scalar(x.pos, scope);
+      cond = `${xr('__rn')} = CASE WHEN ${p} > 0 THEN ${p} WHEN ${p} < 0 THEN ${xr('__n')} + ${p} + 1 END`;
+    } else {
+      const f = this.scalar(x.from, scope), t = this.scalar(x.to, scope);
+      cond = `${xr('__rn')} BETWEEN ${x.fromAbs ? abs(f) : `${cr('__rn')} + ${f}`} AND ${x.toAbs ? abs(t) : `${cr('__rn')} + ${t}`}`;
+    }
+    const sel = x.rel.cols.map((_, i) => xr(names[i])).join(', ');
+    let sql;
+    if (x.needCur) {
+      const same = x.parts.map((_, i) => this.d.isNotDistinct(xr(`__p${i}`), cr(`__p${i}`)));
+      let cur = this.currentRows(x, scope, num, names);
+      // INDEX, and WINDOW with both ends absolute: once per current partition, not per row
+      // of it (only the partition counts).
+      if (x.fn === 'index' || x.fn === 'window' && x.fromAbs && x.toAbs) {
+        const k = this.alias('k');
+        cur = `SELECT DISTINCT ${x.parts.length ? x.parts.map((_, i) => `${k}."__p${i}"`).join(', ') : '1 AS one'} FROM (${cur}) AS ${k}`;
+      }
+      sql = `SELECT ${sel} FROM (${num}) AS ${r} JOIN (${cur}) AS ${c} ON ${[...same, cond].join(' AND ')}`;
+    } else sql = `SELECT ${sel} FROM (${num}) AS ${r} WHERE ${cond}`;
+    return this.fromSql(`(${sql})`, x.rel.cols, names.slice(0, x.rel.cols.length));
+  }
+
   // --- the filter context on a scan -------------------------------------------------------
 
   conds(table, ctx, res, scope, excluded = null) {
@@ -260,6 +412,7 @@ export class Emitter {
         const D = f.cols.filter(inExp);
         if (!D.length) continue;
         if (f.kind === 'bind') {
+          if (f.implied && ctx.filters.includes(f.implied)) continue;
           out.push(this.d.isNotDistinct(res.meta(D[0]), this.scalar(f.val, scope)));
           if (f.guard) out.push(paren(this.scalar(f.guard, scope, true)));
         }
@@ -286,7 +439,8 @@ export class Emitter {
     if (!f.base) {
       const b = this.table(f.src, scope), names = b.names(), a = this.alias('r');
       const sel = D.map(c => `${a}.${this.ident(names[f.idx[f.cols.indexOf(c)]])}`);
-      return this.member(D.map(c => res.meta(c)), sel, `(${b.render()}) AS ${a}`);
+      const blanks = D.some(c => this.blankSide(table, c, res, state) && mayBeBlank(f.src, f.idx[f.cols.indexOf(c)]));
+      return this.member(D.map(c => res.meta(c)), sel, `(${b.render()}) AS ${a}`, blanks, ir.freeRows(f.src).size > 0);
     }
     // Rows of a model table, as the scan's own rows: its conditions, inline.
     const chain = filterChain(f.src);
@@ -307,13 +461,28 @@ export class Emitter {
     const b = this.open(this.table(f.src, scope));
     b.setOut(cols.map(c => ({ name: c.name, lineage: c })), cols.map(c => b.res.meta(c)));
     const a = this.alias('r'), names = b.names();
-    return this.member(cols.map(c => res.meta(c)), names.map(n => `${a}.${this.ident(n)}`), `(${b.render()}) AS ${a}`);
+    // A column read through a relationship is blank for rows that match no row of its table.
+    const blanks = cols.some(c => this.blankSide(table, c, res, state) && this.blankSide(f.base, c, null, state));
+    return this.member(cols.map(c => res.meta(c)), names.map(n => `${a}.${this.ident(n)}`), `(${b.render()}) AS ${a}`, blanks, ir.freeRows(f.src).size > 0);
   }
 
-  // Whether the values `left` are a row of `from` (its columns `right`): IN for one column,
-  // EXISTS for more (which also matches blanks, as DAX does).
-  member(left, right, from) {
-    if (left.length === 1) return `${left[0]} IN (SELECT ${right[0]} FROM ${from})`;
+  // Whether a scan of `table` can read a blank in column c: on its blank row, or through a
+  // relationship (not relying on referential integrity) for rows that match no row of c's
+  // table. (A NULL stored in a column is taken as not there: SQL's comparison applies to it.)
+  blankSide(table, c, res, state) {
+    if (res?.blankRow) return true;
+    if (c.table === table) return false;
+    const path = this.model.expand(table, state, null, true).get(c.table.name);
+    return !path || path.some(h => !(h.rel.ri || this.options.assumeIntegrity));
+  }
+
+  // Whether the values `left` are a row of `from` (its columns `right`), a blank matching a
+  // blank as in DAX. IN for one column that cannot be blank on both sides; one that can, IN or
+  // else a blank in `from` (as fast as IN when `from` reads no outer row); EXISTS otherwise.
+  member(left, right, from, blanks = false, correlated = true) {
+    if (left.length === 1 && !blanks) return `${left[0]} IN (SELECT ${right[0]} FROM ${from})`;
+    if (left.length === 1 && !correlated)
+      return `(${left[0]} IN (SELECT ${right[0]} FROM ${from}) OR ${left[0]} IS NULL AND EXISTS (SELECT 1 FROM ${from} WHERE ${right[0]} IS NULL))`;
     return `EXISTS (SELECT 1 FROM ${from} WHERE ${left.map((l, i) => this.d.isNotDistinct(right[i], l)).join(' AND ')})`;
   }
 
@@ -342,10 +511,22 @@ export class Emitter {
       }
       case 'agg': return this.agg(x, scope);
       case 'exists': return `EXISTS (${this.isolated(() => this.table(x.src, scope).render())})`;
+      case 'wrank': {
+        const { num, names } = this.numbered(x, scope);
+        const cur = this.currentRows(x, scope, num, names);
+        // One current row (rows tied in the order share a rank); several give no value.
+        const c = this.alias('c'), col = x.fn === 'rownumber' ? '__rn' : x.dense ? '__drank' : '__rank';
+        return `(SELECT CASE WHEN COUNT(DISTINCT ${c}.${col}) = 1 THEN MIN(${c}.${col}) END FROM (${cur}) AS ${c})`;
+      }
+      case 'blankexists': {
+        const sql = this.blankRow(x.table, x.ctx, scope, b => { b.setOut([{ name: 'one', lineage: null }], ['1']); return b.render(); });
+        return sql ? `EXISTS (${sql})` : 'FALSE';
+      }
       case 'insub': {
         const b = this.isolated(() => this.table(x.src, scope)), names = b.names(), a = this.alias('i');
-        const s = this.member(x.e.map(e => this.scalar(e, scope)), names.map(n => `${a}.${this.ident(n)}`), `(${b.render()}) AS ${a}`);
-        return pred || x.e.length > 1 ? `(${s})` : `COALESCE(${s}, FALSE)`;
+        const blanks = x.e.some((e, j) => !e.nn && mayBeBlank(x.src, j));
+        const s = this.member(x.e.map(e => this.scalar(e, scope)), names.map(n => `${a}.${this.ident(n)}`), `(${b.render()}) AS ${a}`, blanks, ir.freeRows(x.src).size > 0);
+        return pred ? `(${s})` : `COALESCE(${s}, FALSE)`;
       }
     }
     throw new Error(`emit: scalar ${x.k}`);
@@ -383,8 +564,11 @@ export class Emitter {
     switch (x.op) {
       case 'add': case 'sub': {
         const sub = x.op === 'sub';
-        if ((l.t === 'datetime' || l.t === 'date') && ir.isNum(r.t)) return d.fn('add_interval', [S(l), sub ? `-(${S(r)})` : S(r), "'day'"]);
-        if (sub && (l.t === 'datetime' || l.t === 'date') && (r.t === 'datetime' || r.t === 'date')) return d.fn('datediff', [S(r), S(l), "'day'"]);
+        const date = t => t === 'datetime' || t === 'date';
+        if (date(l.t) && ir.isNum(r.t)) return d.fn('add_interval', [S(l), sub ? `-(${S(r)})` : S(r), "'day'"]);
+        if (!sub && ir.isNum(l.t) && date(r.t)) return d.fn('add_interval', [S(r), S(l), "'day'"]);
+        if (sub && date(l.t) && date(r.t)) return d.fn('datediff', [S(r), S(l), "'day'"]);
+        if (date(l.t) && date(r.t)) return d.fn('add_datetimes', [S(l), S(r)]);
         const N = v => this.num(v, scope);
         if (l.nn && r.nn) return `(${N(l)} ${sub ? '-' : '+'} ${N(r)})`;
         if (l.nn) return `(${N(l)} ${sub ? '-' : '+'} COALESCE(${S(r)}, 0))`;
@@ -472,7 +656,7 @@ export class Emitter {
     const extra = {};
     if (x.fn === 'concat') {
       extra.delim = this.scalar(x.a[0], scope);
-      extra.order = (x.order ?? []).map(o => `${this.scalar(o.expr, scope)}${o.desc ? ' DESC' : ''}`);
+      extra.order = (x.order ?? []).map(o => `${this.scalar(o.expr, scope)}${o.desc ? ' DESC NULLS LAST' : ' ASC NULLS FIRST'}`);
       return this.d.agg('concat', this.d.text(arg, x.arg.t), extra);
     }
     if (x.fn === 'pct_inc' || x.fn === 'pct_exc') extra.k = this.scalar(x.a[0], scope);
@@ -559,12 +743,26 @@ export class Emitter {
     if (!rels.length || this.options.blankRows === false) return null;
     const nulls = table.columns.filter(c => !c.expr).map(c => `${c.type === 'variant' ? 'NULL' : this.d.cast('NULL', c.type)} AS ${this.ident(c.source)}`);
     const b = this.isolated(() => this.scanBlock(table, ctx, scope, null, null, `(SELECT ${nulls.join(', ')})`));
-    const orphans = rels.map(r => {
-      const f = this.alias('o'), d = this.alias('o');
-      return `EXISTS (SELECT 1 FROM ${this.source(r.from.table)} AS ${f} LEFT JOIN ${this.source(table)} AS ${d} ON ${d}.${this.ident(r.to.source)} = ${f}.${this.ident(r.from.source)} WHERE ${d}.${this.ident(r.to.source)} IS NULL)`;
-    });
-    b.where.push(`(${orphans.join(' OR ')})`);
+    b.where.push(`(${this.orphans(table)})`);
     return out(b);
+  }
+
+  // Whether the table has a blank row: some row on the many side of a relationship to it has a
+  // key it lacks, or that table has a blank row itself (whose key matches nothing: a sale of an
+  // unknown product is in the blank category too).
+  orphans(table, seen = new Set()) {
+    seen.add(table);
+    const parts = [];
+    for (const r of this.model.relationships) {
+      if (r.to.table !== table || r.fromCard !== 'many' || r.toCard !== 'one' || r.ri) continue;
+      const f = this.alias('o'), d = this.alias('o');
+      parts.push(`EXISTS (SELECT 1 FROM ${this.source(r.from.table)} AS ${f} LEFT JOIN ${this.source(table)} AS ${d} ON ${d}.${this.ident(r.to.source)} = ${f}.${this.ident(r.from.source)} WHERE ${d}.${this.ident(r.to.source)} IS NULL)`);
+      if (!seen.has(r.from.table)) {
+        const inner = this.orphans(r.from.table, seen);
+        if (inner) parts.push(inner);
+      }
+    }
+    return parts.join(' OR ');
   }
 
   // ROW(...): one row, its aggregates fused where they can be.
@@ -779,14 +977,25 @@ class Res {
     if (!this.block) throw semantic(`'${hop.to.table.name}' cannot be joined here`);
     this.block.joins.push(`LEFT JOIN ${this.em.source(hop.to.table)} AS ${a} ON ${a}.${this.em.ident(hop.to.source)} = ${from}`);
     this.joinAlias.set(key, a);
+    (this.joinKey ??= new Map()).set(a, `${a}.${this.em.ident(hop.to.source)}`);
     return a;
   }
   physical(alias, m) {
     if (!m.expr) return `${alias}.${this.em.ident(m.source)}`;
-    // A calculated column: its expression on this row, in an empty filter context.
+    // A calculated column: its expression on this row, in an empty filter context and without
+    // row-level security, as computed at refresh. Blank on the blank row (a join that found
+    // no row, or the blank row itself).
+    if (alias === this.alias && this.blankRow) return this.em.d.cast('NULL', m.type);
     const { row, expr } = this.em.options.calcColumn(m);
     const res = new ScanRes(this.em, this.block, m.table, alias, this.state);
-    return `(${this.em.isolated(() => this.em.scalar(expr, new Map([[row.id, res]])))})`;
+    // One that needs its own values (a window function over its own table) cannot be written.
+    const busy = (this.em.calcBusy ??= new Set());
+    if (busy.has(m)) throw semantic(`calculated column '${m.table.name}'[${m.name}] depends on itself`);
+    busy.add(m);
+    let sql;
+    try { sql = `(${this.em.unsecured(() => this.em.isolated(() => this.em.scalar(expr, new Map([[row.id, res]]))))})`; } finally { busy.delete(m); }
+    const key = this.joinKey?.get(alias);
+    return key ? `CASE WHEN ${key} IS NULL THEN NULL ELSE ${sql} END` : sql;
   }
 }
 
@@ -825,6 +1034,39 @@ function withRow(scope, row, res) {
   return s;
 }
 const paren = s => `(${s})`;
+
+// An ORDER BY term with DAX's blanks: DEFAULT puts a numeric blank between the negative
+// numbers and zero, and a text blank before every text; FIRST and LAST say.
+function orderTerm(v, o) {
+  const dir = o.desc ? 'DESC' : 'ASC';
+  if (o.blanks === 'first') return `${v} ${dir} NULLS FIRST`;
+  if (o.blanks === 'last') return `${v} ${dir} NULLS LAST`;
+  if (ir.isNum(o.t)) return `COALESCE(${v}, 0) ${dir}, (${v} IS NULL) ${o.desc ? 'ASC' : 'DESC'}`;
+  return `${v} ${dir} NULLS ${o.desc ? 'LAST' : 'FIRST'}`;
+}
+
+// Whether a table can hold the blank row (and so a key matched against it can be blank).
+// Whether column i of table x can hold a blank, as far as the compiler can tell: a constant
+// is one or not; a model table's own column is not (a NULL stored in it aside); the blank row
+// is; anything else may be.
+function mayBeBlank(x, i) {
+  if (i == null || i < 0) return true;
+  const lit = v => v?.k === 'lit' && v.v !== null;
+  switch (x.k) {
+    case 'rows': return x.rows.some(r => !lit(r[i]));
+    case 'onerow': return !lit(x.vals[i]) && !x.vals[i]?.nn;
+    case 'distinct': case 'shared': case 'filter': case 'topn': return mayBeBlank(x.src, i);
+    case 'project': {
+      if (x.keep && i < x.src.cols.length) return mayBeBlank(x.src, i);
+      const e = x.items[x.keep ? i - x.src.cols.length : i]?.expr;
+      if (e?.k === 'col' && e.row === x.row) return mayBeBlank(x.src, typeof e.ref === 'number' ? e.ref : x.src.cols.findIndex(c => c.lineage === e.ref));
+      return !e?.nn;
+    }
+    case 'scan': return !(x.cols[i]?.lineage?.table === x.table);
+    case 'union': case 'intersect': case 'except': return x.srcs.some(s => mayBeBlank(s, i));
+  }
+  return true;
+}
 
 // A filter's table as FILTER(..FILTER(scan)..): the scan and the predicates.
 function filterChain(x) {

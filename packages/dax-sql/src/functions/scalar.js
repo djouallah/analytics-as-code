@@ -3,6 +3,7 @@
 import * as ir from '../ir.js';
 import { semantic, unsupported } from '../errors.js';
 import { dateLit } from '../ir.js';
+import { numberFormat, dateFormat, formatKind, isNamedDate } from '../format.js';
 
 const s = (c, a, env) => c.scalar(a, env);
 const opt = (c, a, env, dflt) => (a && a.k !== 'empty' ? c.scalar(a, env) : dflt);
@@ -112,53 +113,31 @@ function substitute(c, args, env) {
 function concatenate(c, args, env) { return ir.op('concat', s(c, args[0], env), s(c, args[1], env)); }
 function combineValues(c, args, env) { return ir.fn('combinevalues', args.map(x => s(c, x, env)), 'string', { nn: true }); }
 
-// FORMAT(value, "pattern"): the common date and number patterns.
+// FORMAT(value, "pattern"[, "en-US"]): the custom and named number and date patterns
+// (format.js reads them; the dialect writes them). A blank formats as "", text as itself.
 function format(c, args, env) {
-  const x = s(c, args[0], env), p = args[1];
-  if (p?.k !== 'str') throw unsupported('FORMAT with a pattern that is not a constant');
-  const fmt = p.v;
-  if (x.t === 'datetime' || x.t === 'date') return ir.fn('format_date', [x, ir.lit(datePattern(fmt), 'string')], 'string', { strict: true });
-  return ir.fn('format_number', [x, ir.lit(JSON.stringify(numberPattern(fmt)), 'string')], 'string', { strict: true });
-}
-const NAMED_DATES = { 'short date': 'M/d/yyyy', 'long date': 'dddd, mmmm d, yyyy', 'general date': 'M/d/yyyy h:nn:ss AM/PM',
-  'short time': 'hh:nn', 'long time': 'h:nn:ss AM/PM', 'medium date': 'dd-mmm-yy' };
-function datePattern(fmt) {
-  let f = NAMED_DATES[fmt.toLowerCase()] ?? fmt, out = '', i = 0, afterHour = false;
-  const tok = [['yyyy', '%Y'], ['yy', '%y'], ['mmmm', '%B'], ['mmm', '%b'], ['dddd', '%A'], ['ddd', '%a'], ['dd', '%d'], ['d', '%-d'],
-    ['hh', '%H'], ['h', '%-H'], ['nn', '%M'], ['n', '%-M'], ['ss', '%S'], ['s', '%-S'], ['AM/PM', '%p'], ['am/pm', '%p'], ['q', '%Q']];
-  if (/AM\/PM/i.test(f)) tok.splice(8, 2, ['hh', '%I'], ['h', '%-I']);
-  while (i < f.length) {
-    if (f.startsWith('mm', i) || f[i] === 'm' || f[i] === 'M') {
-      const two = f.startsWith('mm', i) || f.startsWith('MM', i);
-      if (!f.startsWith('mmm', i)) {
-        out += afterHour ? (two ? '%M' : '%-M') : (two ? '%m' : '%-m');
-        i += two ? 2 : 1;
-        continue;
-      }
-    }
-    const t = tok.find(([k]) => f.startsWith(k, i));
-    if (t) {
-      if (t[1] === '%Q') throw unsupported('the quarter (q) in a FORMAT pattern');
-      out += t[1];
-      afterHour = /%-?[HI]/.test(t[1]);
-      i += t[0].length;
-      continue;
-    }
-    if (f[i] === '\\' && i + 1 < f.length) { out += f[i + 1]; i += 2; continue; }
-    if (/[0#]/.test(f[i])) throw unsupported(`FORMAT pattern "${fmt}" on a date`);
-    out += f[i] === '%' ? '%%' : f[i];
-    i++;
+  if (args.length < 2) throw semantic('FORMAT needs a value and a format string');
+  let x = s(c, args[0], env);
+  const p = s(c, args[1], env);
+  if (p.k !== 'lit' || (p.v !== null && typeof p.v !== 'string')) throw unsupported('FORMAT with a format string that is not a constant');
+  if (args[2] && args[2].k !== 'empty') {
+    const l = s(c, args[2], env);
+    if (l.k !== 'lit' || !/^en(-us)?$/i.test(String(l.v ?? ''))) throw unsupported('FORMAT with a locale other than en-US');
   }
-  return out;
+  return formatValue(x, p.v ?? '');
 }
-function numberPattern(fmt) {
-  const named = { 'general number': null, fixed: '0.00', standard: '#,##0.00', percent: '0.00%', currency: '$#,##0.00', scientific: 'sci' };
-  let f = fmt.toLowerCase() in named ? named[fmt.toLowerCase()] : fmt;
-  if (f === null) return { general: true };
-  if (f === 'sci') return { scientific: true, decimals: 2 };
-  const m = /^([^0#,.]*)([#,0]+)(?:\.(0+))?(%?)([^0#]*)$/.exec(f);
-  if (!m) throw unsupported(`FORMAT pattern "${fmt}"`);
-  return { prefix: m[1], thousands: m[2].includes(','), decimals: m[3]?.length ?? 0, percent: m[4] === '%', suffix: m[5] };
+function formatValue(x, fmt) {
+  if (x.t === 'blank') return ir.lit('', 'string');
+  // Values of several kinds (IF(c, 1.5, "x")): each branch formatted as its kind.
+  if (x.k === 'case' && x.t === 'variant') return ir.kase(x.w.map(([c, v]) => [c, formatValue(v, fmt)]), formatValue(x.e, fmt), 'string');
+  if (x.t === 'string' || x.t === 'variant') return ir.fn('coalesce', [x, ir.lit('', 'string')], 'string', { nn: true });
+  const date = x.t === 'datetime' || x.t === 'date', kind = formatKind(fmt);
+  // A date with a number pattern is its serial number; a number with a date pattern, the date
+  // of that serial number (as Visual Basic reads them).
+  if (date && kind === 'number') x = ir.fn('date_serial', [x], 'double', { strict: true });
+  else if (!date && x.t !== 'bool' && (kind === 'date' || isNamedDate(fmt))) x = ir.fn('serial_date', [x], 'datetime', { strict: true });
+  if (x.t === 'datetime' || x.t === 'date') return ir.fn('format_date', [x, ir.lit(JSON.stringify(dateFormat(fmt)), 'string')], 'string', { nn: true });
+  return ir.fn('format_number', [x, ir.lit(JSON.stringify(numberFormat(fmt)), 'string')], 'string', { nn: true });
 }
 
 function blankFn() { return ir.BLANK; }

@@ -4,6 +4,7 @@
 //   date dt"2024-01-31" (v the text inside)
 //   id   an identifier, or a 'quoted name' (q: true)
 //   col  [name] (v without brackets, ]] unescaped)
+//   param @name, a query parameter
 //   op   an operator or punctuation
 import { syntax } from './errors.js';
 
@@ -84,6 +85,12 @@ export function lex(src) {
     if (/[0-9]/.test(c) || (c === '.' && /[0-9]/.test(src[i + 1] ?? ''))) {
       const m = /^(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/.exec(src.slice(i));
       out.push({ t: 'num', v: m[0], at, end: i + m[0].length });
+      i += m[0].length;
+      continue;
+    }
+    if (c === '@' && /[\p{L}_]/u.test(src[i + 1] ?? '')) {
+      const m = /^@([\p{L}_][\p{L}\p{N}_]*)/u.exec(src.slice(i));
+      out.push({ t: 'param', v: m[1], at, end: i + m[0].length });
       i += m[0].length;
       continue;
     }

@@ -10,7 +10,9 @@
 //   { k:'row', items }                (a, b) — a row, left of IN or inside { }
 //   { k:'table', rows }               { 1, 2 } or { (1, "a"), (2, "b") }
 //   { k:'var', defs: [{ name, e }], body }
-// A query: { defines: [...], evaluates: [{ e, order: [{ e, desc }] }] } where a define is
+//   { k:'param', name }               @name, a query parameter
+// A query: { defines: [...], evaluates: [{ e, order: [{ e, desc }], start: [value] }] } where a
+// define is
 //   { kind:'measure'|'column', table, name, e } | { kind:'var'|'table', name, e }
 import { lex } from './lexer.js';
 import { syntax } from './errors.js';
@@ -86,8 +88,14 @@ class Parser {
           order.push({ e: o, desc });
         } while (this.eat(','));
       }
-      if (this.isKw('START')) throw this.err('START AT is not supported');
-      evaluates.push({ e, order });
+      const start = [];
+      if (this.eat('START')) {
+        if (!order.length) throw this.err('START AT needs an ORDER BY');
+        this.need('AT');
+        do start.push(this.expr()); while (this.eat(','));
+        if (start.length > order.length) throw this.err('START AT has more values than ORDER BY has columns');
+      }
+      evaluates.push({ e, order, start });
     }
     if (!evaluates.length) throw this.err('expected EVALUATE');
     return { defines, evaluates };
@@ -164,6 +172,7 @@ class Parser {
     if (t.t === 'str') return { k: 'str', v: t.v, pos };
     if (t.t === 'date') return { k: 'date', v: t.v, pos };
     if (t.t === 'col') return { k: 'col', table: null, name: t.v, pos };
+    if (t.t === 'param') return { k: 'param', name: t.v, pos };
     if (t.t === 'op' && t.v === '(') {
       const first = this.expr();
       if (this.eat(',')) {
@@ -193,6 +202,17 @@ class Parser {
       }
       const up = t.v.toUpperCase();
       if (!t.q && (up === 'TRUE' || up === 'FALSE')) return { k: 'bool', v: up === 'TRUE', pos };
+      // ORDERBY's order: ASC or DESC, then BLANKS FIRST, BLANKS LAST or BLANKS DEFAULT.
+      if (!t.q && (up === 'ASC' || up === 'DESC' || up === 'BLANKS')) {
+        const blanks = up === 'BLANKS' ? t : this.tok?.t === 'id' && !this.tok.q && this.tok.v.toUpperCase() === 'BLANKS' ? this.tok : null;
+        if (blanks) {
+          if (blanks !== t) this.i++;
+          const w = this.tok;
+          if (w?.t !== 'id' || !['FIRST', 'LAST', 'DEFAULT'].includes(w.v.toUpperCase())) throw this.err('expected FIRST, LAST or DEFAULT after BLANKS');
+          this.i++;
+          return { k: 'name', name: up === 'BLANKS' ? 'ASC' : t.v, blanks: w.v.toLowerCase(), pos };
+        }
+      }
       if (!t.q && KEYWORDS.has(up)) { this.i--; throw this.err(`unexpected ${t.v}`); }
       return { k: 'name', name: t.v, pos };
     }

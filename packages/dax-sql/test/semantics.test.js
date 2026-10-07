@@ -248,7 +248,9 @@ test('SELECTEDVALUE, LOOKUPVALUE, CONCATENATEX', async () => {
   const row = r('Color', 'name');
   await eq('EVALUATE SUMMARIZECOLUMNS(Product[Color], "name", SELECTEDVALUE(Product[Name], "many"))', [row('Red', 'many'), row('Black', 'many'), row('Blue', 'Cap')]);
   await eq('EVALUATE ROW("p", LOOKUPVALUE(Product[Price], Product[Name], "Cap"))', [{ p: 20 }]);
-  await eq('EVALUATE ROW("c", CONCATENATEX(VALUES(Customer[City]), Customer[City], ", ", Customer[City], ASC))', [{ c: 'Berlin, London, Paris' }]);
+  await eq('EVALUATE ROW("c", CONCATENATEX(DISTINCT(Customer[City]), Customer[City], ", ", Customer[City], ASC))', [{ c: 'Berlin, London, Paris' }]);
+  // VALUES lists the blank row (customer 99 is not in Customer), first when ascending.
+  await eq('EVALUATE ROW("c", CONCATENATEX(VALUES(Customer[City]), Customer[City], ", ", Customer[City], ASC))', [{ c: ', Berlin, London, Paris' }]);
 });
 
 test('DEFINE MEASURE and a query VAR', () => eq(

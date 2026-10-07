@@ -5,10 +5,24 @@
 // (active) and by ShipDate (inactive); Returns -> Product, Returns -> Date. Date is a date
 // table (dataCategory Time). Sale 11 is to customer 99, who is not in Customer. CityTarget
 // is related to Customer many-to-many on the city, Customer filtering it.
+//
+// Also: two calculated tables (Big Products, from Product; Days, CALENDARAUTO), two calculation
+// groups (Time Calc, precedence 10; Scale, precedence 20), a field parameter (Fields), and
+// three roles (Paris, RedOnly, Me: the customer named USERPRINCIPALNAME()).
 const col = (name, dataType, extra = {}) => ({ name, dataType, sourceColumn: name, ...extra });
 const table = (name, columns, measures = [], extra = {}) => ({
   name, columns, measures: measures.map(([n, e]) => ({ name: n, expression: e })),
   partitions: [{ name, source: { type: 'entity', entityName: name } }], ...extra,
+});
+
+const calcTable = (name, expression, cols) => ({
+  name, columns: cols.map(([n, dataType, sourceColumn, extra]) => ({ name: n, dataType, type: 'calculatedTableColumn', sourceColumn, ...extra })),
+  partitions: [{ name, source: { type: 'calculated', expression } }],
+});
+const calcGroup = (name, precedence, items) => ({
+  name, calculationGroup: { precedence, calculationItems: items.map(([n, expression], ordinal) => ({ name: n, expression, ordinal })) },
+  columns: [{ name, dataType: 'string', sourceColumn: 'Name', sortByColumn: 'Ordinal' }, { name: 'Ordinal', dataType: 'int64', sourceColumn: 'Ordinal' }],
+  partitions: [{ name: 'Partition', source: { type: 'calculationGroup' } }],
 });
 
 export const bim = {
@@ -54,6 +68,26 @@ export const bim = {
       table('Returns', [col('Date', 'dateTime'), col('ProductKey', 'int64'), col('ReturnQty', 'int64')],
         [['Returned', 'SUM(Returns[ReturnQty])']]),
       table('CityTarget', [col('City', 'string'), col('Target', 'int64')], [['Target', 'SUM(CityTarget[Target])']]),
+      calcTable('Big Products', 'FILTER(Product, Product[Price] >= 100)', [
+        ['ProductKey', 'int64', 'Product[ProductKey]'], ['Name', 'string', 'Product[Name]'], ['Price', 'double', 'Product[Price]']]),
+      calcTable('Days', 'CALENDARAUTO()', [['Date', 'dateTime', '[Date]']]),
+      calcGroup('Time Calc', 10, [
+        ['Current', 'SELECTEDMEASURE()'],
+        ['YTD', "CALCULATE(SELECTEDMEASURE(), DATESYTD('Date'[Date]))"],
+        ['PY', "CALCULATE(SELECTEDMEASURE(), SAMEPERIODLASTYEAR('Date'[Date]))"],
+        ['YOY', 'SELECTEDMEASURE() - CALCULATE(SELECTEDMEASURE(), \'Time Calc\'[Time Calc] = "PY")'],
+        ['Name', 'SELECTEDMEASURENAME()'],
+      ]),
+      calcGroup('Scale', 20, [['x2', 'SELECTEDMEASURE() * 2'], ['plus1', 'SELECTEDMEASURE() + 1']]),
+      calcTable('Fields', '{ ("Sales", NAMEOF(\'Sales\'[Sales Amount]), 0), ("Quantity", NAMEOF(\'Sales\'[Quantity]), 1), ("Color", NAMEOF(\'Product\'[Color]), 2) }', [
+        ['Fields', 'string', '[Value1]'],
+        ['Fields Fields', 'string', '[Value2]', { extendedProperties: [{ type: 'json', name: 'ParameterMetadata', value: { version: 3, kind: 2 } }] }],
+        ['Fields Order', 'int64', '[Value3]']]),
+    ],
+    roles: [
+      { name: 'Paris', modelPermission: 'read', tablePermissions: [{ name: 'Customer', filterExpression: 'Customer[City] = "Paris"' }] },
+      { name: 'RedOnly', modelPermission: 'read', tablePermissions: [{ name: 'Product', filterExpression: 'Product[Color] = "Red"' }] },
+      { name: 'Me', modelPermission: 'read', tablePermissions: [{ name: 'Customer', filterExpression: 'Customer[Customer] = USERPRINCIPALNAME()' }] },
     ],
     relationships: [
       { name: 'sales_product', fromTable: 'Sales', fromColumn: 'ProductKey', toTable: 'Product', toColumn: 'ProductKey' },
