@@ -198,16 +198,18 @@ the deployed model). The two Fabric apps are named by their engine (the owner's,
 is not the end of the world if one does. So a change that touches what they share (the
 model, the `mart` tables, the page's files) is checked on the public page first and goes
 out only when that check is clean, and where the clients pull apart the public page wins.
-The page has the layers of a BI stack, each in its own place under `dashboard/github/` (the
+The page has the layers of a BI stack, each in its own place under `dashboard/github-dax/` (the
 table of what stands in each place in a real product is in `ARCHITECTURE.md`), and two hosts
 that run it on DuckDB-WASM: GitHub Pages and a Fabric app. Everything is the same file on
 both except `storage/data.js`. On the third host, the Fabric app on VertiPaq, the last three
 layers are Power BI's, and of this list it has `index.html`, its own `storage/data.js` and
 the Logs tab.
-- consumer: `index.html`
-- query language: DAX, written in the page
+- consumer: `index.html` (the charts) and `frontend/queries.js` (what each chart asks)
+- query language: the page's queries, objects of the model's fields (`select`, `where`, ...),
+  which the compiler writes as DAX
 - semantic model: `semantic_model/model.bim` (at the top of the repo), a Tabular model in TMSL
-- compiler: `semantic/compiler.js`, the model to views and the DAX to SQL
+- compiler: `semantic/compiler.js`, the model to views, the page's queries to DAX and the DAX
+  to SQL
 - engine: DuckDB-WASM
 - storage: `storage/data.js`, `storage/history.js`
 - and the Logs tab, `frontend/`
@@ -218,72 +220,119 @@ page uses and throws on anything else (`DAX: X is not supported`), and where DAX
 differ the result is SQL's: a blank is a NULL, and there is no filter context (a filter is a boolean argument of `CALCULATETABLE` or
 `CALCULATE`). Its rows are DAX's: `SUMMARIZECOLUMNS` leaves out a group whose measures are
 all blank (a `HAVING`), and `TOPN` is descending unless `ASC` and keeps the rows tied with
-the n-th (`QUALIFY RANK()`). A chart that needs a new construct gets it in `compiler.js`, as one more case;
-don't grow it into a general engine. Of the rules a query compiler applies on its own, it
+the n-th (`QUALIFY RANK()`). Don't grow it into a general engine. Of the rules a query compiler applies on its own, it
 applies one, when a join is needed (below). Which table a measure reads is the model's rule,
 which the compiler answers from the query; which grain a date range gets, and MW to MWh, are
 still the page's.
-**The page's DAX has to be right in DAX, not only through the compiler** (2026-10-06): the
-Fabric app on VertiPaq sends it to Power BI as written. Where the two would differ, the
-query is written for DAX and the compiler gets the case. Found so far: a filter inside
-`CALCULATE` replaces the ones around it on the same column, so the KPI deltas and "Right
-now"'s generator column (a filter on the fuel it is grouped by) wrap theirs in
-`KEEPFILTERS`, which the compiler reads as the filter itself; and a fact's own column does
-not filter a dimension, so a query that reads a unit's attribute per unit
-(`SELECTEDVALUE(dim_duid[StationName])`) groups by `dim_duid[DUID]`, which the compiler
-reads off the fact.
+**The page knows no DAX** (the owner's, 2026-10-07: an agent must not be able to write
+arbitrary DAX, inline calculations and the like into the page; a query asks the way a report
+visual does; and "nothing, zero" about DAX in `index.html`: `grep -i dax` finds nothing there
+or in `frontend/queries.js`). A query is an object of the model's fields, and these words only:
+`select` (a column `'table.column'` grouped by, a measure by its name `'Generation MW'`, or
+`{ min | max: column }`, a key's first or last value), `where` (conditions on columns: `= <> < <= > >= between in notIn blank
+notBlank`, and `{ any: [...] }`; a value is a string, a number, true or false, or a date), `having` (on a value of the select), `totals` (a subtotal
+over some of the select's columns), `orderBy` and `top`. `toDax` in `compiler.js` writes its
+DAX, checking each column and measure against `model.bim`, and `query()` refuses DAX text.
+What DAX needs that a query does not say is the compiler's to add: a query of a dimension's
+columns alone leaves out the blank row DAX gives a dimension whose key a fact names and it
+lacks (`dim_duid`, `dim_interconnector`).
+**The words, and the compiler's cases for the measures, are frozen**: a new one is the
+owner's to add, never a page's or an agent's. What a query cannot say is a measure of the
+model, or a column of it. Power BI is the idea, not the format:
+none of its formats is copied, ported or kept compatible (the owner's, 2026-10-07).
+**The DAX the compiler writes has to be right in DAX, not only through the compiler**
+(2026-10-06): it is run against the deployed model before a change goes out. Found so far: a
+fact's own column does not filter a dimension, so a query that reads a unit's attribute per
+unit (its station) groups by `dim_duid[DUID]`, which the compiler reads off the fact.
 
-**A figure the model can express is a measure there, the one Power BI calls, and the page
-asks for it** (the owner's, 2026-10-05, angrily, on finding that the page worked most of its
-figures out itself: "the whole point is to use the same semantic model"; and 2026-10-06, on
-finding it still divided measures itself: "if something makes sense to be done using custom
-formula then it is fine, but the rule is if the measure can be expressed upstream in the
-semantic model then it should be there"). An average, a share, a rate or a factor is never
-rebuilt in `index.html` from its parts, least of all one the model already has: for a day
-the page bypassed `[Capacity factor]`, `[Renewable share]` and `[Curtailment rate]` because
-the compiler could not translate a measure over two facts. When that happens the compiler
-gets the case, not the page the formula. A query groups, filters and names measures. What
-stays the page's, each for its reason:
-- the Flows readout: the renewable share of the frame being played, from the unit rows
-  the animation already holds (a measure would be a query per frame);
-- shaping rows: rename, add up the rows of an additive measure (the
-  units of a station or an owner, the stack for a sparkline, the series' averages for the
-  total);
-- rows as they are stored, which are not figures: the filter lists, the newest interval,
-  the Flows rows, the first and last key of a table;
-- presentation: a share of what is shown, the change between two values of a measure.
-A figure that is not a measure yet becomes one in `model.bim` first. Analyze is not part of
-this: it is SQL.
+**The page is a renderer: it works out no figure** (the owner's, 2026-10-05, angrily, on
+finding that the page worked most of its figures out itself: "the whole point is to use the
+same semantic model"; 2026-10-06: "if the measure can be expressed upstream in the semantic
+model then it should be there"; and 2026-10-07, on reading a list of what the page was still
+allowed to compute: "i never allowed js to hold logic, it was supposed to be mechanically
+rendering nothing more"). A figure is a measure of the model, the one Power BI calls; a total
+is a `totals` row; a group is a column of the model (`dim_duid[Plant]`, `[Owner]`,
+`[Storage]`); an order is an `orderBy`; a share of what is shown is `[Generation share]`; a
+change against the days before is a `[... change]` measure. When the model or the compiler
+cannot say something, the model gets the measure or the column, or the compiler the case,
+never the page the formula. What numbers the page does handle is how it draws (an axis cut
+at a percentile, a bubble's size, a layout, a number written as text, which row is the
+largest), and all of it is in `dashboard/github-dax/frontend/draw.js`.
+**`scripts/parity/page_lint.mjs` enforces it** (`build.yml`, on every push): no `+ - * / %`
+on numbers, no `+= -=`, no `.reduce()` in the script of `index.html` or in `queries.js`; it
+does not read `draw.js`, which a review reads instead. The rows the page uses as they are
+stored are not figures: the filter lists, the newest interval, the Flows rows (a unit's MW,
+a link's flow and limits).
+Two things the page shows less of since 2026-10-07, because they were the page's own logic:
+the Flows events under the clock (a jump of a link or a price between two intervals) and how
+long a link has had no flow; and the hero's "Other" has no share (the share of several fuels
+together is no measure).
 
-**The Analyze tab is SQL, and only SQL**: its box, the two builders that fill it
-(`buildAnalyzeSQL`, `buildGenPriceSQL`) and the `sql` filter helpers they use. It reads the
-same views. The compiler never sees text a user typed: `query()` translates what
-starts with `EVALUATE`, and only the page's own queries do. Don't make the box accept DAX.
+**The Analyze tab is SQL, and only SQL**: a box over the views the compiler builds (the
+example lists them, with their columns), which shows the stored columns, not the model's
+measures, and says so. The page writes no SQL into it (until 2026-10-07 two builders wrote
+SQL from the page's filters, a second query language with figures of its own: net MW for
+generation, a plain average of daily prices). The compiler never sees text a user typed:
+`query()` translates a query object, which only the page's own queries are, and refuses DAX
+text. Don't make the box accept DAX. Its CSV is the rows of its SQL (`draw.js`'s `writeCsv`).
 
-`index.html` is the one file at the top of `dashboard/github/`: it is the site's URL, and `data.js`
+**The compiler is checked against the model** (2026-10-07): `scripts/parity/page_queries.mjs`
+calls every member of `queries.js` the way `index.html` does, over 12 page states, and runs
+each query's SQL on the deployed `.duckdb` files; `scripts/parity_model.py` asks the deployed
+model the same DAX and compares the rows (to a cent, or a part in a million: VertiPaq's
+fixed decimal). `deploy_model.yml` runs it after `check_model.py`. A new query of the page
+is in it once `asked()` there calls it. From a laptop it runs over REST with a user token
+(`POWERBI_TOKEN`, `WS_ID`), which answers at most 100,000 rows. Its first run found: the
+curtailment by month with units picked did not compile (no view joined a fact to two
+dimensions: now `<fact>_star`), a count of no rows was 0 where DAX gives blank, and AEMO
+spelling a station two ways, which VertiPaq folds (text is case-insensitive there) and
+DuckDB did not (now one spelling per name in `dim_duid`). Its first run in CI found that DAX does
+not filter a query of a fact's own columns by a dimension unless a measure of it is blank
+there: the Flows units and links of one region came back for every region. So such a query
+selects a measure (`[Average MW]` for a unit's MW), and a measure it selects is blank where
+there are no rows (`[No flow]` is 1 or 0, not a boolean: a boolean measure is never blank).
+A result above 20,000 rows is not asked of the model, only listed (`not asked`) with its
+count: a few results of 2 million rows throttled the capacity (20 s on every query after
+them), fetched or under `COUNTROWS`, which computes the rows all the same. The same DAX is
+compared at the states where it is smaller. The check asks only the queries whose key
+changed since the commit of the last green run of `deploy_model.yml` (dispatch `since` to
+name another commit, `since=all` for every query): the DAX and SQL without their literals,
+and the DAX of every measure the query reaches (a changed measure counts whichever side of
+an `IF` the query takes, so it asks more than it must, never less). The queries are built
+again from that commit's own `queries.js`, compiler and model; one it does not have counts
+as changed. All 409 under throttling did not fit in 30 minutes (run 37611743795); a query
+over 20 s means the capacity is throttling, and the check waits 5 minutes after it.
+`publish=false` runs the check alone, on the model as deployed: publishing needs memory the
+model may not have left (3,069 MB of a 3 GB limit after a day of parity, run 37617689613).
+
+`index.html` is the one file at the top of `dashboard/github-dax/`: it is the site's URL, and `data.js`
 finds `data/` from the page's URL. The deployed tree is the repo tree, so a relative import
 resolves the same locally and deployed, with one exception: `model.bim` is not in this
 folder. Both builds (`build.yml`, `dashboard/fabric_app_wasm/build.mjs`) copy
 `semantic_model/model.bim` to `semantic/model.bim`, next to the compiler that fetches it,
 and anything that serves the page from the repo has to do the same.
-- `dashboard/github/index.html` is the page: charts, and DAX that names the model's tables, columns
-  and measures (`fct_summary[mw]`, `dim_duid[FuelSourceDescriptor]`, `[Capture price]`). **It
-  joins nothing** and names no view (outside Analyze and `data.has('v_...')`). Which fuels
-  are renewable is not in the dashboard at all: `dim_duid[Renewable]` says. The rules it does
-  hold are written once, at the top of its section 1, which holds every DAX query the
-  charts send (the `dax` object, by tab and chart; the renderers only call it): storage is the fuel "Grid", a
-  generator is anything else (a blank fuel included, which DAX and SQL disagree on, so it is
-  spelled out), and which grain a date range reads (`grain()`: the 5-minute tables up to 30
-  days, the daily ones beyond). The page does not name the table for it: up to 30 days it
-  filters and groups by the fact's own columns (`fct_summary[date]`, `fct_region[REGIONID]`),
-  beyond by the dimensions' (`dim_calendar[date]`, `dim_duid[DUID]`, `dim_region[Region]`)
-  with `dax.wholeDays`, and the same measure reads the 5-minute table or the daily one, as
+- `dashboard/github-dax/index.html` is the page: the charts, which draw what
+  `dashboard/github-dax/frontend/queries.js` asks: every query the charts send, by tab and chart
+  (`createQueries(page)`, over the page's state passed in as functions; the renderers only
+  call it). The queries name the model's tables, columns and measures (`fct_summary.mw`,
+  `dim_duid.FuelSourceDescriptor`, `Capture price`). **The page joins nothing** and names no
+  view (outside Analyze and `data.has('v_...')`). Which fuels are renewable, and which units
+  are storage, is not in the dashboard at all: `dim_duid.Renewable` and `dim_duid.Storage`
+  say (a generator is a unit that is not storage, a unit with no fuel included). What
+  `queries.js` holds is which grain a date range reads (`grain()`: the 5-minute tables up to
+  30 days, the daily ones beyond), and with it which measure a chart draws at that grain. The page does not name the table for it: up to 30 days it
+  filters and groups by the fact's own columns (`fct_summary.date`, `fct_region.REGIONID`),
+  beyond by the dimensions' (`dim_calendar.date`, `dim_duid.DUID`, `dim_region.Region`)
+  with `queries.wholeDays` (the range cut to the first day the daily table holds and the newest day both daily tables hold, read
+  once `agg` is attached), and the same measure reads the 5-minute table or the daily one, as
   the model's `[Reads 5 minutes]` says. Where the two grains are different figures, each is
   its own measure and `grain()` names it: `[Generation MW]` at a time and `[Generation MWh]`
   a day, `[Negative price share]` of intervals and `[Negative price days share]`.
-  The filters are DAX too (`dax.whereGen`, `dax.unitFilters`, `dax.wherePrice`,
-  `dax.priceFilters`: the arguments of a `CALCULATETABLE`, on the fact's own `date` and on
-  the unit's attributes); the `sql` ones next to them are Analyze's.
+  The filters are conditions of a query's `where` (`queries.whereGen`, `queries.unitFilters`,
+  `queries.wherePrice`, `queries.priceFilters`: on the fact's own `date` and on the unit's
+  attributes). A fuel or unit pick reaches the regional tables because the model's
+  relationship from `dim_duid` to `dim_region` filters both ways (2026-10-07): the regions
+  those units are in, in Power BI and in the compiler alike.
   **Rooftop solar is five units** (since 2026-10-07): `ROOFTOP_<region>`, fuel "Rooftop
   solar", rows of `fct_summary` like any unit's, so every filter on the units reaches it and
   no query adds it on its own. Until then it was a table of its own, joined in by the page
@@ -296,8 +345,8 @@ and anything that serves the page from the repo has to do the same.
   otherwise. `.platform` and `definition.pbism` next to it make the folder a Fabric item.
   It is JSON, so a browser reads it with no library: there are no comments, so the why goes
   in a `description`, and a long expression is an array of lines.
-- `dashboard/github/semantic/compiler.js` has two parts (`createModel(dataSource)`: the data
-  source's members plus `has`, `needs` and `toSQL`). **It is a toy on purpose** (the owner,
+- `dashboard/github-dax/semantic/compiler.js` has two parts (`createModel(dataSource)`: the data
+  source's members plus `has`, `views`, `needs`, `toDax` and `toSQL`). **It is a toy on purpose** (the owner,
   2026-10-05): an example of where that layer of the stack sits, not a DAX engine. It
   translates what this page asks, by fixed cases; it does not plan, and a construct it cannot
   translate gets its equivalent SQL written here, never a general mechanism.
@@ -310,8 +359,8 @@ and anything that serves the page from the repo has to do the same.
   (`information_schema`), and one runs the statements that are new or changed.
   `needs(sql)` says what a SQL query reads; `ensureHistory` attaches nothing for a range
   that starts inside the days `today` holds, so the default view fetches no history.
-  The queries: `toSQL(dax)` turns a DAX query into one SELECT over those views, the same
-  text once (a Map). The header of the file lists what each DAX construct becomes. To know:
+  The queries: `toDax(query)` writes the page's query as DAX, and `toSQL(dax)` turns that
+  into one SELECT over those views, the same text once (a Map). The header of the file lists what each DAX construct becomes. To know:
   - It picks the view from the tables a query names: `fct_summary` alone reads
     `v_fct_summary`, with a column of `dim_duid` the relationship's view.
   - The key of a dimension (`dim_calendar[date]`, `dim_time[time]`, `dim_region[Region]`,
@@ -335,7 +384,7 @@ and anything that serves the page from the repo has to do the same.
     context does: a filter on `dim_calendar` reaches every fact, one on `dim_duid` or on
     `fct_summary[date]` only the units. For the same reason a filter on another fact is
     left out of the SELECT it does not reach. So a query that calls a two-fact measure
-    filters each fact (`dax.whereAll`): up to 30 days `fct_summary[date]`,
+    filters each fact (`queries.whereAll`): up to 30 days `fct_summary[date]`,
     `fct_region[date]` and `dim_calendar[date]`, beyond `dim_calendar[date]` with
     `wholeDays`; and the region on `dim_region[Region]`, which reaches all three.
     The subquery is a CTE, read once per query and looked up per row of the result:
@@ -344,13 +393,26 @@ and anything that serves the page from the repo has to do the same.
     A blank from such a subquery is 0, as DAX adds it. Not supported: under a subtotal of
     a key that reaches it. In a measure of the model `<>` is DAX's (`IS DISTINCT FROM`: a
     blank fuel is not "Grid"); in the page's own filters it stays SQL's.
+  - A relationship that filters both ways (`crossFilteringBehavior: bothDirections`, read
+    from the bim: `dim_duid_to_dim_region`) lets a filter on its `from` table reach the
+    tables of its `to` side as the keys its rows have: a unit filter on `fct_region` is
+    `REGIONID IN (SELECT Region FROM v_dim_duid WHERE ...)`. A subquery is still grouped
+    only by the keys that reach its table forwards.
+  - `CALCULATE(m, ALLSELECTED(table))` (`[Generation share]`) is m over everything the query
+    selects, not grouped by that table's columns: a window over the groups when m is a sum of
+    the SELECT's own table (then the SELECT's conditions on values go to QUALIFY, so the share
+    is of every group), else a subquery. `CALCULATE(m, DATESBETWEEN(dim_calendar[date], a,
+    b))` (the `[... change]` measures) is m over those days instead of the query's, a and b
+    worked out here from the query's literal range (`MIN`/`MAX` of `dim_calendar[date]`,
+    `DATEDIFF` in days). A CALCULATE of a measure of another table takes its filters into
+    that measure's subquery (`[Demand with rooftop MW]`). A count of no rows is blank, as in
+    DAX. A query of a fact and two of its dimensions reads `<fact>_star`.
+    The header of `compiler.js` lists every place its SQL is knowingly not DAX.
   - Its fixed cases for this model: the days the daily table lacks, which a measure adds from the
-    5-minute table (`late`, an `EXCEPT`), are none: the page restricts a long range to the
-    days the daily table holds (`dax.wholeDays`, `dax.wholeRegionDays`), which makes that
-    set empty in DAX too. So a long range ends on the newest whole day on the page, and
+    5-minute table (`dim_calendar[date] > [Newest whole day]`), are none: the page restricts a long range to the
+    days the daily table holds (`queries.wholeDays`), which makes that set empty in DAX too. So a long range ends on the newest whole day on the page, and
     on the newest interval in Power BI. `[Units]` off the daily table is
-    `COUNT(DISTINCT DUID)`. And `wholeDays` on the daily table itself is not written: as a
-    semi-join it cost 100 ms a query to keep every row. `MAX(column, 0)` and
+    `COUNT(DISTINCT DUID)`. `MAX(column, 0)` and
     `MIN(column, 0)` read the column as DOUBLE: a sum of fixed decimals is 128-bit, and
     two of them (output and charging) made the 30-day generation query slower than the
     one sum by sign it replaced (623 ms against 452; 335 as DOUBLE). `[Capacity MW]`,
@@ -358,15 +420,13 @@ and anything that serves the page from the repo has to do the same.
     (`CALCULATE(SUM(dim_duid[RegCapMW]), SUMMARIZE(fact, dim_duid[DUID]))`), makes its
     SELECT two levels: the rows per unit first (its sums, its capacity once), then the
     groups asked for (`perUnit`). In one level, as `list(DISTINCT {DUID, RegCapMW})`, the
-    capacity factor of 30 days took 2.7 s in the browser against 0.8. And a table's own
-    values put on a dimension (`wholeDays`) are a CTE, read once per query: a two-fact
-    measure puts that filter on each of its subqueries.
+    capacity factor of 30 days took 2.7 s in the browser against 0.8.
 - `storage/data.js` is the host: how the `.duckdb` files are fetched, cached and attached
   (`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `query`). It attaches `dim`,
   `today`, `agg` and the 5-minute history, and builds no view. On both the files are
   downloaded whole into OPFS, and the history is the half-year files (`p2026_h1`, ...), the
   ones a range needs. There are two, with the same members:
-  - `dashboard/github/storage/data.js`, GitHub Pages: the files sit in `data/` (`mart_dim`, `mart_today`,
+  - `dashboard/github-dax/storage/data.js`, GitHub Pages: the files sit in `data/` (`mart_dim`, `mart_today`,
     `mart_agg`, `mart_<YYYY>_h<N>`), with `mart_manifest.json` listing the half-years.
   - `dashboard/fabric_app_wasm/site/storage/data.js`, the Fabric app: the files are in a lakehouse behind a
     Fabric sign-in, read with a short-lived read-only SAS, and downloaded as 2 MB Range
@@ -379,31 +439,29 @@ and anything that serves the page from the repo has to do the same.
   (one 2024 day took 38 s that way, 2026-10-04).
   Both set the session to Brisbane time, on purpose: the files carry `date` and `time`, no
   TIMESTAMPTZ, and the only thing the zone decides is that `CURRENT_DATE` is the NEM's day.
-- `dashboard/github/storage/history.js` is what both `data.js` share about the half-year history
+- `dashboard/github-dax/storage/history.js` is what both `data.js` share about the half-year history
   files: `periodsForRange` (which ones a date range needs) and `attachCached` (ATTACH from
   OPFS in place, into memory if a second tab holds the file).
-- `dashboard/github/frontend/perflog.js` and `dashboard/github/frontend/logs.js` are the Logs tab, on both
+- `dashboard/github-dax/frontend/perflog.js` and `dashboard/github-dax/frontend/logs.js` are the Logs tab, on both
   hosts: a table of what this session fetched, attached and ran, with timings, and the build
   stamp. This session only: it lives in the page's memory, nothing is stored, written to a
   file or uploaded, and the Copy button is the one way out. A host's `data.js` does the
   logging (`perf.log`, `perf.time`, and `perf.query` around every query, the compiler's
-  included); the page has the tab and its panel, and `logs.js` fills it. A query the page
-  wrote in DAX is shown as written, with the SQL it became under it: `query(sql, dax)` in
+  included); the page has the tab and its panel, and `logs.js` fills it. A query's DAX, as
+  the compiler wrote it, is shown with the SQL it became under it: `query(sql, dax)` in
   both `data.js`, the compiler passing the DAX. An event's `what` is always the SQL, which
   is what a change is checked against; the DAX is its `dax`.
 
 Three things in that design are there for speed and must survive an edit:
 - A query that needs nothing about the unit (previous-period generation with no filter, the
   Flows generators, the cutoff) reads the plain fact view, not the relationship's: no join
-  to pay for. The compiler does this, from the tables the DAX names: so a query that needs
+  to pay for. The compiler does this, from the tables the query names: so a query that needs
   nothing of the unit must not name a column of `dim_duid` other than its key, and a unit
   pick is a filter on the fact's own `DUID`.
 - The price is on `fct_summary`'s row: capture price and the battery chart join nothing.
-- The charts that leave storage out filter on the fuel (`<> "Grid"`), never on
-  `NOT (fuel = "Grid")`: with the fuel filter on Grid the optimizer then sees
-  `fuel = 'Grid' AND fuel <> 'Grid'` and reads nothing; through `NOT (...)` it does not.
-  With a fuel picked the page writes the bare rule (`generatorUnits()`); with none it adds
-  `|| ISBLANK(fuel)`, because a unit with no fuel is a generator and SQL would drop it.
+- A share of what is shown (`[Generation share]`) over a sum is a window, not a second scan
+  (the 30-day generation chart: 1.9 s natively with the shares and the stack's totals,
+  against 1.3 s without either; a subquery for the shares made it 2.4 s).
 
 How the page looks is decided in five places of `index.html`, and a chart goes through them
 rather than round them:
@@ -427,7 +485,10 @@ rather than round them:
 - **One screen per tab on a desktop** (the owner's, 2026-10-06: no scrolling page). At 1100 px
   wide and 600 tall or more the page does not scroll: each tab is a flex/grid that fills the
   window under the header, and a chart takes its cell's height (`--h` is its height only where
-  the page scrolls, below that size). Under 960 tall a compact layout applies (the hero one
+  the page scrolls, below that size). A chart of the Dashboard and Insights is never under
+  150 px (`--chart-min`): a window too short for that under the header, the hero and the
+  KPIs scrolls by the difference (at 1100x600 the generation chart had been 5 px; from about
+  1280x720 up nothing scrolls). Under 960 tall a compact layout applies (the hero one
   band, the Dashboard's three charts side by side). Charts follow their boxes through a
   `ResizeObserver`. Insights is three sub-pages of four charts (`INSIGHTS_PAGES`) and only the
   one shown is drawn; the Flows board holds each link's small chart in its row; the History
@@ -450,6 +511,12 @@ publish into `NemTracker/nemtracker.github.io` with `scripts/deploy_pages.sh`: a
 depth-1 clone, the published paths added with `-f` (so the deploy repo's `.gitignore` can't
 skip a file), push retried on a race. It only adds and replaces: a file leaves the site by
 hand, in the deploy repo.
+**Every build stamps its files** (`scripts/stamp_build.mjs`, run by `build.yml` and by
+`dashboard/fabric_app_wasm/build.mjs`): `__BUILD__` becomes the build, and every relative
+import gets `?v=<build>`. Pages serves the files with `max-age=600`, so without it a browser
+ran the new page with its cached old `compiler.js` for up to 10 minutes after a deploy
+(2026-10-07, `s.replace is not a function`). A harness that imports a module itself from a
+stamped copy has to add the same `?v=`, or it gets a second instance of it.
 **The files are a copy of the `mart` tables, with no rule of their own**
 (`scripts/cache_catalog.py`: `SELECT *` per table, into `mart_dim`, `mart_agg`, `mart_today`
 and `mart_<YYYY>_h<N>`). Every run copies the newest 14 days; the daily run also copies the
@@ -484,7 +551,7 @@ it is viewed.
 **The Fabric app is `dashboard/fabric_app_wasm/`**, a Rayfin project: static hosting, Fabric sign-in, and one
 function, `getDataSas` (`dashboard/fabric_app_wasm/rayfin/functions`), which signs a read-only SAS on the data
 folder so that the browser never holds a storage token. `dashboard/fabric_app_wasm/build.mjs` assembles
-`dashboard/fabric_app_wasm/dist`: `index.html`, the three folders and `dag/` from `dashboard/github/`,
+`dashboard/fabric_app_wasm/dist`: `index.html`, the three folders and `dag/` from `dashboard/github-dax/`,
 `semantic_model/model.bim`, with
 `dashboard/fabric_app_wasm/site/` copied over them (`storage/data.js`, its own, `storage/auth.js` and
 `storage/sas.js`), and
@@ -546,6 +613,9 @@ no function, no SAS. Its `dist` is `index.html`, `frontend/`, `dag/`, `storage/d
 `storage/auth.js`, and `semantic/compiler.js`, which here is one line
 (`createModel = data => data`) standing where the compiler does so that `index.html` is the
 same file.
+**Since 2026-10-07 it does not work with the page**: the page sends query objects, not DAX,
+and this stub does not write DAX. It is to be redone the way Rayfin recommends, not by
+carrying the compiler over (the owner's).
 - **How it reaches the model:** a Rayfin connector, `nem` in `rayfin/rayfin.yml` (type
   `fabric-semanticmodel`, one operation, `executeQuery`, delegated). The browser calls the
   app's backend, which runs the query on the model as the signed-in user: the browser holds
@@ -648,9 +718,15 @@ they are what these tables are built from.
   aggregation tables (user-defined aggregations are not supported), so the switch is DAX:
   `[Generation MWh]`, `[Charging MWh]`, `[Revenue]`, `[Capture price]`, `[Units]` and
   `[Capacity factor]` read `fct_summary_daily` when no time of day is asked for, plus
-  `fct_summary` for the days the daily table does not hold yet (`EXCEPT` on the dates), and
+  `fct_summary` for the days after the newest one the daily table holds, and
   `fct_summary` alone when one is; `[Average price]`, `[Demand MWh]`, `[Net interchange MW]`
   and `[Hours]` do the same over `fct_region_daily` (a day there is 288 intervals).
+  The newest day is a hidden measure per daily table (`[Newest whole day]`,
+  `[Newest whole day regional]`, `CALCULATE(MAX(date), REMOVEFILTERS())`), and the days
+  after it a `KEEPFILTERS(dim_calendar[date] > _last)`: the daily tables are written in date
+  order with no gaps. Until 2026-10-07 it was the set of those days (`EXCEPT` of the
+  calendar's dates and the daily table's, per region a `CROSSJOIN`), which over a year
+  grouped by unit or plant took 1.4 GB, over the capacity's 1 GB a query.
   "A time of day is asked for" is written once per fact, in a hidden measure
   (`[Reads 5 minutes]`, `[Reads 5 minutes regional]`): any column of `dim_time` filtered or
   grouped, or a column of the fact itself filtered. So filters go through the dimensions.
@@ -727,7 +803,7 @@ they are what these tables are built from.
 | stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
 | processed_files | landing | incremental append — the files each landing fact has loaded (`model, csv_filename, processed_at`), appended by the facts' post-hooks; the pending check is the log minus this table. A `rebuild=<fact>` appends a reset row (`csv_filename` NULL); the first build seeds it from the facts' `file` columns |
 | dim_calendar | mart | incremental append (the NOT-IN filter keeps existing dates out; runs 2 years ahead) |
-| dim_duid | mart | incremental insert-only merge on DUID; NEM units from the registration list, then `duid_unregistered.csv`; registered capacity (RegCapMW etc.); `Renewable` — **the list of renewable fuels lives in this model** (an inline CTE next to `states`), nowhere else; `Classification` from the list (Scheduled / Semi-Scheduled / Non-Scheduled, stars stripped; NULL off the list): curtailment is measured on Semi-Scheduled, not on a fuel, because HPR1 (a battery) is registered with fuel "Wind"; `CO2eFactor` (t CO2-e/MWh) from MMSDM `GENUNITS` through `DUALLOC`, for registered and unregistered units alike, NULL for loads, AEMO's dummy units and the gensets "On Exclusion List" (Colongra, Jeeralang, Braemar 3 and 6), which `[Emissions t]` therefore leaves out. A new column or a changed rule reaches the existing rows with a `rebuild=dim_duid` |
+| dim_duid | mart | incremental insert-only merge on DUID; NEM units from the registration list, then `duid_unregistered.csv`; registered capacity (RegCapMW etc.); `Renewable` — **the list of renewable fuels lives in this model** (an inline CTE next to `states`), nowhere else; `Classification` from the list (Scheduled / Semi-Scheduled / Non-Scheduled, stars stripped; NULL off the list): curtailment is measured on Semi-Scheduled, not on a fuel, because HPR1 (a battery) is registered with fuel "Wind"; `CO2eFactor` (t CO2-e/MWh) from MMSDM `GENUNITS` through `DUALLOC`, for registered and unregistered units alike, NULL for loads, AEMO's dummy units and the gensets "On Exclusion List" (Colongra, Jeeralang, Braemar 3 and 6), which `[Emissions t]` therefore leaves out; `Storage` (a battery, the fuel "Grid": the one place that rule lives), `Plant` (the station, or the unit when it has none: what the page groups units by) and `Owner` (the participant, rooftop's five units "Rooftop solar (AEMO estimate)"), 2026-10-07; one spelling per name, case-insensitively, for StationName, Participant and TechnologyType (VertiPaq stores text case-insensitively). A new column or a changed rule reaches the existing rows with a `rebuild=dim_duid` |
 | fct_scada, fct_price | landing | incremental insert-only merge (by file) |
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
 | fct_interconnector_today | landing | incremental insert-only merge (by file) — the INTERCONNECTORRES rows of the same archived DispatchIS files as fct_price_today **and, despite the name, the whole history**: AEMO's monthly MMSDM archive of the same record, 2018-01 → 2026-08 (source_type `interconnector_monthly`, a finite backfill; read with `strict_mode = false`, which the files from 2024-08 need). August 2026 is in both sources, so `fct_interconnector` takes one row per interval (`MAX … GROUP BY`); the Flows page plays any range ≤ 30 days |
@@ -849,7 +925,7 @@ the same pins, and pins the two Azure SDK packages its upload uses.
 - **The dashboard pins `@duckdb/duckdb-wasm@1.33.1-dev65.0`** (DuckDB 1.5.x line), a dev build
   because nothing stable has shipped since 1.33.0. Don't take npm's `latest` tag: it points
   at `1.33.1-dev57.0`, which the DuckDB blog says breaks OPFS. The dev build lets
-  `attachCached` (`dashboard/github/storage/history.js`) read the OPFS-cached files in place
+  `attachCached` (`dashboard/github-dax/storage/history.js`) read the OPFS-cached files in place
   (`registerFileHandle` + `BROWSER_FSACCESS`) instead of copying each one into the WASM heap.
   Register the plain filename, not `opfs://`: an `opfs://` ATTACH also opens `<file>.wal`,
   which is never registered, so the ATTACH fails. The handle is exclusive, so a second tab

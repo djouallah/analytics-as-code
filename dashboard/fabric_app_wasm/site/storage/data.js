@@ -1,7 +1,7 @@
 // =============================================================================
 // data.js — DataSource: bring up DuckDB-WASM with the OneLake data attached
 // =============================================================================
-// The Fabric version: the counterpart of ../../../github/storage/data.js (GitHub Pages),
+// The Fabric version: the counterpart of ../../../github-dax/storage/data.js (GitHub Pages),
 // with the same members (init, attachAgg, ensureHistory, query) over the same history.js, so
 // index.html and the semantic model are the same files on both hosts. The data files are the
 // same too; what differs is where they are: in a lakehouse, behind a Fabric sign-in (auth.js)
@@ -47,31 +47,35 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   let db, conn;   // set by init()
 
   const signedUrl = async (name) => { const access = await sas.dataAccess(); return `${access.baseUrl}/${name}?${access.sas}`; };
+  // One read of the data folder. A 403 is a SAS that expired or was revoked (the cached one
+  // is trusted by its own expiry, on the browser's clock): re-sign once and ask again.
+  async function get(name, init) {
+    let r = await fetch(await signedUrl(name), { cache: 'no-store', ...init });
+    if (r.status === 403) { await sas.refresh(); r = await fetch(await signedUrl(name), { cache: 'no-store', ...init }); }
+    return r;
+  }
 
   // Resolve the moving `latest.json` pointer: the import's timestamp and its half-years.
   async function resolveLatest() {
     // no-store: latest.json is a moving pointer; a cached copy would name a stale import and
     // the dashboard would never pick up a fresh one.
-    const fetchLatest = async () => {
-      const t = performance.now();
-      const r = await fetch(await signedUrl('latest.json'), { cache: 'no-store' });
-      perf.log('fetch', 'GET latest.json', { ms: performance.now() - t, status: r.status });
-      return r;
-    };
-    let resp = await fetchLatest();
-    if (resp.status === 403) { await sas.refresh(); resp = await fetchLatest(); }   // expired SAS
+    const t = performance.now();
+    const resp = await get('latest.json');
+    perf.log('fetch', 'GET latest.json', { ms: performance.now() - t, status: resp.status });
     if (!resp.ok) throw new Error(`Failed to read data/latest.json: HTTP ${resp.status}`);
     const latest = await resp.json();
-    if (!latest.ts) throw new Error('data/latest.json names no import');
+    if (!latest.ts || !Array.isArray(latest.periods)) throw new Error('data/latest.json names no import');
     console.log(`[data] latest import: ${latest.ts}, ${latest.periods.length} half-years`);
     return latest;
   }
-  let _latest = null;   // promise of latest.json
-  const latest = () => _latest ??= resolveLatest();
+  let _latest = null;   // promise of latest.json; a failed one can be asked for again
+  const latest = () => _latest ??= resolveLatest().catch(e => { _latest = null; throw e; });
 
   // --- Whole-file download (parallel Ranges) + OPFS cache keyed by the immutable name ---
   async function download(name) {
-    const head = await fetch(await signedUrl(name), { method: 'HEAD', cache: 'no-store' });
+    const head = await get(name, { method: 'HEAD' });
+    // Gone: the import this page resolved was replaced (deploy_onelake.py keeps two).
+    if (head.status === 404) throw Object.assign(new Error(`HEAD ${name}: HTTP 404`), { gone: true });
     if (!head.ok) throw new Error(`HEAD ${name}: HTTP ${head.status}`);
     const size = Number(head.headers.get('content-length'));
     if (!size) throw new Error(`HEAD ${name}: no Content-Length`);
@@ -83,7 +87,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     const pull = async () => {
       while (next < ranges.length) {
         const [a, b] = ranges[next++];
-        const r = await fetch(await signedUrl(name), { headers: { Range: `bytes=${a}-${b}` }, cache: 'no-store' });
+        const r = await get(name, { headers: { Range: `bytes=${a}-${b}` } });
         if (r.status !== 206) throw new Error(`GET ${name} bytes=${a}-${b}: HTTP ${r.status}`);
         out.set(new Uint8Array(await r.arrayBuffer()), a);
         onStatus(`Downloading data (${++done}/${ranges.length} of ${mb} MB)...`);
@@ -158,7 +162,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
 
   // Attach one half-year period; true if it is attached now. One that fails is skipped
   // instead of breaking the whole query: recent days still come from `today`.
-  async function attachPeriod(p) {
+  async function attachPeriod(p, again = false) {
     const name = `${p}_${(await latest()).ts}.duckdb`;
     try {
       let bytes = null;
@@ -175,12 +179,20 @@ export function createDataSource({ onStatus = () => {} } = {}) {
       _failedPeriods.delete(p);
       return true;
     } catch (e) {
+      // A page open across two daily imports: its import is gone, so read the newest once.
+      // `dim` and `today` stay the ones attached; the view cuts the history at their first day.
+      if (e.gone && !again) { _latest = null; return attachPeriod(p, true); }
       console.warn(`[data] skipping period ${p}: ${e}`);
       perf.log('error', `ATTACH ${name}`, { status: String(e?.message || e) });
       _failedPeriods.set(p, Date.now());
       return false;
     }
   }
+  // One attach per period at a time: a second call while the first is still downloading
+  // shares it. Attached twice, the second ATTACH fails and its fallback drops or replaces
+  // the file registration the first one is reading (2026-10-07).
+  const _attaching = new Map();
+  const attachOnce = p => _attaching.get(p) ?? _attaching.set(p, attachPeriod(p).finally(() => _attaching.delete(p))).get(p);
 
   // Attach the half-year periods of a date range that exist and aren't attached yet.
   // True if any was attached. The caller (the compiler) asks only for a range that reaches
@@ -191,7 +203,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
       && !_attachedPeriods.has(p) && !(Date.now() - _failedPeriods.get(p) < RETRY_MS));
     if (!needed.length) return false;
     onStatus(msg);
-    return (await Promise.all(needed.map(attachPeriod))).includes(true);
+    return (await Promise.all(needed.map(attachOnce))).includes(true);
   }
 
   // Signed in, DuckDB-WASM up, `dim` + `today` attached: enough for the default "Last 3 days" view.

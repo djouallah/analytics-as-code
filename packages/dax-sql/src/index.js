@@ -116,7 +116,6 @@ export function createCompiler(bim, options = {}) {
     cache.set(dax, out);
     return out;
   }
-
   return {
     model,
     dialect,
@@ -172,4 +171,3 @@ function fieldParameters(model) {
   }
   return out.map(p => ({ table: p.table, labelColumn: p.label, fieldsColumn: p.fields, orderColumn: p.order, fields: p.fields_ }));
 }
-

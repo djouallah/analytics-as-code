@@ -169,6 +169,12 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     }
   }
 
+  // One attach per period at a time: a second call while the first is still downloading
+  // shares it. Attached twice, the second ATTACH fails and its fallback drops or replaces
+  // the file registration the first one is reading (2026-10-07).
+  const _attaching = new Map();
+  const attachOnce = p => _attaching.get(p) ?? _attaching.set(p, attachPeriod(p).finally(() => _attaching.delete(p))).get(p);
+
   // Attach the half-year periods of a date range that exist and aren't attached yet.
   // True if any was attached. The caller (the compiler) asks only for a range that reaches
   // back past the days `today` covers.
@@ -183,7 +189,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
       && !_attachedPeriods.has(p) && !(Date.now() - _failedPeriods.get(p) < RETRY_MS));
     if (!needed.length) return false;
     onStatus(msg);
-    return (await Promise.all(needed.map(attachPeriod))).includes(true);
+    return (await Promise.all(needed.map(attachOnce))).includes(true);
   }
 
   return {

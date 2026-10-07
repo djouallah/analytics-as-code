@@ -11,6 +11,15 @@ name: Deploy Semantic Model
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish and refresh the model first (off: only the parity check, on the model as deployed)"
+        type: boolean
+        default: true
+      since:
+        description: "Parity: ask only the queries whose DAX, SQL or measures changed since this commit (empty: the last green run's; all: every query)"
+        required: false
+        default: ""
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -21,17 +30,20 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read     # the last green run of this workflow: the commit parity compares with
   id-token: write   # OIDC federated login to Azure
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 75
     env:
       WS_ID: ${{ vars.WS_ID }}
       LH_ID: ${{ vars.LH_ID }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -57,6 +69,7 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
       - name: Publish the model and the report
+        if: inputs.publish
         run: python scripts/deploy_model.py
       - name: Mint Power BI token
         run: |
@@ -64,6 +77,43 @@ jobs:
           echo "::add-mask::$TOKEN"
           echo "POWERBI_TOKEN=$TOKEN" >> "$GITHUB_ENV"
       - name: Refresh it and query it
+        if: inputs.publish
         env:
           PYTHONNET_RUNTIME: coreclr
         run: python scripts/check_model.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: The page's queries, on the model and on the dashboard's files
+        # scripts/parity: every query the page sends, as the compiler writes its DAX and its
+        # SQL, run over the files the dashboard has deployed (DuckDB) and asked of the model
+        # just deployed (XMLA); the rows have to be the same. The model is the reference.
+        env:
+          PYTHONNET_RUNTIME: coreclr
+          SINCE: ${{ inputs.since }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          data="$RUNNER_TEMP/data" && mkdir -p "$data"
+          site=https://nemtracker.github.io/data
+          curl -fsS -o "$data/mart_manifest.json" "$site/mart_manifest.json"
+          for f in mart_dim mart_today mart_agg $(python -c "import json,sys; print(' '.join('mart_' + p for p in json.load(open(sys.argv[1]))['periods'][-2:]))" "$data/mart_manifest.json"); do
+            curl -fsS -o "$data/$f.duckdb" "$site/$f.duckdb"
+          done
+          (cd scripts/parity && npm ci --no-audit --no-fund && node page_queries.mjs "$data" "$RUNNER_TEMP/parity.json")
+          # since: the same queries built from that commit's compiler, queries and model;
+          # a query whose key is the same there is not asked again. By default the commit of
+          # the last green run of this workflow: what it asked passed, and what it did not ask
+          # was unchanged since the one before. `all` asks every query.
+          since=()
+          if [ -z "$SINCE" ]; then
+            SINCE=$(gh run list --workflow deploy_model.yml --status success -L 1 --json headSha --jq '.[0].headSha // ""')
+            echo "comparing with the last green run's commit: ${SINCE:-none, every query is asked}"
+          fi
+          [ "$SINCE" = all ] && SINCE=
+          if [ -n "$SINCE" ]; then
+            git worktree add -q "$RUNNER_TEMP/since" "$SINCE"
+            (cd scripts/parity && node page_queries.mjs "$data" "$RUNNER_TEMP/since.json" "$RUNNER_TEMP/since")
+            since=("$RUNNER_TEMP/since.json")
+          fi
+          python scripts/parity_model.py "$RUNNER_TEMP/parity.json" "${since[@]}"

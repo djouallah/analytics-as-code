@@ -10,7 +10,11 @@ CREATE TABLE v_dim_calendar AS SELECT CAST(d AS DATE) AS date, year(d) AS year, 
 CREATE TABLE v_dim_month AS SELECT CAST(date_trunc('month', date) AS DATE) AS month, CAST(COUNT(*) AS BIGINT) AS days FROM v_dim_calendar GROUP BY 1;
 CREATE TABLE v_dim_time AS SELECT CAST((m // 60) * 100 + m % 60 AS BIGINT) AS time, CAST(m % 60 AS BIGINT) AS minute, CAST(m // 60 AS BIGINT) AS hour
   FROM range(0, 1440, 5) r(m);
-CREATE TABLE v_dim_duid AS SELECT * FROM (VALUES
+CREATE TABLE v_dim_duid AS SELECT *,
+    COALESCE(lower(trim("FuelSourceDescriptor")) = 'grid', false) AS "Storage",
+    COALESCE("StationName", "DUID") AS "Plant",
+    COALESCE("Participant", CASE WHEN starts_with("DUID", 'ROOFTOP_') THEN 'Rooftop solar (AEMO estimate)' END) AS "Owner"
+  FROM (VALUES
   ('WIND1', 'NSW1', 'NSW', 'Wind', 'P1', 'Wind Farm A', 'Wind Turbine', 'Semi-Scheduled', 0.0, TRUE, 100.0, 100.0, NULL::DOUBLE, -33.0, 150.0),
   ('WIND2', 'VIC1', 'VIC', 'Wind', 'P2', 'Wind Farm B', 'Wind Turbine', 'Semi-Scheduled', 0.0, TRUE, 200.0, 210.0, NULL, -37.0, 144.0),
   ('SOLAR1', 'QLD1', 'QLD', 'Solar', 'P1', 'Solar Farm A', 'Photovoltaic', 'Semi-Scheduled', 0.0, TRUE, 150.0, 150.0, NULL, -27.0, 152.0),

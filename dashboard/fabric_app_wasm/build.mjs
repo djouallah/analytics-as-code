@@ -1,6 +1,6 @@
 // Static "build" of a Fabric app, for both of them (this one and ../fabric_app_vertipaq, whose
 // package.json runs this file): the project is the working directory, and its dist/ is
-//   the shared page (../github): index.html, frontend/, the dbt docs in dag/, and the folders
+//   the shared page (../github-dax): index.html, frontend/, the dbt docs in dag/, and the folders
 //     named as arguments. This app names semantic and storage (the compiler, with the repo's
 //     semantic_model/model.bim put next to it, and history.js); the VertiPaq app names none,
 //     so nothing of the DuckDB path is in its dist/
@@ -17,14 +17,14 @@ import { execSync } from "node:child_process";
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const project = (p) => fileURLToPath(new URL(p, pathToFileURL(process.cwd() + "/")));
 const dist = project("./dist/");
-const page = here("../github/");
+const page = here("../github-dax/");
 const model = here("../../semantic_model/model.bim");
 const folders = ["frontend", ...process.argv.slice(2)];
 
 const git = (cmd) => { try { return execSync(`git ${cmd}`, { encoding: "utf8", cwd: here("./") }).trim(); } catch { return ""; } };
 const sha = git("rev-parse --short HEAD") || "unknown";
 // Only what goes into dist/: a deploy regenerates files under rayfin/ before this runs.
-const dirty = git(`status --porcelain -- "${project("./site")}" site build.mjs ../github ../../semantic_model`) ? "-dirty" : "";
+const dirty = git(`status --porcelain -- "${project("./site")}" site build.mjs ../github-dax ../../semantic_model`) ? "-dirty" : "";
 // URL-safe (it is the ?v= cache-buster): <sha>.<yyyymmdd-hhmm UTC>
 const BUILD = `${sha}${dirty}.${new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 13)}`;
 
@@ -44,4 +44,4 @@ for (const f of await readdir(dist, { recursive: true })) {
 }
 // After the stamping, which must not touch them.
 await cp(page + "dag", dist + "dag", { recursive: true });
-console.log(`Published ../github (${folders.join(", ")}) + site/ -> ${dist} (build ${BUILD})`);
+console.log(`Published ../github-dax (${folders.join(", ")}) + site/ -> ${dist} (build ${BUILD})`);

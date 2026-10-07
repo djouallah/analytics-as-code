@@ -1,0 +1,208 @@
+// =============================================================================
+// page_queries.mjs — the page's queries, as the page builds them, through the compiler, over
+// the deployed files
+// =============================================================================
+//   cd scripts/parity && npm ci && node page_queries.mjs <data dir> <out.json>
+//
+// <data dir> holds the files the page attaches (mart_dim, mart_today, mart_agg and the
+// half-years mart_<YYYY>_h<N>), as deployed. For a set of page states (a date range, a
+// region, a fuel, units picked) every member of frontend/queries.js is called with the
+// arguments index.html gives it; each query becomes DAX (toDax) and SQL (toSQL) as in the
+// browser, and the SQL runs on the files in native DuckDB. The output holds, per query, the
+// DAX, the SQL and the rows: scripts/parity_model.py asks the deployed model the same DAX and
+// compares its rows with these. Nothing here decides what the page asks: it is the page's own
+// code, run outside the browser.
+//
+// The states end two days before the newest day the files hold: the files are a copy taken
+// at one time and the model reads the live tables, so the days still filling differ. The
+// queries that read the newest interval or day are left out for the same reason.
+// =============================================================================
+
+import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { DuckDBInstance } from '@duckdb/node-api';
+
+// [root]: another checkout to take the compiler, the queries and the model from (the commit a
+// check is compared with: parity_model.py --since); its rows are not run, only its keys kept.
+const [dataDir, out, other] = process.argv.slice(2);
+if (!dataDir || !out) { console.error('usage: node page_queries.mjs <data dir> <out.json> [root]'); process.exit(2); }
+const ROOT = other ? path.resolve(other) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+
+// compiler.js fetches model.bim from next to itself, where the builds copy it.
+const bim = JSON.parse(readFileSync(path.join(ROOT, 'semantic_model/model.bim'), 'utf8'));
+globalThis.fetch = async url => {
+  if (!String(url).includes('model.bim')) throw new Error(`no fetch here: ${url}`);
+  return { ok: true, json: async () => bim };
+};
+// The page's folder: dashboard/github-dax, dashboard/github in a checkout from before the
+// rename (2026-10-07), which `since` can compare with.
+const PAGE = ['dashboard/github-dax', 'dashboard/github'].map(d => path.join(ROOT, d)).find(d => existsSync(d));
+const { createModel } = await import(pathToFileURL(path.join(PAGE, 'semantic/compiler.js')));
+const { createQueries } = await import(pathToFileURL(path.join(PAGE, 'frontend/queries.js')));
+
+// --- The engine: the files attached as data.js attaches them, every half-year at once ---
+const instance = await DuckDBInstance.create(':memory:');
+const conn = await instance.connect();
+const file = name => path.resolve(dataDir, name).replace(/\\/g, '/');
+const attach = (name, alias) => conn.run(`ATTACH '${file(name)}' AS ${alias} (READ_ONLY)`);
+async function run(sql) {
+  let reader;
+  for (const s of sql.split(';\n')) reader = await conn.runAndReadAll(s);
+  return reader.getRowObjectsJson();
+}
+const source = {
+  async init() {
+    await attach('mart_dim.duckdb', 'dim');
+    await attach('mart_today.duckdb', 'today');
+    for (const f of readdirSync(dataDir).filter(f => /^mart_\d{4}_h[12]\.duckdb$/.test(f)))
+      await attach(f, `p${f.slice(5, 12)}`);
+  },
+  attachAgg: () => attach('mart_agg.duckdb', 'agg'),
+  ensureHistory: async () => false,
+  query: async sql => { const rows = await run(sql); return { toArray: () => rows }; },
+};
+const model = createModel(source);
+await model.init();
+await model.attachAgg();
+const rows = q => run(model.toSQL(model.toDax(q)));
+
+// --- The page's state, as index.html gives it to createQueries ---
+const UNKNOWN = 'Unknown', ROOFTOP = 'Rooftop solar';
+const shiftDate = (date, n) => {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+const [{ d: newest }] = await rows({ select: { d: { max: 'fct_summary.date' } } });
+const [{ d: oldest }] = await rows({ select: { d: { min: 'dim_calendar.date' } } });
+const to = shiftDate(newest, -2);
+let state;
+const pageQueries = createQueries({
+  range: () => state.range, intraday: () => days(state.range) <= 30, region: () => state.region,
+  fuel: () => state.fuel, picked: () => state.picked, newestDate: () => newest,
+  shiftDate, UNKNOWN, ROOFTOP });
+// The other checkout's queries.js may not have a query this one asks, or take other
+// arguments: such a query is left out there (null), so it counts as changed.
+const queries = !other ? pageQueries : new Proxy(pageQueries, {
+  get: (t, k) => typeof t[k] !== 'function' ? (k in t ? t[k] : () => null)
+    : (...a) => { try { return t[k](...a); } catch { return null; } },
+});
+const days = ({ from, to }) => Math.round((new Date(to) - new Date(from)) / 86400000);
+await queries.readWholeDays(rows);
+
+const RANGES = { '3 days': shiftDate(to, -2), '30 days': shiftDate(to, -30), '1 year': shiftDate(to, -365) };
+// The last state sets two unit filters that no unit passes together (HPR1 is registered as
+// Wind, BALDHWF1 is Wind): a regional query reads the regions of the units that pass both,
+// none, not the regions of the units that pass each (2026-10-07).
+const FILTERS = { all: {}, 'region SA1': { region: 'SA1' }, 'fuel Wind': { fuel: 'Wind' },
+  'units HPR1 BALDHWF1': { picked: ['HPR1', 'BALDHWF1'] },
+  'fuel Solar, units HPR1 BALDHWF1': { fuel: 'Solar', picked: ['HPR1', 'BALDHWF1'] } };
+
+// What each chart asks in a state, with the arguments index.html passes.
+function asked() {
+  const intraday = days(state.range) <= 30;
+  const now = { date: state.range.to, time: 1200 };
+  const list = {
+    'generation fuel': queries.generation('fuel', intraday),
+    'generation duid': queries.generation('duid', intraday),
+    'generation station': queries.generation('station', intraday),
+    'generationNotOf duid': queries.generationNotOf('duid', intraday, ['HPR1', 'BALDHWF1']),
+    'generationOf fuel': queries.generationOf('fuel', intraday, ['Diesel', 'Unknown']),
+    'averages fuel': queries.averages('fuel'),
+    'averages station': queries.averages('station'),
+    generationAverage: queries.generationAverage(),
+    demand: queries.demand(intraday),
+    demandPeak: queries.demandPeak(intraday),
+    price: queries.price(intraday),
+    averagePrice: queries.averagePrice(),
+    generatorCount: queries.generatorCount(),
+    emissions: queries.emissions(intraday),
+    renewableShareByPeriod: queries.renewableShareByPeriod(intraday),
+    renewableShareOfRange: queries.renewableShareOfRange(),
+    nowByFuel: queries.nowByFuel(now, state.region),
+    nowShare: queries.nowShare(now, state.region),
+    nowOf: queries.nowOf(now, state.region, ['Diesel', 'Unknown']),
+    nowByRegion: queries.nowByRegion(now.date, now.time),
+    mapScatter: queries.mapScatter(),
+    profile: queries.profile(intraday),
+    curtailment: queries.curtailment(days(state.range) > 120),
+    curtailmentTotal: queries.curtailmentTotal(),
+    curtailedFarms: queries.curtailedFarms(),
+    heatmap: queries.heatmap(intraday),
+    capture: queries.capture(),
+    negativePrices: queries.negativePrices(intraday),
+    netExports: queries.netExports(intraday),
+    capacityFactor: queries.capacityFactor(),
+    owners: queries.owners(),
+    ownerShares: queries.ownerShares(),
+    historyShare: queries.historyShare(),
+    historySolar: queries.historySolar(),
+    historyWind: queries.historyWind(),
+    historyPrice: queries.historyPrice(),
+    changeGeneration: queries.changeGeneration(),
+    changePrice: queries.changePrice(),
+    changeRenewables: queries.changeRenewables(),
+    changeEmissions: queries.changeEmissions(),
+  };
+  if (!intraday) list.profileMonths = queries.profileMonths();
+  // Flows and Batteries draw up to 30 days.
+  if (intraday) Object.assign(list, {
+    batteryDay: queries.batteryDay(), batterySpread: queries.batterySpread(), batteryFleet: queries.batteryFleet(),
+    flowGens: queries.flowGens(state.range.to), flowNow: queries.flowNow(state.range.to),
+    flows: queries.flows(state.range.from, state.range.to), flowPrices: queries.flowPrices(state.range.from, state.range.to) });
+  return list;
+}
+
+// The columns a row is matched on: the select's columns and the totals' flags.
+const keysOf = q => [...Object.entries(q.select).filter(([, f]) => typeof f === 'string' && f.includes('.')).map(([n]) => n),
+  ...Object.keys(q.totals ?? {})];
+
+// What a query's check depends on, without its dates and strings (the dates move every day;
+// a number stays: a changed / 12 or >= 0.5 is a changed query): its DAX, its SQL, and the
+// DAX of every measure it reaches. A query whose key was checked at the
+// commit compared with need not be asked again (parity_model.py --since).
+const MEASURES = new Map(bim.model.tables.flatMap(t => (t.measures ?? []).map(m =>
+  [m.name, Array.isArray(m.expression) ? m.expression.join('\n') : m.expression])));
+const reached = (text, out = new Set()) => {
+  for (const [, n] of text.matchAll(/\[([^\]]+)\]/g))
+    if (MEASURES.has(n) && !out.has(n)) { out.add(n); reached(MEASURES.get(n), out); }
+  return out;
+};
+const shape = s => (s ?? '').replace(/dt"[^"]*"|DATE '[^']*'/g, 'D').replace(/"(?:[^"]|"")*"|'(?:[^']|'')*'/g, 'S');
+const keyOf = e => JSON.stringify([shape(e.dax), shape(e.sql), [...reached(e.dax)].sort().map(n => [n, MEASURES.get(n)])]);
+
+const MAX_ROWS = 20000;
+const results = [], seen = new Map();
+const add = async (stateName, name, q) => {
+  if (!q) return;
+  let dax;
+  try { dax = model.toDax(q); } catch (e) { if (other) return; throw e; }
+  if (seen.has(dax)) { seen.get(dax).states.push(stateName); return; }
+  const entry = { name, states: [stateName], keys: keysOf(q), dax };
+  try {
+    entry.sql = model.toSQL(dax);
+    entry.key = keyOf(entry);
+    if (other) { seen.set(dax, entry); results.push(entry); return; }
+    const found = await run(entry.sql);
+    // A bigger result is not asked of the model: parity_model.py lists it with its row
+    // count. The REST call answers at most 100,000 rows, and over XMLA a few results of 2
+    // million rows throttled the capacity, fetched (deploy run 37599068734) or counted
+    // (37604775104): COUNTROWS computes the rows all the same, and every query after them
+    // took 20 s more. The same DAX is compared at the states where it is smaller.
+    if (found.length > MAX_ROWS) entry.rowCount = found.length; else entry.rows = found;
+  } catch (e) { entry.error = String(e.message ?? e); }
+  seen.set(dax, entry);
+  results.push(entry);
+};
+for (const [n, q] of Object.entries({ regions: queries.regions, regionNames: queries.regionNames, fuels: queries.fuels,
+  allDuids: queries.allDuids, oldestDate: queries.oldestDate, flowUnits: queries.flowUnits,
+  interconnectors: queries.interconnectors, stationUnits: queries.stationUnits('Hornsdale Power Reserve') }))
+  await add('lists', n, q);
+for (const [r, from] of Object.entries(RANGES))
+  for (const [f, filters] of Object.entries(FILTERS)) {
+    state = { range: { from, to }, region: null, fuel: null, picked: [], ...filters };
+    for (const [n, q] of Object.entries(asked())) await add(`${r}, ${f}`, n, q);
+  }
+writeFileSync(out, JSON.stringify({ newest, to, queries: results }, null, 1));
+console.log(`${results.length} distinct queries, ${results.filter(r => r.error).length} failed in DuckDB; newest day ${newest}, states end ${to}`);

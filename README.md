@@ -22,7 +22,7 @@ market (AEMO).
     [`dashboard/fabric_app_vertipaq/`](dashboard/fabric_app_vertipaq/); it has never run
     in a browser.
   - a **Power BI report**, on the same model and the same server.
-- **[`compiler.js`](dashboard/github/semantic/compiler.js)** is what lets the page read a
+- **[`compiler.js`](dashboard/github-dax/semantic/compiler.js)** is what lets the page read a
   Power BI model without Power BI: it turns the model into DuckDB views and the page's DAX
   queries into SQL. **It is not a general-purpose DAX compiler.** It was written for this
   repository only: it knows this model and the constructs this page uses, and fails on

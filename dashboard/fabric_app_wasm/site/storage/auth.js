@@ -87,7 +87,16 @@ function createRayfinAuth({ client = (rayfin, config) => new rayfin.RayfinClient
     }
   }
 
-  return { signIn, client: async () => { await init(); return _client; } };
+  // The client with a session: a re-sign after the cached SAS ran out (sas.js) needs one as
+  // much as the first did, and the gate is down by then.
+  async function signedClient() {
+    await init();
+    if (!_client.auth.getSession()?.isAuthenticated && !await ensureSession(false))
+      throw new Error('signed out: reload the page to sign in again');
+    return _client;
+  }
+
+  return { signIn, client: signedClient };
 }
 
 export const createAuth = createRayfinAuth;

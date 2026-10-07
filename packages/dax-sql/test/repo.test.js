@@ -2,7 +2,7 @@
 //   - every measure of model.bim, compiled and run in five filter contexts;
 //   - some of them checked against SQL written by hand;
 //   - every query the page sends, in six page states, compared row for row with what the
-//     page's own compiler (dashboard/github/semantic/compiler.js) returns for it.
+//     page's own compiler (dashboard/github-dax/semantic/compiler.js) returns for it.
 // All on made-up data in the model's shape (fixtures/nem.js). Where the two compilers differ,
 // this one follows DAX, and the differences are listed below with the reason. Skipped when
 // the repository's files are not there (DAX_SQL_REPO can point at a checkout).
@@ -16,7 +16,7 @@ import { pageQueries, STATES } from './page-queries.js';
 
 const root = process.env.DAX_SQL_REPO ? new URL(`file://${process.env.DAX_SQL_REPO.replace(/\/?$/, '/')}`) : new URL('../../../', import.meta.url);
 const path = p => new URL(p, root);
-const present = ['semantic_model/model.bim', 'dashboard/github/index.html', 'dashboard/github/semantic/compiler.js'].every(p => fs.existsSync(path(p)));
+const present = ['semantic_model/model.bim', 'dashboard/github-dax/index.html', 'dashboard/github-dax/semantic/compiler.js'].every(p => fs.existsSync(path(p)));
 const skip = present ? false : 'the repository files are not here';
 
 // Where the page's compiler is not DAX: the query, and why the rows differ.
@@ -25,16 +25,15 @@ const DIFFERENT = {
   batteryFleet: 'no unit left by the filters: COUNTROWS of nothing is blank in DAX; compiler.js returns 0',
 };
 
-let con, dax, toy, html, bim;
+let con, dax, toy, bim;
 before(async () => {
   if (skip) return;
   const bimText = fs.readFileSync(path('semantic_model/model.bim'), 'utf8');
   bim = JSON.parse(bimText);
-  html = fs.readFileSync(path('dashboard/github/index.html'), 'utf8');
   // compiler.js fetches model.bim next to itself when it loads.
   const fetch = globalThis.fetch;
   globalThis.fetch = async () => ({ json: async () => JSON.parse(bimText) });
-  try { toy = await import(path('dashboard/github/semantic/compiler.js').href); } finally { globalThis.fetch = fetch; }
+  try { toy = await import(path('dashboard/github-dax/semantic/compiler.js').href); } finally { globalThis.fetch = fetch; }
   const db = await DuckDBInstance.create(':memory:');
   con = await db.connect();
   await con.run(setup);
@@ -96,10 +95,15 @@ test('measures against SQL written by hand', { skip }, async () => {
 test("the page's queries give the rows compiler.js gives", { skip }, async () => {
   let compared = 0;
   for (const [state, s] of Object.entries(STATES)) {
-    for (const { name, dax: q } of pageQueries(html, s)) {
-      const mine = await run(q).catch(e => { throw new Error(`${state}.${name}: ${e.message}`); });
+    const asked = await pageQueries(s, async q => rows(dax.compile(toy.toDax(q)).sql));
+    for (const { name, query } of asked) {
+      const text = toy.toDax(query);
+      const mine = await run(text).catch(e => { throw new Error(`${state}.${name}: ${e.message}`); });
       let theirs;
-      try { theirs = await rows(toy.toSQL(q)); } catch { continue; }   // a query compiler.js cannot translate
+      try { theirs = await rows(toy.toSQL(text)); } catch (e) {
+        if (!compared) throw new Error(`${state}.${name}: ${e.message}\n${text}`);
+        continue;
+      }
       if (DIFFERENT[name]) continue;
       assert.deepEqual(bag(mine), bag(theirs), `${state}.${name}`);
       compared++;
