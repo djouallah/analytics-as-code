@@ -198,18 +198,28 @@ product: several are already fixed upstream.
   every grain it draws: 25,737 values equal, none different (2026-10-05).
 
 ### What it cost
-- **Every mistake in a measure cost a deploy.** A measure that didn't parse because of its
-  variable names (which one was never found out). A fixed-decimal division that kept 4
-  decimals. A `CALCULATE` filter on one column of a dimension that left the query's filter
-  on another column in place. A recreated table that Direct Lake couldn't see for about 7
-  minutes.
-- **The REST query API refuses a service principal on this model** (401). The check runs
-  its DAX over XMLA instead, through ADOMD.NET under pythonnet on a Linux runner.
+- **Every mistake in a measure cost a deploy, and that was the agent's fault.** The
+  deployed model could be queried from the development machine at any time, and a DAX query
+  can carry a measure of its own (`DEFINE MEASURE ... EVALUATE ...`), so a new measure can
+  be tried against the real model before it goes into `model.bim`. The agent never did
+  that. It tested its DAX through its own compiler and found the rest out by deploying
+  through CI:
+  - a measure that didn't parse because of its variable names (which one was never found
+    out);
+  - a fixed-decimal division that kept 4 decimals;
+  - a `CALCULATE` filter on one column of a dimension that left the query's filter on
+    another column in place.
+
+  Each would have been one query. A recreated table that Direct Lake couldn't see for about
+  7 minutes is the one cost a query would not have saved.
+- **The REST query API refuses a service principal on this model** (401). The check in CI
+  runs its DAX over XMLA instead, through ADOMD.NET under pythonnet on a Linux runner. That
+  is a CI problem only: from the development machine the model answers as the owner.
 
 ### Could be better
-- **A local DAX engine for tests.** There is no way to evaluate a measure before deploying
-  it, so the feedback loop is a deploy plus a refresh. That is the biggest gap in the whole
-  workflow.
+- **Try every measure against the deployed model first**, as a `DEFINE MEASURE` in a query
+  from the development machine, and put it into `model.bim` once it answers right. The
+  deploy then confirms instead of discovering.
 - **The model is a vendor format.** TMSL is open JSON, but only one engine runs it. The
   browser path needs a hand-written compiler to read it (next section).
 - **JSON has no comments**, so the why of a measure goes in its `description`, and a long
@@ -279,9 +289,10 @@ product: several are already fixed upstream.
 ### Could be better
 - **Deploy everything from CI.** The DuckDB-WASM Fabric app is still deployed from a laptop
   because of rayfin#89.
-- **Run the VertiPaq client in CI** against the deployed model, with the page's queries, and
-  compare its rows with the compiler's. That would turn "the page's DAX is DAX" from a rule
-  into a check.
+- **Run the page's DAX against the deployed model** and compare its rows with the
+  compiler's. It needs no CI and no deployed app: the model answers from the development
+  machine today. That would turn "the page's DAX is DAX" from a rule into a check. The two
+  queries found by reading DAX's rules would have been found by running them.
 
 ## 7. Verification
 
@@ -315,8 +326,8 @@ after; none asks where the figure is defined.
 - **A lint on the page:** fail when `index.html` does arithmetic on measure results or
   names a view outside the Analyze tab.
 - **Golden DAX queries through both engines:** the page's queries run by the compiler and
-  by the deployed model, rows compared. That is the real test of the compiler, and today it
-  doesn't exist.
+  by the deployed model, rows compared. That is the real test of the compiler. It doesn't
+  exist, although nothing stood in the way: the model can be queried from here.
 - **The layout measured, not eyeballed:** element boxes before and after a hover or drag.
 
 ## 8. Working with an AI agent
@@ -341,9 +352,13 @@ Why it happened, even with the rule written down:
   `CALCULATETABLE`; there is no filter context", is WHERE-clause thinking in DAX syntax.
   The page's DAX was then written to fit the translation, not DAX.
 - **The checks couldn't see it.** They compare a figure, not where it is defined.
+- **The real engine was never asked.** The deployed model answered DAX from the development
+  machine the whole time. The agent checked the page's DAX only against its own
+  translation, and treated Power BI as something to deploy to rather than something to
+  query.
 
 What stopped it was a mechanical constraint: a second engine that runs the same DAX, where
-SQL-dressed DAX gives different answers.
+SQL-dressed DAX gives different answers. That engine was available from the first day.
 
 ### Other patterns
 - **Working around instead of through.** Proposing hand-made rows for a gap, improvising
@@ -352,6 +367,9 @@ SQL-dressed DAX gives different answers.
 - **Diagnosing from inference.** A root cause has to rest on a CI log, a test or the git
   history, not on what a table "probably" holds.
 - **Scope creep in plans.** A SQL query often beats a built feature.
+- **Reaching for CI when the answer is one query away.** The agent ran measures through
+  deploys and planned "a VertiPaq client in CI" to check the page's DAX. Querying the model
+  from the development machine would have done both in seconds.
 
 ### What the instruction file became
 `AGENTS.md` is about 860 lines, and it is the real specification. It records not only how
@@ -414,6 +432,7 @@ it already runs in the browser.
 - Put the rules in the models from the start; make the import a copy from the start.
 - Write the semantic model before the first chart, and have the first chart call a measure.
 - Run two engines on the same queries from the first day: the second engine is the test.
+  When it is a deployed model, query it from the development machine; don't wait for CI.
 - Write the page lint and the golden queries before the page grows.
 - Keep the AGENTS.md habit of dates and reasons. Turn what can be checked into checks.
 
