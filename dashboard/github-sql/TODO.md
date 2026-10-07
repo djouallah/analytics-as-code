@@ -9,7 +9,7 @@ Open items only: a finished item is removed, not ticked.
 
 ## What carries over unchanged
 
-- The `mart` tables and the `.duckdb` files deployed with them (`data/`): no new import.
+- The data: the same `.duckdb` files the site already serves (`data/`), no new import.
 - `index.html`, `frontend/draw.js`, `frontend/logs.js`, `frontend/perflog.js`,
   `storage/data.js`, `storage/history.js`: copied from `../github-dax/`.
 - The grain rule: up to 30 days the 5-minute tables, beyond the daily and hourly ones
@@ -17,10 +17,6 @@ Open items only: a finished item is removed, not ticked.
 
 ## To do
 
-- [ ] **Where it is served.** `storage/data.js` finds `data/` next to the page's URL, so a page
-  at `/sql/` would look in `/sql/data/`. It has to read the files already deployed at the site
-  root (`../data/`): a second copy would put the site over GitHub Pages' 1 GB. Then
-  `build.yml` publishes this folder to `sql/` with the same copy and `stamp_build.mjs`.
 - [ ] **The tables as views.** A table is split over files (`today`, the half-years, `agg`),
   and the compiler's `build()` (`../github-dax/semantic/compiler.js`) puts them back together
   as views after every attach. That part is not DAX and stays, as a small `storage/views.js`:
@@ -43,8 +39,3 @@ Open items only: a finished item is removed, not ticked.
 `compiler.js`, the query words (`select`, `where`, `totals`, ...), the page's copy of
 `model.bim`, and for this page the full parity harness and the no-arithmetic lint
 (`scripts/parity/page_lint.mjs` reads `index.html` and `queries.js` of `../github-dax/` only).
-
-## Decision for the owner
-
-Whether this page replaces `../github-dax/` at the site root once both agree, or the two stay
-side by side for the talk.
