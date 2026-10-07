@@ -12,6 +12,10 @@ name: Deploy Semantic Model
 on:
   workflow_dispatch:
     inputs:
+      publish:
+        description: "Publish and refresh the model first (off: only the parity check, on the model as deployed)"
+        type: boolean
+        default: true
       since:
         description: "Parity: ask the model only the queries whose DAX, SQL or measures changed since this commit (empty: all)"
         required: false
@@ -64,6 +68,7 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
       - name: Publish the model and the report
+        if: inputs.publish
         run: python scripts/deploy_model.py
       - name: Mint Power BI token
         run: |
@@ -71,6 +76,7 @@ jobs:
           echo "::add-mask::$TOKEN"
           echo "POWERBI_TOKEN=$TOKEN" >> "$GITHUB_ENV"
       - name: Refresh it and query it
+        if: inputs.publish
         env:
           PYTHONNET_RUNTIME: coreclr
         run: python scripts/check_model.py
