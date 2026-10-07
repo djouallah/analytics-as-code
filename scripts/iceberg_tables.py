@@ -32,6 +32,7 @@ TABLES = [
     "mart.fct_rooftop",
     "mart.fct_interconnector",
     "mart.fct_curtailment",
+    "mart.fct_curtailment_region",
     "mart.fct_region_daily",
     "mart.fct_summary_daily",
     "mart.dim_month",

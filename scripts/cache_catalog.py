@@ -44,7 +44,7 @@ DIM = {"dim_duid": "DUID", "dim_calendar": "date", "dim_region": "Region", "dim_
        "dim_month": "month", "dim_interconnector": "interconnector"}
 AGG = {"fct_summary_daily": "DUID, date", "fct_region_daily": "REGIONID, date",
        "fct_summary_hourly": "DUID, month, hour", "fct_region_hourly": "REGIONID, month, hour",
-       "fct_curtailment": "DUID, date"}
+       "fct_curtailment": "DUID, date", "fct_curtailment_region": "REGIONID, date, fuel"}
 SPLIT = {"fct_summary": "date, time, price, DUID", "fct_region": "REGIONID, date, time",
          "fct_interconnector": "interconnector, date, time"}
 GROUPS = {"dim": DIM, "agg": AGG, "today": SPLIT, "history": SPLIT}

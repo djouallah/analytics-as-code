@@ -340,6 +340,32 @@ models:
         tests:
           - not_null
 
+  - name: fct_curtailment_region
+    description: For Power BI and the dashboard - curtailed and available energy per region, day and fuel (Wind, Solar). The farms (fct_curtailment) up to their newest day, AEMO's regional figures (fct_region) after it; each run replaces the 'aemo' rows (a DELETE in its own commit, then the insert-only merge). In schema mart
+    columns:
+      - name: REGIONID
+        description: NEM region
+        tests:
+          - not_null
+      - name: date
+        description: Calendar date, NEM time
+        tests:
+          - not_null
+      - name: fuel
+        description: Wind or Solar
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Wind', 'Solar']
+      - name: curtailed_mwh
+        description: Energy available but not dispatched (MWh)
+      - name: available_mwh
+        description: Energy available (MWh) - the denominator of a curtailment rate
+      - name: source
+        description: farms (the semi-scheduled units' next-day data, added up) or aemo (AEMO's regional figures, for the days after the farms' newest)
+        tests:
+          - not_null
+
   - name: fct_region_daily
     description: For Power BI and the dashboard's long ranges - price, demand and net interchange per region and day, the plain average of the day's intervals. A day is written once fct_region holds its 288 intervals. In schema mart
     columns:
@@ -443,9 +469,9 @@ exposures:
     depends_on:
       - ref('fct_summary')
       - ref('fct_region')
-      - ref('fct_rooftop')
       - ref('fct_interconnector')
       - ref('fct_curtailment')
+      - ref('fct_curtailment_region')
       - ref('fct_summary_daily')
       - ref('fct_region_daily')
       - ref('fct_summary_hourly')
