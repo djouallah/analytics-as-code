@@ -67,16 +67,8 @@ jobs:
       - name: Prepare deploy directory
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: |
-          mkdir -p deploy
-          # The page and one folder per layer, as they are in the repo, and the semantic
-          # model next to its compiler: it is the repo's (semantic_model/), not this client's.
-          cp dashboard/github-dax/index.html deploy/
-          cp -r dashboard/github-dax/frontend dashboard/github-dax/semantic dashboard/github-dax/storage deploy/
-          cp semantic_model/model.bim deploy/semantic/
-          # The build stamp (the Logs panel shows it) and ?v=<build> on every relative
-          # import, so a browser's cached modules never run with a new page.
-          node scripts/stamp_build.mjs deploy "${GITHUB_SHA::7}"
-          cp -r dashboard/github-dax/dag deploy/
+          # github-dax at the root, github-sql at sql/, stamped (the script says how).
+          bash scripts/stage_pages.sh deploy "${GITHUB_SHA::7}"
       - name: Deploy to nemtracker
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:

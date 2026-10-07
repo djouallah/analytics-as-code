@@ -663,7 +663,7 @@
     </div>
     <div class="analyze-sql">
       <div class="analyze-sql-head">
-        <label for="analyzeSql">SQL <span>— over the views of the model's tables: their stored columns, not the model's measures, so a figure here is what the query works out, not a chart's</span></label>
+        <label for="analyzeSql">SQL <span>— over the views of the tables: their stored columns, so a figure here is what the query works out, not a chart's</span></label>
         <button class="btn-analyze" id="analyzeSqlReset" type="button">Example</button>
       </div>
       <textarea id="analyzeSql" spellcheck="false" wrap="off"></textarea>
@@ -692,9 +692,8 @@
 
   <script type="module">
     import { createDataSource } from "./storage/data.js";
-    import { createModel } from "./semantic/compiler.js";
     import { renderLogs } from "./frontend/logs.js";
-    import { createQueries } from "./frontend/queries.js";
+    import { createQueries, connect } from "./frontend/queries.js";
     import { largestBy, smallestBy, orderBy, cycle, pick, hashIndex, clampIndex, axisClip, percentiles, daysApart, dayCount,
       shiftDate, formatTime, dayAhead, playStep, playDelay, renderCost, round1, round2, kLabel, mwhAxis, fmtGwh, fmtMwh,
       fmtTonnes, fmtMwAbs, pinSide, easeTo, progress, tipPlace, legendColumns, calendarLayout, bandSeries, barPercent,
@@ -866,14 +865,10 @@
     // =========================================================================
 
     // Where the .duckdb files live and how they are fetched and attached is data.js's business
-    // (a host that stores the files differently ships its own). What the data means is the
-    // semantic model's (semantic_model/model.bim, the Tabular model Power BI reads in Direct Lake:
-    // the tables of the lakehouse, the relationships, the measures), which compiler.js turns
-    // into views. The page asks the model in fields and filters (frontend/queries.js), which
-    // compiler.js turns into what runs over those views: it names no attached table and writes
-    // no join. The Analyze tab alone is
-    // SQL, over the same views.
-    const data = createModel(createDataSource({ onStatus: setStatus }));
+    // (a host that stores the files differently ships its own): it has a view per table. How
+    // the page asks is frontend/queries.js's: the queries, and `connect`, what runs them over
+    // the data. The Analyze tab is SQL, over the same views.
+    const data = connect(createDataSource({ onStatus: setStatus }));
     // Analyze is SQL. A host whose engine is the model itself (VertiPaq, in the Fabric app
     // of that name) runs none: its data source has no `needs`, and the tab is left out.
     if (!data.needs) document.getElementById('tab-analyze').remove();
@@ -1693,7 +1688,7 @@
       // The daily tables come with agg; init draws this again once it is attached.
       if (!aggLoaded) return ids.forEach(id => show(id));
       const { from, to } = getDateRange();
-      const [[, , first, last]] = queries.wholeDays('units', from, to);
+      const { first, last } = queries.wholeDaysRange('units', from, to);
       const days = dayCount(first, last);
       if (!(days >= 1)) return ids.forEach(id => show(id));
       const one = q => runQuery(q).then(([r]) => r?.v ?? null);
@@ -2768,14 +2763,14 @@
     }
 
     // --- Analyze: SQL, and only SQL ---
-    // The box is SQL over the views the compiler builds from the model (a table's view
-    // v_<table>, a relationship's view under its name): what the files store, as they store
-    // it. The page writes no SQL here; the example lists the views and their columns.
+    // The box is SQL over the data's views (a table's view v_<table>, and with the semantic
+    // model a relationship's view under its name): what the files store, as they store it.
+    // The page writes no SQL here; the example lists the views and their columns.
     function syncAnalyzeSql() {
       const ta = document.getElementById('analyzeSql');
       if (!ta) return;
       const views = data.views().map(v => `--   ${v.name}: ${v.columns.join(', ')}`).join('\n');
-      ta.value = `-- The views of the model's tables and relationships, over the attached files:\n${views}\n`
+      ta.value = `-- The views over the attached files:\n${views}\n`
         + 'SELECT * FROM v_fct_region_daily ORDER BY date DESC LIMIT 100';
     }
     function getAnalyzeSql() {

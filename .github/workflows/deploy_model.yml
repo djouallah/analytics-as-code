@@ -117,3 +117,11 @@ jobs:
             since=("$RUNNER_TEMP/since.json")
           fi
           python scripts/parity_model.py "$RUNNER_TEMP/parity.json" "${since[@]}"
+      - name: The SQL page against the page through the model
+        # scripts/parity/sql_page.mjs: every question of dashboard/github-sql (its own SQL)
+        # against the same question of dashboard/github-dax (through the compiler), over the
+        # files of the step above: the same rows. The step above holds github-dax's to the
+        # model, so this holds github-sql's to it too. A changed measure that the SQL page
+        # does not follow fails here.
+        if: ${{ !cancelled() }}
+        run: cd scripts/parity && node sql_page.mjs "$RUNNER_TEMP/data"

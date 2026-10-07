@@ -10,11 +10,11 @@
 //                                                first paint
 //   mart_<YYYY>_h<N>.duckdb    as `p<YYYY>_h<N>` the 5-minute tables by half-year: ensureHistory(), only
 //                                                the half-years a 5-minute range needs
-// The model and index.html know none of this: ../semantic/compiler.js wraps the members
-// createDataSource returns and builds its views over the attached databases, which it finds
-// in the engine's catalog. A host that stores the files differently (the Fabric app,
+// The page knows none of this: it reads a view per table, v_<table>, which views.js builds
+// over the attached databases after every attach (they are found in the engine's catalog).
+// A host that stores the files differently (the Fabric app,
 // ../../fabric_app_wasm/site/storage/data.js: a lakehouse behind a Fabric sign-in) has its own data.js with
-// the same members, over the same history.js.
+// the same members, over the same history.js and views.js.
 //
 // DOM-free: progress is reported through the injected `onStatus` callback, and what is
 // fetched, attached and run is timed in perflog.js, for the Logs tab.
@@ -22,6 +22,7 @@
 
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev65.0/+esm";
 import { periodsForRange, attachCached } from "./history.js";
+import { withViews } from "./views.js";
 import { perf, HTTP_TRACE_SHIM } from "../frontend/perflog.js";
 
 export function createDataSource({ onStatus = () => {} } = {}) {
@@ -116,7 +117,9 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   let _baseUrl = '';
 
   // DuckDB-WASM up, `dim` + `today` attached: enough for the default "Last 3 days" view.
-  async function init() {
+  // `base`: where data/ is, relative to the page's folder (a page in a folder of the site
+  // reads the site's files, '../').
+  async function init({ base = '' } = {}) {
     onStatus("Loading DuckDB WASM...");
     const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
     const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
@@ -131,7 +134,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     URL.revokeObjectURL(workerUrl);
 
     conn = await _db.connect();
-    _baseUrl = window.location.href.replace(/\/[^/]*$/, "");
+    _baseUrl = new URL(base || '.', window.location.href).href.replace(/\/$/, "");
 
     onStatus("Loading today's data...");
     await Promise.all([loadDb('mart_dim.duckdb', 'dim'), loadDb('mart_today.duckdb', 'today')]);
@@ -176,7 +179,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   const attachOnce = p => _attaching.get(p) ?? _attaching.set(p, attachPeriod(p).finally(() => _attaching.delete(p))).get(p);
 
   // Attach the half-year periods of a date range that exist and aren't attached yet.
-  // True if any was attached. The caller (the compiler) asks only for a range that reaches
+  // True if any was attached. The caller (views.js) asks only for a range that reaches
   // back past the days `today` covers.
   async function ensureHistory(from, to, msg) {
     if (!_manifest) {
@@ -192,9 +195,9 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     return (await Promise.all(needed.map(attachOnce))).includes(true);
   }
 
-  return {
+  return withViews({
     init, attachAgg, ensureHistory,
     // `dax`: the query as the page wrote it, for the Logs tab (the compiler passes it).
     query: (sql, dax) => perf.query(sql, () => conn.query(sql), dax),
-  };
+  });
 }

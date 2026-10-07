@@ -52,8 +52,9 @@
 // (queries.wholeDays).
 //
 // Part 1, the model. What model.bim holds and what each entry becomes:
-//   tables               a view each, v_<table>: the table of the lakehouse its partition
-//                        names, over the files that are attached (see "The model -> views")
+//   tables               a view each, v_<table>, which the data source has: the table of the
+//                        lakehouse of that name over the files attached (../storage/views.js;
+//                        a table's partition names the table of its own name)
 //   relationships        a view each, under the relationship's name: the `from` side LEFT JOIN
 //                        the `to` side, with the columns of `to`
 //   measures             nothing of their own: a measure is DAX, written out where a query
@@ -102,16 +103,16 @@
 // What comes back is cast by the column's dataType, as the browser wants it: a date as text,
 // a whole number as INTEGER, a number as DOUBLE.
 //
-// createModel(data) wraps a data source (../storage/data.js: init, attachAgg, ensureHistory,
-// query) and has its members plus `has`, `needs`, `toDax` and `toSQL`; `query` takes the
-// page's query (an object) or SQL, never DAX text. It compiles the model after every attach, reading what is attached
-// from the engine's own catalog: one query for the catalog, one for the statements that
-// changed. A view is created once and bound again every time it is read (DuckDB), so the
-// ones over a rebuilt view follow it.
+// createModel(data) wraps a data source (../storage/data.js, which has a view per table,
+// v_<table>) and has its members, with the views of the model's relationships added
+// (../storage/views.js), `toDax` and `toSQL`; `query` takes the page's query (an object)
+// or SQL, never DAX text. ../frontend/queries.js hands it to the page (`connect`).
 //
 // Host-independent: it only knows the attached databases by name (dim, today, agg,
 // p<YYYY>_h<N>), so a host that ships its own data.js keeps this file and model.bim.
 // =============================================================================
+
+import { withViews } from '../storage/views.js';
 
 // The model, fetched next to this file, with this file's ?v= (the Fabric build's cache-buster).
 const MODEL = (await (await fetch(new URL('./model.bim' + new URL(import.meta.url).search, import.meta.url))).json()).model;
@@ -971,127 +972,14 @@ const isDax = q => /^\s*EVALUATE\b/i.test(q);
 // The model -> views
 // =============================================================================
 
-// A table of the model is a table of the lakehouse, copied into the files as it is
-// (scripts/cache_catalog.py): whole in `dim` or `agg`, or split by date over `today` (the
-// newest days, refreshed every hour) and the half-year files. v_<table> is that table
-// over what is attached; where two files hold a day, `today` has it. A split table that is
-// also whole in `agg` has its older days read from there.
-const ENTITIES = MODEL.tables.map(t => ({ name: `v_${t.name}`, table: t.partitions[0].source.entityName }));
+// The views of the model's relationships, and one per fact with two of its dimensions,
+// over the tables' views that the data source has (../storage/views.js: v_<table>).
 const RELATIONSHIPS = RELS.filter(r => r.view).map(r => ({ name: r.view, from: `v_${r.from}`, to: `v_${r.to}`, on: [r.fromColumn, r.toColumn] }));
 const STAR_VIEWS = STARS.map(s => ({ name: s.view, from: `v_${s.fact}`, joins: s.rels.map(r => ({ to: `v_${r.to}`, on: [r.fromColumn, r.toColumn] })) }));
-// In the order they are created: every view after the ones it reads.
-const ITEMS = [...ENTITIES, ...RELATIONSHIPS, ...STAR_VIEWS];
-const PERIOD = /^p\d{4}_h[12]$/;
-const mentions = (s, name) => new RegExp(`\\b${name}\\b`, 'i').test(s);
 
 export function createModel(data) {
-  // The views that exist by now, name -> { cols }, and what each needs attached to hold all
-  // its rows: the half-year files of a date range (`history`) or the aggregates (`agg`).
-  let _views = new Map(), _requires = new Map();
-  let _recentFrom = null;    // the first day `today` holds
-  const _sent = new Map();   // statement name -> the SQL last run for it
-
-  // Columns of every attached table, by `<db>.<table>`.
-  async function catalog() {
-    const r = await data.query(`SELECT table_catalog || '.' || table_name AS t, column_name AS c
-      FROM information_schema.columns WHERE table_catalog <> current_database()`);
-    const tables = new Map();
-    for (const { t, c } of r.toArray()) {
-      if (!tables.has(t)) tables.set(t, new Set());
-      tables.get(t).add(c);
-    }
-    return tables;
-  }
-
-  // The SELECT of one view over what is attached, or null if it cannot exist yet.
-  function build(item, tables, views) {
-    if (item.table) {
-      const dbs = [...tables.keys()].filter(t => t.endsWith(`.${item.table}`)).map(t => t.split('.')[0]);
-      const read = db => `SELECT * FROM ${db}.${item.table}`;
-      const periods = dbs.filter(db => PERIOD.test(db)).sort(), recent = dbs.includes('today');
-      const requires = new Set(recent ? ['history'] : dbs.includes('dim') ? [] : ['agg']);
-      if (!dbs.length) return { requires };
-      const older = recent && dbs.includes('agg') ? ['agg'] : periods;
-      // BY NAME: a file built before the table got a column reads as NULL in it, instead of
-      // the view failing on files that differ. The view has the columns of all of them.
-      const sql = recent && older.length
-        ? `SELECT * FROM (${older.map(read).join(' UNION ALL BY NAME ')}) WHERE date < DATE '${_recentFrom}' UNION ALL BY NAME ${read('today')}`
-        : dbs.sort().map(read).join(' UNION ALL BY NAME ');
-      const cols = new Set(dbs.flatMap(db => [...tables.get(`${db}.${item.table}`)]));
-      return { sql, cols, requires };
-    }
-    // A fact and all its dimensions: each joined as its relationship's view joins it, a
-    // column a table before it already has left out.
-    if (item.joins) {
-      const from = views.get(item.from), tos = item.joins.map(j => views.get(j.to));
-      const requires = new Set([item.from, ...item.joins.map(j => j.to)].flatMap(v => [..._requires.get(v)]));
-      if (!from || tos.some(t => !t)) return { requires };
-      const cols = new Set(from.cols), fields = [], joins = [];
-      item.joins.forEach(({ to, on: [l, r] }, i) => {
-        for (const c of tos[i].cols) if (c !== r && !cols.has(c)) { cols.add(c); fields.push(`d${i}.${c}`); }
-        joins.push(`LEFT JOIN ${to} d${i} ON f.${l} = d${i}.${r}`);
-      });
-      return { sql: `SELECT f.*${fields.map(c => `, ${c}`).join('')} FROM ${item.from} f ${joins.join(' ')}`, cols, requires };
-    }
-    // A relationship.
-    const from = views.get(item.from), to = views.get(item.to);
-    const requires = new Set([..._requires.get(item.from), ..._requires.get(item.to)]);
-    if (!from || !to) return { requires };
-    const [l, r] = item.on, fields = [...to.cols].filter(c => c !== r && !from.cols.has(c));
-    return { sql: `SELECT f.*, ${fields.map(c => `d.${c}`).join(', ')} FROM ${item.from} f LEFT JOIN ${item.to} d ON f.${l} = d.${r}`,
-      cols: new Set([...from.cols, ...fields]), requires };
-  }
-
-  // Creates what the model describes over what is attached by now: the statements that are
-  // new or changed since the last compile, as one query. One compile at a time.
-  let _compiling = Promise.resolve();
-  const compile = () => _compiling = _compiling.catch(() => {}).then(async () => {
-    const tables = await catalog();
-    // A literal in the views, not a subquery: a query inside `today`'s days then reads no
-    // half-year at all (40 ms against 98 for three days of one region).
-    _recentFrom ??= (await data.query(`SELECT CAST(MIN(date) AS VARCHAR) AS d FROM today.fct_region`)).toArray()[0].d;
-    const views = new Map();
-    const statements = [];
-    _requires = new Map();
-    for (const item of ITEMS) {
-      const view = build(item, tables, views);
-      _requires.set(item.name, view.requires);
-      if (!view.sql) continue;
-      views.set(item.name, view);
-      statements.push([item.name, `CREATE OR REPLACE VIEW ${item.name} AS ${view.sql}`]);
-    }
-    const changed = statements.filter(([name, s]) => _sent.get(name) !== s);
-    if (changed.length) await data.query(changed.map(([, s]) => s).join(';\n'));
-    for (const [name, s] of changed) _sent.set(name, s);
-    _views = views;
-  });
-
   return {
-    async init() {
-      const res = await data.init();
-      await compile();
-      return res;
-    },
-    async attachAgg() {
-      await data.attachAgg();
-      await compile();
-    },
-    // True if more history was attached: results the caller cached are stale. A range that
-    // starts inside the days `today` holds is read from it alone, so nothing is attached for
-    // it: that is the default "Last 3 days" view.
-    async ensureHistory(from, to, msg) {
-      if (from >= _recentFrom) return false;
-      const changed = await data.ensureHistory(from, to, msg);
-      if (changed) await compile();
-      return changed;
-    },
-    // The views that exist, with their columns: what the Analyze tab's SQL can read.
-    views: () => [..._views].map(([name, v]) => ({ name, columns: [...v.cols] })),
-    // Whether a view exists and, given a column, whether it has it.
-    has: (view, column) => {
-      const v = _views.get(view);
-      return !!v && (!column || !v.cols || v.cols.has(column));
-    },
+    ...withViews(data, [...RELATIONSHIPS, ...STAR_VIEWS]),
     // The page's query (an object) becomes DAX, and the DAX SQL; both go to the Logs tab.
     // SQL (Analyze) goes as it is. DAX text is refused: the page asks in the query's words.
     query: async q => {
@@ -1101,11 +989,5 @@ export function createModel(data) {
     },
     toDax,
     toSQL,
-    // What a SQL query reads, by the views it names: the 5-minute history of a date range
-    // (ensureHistory) and/or the aggregates (attachAgg).
-    needs: q => {
-      const reads = kind => ITEMS.some(i => _requires.get(i.name)?.has(kind) && mentions(q, i.name));
-      return { history: reads('history'), agg: reads('agg') };
-    },
   };
 }

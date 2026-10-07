@@ -32,7 +32,11 @@
 // createQueries(page) takes what the page's state is, as functions: range() { from, to },
 // intraday(), region(), fuel(), picked() (the units picked), newestDate(), shiftDate(date, n),
 // and the names UNKNOWN and ROOFTOP.
+// connect(data) is what runs these queries: the data source (../storage/data.js) wrapped by
+// the compiler, which turns a query into DAX and the DAX into SQL over the data's views.
 // =============================================================================
+
+export { createModel as connect } from '../semantic/compiler.js';
 
 export function createQueries(page) {
   const { UNKNOWN, ROOFTOP, shiftDate } = page;
@@ -87,10 +91,15 @@ export function createQueries(page) {
     // from the 5-minute table, which the compiler does not (2026-10-07: for some hours each
     // night the regional table has a day the units' has not yet).
     wholeDays(which, from, to) {
+      const { first, last } = queries.wholeDaysRange(which, from, to);
+      return queries.dates('dim_calendar', first, last);
+    },
+    // The same range as dates, { first, last }: what the KPIs' change compares with.
+    wholeDaysRange(which, from, to) {
       if (!wholeDaysHeld) throw new Error('the daily tables are not attached yet');
       const { first } = wholeDaysHeld[which], { units, regions } = wholeDaysHeld;
       const last = units.last < regions.last ? units.last : regions.last;
-      return queries.dates('dim_calendar', !from || from < first ? first : from, !to || to > last ? last : to);
+      return { first: !from || from < first ? first : from, last: !to || to > last ? last : to };
     },
 
     // The header's filters on the units, at the range's grain.

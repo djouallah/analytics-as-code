@@ -193,8 +193,13 @@ top of the repo is the one semantic model, and `dashboard/` holds its four clien
 DuckDB-WASM), `fabric_app_vertipaq/` (the same page as a Fabric app, its DAX run by the
 deployed model: see "The Fabric app on VertiPaq") and `powerbi/` (`nem.Report`, a report over
 the deployed model). The two Fabric apps are named by their engine (the owner's, 2026-10-06).
-`github-sql/` is not a client yet: a TODO for the same page in plain SQL, with no semantic
-layer in the browser (2026-10-08).
+`github-sql/` (2026-10-08) is the same page in plain SQL, with no semantic layer: the same
+`index.html`, `storage/` and Logs tab, and its own `frontend/queries.js`, each member one
+SELECT over the views, its figures written in SQL. It is served at `sql/` on the same site,
+next to the github-dax page at the root, which stays the default, and reads the site's
+`data/` (`connect` in its `queries.js` passes `base: '../'` to `data.js`'s `init`). It is how
+a team would build the page in practice; it holds to the model through github-dax
+(`scripts/parity/sql_page.mjs`, below).
 **The GitHub page is the critical one: it is public and must never break** (the owner's,
 2026-10-05). The Fabric apps and Power BI are internal: they should not break either, but it
 is not the end of the world if one does. So a change that touches what they share (the
@@ -210,10 +215,14 @@ the Logs tab.
 - query language: the page's queries, objects of the model's fields (`select`, `where`, ...),
   which the compiler writes as DAX
 - semantic model: `semantic_model/model.bim` (at the top of the repo), a Tabular model in TMSL
-- compiler: `semantic/compiler.js`, the model to views, the page's queries to DAX and the DAX
-  to SQL
+- compiler: `semantic/compiler.js`, the model's relationships to views, the page's queries to
+  DAX and the DAX to SQL
 - engine: DuckDB-WASM
-- storage: `storage/data.js`, `storage/history.js`
+- storage: `storage/data.js`, `storage/history.js`, `storage/views.js` (a view per table)
+`index.html` imports `storage/data.js` and `frontend/queries.js`, nothing else of these:
+`queries.js` exports `connect(data)`, what runs its queries (here the compiler's
+`createModel`, in github-sql the data source as it is). So a client of the page swaps
+`frontend/queries.js`, not `index.html`.
 - and the Logs tab, `frontend/`
 
 **It is a proof of concept (2026-10-05); the point is that the layers are there, in the
@@ -261,7 +270,8 @@ never the page the formula. What numbers the page does handle is how it draws (a
 at a percentile, a bubble's size, a layout, a number written as text, which row is the
 largest), and all of it is in `dashboard/github-dax/frontend/draw.js`.
 **`scripts/parity/page_lint.mjs` enforces it** (`build.yml`, on every push): no `+ - * / %`
-on numbers, no `+= -=`, no `.reduce()` in the script of `index.html` or in `queries.js`; it
+on numbers, no `+= -=`, no `.reduce()` in the script of `index.html` or in either page's
+`queries.js` (github-sql's figures are SQL, in its strings); it
 does not read `draw.js`, which a review reads instead. The rows the page uses as they are
 stored are not figures: the filter lists, the newest interval, the Flows rows (a unit's MW,
 a link's flow and limits).
@@ -284,7 +294,14 @@ each query's SQL on the deployed `.duckdb` files; `scripts/parity_model.py` asks
 model the same DAX and compares the rows (to a cent, or a part in a million: VertiPaq's
 fixed decimal). `deploy_model.yml` runs it after `check_model.py`. A new query of the page
 is in it once `asked()` there calls it. From a laptop it runs over REST with a user token
-(`POWERBI_TOKEN`, `WS_ID`), which answers at most 100,000 rows. Its first run found: the
+(`POWERBI_TOKEN`, `WS_ID`), which answers at most 100,000 rows. The states and `asked()` are
+`scripts/parity/page_states.mjs`. **The SQL page is held to this one**
+(`scripts/parity/sql_page.mjs`, the step after in `deploy_model.yml`, 30 s on a laptop): every
+member of github-sql's `queries.js`, in the same states, against github-dax's over the same
+files, the same rows (matched on the columns that are not figures, to a part in a million)
+in the order its `orderBy` asks. A measure changed in the model that the SQL page does not
+follow fails there. With an output file it writes the shape `parity_model.py` reads, the
+DAX next to the SQL page's rows, to ask the model directly. Its first run found: the
 curtailment by month with units picked did not compile (no view joined a fact to two
 dimensions: now `<fact>_star`), a count of no rows was 0 where DAX gives blank, and AEMO
 spelling a station two ways, which VertiPaq folds (text is case-insensitive there) and
@@ -310,9 +327,11 @@ model may not have left (3,069 MB of a 3 GB limit after a day of parity, run 376
 `index.html` is the one file at the top of `dashboard/github-dax/`: it is the site's URL, and `data.js`
 finds `data/` from the page's URL. The deployed tree is the repo tree, so a relative import
 resolves the same locally and deployed, with one exception: `model.bim` is not in this
-folder. Both builds (`build.yml`, `dashboard/fabric_app_wasm/build.mjs`) copy
+folder. Both builds (`scripts/stage_pages.sh`, `dashboard/fabric_app_wasm/build.mjs`) copy
 `semantic_model/model.bim` to `semantic/model.bim`, next to the compiler that fetches it,
-and anything that serves the page from the repo has to do the same.
+and anything that serves the page from the repo has to do the same. github-sql is not
+servable from the repo at all: it is assembled (`stage_pages.sh`: github-dax's files, its
+`queries.js` over them, at `sql/`).
 - `dashboard/github-dax/index.html` is the page: the charts, which draw what
   `dashboard/github-dax/frontend/queries.js` asks: every query the charts send, by tab and chart
   (`createQueries(page)`, over the page's state passed in as functions; the renderers only
@@ -347,20 +366,26 @@ and anything that serves the page from the repo has to do the same.
   otherwise. `.platform` and `definition.pbism` next to it make the folder a Fabric item.
   It is JSON, so a browser reads it with no library: there are no comments, so the why goes
   in a `description`, and a long expression is an array of lines.
+- `dashboard/github-dax/storage/views.js` (`withViews(data, items)`, which every `data.js`
+  returns itself wrapped in) is the tables as views: a view `v_<table>` per table attached,
+  over the files (the table whole in `dim` or `agg`, or split by date over `today` and the
+  half-years: `today` has the days it holds, cut at a literal date; the files are stacked by
+  column name, so one built before a column was added reads as NULL in it). It creates them
+  after every attach: one query reads what is attached from the engine's catalog
+  (`information_schema`), and one runs the statements that are new or changed. It adds
+  `views`, `has`, `needs` and `requires` to the data source: `needs(sql)` says what a SQL
+  query reads; `ensureHistory` attaches nothing for a range that starts inside the days
+  `today` holds, so the default view fetches no history. A layer above wraps it again with
+  views of its own over these (`items`: relationships, a fact with its dimensions).
 - `dashboard/github-dax/semantic/compiler.js` has two parts (`createModel(dataSource)`: the data
-  source's members plus `has`, `views`, `needs`, `toDax` and `toSQL`). **It is a toy on purpose** (the owner,
+  source's members, its views plus the model's, `toDax` and `toSQL`). **It is a toy on purpose** (the owner,
   2026-10-05): an example of where that layer of the stack sits, not a DAX engine. It
   translates what this page asks, by fixed cases; it does not plan, and a construct it cannot
   translate gets its equivalent SQL written here, never a general mechanism.
-  The model: a view `v_<table>` per table of the model, over the files that are attached
-  (the table whole in `dim` or `agg`, or split by date over `today` and the half-years:
-  `today` has the days it holds, cut at a literal date; the files are stacked by column
-  name, so one built before a column was added reads as NULL in it), and a view per relationship under
-  its name (`fct_summary_to_dim_duid`: the fact LEFT JOIN the dimension). It compiles after
-  every attach: one query reads what is attached from the engine's catalog
-  (`information_schema`), and one runs the statements that are new or changed.
-  `needs(sql)` says what a SQL query reads; `ensureHistory` attaches nothing for a range
-  that starts inside the days `today` holds, so the default view fetches no history.
+  The model: the data source's `v_<table>` (a table of the model is the lakehouse table of
+  its own name), and a view per relationship under its name (`fct_summary_to_dim_duid`: the
+  fact LEFT JOIN the dimension) and per fact with two of its dimensions, created by
+  `withViews` over them.
   The queries: `toDax(query)` writes the page's query as DAX, and `toSQL(dax)` turns that
   into one SELECT over those views, the same text once (a Map). The header of the file lists what each DAX construct becomes. To know:
   - It picks the view from the tables a query names: `fct_summary` alone reads
@@ -424,8 +449,8 @@ and anything that serves the page from the repo has to do the same.
     groups asked for (`perUnit`). In one level, as `list(DISTINCT {DUID, RegCapMW})`, the
     capacity factor of 30 days took 2.7 s in the browser against 0.8.
 - `storage/data.js` is the host: how the `.duckdb` files are fetched, cached and attached
-  (`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `query`). It attaches `dim`,
-  `today`, `agg` and the 5-minute history, and builds no view. On both the files are
+  (`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `query`, wrapped by
+  `views.js`). It attaches `dim`, `today`, `agg` and the 5-minute history. On both the files are
   downloaded whole into OPFS, and the history is the half-year files (`p2026_h1`, ...), the
   ones a range needs. There are two, with the same members:
   - `dashboard/github-dax/storage/data.js`, GitHub Pages: the files sit in `data/` (`mart_dim`, `mart_today`,
@@ -507,8 +532,9 @@ difference of some 10 ms on one query is not worth chasing: on a second run as m
 other way.
 
 ## Dashboard deploy
-`build.yml` (index.html, the `frontend/`, `semantic/` and `storage/` folders, dbt docs) and
-`import_data.yml` (the .duckdb files)
+`build.yml` (the pages, staged by `scripts/stage_pages.sh`: github-dax at the root with its
+`frontend/`, `semantic/` and `storage/` folders, github-sql at `sql/`, the dbt docs) and
+`import_data.yml` (the .duckdb files; with `with_page`, the same staging)
 publish into `NemTracker/nemtracker.github.io` with `scripts/deploy_pages.sh`: a blobless
 depth-1 clone, the published paths added with `-f` (so the deploy repo's `.gitignore` can't
 skip a file), push retried on a race. It only adds and replaces: a file leaves the site by

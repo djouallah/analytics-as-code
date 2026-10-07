@@ -22,9 +22,12 @@ market (AEMO).
     [`dashboard/fabric_app_vertipaq/`](dashboard/fabric_app_vertipaq/); it has never run
     in a browser.
   - a **Power BI report**, on the same model and the same server.
+- **The same page without the semantic model**, in plain SQL
+  ([live](https://nemtracker.github.io/sql/), [`dashboard/github-sql/`](dashboard/github-sql/)):
+  how a team would build it in practice. Its figures are checked against the DAX page's.
 - **[`compiler.js`](dashboard/github-dax/semantic/compiler.js)** is what lets the page read a
-  Power BI model without Power BI: it turns the model into DuckDB views and the page's DAX
-  queries into SQL. **It is not a general-purpose DAX compiler.** It was written for this
+  Power BI model without Power BI: it turns the model's relationships into DuckDB views and
+  the page's DAX queries into SQL. **It is not a general-purpose DAX compiler.** It was written for this
   repository only: it knows this model and the constructs this page uses, and fails on
   anything else. It is here to show where that layer sits.
 

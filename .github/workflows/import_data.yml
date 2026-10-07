@@ -166,17 +166,13 @@ jobs:
           node-version: "24"
       - name: Stage the page with the data
         # with_page: the page goes out in the same commit as the data, so the site never holds
-        # the new page with the old data or the other way round. The same copy and stamp as
+        # the new page with the old data or the other way round. The same staging as
         # build.yml's "Prepare deploy directory": without the ?v=<build> on every import a
         # browser runs the new page with its cached old modules (2026-10-07).
         if: github.event_name == 'workflow_dispatch' && inputs.with_page
         run: |
           cp deploy_data/data/* deploy_daily/data/
-          cp dashboard/github-dax/index.html deploy_daily/
-          cp -r dashboard/github-dax/frontend dashboard/github-dax/semantic dashboard/github-dax/storage deploy_daily/
-          cp semantic_model/model.bim deploy_daily/semantic/
-          node scripts/stamp_build.mjs deploy_daily "${GITHUB_SHA::7}"
-          cp -r dashboard/github-dax/dag deploy_daily/
+          bash scripts/stage_pages.sh deploy_daily "${GITHUB_SHA::7}"
       - name: Upload instead of deploying
         if: github.event_name == 'workflow_dispatch' && !inputs.publish
         uses: actions/upload-artifact@v4

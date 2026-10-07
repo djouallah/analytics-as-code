@@ -90,8 +90,9 @@ on purpose: the point is the layers, not their maturity.
 - **The semantic model** describes the tables, their relationships and the measures, each
   with a description. It is a real Power BI model (`model.bim`), the same file that is
   deployed to Fabric: it holds DAX only, and nothing in it is written for the page.
-- **The compiler** turns it into DuckDB views, writes the page's queries as DAX, and
-  turns the DAX into SQL over the views. It is a toy, on purpose: the file is there to show where that layer
+- **The compiler** turns its relationships into DuckDB views, over the views of the
+  tables that storage has, writes the page's queries as DAX, and turns the DAX into SQL
+  over them. It is a toy, on purpose: the file is there to show where that layer
   sits. It knows the constructs this
   page uses and nothing else.
 - **The query language** is where the layers show. SQL asks for tables, while a semantic
@@ -101,6 +102,11 @@ on purpose: the point is the layers, not their maturity.
   say, as a report visual's is; every figure is a measure, and the page draws the rows
   (`scripts/parity/page_lint.mjs` checks that its code works out none). The Analyze tab is
   the exception: it is SQL, written by whoever uses it, against the same views.
+- **The same page without the semantic layer** is `dashboard/github-sql/`, at `sql/` on the
+  site: the same `index.html` and storage, and its own `frontend/queries.js`, which asks in
+  SQL, each figure written out where a chart uses it, the joins written out. It is how a
+  team would build the page in practice. `scripts/parity/sql_page.mjs` holds its rows to
+  the DAX page's, which are held to the model.
 
 ### How a Power BI report asks
 
@@ -148,8 +154,8 @@ no query service.
 ├── scripts/              # The cache (Iceberg → DuckDB files), table maintenance, deploy
 ├── semantic_model/       # The one semantic model (model.bim): what every dashboard reads, and a Fabric item
 ├── dashboard/            # Its four clients
-│   ├── github-dax/       # The page, and a folder per layer: frontend/, semantic/ (the compiler), storage/ (the GitHub Pages host)
-│   ├── github-sql/       # The same page in plain SQL, no semantic layer in the browser: a TODO
+│   ├── github-dax/       # The page, and a folder per layer: frontend/, semantic/ (the compiler), storage/ (the GitHub Pages host, the tables as views)
+│   ├── github-sql/       # The same page in plain SQL, no semantic layer (its frontend/queries.js), served at sql/
 │   ├── fabric_app_wasm/     # The same page as a Fabric app on DuckDB-WASM: its host code, sign-in, and the Rayfin project
 │   ├── fabric_app_vertipaq/ # The same page as a Fabric app on the deployed model: not available yet (a README)
 │   └── powerbi/          # A report over the deployed model

@@ -18,10 +18,10 @@
 // queries that read the newest interval or day are left out for the same reason.
 // =============================================================================
 
-import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { DuckDBInstance } from '@duckdb/node-api';
+import { engine, pageOf, states, lists, asked, keysOf, shiftDate } from './page_states.mjs';
 
 // [root]: another checkout to take the compiler, the queries and the model from (the commit a
 // check is compared with: parity_model.py --since); its rows are not run, only its keys kept.
@@ -40,123 +40,28 @@ globalThis.fetch = async url => {
 const PAGE = ['dashboard/github-dax', 'dashboard/github'].map(d => path.join(ROOT, d)).find(d => existsSync(d));
 const { createModel } = await import(pathToFileURL(path.join(PAGE, 'semantic/compiler.js')));
 const { createQueries } = await import(pathToFileURL(path.join(PAGE, 'frontend/queries.js')));
+// The tables' views are the data source's since 2026-10-08 (storage/views.js, which data.js
+// wraps itself in); before, the compiler built them.
+const VIEWS = path.join(PAGE, 'storage/views.js');
+const withViews = existsSync(VIEWS) ? (await import(pathToFileURL(VIEWS))).withViews : s => s;
 
-// --- The engine: the files attached as data.js attaches them, every half-year at once ---
-const instance = await DuckDBInstance.create(':memory:');
-const conn = await instance.connect();
-const file = name => path.resolve(dataDir, name).replace(/\\/g, '/');
-const attach = (name, alias) => conn.run(`ATTACH '${file(name)}' AS ${alias} (READ_ONLY)`);
-async function run(sql) {
-  let reader;
-  for (const s of sql.split(';\n')) reader = await conn.runAndReadAll(s);
-  return reader.getRowObjectsJson();
-}
-const source = {
-  async init() {
-    await attach('mart_dim.duckdb', 'dim');
-    await attach('mart_today.duckdb', 'today');
-    for (const f of readdirSync(dataDir).filter(f => /^mart_\d{4}_h[12]\.duckdb$/.test(f)))
-      await attach(f, `p${f.slice(5, 12)}`);
-  },
-  attachAgg: () => attach('mart_agg.duckdb', 'agg'),
-  ensureHistory: async () => false,
-  query: async sql => { const rows = await run(sql); return { toArray: () => rows }; },
-};
-const model = createModel(source);
+const { run, source } = await engine(dataDir);
+const model = createModel(withViews(source));
 await model.init();
 await model.attachAgg();
 const rows = q => run(model.toSQL(model.toDax(q)));
 
-// --- The page's state, as index.html gives it to createQueries ---
-const UNKNOWN = 'Unknown', ROOFTOP = 'Rooftop solar';
-const shiftDate = (date, n) => {
-  const d = new Date(`${date}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-};
 const [{ d: newest }] = await rows({ select: { d: { max: 'fct_summary.date' } } });
-const [{ d: oldest }] = await rows({ select: { d: { min: 'dim_calendar.date' } } });
 const to = shiftDate(newest, -2);
-let state;
-const pageQueries = createQueries({
-  range: () => state.range, intraday: () => days(state.range) <= 30, region: () => state.region,
-  fuel: () => state.fuel, picked: () => state.picked, newestDate: () => newest,
-  shiftDate, UNKNOWN, ROOFTOP });
+const page = pageOf(createQueries, newest);
 // The other checkout's queries.js may not have a query this one asks, or take other
 // arguments: such a query is left out there (null), so it counts as changed.
-const queries = !other ? pageQueries : new Proxy(pageQueries, {
+const queries = !other ? page.queries : new Proxy(page.queries, {
   get: (t, k) => typeof t[k] !== 'function' ? (k in t ? t[k] : () => null)
     : (...a) => { try { return t[k](...a); } catch { return null; } },
 });
-const days = ({ from, to }) => Math.round((new Date(to) - new Date(from)) / 86400000);
 await queries.readWholeDays(rows);
 
-const RANGES = { '3 days': shiftDate(to, -2), '30 days': shiftDate(to, -30), '1 year': shiftDate(to, -365) };
-// The last state sets two unit filters that no unit passes together (HPR1 is registered as
-// Wind, BALDHWF1 is Wind): a regional query reads the regions of the units that pass both,
-// none, not the regions of the units that pass each (2026-10-07).
-const FILTERS = { all: {}, 'region SA1': { region: 'SA1' }, 'fuel Wind': { fuel: 'Wind' },
-  'units HPR1 BALDHWF1': { picked: ['HPR1', 'BALDHWF1'] },
-  'fuel Solar, units HPR1 BALDHWF1': { fuel: 'Solar', picked: ['HPR1', 'BALDHWF1'] } };
-
-// What each chart asks in a state, with the arguments index.html passes.
-function asked() {
-  const intraday = days(state.range) <= 30;
-  const now = { date: state.range.to, time: 1200 };
-  const list = {
-    'generation fuel': queries.generation('fuel', intraday),
-    'generation duid': queries.generation('duid', intraday),
-    'generation station': queries.generation('station', intraday),
-    'generationNotOf duid': queries.generationNotOf('duid', intraday, ['HPR1', 'BALDHWF1']),
-    'generationOf fuel': queries.generationOf('fuel', intraday, ['Diesel', 'Unknown']),
-    'averages fuel': queries.averages('fuel'),
-    'averages station': queries.averages('station'),
-    generationAverage: queries.generationAverage(),
-    demand: queries.demand(intraday),
-    demandPeak: queries.demandPeak(intraday),
-    price: queries.price(intraday),
-    averagePrice: queries.averagePrice(),
-    generatorCount: queries.generatorCount(),
-    emissions: queries.emissions(intraday),
-    renewableShareByPeriod: queries.renewableShareByPeriod(intraday),
-    renewableShareOfRange: queries.renewableShareOfRange(),
-    nowByFuel: queries.nowByFuel(now, state.region),
-    nowShare: queries.nowShare(now, state.region),
-    nowOf: queries.nowOf(now, state.region, ['Diesel', 'Unknown']),
-    nowByRegion: queries.nowByRegion(now.date, now.time),
-    mapScatter: queries.mapScatter(),
-    profile: queries.profile(intraday),
-    curtailment: queries.curtailment(days(state.range) > 120),
-    curtailmentTotal: queries.curtailmentTotal(),
-    curtailedFarms: queries.curtailedFarms(),
-    heatmap: queries.heatmap(intraday),
-    capture: queries.capture(),
-    negativePrices: queries.negativePrices(intraday),
-    netExports: queries.netExports(intraday),
-    capacityFactor: queries.capacityFactor(),
-    owners: queries.owners(),
-    ownerShares: queries.ownerShares(),
-    historyShare: queries.historyShare(),
-    historySolar: queries.historySolar(),
-    historyWind: queries.historyWind(),
-    historyPrice: queries.historyPrice(),
-    changeGeneration: queries.changeGeneration(),
-    changePrice: queries.changePrice(),
-    changeRenewables: queries.changeRenewables(),
-    changeEmissions: queries.changeEmissions(),
-  };
-  if (!intraday) list.profileMonths = queries.profileMonths();
-  // Flows and Batteries draw up to 30 days.
-  if (intraday) Object.assign(list, {
-    batteryDay: queries.batteryDay(), batterySpread: queries.batterySpread(), batteryFleet: queries.batteryFleet(),
-    flowGens: queries.flowGens(state.range.to), flowNow: queries.flowNow(state.range.to),
-    flows: queries.flows(state.range.from, state.range.to), flowPrices: queries.flowPrices(state.range.from, state.range.to) });
-  return list;
-}
-
-// The columns a row is matched on: the select's columns and the totals' flags.
-const keysOf = q => [...Object.entries(q.select).filter(([, f]) => typeof f === 'string' && f.includes('.')).map(([n]) => n),
-  ...Object.keys(q.totals ?? {})];
 
 // What a query's check depends on, without its dates and strings (the dates move every day;
 // a number stays: a changed / 12 or >= 0.5 is a changed query): its DAX, its SQL, and the
@@ -195,14 +100,10 @@ const add = async (stateName, name, q) => {
   seen.set(dax, entry);
   results.push(entry);
 };
-for (const [n, q] of Object.entries({ regions: queries.regions, regionNames: queries.regionNames, fuels: queries.fuels,
-  allDuids: queries.allDuids, oldestDate: queries.oldestDate, flowUnits: queries.flowUnits,
-  interconnectors: queries.interconnectors, stationUnits: queries.stationUnits('Hornsdale Power Reserve') }))
-  await add('lists', n, q);
-for (const [r, from] of Object.entries(RANGES))
-  for (const [f, filters] of Object.entries(FILTERS)) {
-    state = { range: { from, to }, region: null, fuel: null, picked: [], ...filters };
-    for (const [n, q] of Object.entries(asked())) await add(`${r}, ${f}`, n, q);
-  }
+for (const [n, q] of Object.entries(lists(queries))) await add('lists', n, q);
+for (const [name, state] of states(to)) {
+  page.set(state);
+  for (const [n, q] of Object.entries(asked(queries, state))) await add(name, n, q);
+}
 writeFileSync(out, JSON.stringify({ newest, to, queries: results }, null, 1));
 console.log(`${results.length} distinct queries, ${results.filter(r => r.error).length} failed in DuckDB; newest day ${newest}, states end ${to}`);

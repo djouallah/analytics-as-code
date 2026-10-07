@@ -2,7 +2,7 @@
   "name": "parity",
   "private": true,
   "type": "module",
-  "description": "The page against the model: its queries through the compiler over the deployed files (page_queries.mjs; scripts/parity_model.py asks the deployed model the same DAX and compares), and no arithmetic in its code (page_lint.mjs).",
+  "description": "The page against the model: its queries through the compiler over the deployed files (page_queries.mjs; scripts/parity_model.py asks the deployed model the same DAX and compares), the SQL page against it (sql_page.mjs), and no arithmetic in their code (page_lint.mjs).",
   "dependencies": {
     "@duckdb/node-api": "1.5.6-r.1",
     "acorn": "8.15.0"

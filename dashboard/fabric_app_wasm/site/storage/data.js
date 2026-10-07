@@ -29,6 +29,7 @@
 
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev65.0/+esm";
 import { periodsForRange, attachCached } from "./history.js";
+import { withViews } from "./views.js";
 import { createAuth } from "./auth.js";
 import { createSas } from "./sas.js";
 import { perf, HTTP_TRACE_SHIM } from "../frontend/perflog.js";
@@ -195,7 +196,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   const attachOnce = p => _attaching.get(p) ?? _attaching.set(p, attachPeriod(p).finally(() => _attaching.delete(p))).get(p);
 
   // Attach the half-year periods of a date range that exist and aren't attached yet.
-  // True if any was attached. The caller (the compiler) asks only for a range that reaches
+  // True if any was attached. The caller (views.js) asks only for a range that reaches
   // back past the days `today` covers.
   async function ensureHistory(from, to, msg) {
     const { periods } = await latest();
@@ -241,5 +242,6 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   }
 
   // `dax`: the query as the page wrote it, for the Logs tab (the compiler passes it).
-  return { init, attachAgg, ensureHistory, query: (sql, dax) => perf.query(sql, () => conn.query(sql), dax) };
+  // A view per table over the attached files (views.js, the page's).
+  return withViews({ init, attachAgg, ensureHistory, query: (sql, dax) => perf.query(sql, () => conn.query(sql), dax) });
 }
