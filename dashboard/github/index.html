@@ -265,7 +265,8 @@
     .record-card .kpi-value { font-size: 1.4rem; }
     .record-new { background: var(--good); color: var(--card); border-radius: 999px; padding: 0 0.4rem; margin-left: 0.35rem; font-size: 0.62rem; font-weight: 700; text-transform: uppercase; }
 
-    @media (max-width: 1100px) {
+    /* Below the one-screen size (1100 wide, below), not at it: at 1100 both applied. */
+    @media (max-width: 1099.98px) {
       .hero-regions { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
       .kpi-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .kpi-row.records { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -1438,6 +1439,7 @@
       if (bar.dataset.names === names) {
         [...bar.children].forEach((seg, i) => {
           seg.style.flexGrow = Math.round(items[i].mw);
+          seg.style.background = items[i].color;   // the theme's colour: it changes with the scheme
           seg.dataset.tip = tipOf(items[i]);
           seg.setAttribute('aria-label', `${items[i].name} ${mwText(items[i].mw)}`);
         });
@@ -1705,6 +1707,10 @@
     };
     const insightsPage = () => document.querySelector('.subtab.active').dataset.page;
     async function renderInsights(seq) {
+      // Beyond 30 days the charts read the daily tables, attached after the first paint: a
+      // sub-tab clicked before that waits for them instead of asking for days not held yet.
+      if (!isIntradayMode()) await loadDailyAggDatabase();
+      if (seq !== _renderSeq) return;
       await Promise.all(INSIGHTS_PAGES[insightsPage()].map(render => render(seq)));
     }
     const subtabs = [...document.querySelectorAll('.subtab')];
@@ -2423,7 +2429,8 @@
       if (seq !== _renderSeq) return;
       if (!found.length) return showEmpty('chart-owners');
       const ownerName = owner => owner ?? UNKNOWN;
-      const owners = new Map(shares.map(r => [ownerName(r.owner), { name: ownerName(r.owner), share: r.share, children: [] }]));
+      // The owner's energy is its own row's: without a value ECharts would add the plants up.
+      const owners = new Map(shares.map(r => [ownerName(r.owner), { name: ownerName(r.owner), value: r.mwh, share: r.share, children: [] }]));
       for (const r of found) {
         const fuel = fuelName(r.fuel), o = owners.get(ownerName(r.owner));
         o?.children.push({ name: r.plant, value: r.mwh, share: r.share, fuel, itemStyle: { color: fuelColor(fuel) } });
@@ -3010,9 +3017,11 @@
       updateFilterTags();
       startLayout();
       const range = getDateRange();
-      if (range.from && range.to && range.from > range.to) {
+      // An emptied input is no range: the grain would be worked out from '' and read the
+      // whole history.
+      if (!range.from || !range.to || range.from > range.to) {
         dim(false);
-        setStatus("'From' date is after 'To' date", "error");
+        setStatus(range.from && range.to ? "'From' date is after 'To' date" : "Pick both dates", "error");
         return;
       }
       try {
