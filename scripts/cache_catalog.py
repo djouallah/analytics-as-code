@@ -10,10 +10,7 @@ needs that the tables do not hold is a dbt model first. What this file decides i
 file a table goes into, so that a browser downloads what a page needs and no file outgrows
 what the host takes:
   mart_dim.duckdb              the dimensions
-  mart_agg.duckdb              the per-day and per-month tables, whole, and fct_rooftop whole:
-                               it is small, and the daily charts read it over any range, with
-                               no half-year attached (it is in the split files too, so that a
-                               5-minute range does not wait for this file)
+  mart_agg.duckdb              the per-day and per-month tables, whole
   mart_today.duckdb            the newest RECENT_DAYS days of the tables in SPLIT
   mart_<YYYY>_h<N>.duckdb      the same tables, by half-year of `date`
 Rows are written in an order that makes a file small and a range scan cheap: key order, but
@@ -47,9 +44,9 @@ DIM = {"dim_duid": "DUID", "dim_calendar": "date", "dim_region": "Region", "dim_
        "dim_month": "month", "dim_interconnector": "interconnector"}
 AGG = {"fct_summary_daily": "DUID, date", "fct_region_daily": "REGIONID, date",
        "fct_summary_hourly": "DUID, month, hour", "fct_region_hourly": "REGIONID, month, hour",
-       "fct_curtailment": "DUID, date", "fct_rooftop": "REGIONID, date, time"}
+       "fct_curtailment": "DUID, date"}
 SPLIT = {"fct_summary": "date, time, price, DUID", "fct_region": "REGIONID, date, time",
-         "fct_interconnector": "interconnector, date, time", "fct_rooftop": "REGIONID, date, time"}
+         "fct_interconnector": "interconnector, date, time"}
 GROUPS = {"dim": DIM, "agg": AGG, "today": SPLIT, "history": SPLIT}
 
 
