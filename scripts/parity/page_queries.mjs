@@ -152,10 +152,11 @@ const add = async (stateName, name, q) => {
   try {
     entry.sql = model.toSQL(dax);
     const found = await run(entry.sql);
-    // A bigger result is counted, not compared: parity_model.py asks the model for its
-    // COUNTROWS. Fetching it would not do: the REST call answers at most 100,000 rows, and
-    // over XMLA a few results of 2 million rows throttled the capacity (every query after
-    // them took 20 s, and the job ran out of time, deploy run 37599068734).
+    // A bigger result is not asked of the model: parity_model.py lists it with its row
+    // count. The REST call answers at most 100,000 rows, and over XMLA a few results of 2
+    // million rows throttled the capacity, fetched (deploy run 37599068734) or counted
+    // (37604775104): COUNTROWS computes the rows all the same, and every query after them
+    // took 20 s more. The same DAX is compared at the states where it is smaller.
     if (found.length > MAX_ROWS) entry.rowCount = found.length; else entry.rows = found;
   } catch (e) { entry.error = String(e.message ?? e); }
   seen.set(dax, entry);

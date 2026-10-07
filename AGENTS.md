@@ -291,8 +291,10 @@ not filter a query of a fact's own columns by a dimension unless a measure of it
 there: the Flows units and links of one region came back for every region. So such a query
 selects a measure (`[Average MW]` for a unit's MW), and a measure it selects is blank where
 there are no rows (`[No flow]` is 1 or 0, not a boolean: a boolean measure is never blank).
-A result above 20,000 rows is compared on its count, asked of the model as `COUNTROWS`:
-fetching a few results of 2 million rows throttled the capacity (20 s a query after them).
+A result above 20,000 rows is not asked of the model, only listed (`not asked`) with its
+count: a few results of 2 million rows throttled the capacity (20 s on every query after
+them), fetched or under `COUNTROWS`, which computes the rows all the same. The same DAX is
+compared at the states where it is smaller.
 
 `index.html` is the one file at the top of `dashboard/github/`: it is the site's URL, and `data.js`
 finds `data/` from the page's URL. The deployed tree is the repo tree, so a relative import

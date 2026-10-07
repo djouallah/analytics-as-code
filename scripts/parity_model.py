@@ -19,8 +19,9 @@ model), else over REST executeQueries with POWERBI_TOKEN (a user's token, from a
 Both need WS_ID, the workspace of the model.
 
 A query the compiler could not translate, or whose SQL failed, is a failure. A query whose
-result was too big to keep is compared on its row count, which the model is asked for
-(COUNTROWS of the query's table), not the rows. Exits 1 on any difference.
+result was too big to keep is not asked of the model, only listed with its row count:
+computing it, even under COUNTROWS, throttled the capacity (20 s on every query after it).
+Exits 1 on any difference.
 """
 
 import json
@@ -73,12 +74,6 @@ def asker():
                     raise
                 time.sleep(5)
     return ask
-
-
-def counted(dax):
-    """The query as one row, its number of rows: EVALUATE t [ORDER BY ...] -> COUNTROWS(t)."""
-    table = dax.split("EVALUATE", 1)[1].rsplit(" ORDER BY ", 1)[0].strip()
-    return f'EVALUATE ROW("n", COUNTROWS({table}))'
 
 
 def value(v):
@@ -142,7 +137,7 @@ def compare(q, model_rows):
 def main():
     data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     ask = asker()
-    bad = 0
+    bad = skipped = 0
     started = time.monotonic()
     for n, q in enumerate(data["queries"]):
         where = f"[{n}] {q['name']} ({'; '.join(q['states'][:3])}{', ...' if len(q['states']) > 3 else ''})"
@@ -150,20 +145,20 @@ def main():
             bad += 1
             print(f"FAILED {where}: the compiler or DuckDB: {q['error']}\n  {q['dax']}")
             continue
+        if "rowCount" in q:
+            skipped += 1
+            print(f"not asked {where}, {q['rowCount']} rows in the files", flush=True)
+            continue
         t = time.monotonic()
         try:
-            model_rows = ask(counted(q["dax"]) if "rowCount" in q else q["dax"])
+            model_rows = ask(q["dax"])
         except Exception as e:  # noqa: BLE001  (the model's answer is the evidence)
             bad += 1
             body = e.read().decode(errors="replace")[:600] if isinstance(e, urllib.error.HTTPError) else str(e)[:600]
             print(f"FAILED {where}: the model: {body}\n  {q['dax']}")
             continue
         took = time.monotonic() - t
-        if "rowCount" in q:
-            n = int(value(next(iter(model_rows[0].values()))) or 0)
-            diffs = [] if n == q["rowCount"] else [f"{q['rowCount']} rows in the files, {n} in the model"]
-        else:
-            diffs = compare(q, model_rows)
+        diffs = compare(q, model_rows)
         if diffs:
             bad += 1
             print(f"DIFFERS {where}, {took:.1f} s: {len(diffs)} differences")
@@ -171,8 +166,8 @@ def main():
                 print(f"  {d}")
             print(f"  {q['dax']}")
         else:
-            print(f"same    {where}, {q.get('rowCount', len(model_rows))} rows, {took:.1f} s", flush=True)
-    print(f"{len(data['queries'])} queries, {bad} failed or differ, {time.monotonic() - started:.0f} s; "
+            print(f"same    {where}, {len(model_rows)} rows, {took:.1f} s", flush=True)
+    print(f"{len(data['queries'])} queries, {bad} failed or differ, {skipped} not asked, {time.monotonic() - started:.0f} s; "
           f"files to {data['newest']}, states end {data['to']}")
     return 1 if bad else 0
 
