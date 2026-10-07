@@ -160,17 +160,22 @@ jobs:
           # rollover miss: the deploy repo's .gitignore had *.duckdb, and the old deploy
           # action's `git add --all` skipped new ignored files. scripts/deploy_pages.sh
           # adds the published paths with -f.
+      - uses: actions/setup-node@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.with_page
+        with:
+          node-version: "24"
       - name: Stage the page with the data
         # with_page: the page goes out in the same commit as the data, so the site never holds
-        # the new page with the old data or the other way round. The copy is build.yml's
-        # "Prepare deploy directory".
+        # the new page with the old data or the other way round. The same copy and stamp as
+        # build.yml's "Prepare deploy directory": without the ?v=<build> on every import a
+        # browser runs the new page with its cached old modules (2026-10-07).
         if: github.event_name == 'workflow_dispatch' && inputs.with_page
         run: |
           cp deploy_data/data/* deploy_daily/data/
           cp dashboard/github/index.html deploy_daily/
           cp -r dashboard/github/frontend dashboard/github/semantic dashboard/github/storage deploy_daily/
           cp semantic_model/model.bim deploy_daily/semantic/
-          sed -i "s/__BUILD__/${GITHUB_SHA::7}/" deploy_daily/frontend/perflog.js
+          node scripts/stamp_build.mjs deploy_daily "${GITHUB_SHA::7}"
           cp -r dashboard/github/dag deploy_daily/
       - name: Upload instead of deploying
         if: github.event_name == 'workflow_dispatch' && !inputs.publish
