@@ -253,11 +253,15 @@ function known(e, cx) {
   }
   return undefined;
 }
-// The days the daily table does not hold yet, which a measure adds from the 5-minute table
-// (`late`, an EXCEPT): none here. The page reads the daily tables on the days they hold
-// (its `wholeDays` filter), which is what makes that set empty in DAX too. A second fact in
-// the same SELECT is not something this compiler writes.
-const isNone = (x, cx) => x.k === 'name' && !!cx.names.get(x.name)?.lazy && isCall(cx.names.get(x.name).lazy, 'EXCEPT');
+// The days after the newest one the daily table holds, which a measure adds from the
+// 5-minute table (`dim_calendar[date] > _last`, `_last` a measure CALCULATE(MAX(...),
+// REMOVEFILTERS())): none here. The page reads the daily tables on the days they hold (its
+// `wholeDays` filter), which is what makes that set empty in DAX too. A second fact in the
+// same SELECT is not something this compiler writes.
+const isNewest = e => e?.k === 'ref' && MEASURE_DAX.has(e.name) && (m => isCall(m, 'CALCULATE') && isCall(m.args[0], 'MAX')
+  && m.args.length === 2 && isCall(m.args[1], 'REMOVEFILTERS') && !m.args[1].args.length)(measure(e.name));
+const isNone = (x, cx) => x.k === 'bin' && x.op === '>' && x.l.k === 'col' && x.l.table === CALENDAR?.table
+  && x.l.name === CALENDAR.name && x.r.k === 'name' && isNewest(cx.names.get(x.r.name)?.lazy);
 
 // The keys a scope groups by: a SUMMARIZECOLUMNS's (an array, which has a keys() method of
 // its own, hence hasOwn).

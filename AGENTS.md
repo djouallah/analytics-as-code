@@ -400,7 +400,7 @@ and anything that serves the page from the repo has to do the same.
     DAX. A query of a fact and two of its dimensions reads `<fact>_star`.
     The header of `compiler.js` lists every place its SQL is knowingly not DAX.
   - Its fixed cases for this model: the days the daily table lacks, which a measure adds from the
-    5-minute table (`late`, an `EXCEPT`), are none: the page restricts a long range to the
+    5-minute table (`dim_calendar[date] > [Newest whole day]`), are none: the page restricts a long range to the
     days the daily table holds (`queries.wholeDays`), which makes that set empty in DAX too. So a long range ends on the newest whole day on the page, and
     on the newest interval in Power BI. `[Units]` off the daily table is
     `COUNT(DISTINCT DUID)`. `MAX(column, 0)` and
@@ -706,9 +706,15 @@ they are what these tables are built from.
   aggregation tables (user-defined aggregations are not supported), so the switch is DAX:
   `[Generation MWh]`, `[Charging MWh]`, `[Revenue]`, `[Capture price]`, `[Units]` and
   `[Capacity factor]` read `fct_summary_daily` when no time of day is asked for, plus
-  `fct_summary` for the days the daily table does not hold yet (`EXCEPT` on the dates), and
+  `fct_summary` for the days after the newest one the daily table holds, and
   `fct_summary` alone when one is; `[Average price]`, `[Demand MWh]`, `[Net interchange MW]`
   and `[Hours]` do the same over `fct_region_daily` (a day there is 288 intervals).
+  The newest day is a hidden measure per daily table (`[Newest whole day]`,
+  `[Newest whole day regional]`, `CALCULATE(MAX(date), REMOVEFILTERS())`), and the days
+  after it a `KEEPFILTERS(dim_calendar[date] > _last)`: the daily tables are written in date
+  order with no gaps. Until 2026-10-07 it was the set of those days (`EXCEPT` of the
+  calendar's dates and the daily table's, per region a `CROSSJOIN`), which over a year
+  grouped by unit or plant took 1.4 GB, over the capacity's 1 GB a query.
   "A time of day is asked for" is written once per fact, in a hidden measure
   (`[Reads 5 minutes]`, `[Reads 5 minutes regional]`): any column of `dim_time` filtered or
   grouped, or a column of the fact itself filtered. So filters go through the dimensions.
