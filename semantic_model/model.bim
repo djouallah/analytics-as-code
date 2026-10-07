@@ -299,7 +299,7 @@
               "        CONVERT(SUMX(fct_summary, MAX(fct_summary[mw], 0)), DOUBLE) / 12,",
               "        SUM(fct_summary_daily[output_mwh]) + CONVERT(CALCULATE(SUMX(fct_summary, MAX(fct_summary[mw], 0)), late), DOUBLE) / 12)"
             ],
-            "description": "Energy generated. Output only: a unit that is charging (negative) generates nothing. A 5-minute row is MW / 12. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days the daily table does not hold yet. The number is the same from either. CONVERT is there because MW is a fixed decimal: divided as one, the energy of a small unit at one 5-minute time is rounded to 4 decimals."
+            "description": "Energy generated. Output only: a unit that is charging (negative) generates nothing. A 5-minute row is MW / 12. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days the daily table does not hold yet. The number is the same from either. CONVERT is there because MW is a fixed decimal: divided as one, the energy of a small unit at one 5-minute time is rounded to 4 decimals. Rooftop solar is in it: five units, ROOFTOP_<region>, the half-hourly estimate on the straight line between two half hours."
           },
           {
             "name": "Charging MWh",
@@ -337,11 +337,13 @@
             "expression": [
               "VAR late = EXCEPT(VALUES(dim_calendar[date]), CALCULATETABLE(VALUES(fct_summary_daily[date]), REMOVEFILTERS(dim_duid), REMOVEFILTERS(dim_region)))",
               "RETURN",
-              "    IF([Reads 5 minutes],",
-              "        DISTINCTCOUNT(fct_summary[DUID]),",
-              "        COUNTROWS(DISTINCT(UNION(VALUES(fct_summary_daily[DUID]), CALCULATETABLE(VALUES(fct_summary[DUID]), late)))))"
+              "    CALCULATE(",
+              "        IF([Reads 5 minutes],",
+              "            DISTINCTCOUNT(fct_summary[DUID]),",
+              "            COUNTROWS(DISTINCT(UNION(VALUES(fct_summary_daily[DUID]), CALCULATETABLE(VALUES(fct_summary[DUID]), late))))),",
+              "        KEEPFILTERS(dim_duid[FuelSourceDescriptor] <> \"Rooftop solar\"))"
             ],
-            "description": "Units with output or charging in the selection. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days the daily table does not hold yet. The number is the same from either."
+            "description": "Units with output or charging in the selection, rooftop solar's five (one per region) left out: they are not plant. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days the daily table does not hold yet. The number is the same from either."
           },
           {
             "name": "Latest update",
@@ -350,24 +352,7 @@
             "description": "The newest interval the table had seen at its last write, whatever is filtered."
           },
           {
-            "name": "Total generation MWh",
-            "formatString": "#,##0",
-            "expression": "[Generation MWh] + [Rooftop MWh]",
-            "description": "Units and rooftop solar together. Slice it by region or date, not by a unit's attribute: rooftop has none, so it would be added to every slice."
-          },
-          {
             "name": "Renewable share",
-            "formatString": "0.0",
-            "expression": [
-              "DIVIDE(",
-              "    100 * (CALCULATE([Generation MWh], dim_duid[Renewable] = TRUE()) + [Rooftop MWh]),",
-              "    CALCULATE([Generation MWh], dim_duid[FuelSourceDescriptor] <> \"Grid\") + [Rooftop MWh]",
-              ")"
-            ],
-            "description": "Renewable share of the output, %, rooftop solar included. Batteries (fuel Grid) are in neither the renewables nor the total. Slice it by region or date."
-          },
-          {
-            "name": "Renewable share of units",
             "formatString": "0.0",
             "expression": [
               "DIVIDE(",
@@ -375,7 +360,7 @@
               "    CALCULATE([Generation MWh], dim_duid[FuelSourceDescriptor] <> \"Grid\")",
               ")"
             ],
-            "description": "Renewable share of the units' output alone, %, without rooftop solar: the one to use when units are picked, which no filter on rooftop follows. Batteries (fuel Grid) are in neither side. 0 when the units ran and none is renewable, blank when no generator ran."
+            "description": "Renewable share of the output, %. Rooftop solar is in it, as the units of the fuel \"Rooftop solar\". Batteries (fuel Grid) are in neither the renewables nor the total. 0 when the units ran and none is renewable, blank when no generator ran."
           },
           {
             "name": "Capacity MW",
@@ -404,13 +389,7 @@
             "name": "Generation MW",
             "formatString": "#,##0",
             "expression": "SUMX(fct_summary, MAX(fct_summary[mw], 0))",
-            "description": "Output of the units in MW at a 5-minute time, always from fct_summary: read it at one time, it is a sum over the intervals in the selection. For energy use [Generation MWh]."
-          },
-          {
-            "name": "Total generation MW",
-            "formatString": "#,##0",
-            "expression": "[Generation MW] + [Rooftop MW]",
-            "description": "Units and rooftop solar together, in MW at a 5-minute time; rooftop is worked out between its half hours by [Rooftop MW]. Slice it by region, date and time, not by a unit's attribute: rooftop has none."
+            "description": "Output of the units in MW at a 5-minute time, always from fct_summary: read it at one time, it is a sum over the intervals in the selection. For energy use [Generation MWh]. Rooftop solar is in it: five units, ROOFTOP_<region>, the half-hourly estimate on the straight line between two half hours."
           },
           {
             "name": "Charging MW",
@@ -446,13 +425,7 @@
             "name": "Average generation MW",
             "formatString": "#,##0",
             "expression": "DIVIDE([Generation MWh], [Hours])",
-            "description": "The units' output as an average MW: [Generation MWh] over [Hours], the hours the selection holds. Follows the unit filters; rooftop solar is not in it."
-          },
-          {
-            "name": "Average total generation MW",
-            "formatString": "#,##0",
-            "expression": "DIVIDE([Total generation MWh], [Hours])",
-            "description": "The units' output and rooftop solar's as an average MW: [Total generation MWh] over [Hours]. Like it, for slicing by region or date."
+            "description": "The output as an average MW: [Generation MWh] over [Hours], the hours the selection holds. Follows the unit filters; rooftop solar is in it, as the units of the fuel \"Rooftop solar\"."
           },
           {
             "name": "Generation MW on an average day",
@@ -788,111 +761,6 @@
             "source": {
               "type": "entity",
               "entityName": "fct_region",
-              "expressionSource": "DirectLake",
-              "schemaName": "mart"
-            }
-          }
-        ]
-      },
-      {
-        "name": "fct_rooftop",
-        "description": "Rooftop solar per region and half hour: AEMO's estimate, as published, with the half hour's average price. Not units: it has no DUID, and a unit filter does not reach it. A value between two half hours, or after the newest one, is the reader's to work out.",
-        "sourceLineageTag": "[mart].[fct_rooftop]",
-        "columns": [
-          {
-            "name": "REGIONID",
-            "dataType": "string",
-            "description": "The region.",
-            "sourceColumn": "REGIONID",
-            "sourceLineageTag": "REGIONID",
-            "summarizeBy": "none"
-          },
-          {
-            "name": "date",
-            "dataType": "dateTime",
-            "description": "Date of the interval, NEM time (AEST all year).",
-            "sourceColumn": "date",
-            "sourceLineageTag": "date",
-            "summarizeBy": "none",
-            "formatString": "yyyy-MM-dd"
-          },
-          {
-            "name": "time",
-            "dataType": "int64",
-            "description": "Time of day as HHMM: 1435 is 14:35. The half hour ends at it.",
-            "sourceColumn": "time",
-            "sourceLineageTag": "time",
-            "summarizeBy": "none"
-          },
-          {
-            "name": "mw",
-            "dataType": "decimal",
-            "description": "Estimated rooftop output at the end of the half hour, MW.",
-            "sourceColumn": "mw",
-            "sourceLineageTag": "mw",
-            "summarizeBy": "none",
-            "formatString": "#,##0.00"
-          },
-          {
-            "name": "price",
-            "dataType": "decimal",
-            "description": "The average of the region's six 5-minute prices in the half hour, $/MWh.",
-            "sourceColumn": "price",
-            "sourceLineageTag": "price",
-            "summarizeBy": "none",
-            "formatString": "$#,##0.00"
-          }
-        ],
-        "measures": [
-          {
-            "name": "Rooftop MWh",
-            "formatString": "#,##0",
-            "expression": "SUM(fct_rooftop[mw]) / 2",
-            "description": "Rooftop solar energy: a row is half an hour, so MW / 2 is MWh."
-          },
-          {
-            "name": "Rooftop capture price",
-            "formatString": "$#,##0.00",
-            "expression": "DIVIDE(SUMX(fct_rooftop, fct_rooftop[mw] * fct_rooftop[price]), SUM(fct_rooftop[mw]))",
-            "description": "The price rooftop solar earned, $/MWh: the half-hour prices weighted by its output."
-          },
-          {
-            "name": "Average rooftop MW",
-            "formatString": "#,##0",
-            "expression": "DIVIDE([Rooftop MWh], [Hours])",
-            "description": "Rooftop solar as an average MW: [Rooftop MWh] over [Hours], the nights included."
-          },
-          {
-            "name": "Rooftop MW",
-            "formatString": "#,##0",
-            "expression": [
-              "SUMX(",
-              "    CROSSJOIN(VALUES(dim_calendar[date]), VALUES(dim_time[minute]), VALUES(dim_region[Region])),",
-              "    VAR _date = dim_calendar[date]",
-              "    VAR _minute = dim_time[minute]",
-              "    VAR _region = dim_region[Region]",
-              "    VAR _past = MOD(_minute, 30)",
-              "    VAR _mwBefore = CALCULATE(SUM(fct_rooftop[mw]), REMOVEFILTERS(dim_calendar), REMOVEFILTERS(dim_time), dim_calendar[date] = _date, dim_time[minute] = _minute - _past, dim_region[Region] = _region)",
-              "    VAR _mwAfter =",
-              "        IF(_past > 0,",
-              "            IF(_minute - _past + 30 < 1440,",
-              "                CALCULATE(SUM(fct_rooftop[mw]), REMOVEFILTERS(dim_calendar), REMOVEFILTERS(dim_time), dim_calendar[date] = _date, dim_time[minute] = _minute - _past + 30, dim_region[Region] = _region),",
-              "                CALCULATE(SUM(fct_rooftop[mw]), REMOVEFILTERS(dim_calendar), REMOVEFILTERS(dim_time), dim_calendar[date] = _date + 1, dim_time[minute] = 0, dim_region[Region] = _region)))",
-              "    RETURN",
-              "        IF(_past = 0, _mwBefore,",
-              "            IF(NOT ISBLANK(_mwBefore) && NOT ISBLANK(_mwAfter), _mwBefore + (_mwAfter - _mwBefore) * _past / 30))",
-              ")"
-            ],
-            "description": "Rooftop solar in MW at a 5-minute time, worked out from the half-hourly estimate: on a half hour the estimate itself, between two consecutive half hours the straight line between them, and nothing across a missing half hour. Nothing of it is stored. Summed over the dates, times and regions in the selection, so read it at one time; for energy use [Rooftop MWh]. The newest value is not carried forward: that is the chart's choice. The half hours on either side are read with the filters on dim_time and dim_calendar removed: the query's own filter is on the 5-minute time, which has no row in fct_rooftop."
-          }
-        ],
-        "partitions": [
-          {
-            "name": "fct_rooftop",
-            "mode": "directLake",
-            "source": {
-              "type": "entity",
-              "entityName": "fct_rooftop",
               "expressionSource": "DirectLake",
               "schemaName": "mart"
             }
@@ -1491,20 +1359,6 @@
         "toColumn": "date"
       },
       {
-        "name": "fct_rooftop_to_dim_region",
-        "fromTable": "fct_rooftop",
-        "fromColumn": "REGIONID",
-        "toTable": "dim_region",
-        "toColumn": "Region"
-      },
-      {
-        "name": "fct_rooftop_to_dim_calendar",
-        "fromTable": "fct_rooftop",
-        "fromColumn": "date",
-        "toTable": "dim_calendar",
-        "toColumn": "date"
-      },
-      {
         "name": "fct_interconnector_to_dim_calendar",
         "fromTable": "fct_interconnector",
         "fromColumn": "date",
@@ -1535,13 +1389,6 @@
       {
         "name": "fct_region_to_dim_time",
         "fromTable": "fct_region",
-        "fromColumn": "time",
-        "toTable": "dim_time",
-        "toColumn": "time"
-      },
-      {
-        "name": "fct_rooftop_to_dim_time",
-        "fromTable": "fct_rooftop",
         "fromColumn": "time",
         "toTable": "dim_time",
         "toColumn": "time"

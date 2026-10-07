@@ -11,10 +11,10 @@
 //   2. download the files of that import whole (parallel Range fetches, cached in OPFS by
 //      name — names are immutable) and ATTACH them:
 //        dim_<ts>.duckdb          as `dim`          the dimensions
-//        today_<ts>.duckdb        as `today`        fct_summary, fct_region, fct_interconnector, fct_rooftop (last 14 days)
-//        agg_<ts>.duckdb          as `agg`          the per-day and per-month tables, fct_curtailment, fct_rooftop whole
+//        today_<ts>.duckdb        as `today`        fct_summary, fct_region, fct_interconnector (last 14 days)
+//        agg_<ts>.duckdb          as `agg`          the per-day and per-month tables, fct_curtailment
 //                                                   — attachAgg(), after first paint
-//        <YYYY>_h<N>_<ts>.duckdb  as `p<YYYY>_h<N>` the same four tables as `today`, by half-year — ensureHistory(),
+//        <YYYY>_h<N>_<ts>.duckdb  as `p<YYYY>_h<N>` the same three tables as `today`, by half-year — ensureHistory(),
 //                                                   only the half-years a range needs
 //      The history is downloaded, not read in place over HTTP: OneLake answers each Range read
 //      in ~700 ms whatever its size, so whole files in parallel beat a block at a time.

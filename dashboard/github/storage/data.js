@@ -5,9 +5,9 @@
 // into OPFS; GitHub caps a file at 100 MB, hence the half-year split of the 5-minute history:
 // They are the tables of the semantic model, copied as they are (scripts/cache_catalog.py):
 //   mart_dim.duckdb            as `dim`          the dimensions
-//   mart_today.duckdb          as `today`        the 5-minute tables and rooftop, the newest 14 days
-//   mart_agg.duckdb            as `agg`          the per-day and per-month tables, and rooftop whole:
-//                                                attachAgg(), after first paint
+//   mart_today.duckdb          as `today`        the 5-minute tables, the newest 14 days
+//   mart_agg.duckdb            as `agg`          the per-day and per-month tables: attachAgg(), after
+//                                                first paint
 //   mart_<YYYY>_h<N>.duckdb    as `p<YYYY>_h<N>` the 5-minute tables by half-year: ensureHistory(), only
 //                                                the half-years a 5-minute range needs
 // The model and index.html know none of this: ../semantic/compiler.js wraps the members

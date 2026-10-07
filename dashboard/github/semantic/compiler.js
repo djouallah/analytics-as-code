@@ -33,8 +33,8 @@
 //                        picks it here as in Power BI, from what the query filters. A
 //                        measure of another table than the one the SELECT is about ([Hours]
 //                        inside [Capacity factor]) is a subquery of its own, under the
-//                        filters that reach its table. Fixed cases: [Rooftop MW]; the days
-//                        the daily table lacks (none); [Units] off the daily table; and
+//                        filters that reach its table. Fixed cases: the days the daily
+//                        table lacks (none); [Units] off the daily table; and
 //                        [Capacity MW], the units that have rows, in two levels
 //
 // Part 2, the queries (toSQL). A DAX query becomes one SELECT over those views:
@@ -199,13 +199,6 @@ function measure(name) {
 // The table a measure is defined on: the one whose rows it is about.
 const HOME = new Map(MODEL.tables.flatMap(t => (t.measures || []).map(m => [m.name, t.name])));
 const RELS = MODEL.relationships.map(r => ({ view: r.name, from: r.fromTable, fromColumn: r.fromColumn, to: r.toTable, toColumn: r.toColumn }));
-// Rooftop solar at 5 minutes. The model stores the half-hourly estimate (fct_rooftop) and
-// [Rooftop MW] works out the times between two half hours, by looking up its neighbours row
-// by row. That DAX is not translated: v_fct_rooftop_5min (below) is the same thing in SQL,
-// and [Rooftop MW] is the sum of its mw. It is related to what fct_rooftop is.
-const ROOFTOP_5MIN = 'fct_rooftop_5min';
-TABLES.set(ROOFTOP_5MIN, new Map(['REGIONID', 'date', 'time', 'mw'].map(n => [n, TABLES.get('fct_rooftop').get(n)])));
-RELS.push(...RELS.filter(r => r.from === 'fct_rooftop').map(r => ({ ...r, view: null, from: ROOFTOP_5MIN })));
 // A measure whose DAX picks its table: IF([Reads 5 minutes], the 5-minute table, the daily
 // one), where [Reads 5 minutes] asks whether a column is filtered (ISFILTERED,
 // ISCROSSFILTERED). That is answered from the query, as the DAX says: the columns its keys
@@ -253,7 +246,7 @@ function reach(table) {
   return _reach.get(table);
 }
 // A measure that lives on another table than the one this SELECT is about: [Hours] (the
-// regions') inside [Capacity factor] (the units'), [Rooftop MWh] inside [Renewable share].
+// regions') inside [Capacity factor] (the units'), [Month days] inside [Average MW at hour].
 // One SELECT reads one fact, so it is a subquery of its own: the measure under the filters
 // around it that reach its table, grouped by the keys that do and matched on them. That is
 // what the filter context does in DAX: a filter on dim_calendar reaches every fact, one on
@@ -272,9 +265,9 @@ function elsewhere(name, cx) {
   finally { q.scope.push(...around); }
   const sql = select(r, true), type = r.cols.at(-1).type;
   cx.state.agg = true;
-  // Read once per query, as a CTE: a measure can name it more than once ([Rooftop MWh] is
-  // on both sides of [Renewable share]), and matched per row of the result it is then a
-  // lookup. Inline, the share per day of the whole history took 1.3 s (2026-10-06).
+  // Read once per query, as a CTE: a measure can name it more than once, and matched per
+  // row of the result it is then a lookup. Inline, the renewable share per day of the whole
+  // history took 1.3 s (2026-10-06), when rooftop's energy was on both sides of it.
   const cte = q.cross.get(sql) ?? q.cross.set(sql, `x${q.cross.size + 1}`).get(sql);
   if (!q.ctes.some(c => c.startsWith(`${cte} AS `))) q.ctes.push(`${cte} AS MATERIALIZED (${sql})`);
   if (!keys.length) return atom(`COALESCE((SELECT v FROM ${cte}), 0)`, type);
@@ -335,13 +328,6 @@ function scalar(e, cx) {
       // The first measure a SELECT names says which table it is about.
       cx.r.home ??= HOME.get(e.name);
       if (HOME.get(e.name) !== cx.r.home) return elsewhere(e.name, cx);
-      if (e.name === 'Rooftop MW') {
-        cx.touch(ROOFTOP_5MIN);
-        cx.state.agg = true;
-        const sum = cx.filter ? `SUM(t.mw) FILTER (WHERE ${cx.filter})` : 'SUM(t.mw)';
-        cx.r.aggs.push(sum);
-        return atom(sum, 'double');
-      }
       return scalar(measure(e.name), { ...cx, model: true });
     }
     case 'name': {
@@ -758,26 +744,12 @@ const isDax = q => /^\s*EVALUATE\b/i.test(q);
 // A table of the model is a table of the lakehouse, copied into the files as it is
 // (scripts/cache_catalog.py): whole in `dim` or `agg`, or split by date over `today` (the
 // newest days, refreshed every hour) and the half-year files. v_<table> is that table
-// over what is attached; where two files hold a day, `today` has it. One split table is also
-// whole in `agg` (fct_rooftop: the daily charts read it over any range, with no half-year
-// attached): its older days are then read from there.
+// over what is attached; where two files hold a day, `today` has it. A split table that is
+// also whole in `agg` has its older days read from there.
 const ENTITIES = MODEL.tables.map(t => ({ name: `v_${t.name}`, table: t.partitions[0].source.entityName }));
 const RELATIONSHIPS = RELS.filter(r => r.view).map(r => ({ name: r.view, from: `v_${r.from}`, to: `v_${r.to}`, on: [r.fromColumn, r.toColumn] }));
-// [Rooftop MW] in SQL: a half hour and the five times after it, on the straight line to the
-// next half hour. A time between two half hours exists only if both do; nothing is carried
-// forward. A half hour and its five times are on one date, so a filter on date reaches the scan.
-const MINUTE = '(time // 100) * 60 + time % 100', HHMM = m => `CAST((${m}) // 60 * 100 + (${m}) % 60 AS INTEGER)`;
-const ROOFTOP = { name: `v_${ROOFTOP_5MIN}`, reads: 'v_fct_rooftop', sql: `
-  SELECT a.REGIONID, a.date, ${HHMM('a.minute + 5 * s.step')} AS time,
-    CAST(CASE WHEN s.step = 0 THEN a.mw ELSE a.mw + (b.mw - a.mw) * s.step / 6.0 END AS DOUBLE) AS mw
-  FROM (SELECT *, ${MINUTE} AS minute FROM v_fct_rooftop) a
-  CROSS JOIN range(6) s(step)
-  LEFT JOIN v_fct_rooftop b ON b.REGIONID = a.REGIONID
-    AND b.date = CASE WHEN a.minute = 1410 THEN a.date + 1 ELSE a.date END
-    AND b.time = CASE WHEN a.minute = 1410 THEN 0 ELSE ${HHMM('a.minute + 30')} END
-  WHERE s.step = 0 OR b.mw IS NOT NULL` };
 // In the order they are created: every view after the ones it reads.
-const ITEMS = [...ENTITIES, ...RELATIONSHIPS, ROOFTOP];
+const ITEMS = [...ENTITIES, ...RELATIONSHIPS];
 const PERIOD = /^p\d{4}_h[12]$/;
 const mentions = (s, name) => new RegExp(`\\b${name}\\b`, 'i').test(s);
 
@@ -817,15 +789,13 @@ export function createModel(data) {
       const cols = new Set(dbs.flatMap(db => [...tables.get(`${db}.${item.table}`)]));
       return { sql, cols, requires };
     }
-    if (item.to) {
-      const from = views.get(item.from), to = views.get(item.to);
-      const requires = new Set([..._requires.get(item.from), ..._requires.get(item.to)]);
-      if (!from || !to) return { requires };
-      const [l, r] = item.on, fields = [...to.cols].filter(c => c !== r && !from.cols.has(c));
-      return { sql: `SELECT f.*, ${fields.map(c => `d.${c}`).join(', ')} FROM ${item.from} f LEFT JOIN ${item.to} d ON f.${l} = d.${r}`,
-        cols: new Set([...from.cols, ...fields]), requires };
-    }
-    return { sql: views.has(item.reads) && item.sql, cols: null, requires: _requires.get(item.reads) };
+    // A relationship.
+    const from = views.get(item.from), to = views.get(item.to);
+    const requires = new Set([..._requires.get(item.from), ..._requires.get(item.to)]);
+    if (!from || !to) return { requires };
+    const [l, r] = item.on, fields = [...to.cols].filter(c => c !== r && !from.cols.has(c));
+    return { sql: `SELECT f.*, ${fields.map(c => `d.${c}`).join(', ')} FROM ${item.from} f LEFT JOIN ${item.to} d ON f.${l} = d.${r}`,
+      cols: new Set([...from.cols, ...fields]), requires };
   }
 
   // Creates what the model describes over what is attached by now: the statements that are

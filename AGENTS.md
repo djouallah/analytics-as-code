@@ -244,14 +244,11 @@ the page bypassed `[Capacity factor]`, `[Renewable share]` and `[Curtailment rat
 the compiler could not translate a measure over two facts. When that happens the compiler
 gets the case, not the page the formula. A query groups, filters and names measures. What
 stays the page's, each for its reason:
-- what the model does not hold: rooftop's newest half hour carried forward, and so the
-  renewable share up to 30 days, "Right now" and rooftop's average day (their parts are
-  measures, the division is in JS);
-- the Flows readout: the renewable share of the frame being played, from the unit and
-  rooftop rows the animation already holds (a measure would be a query per frame);
+- the Flows readout: the renewable share of the frame being played, from the unit rows
+  the animation already holds (a measure would be a query per frame);
 - the curtailment total in the chart's title: the farms' table to its newest day plus
   AEMO's regional figures after it, two tables the model has no one measure for;
-- shaping rows: rename, `UNION` with rooftop, add up the rows of an additive measure (the
+- shaping rows: rename, add up the rows of an additive measure (the
   units of a station or an owner, the stack for a sparkline, the series' averages for the
   total);
 - rows as they are stored, which are not figures: the filter lists, the newest interval,
@@ -289,14 +286,11 @@ and anything that serves the page from the repo has to do the same.
   The filters are DAX too (`dax.whereGen`, `dax.unitFilters`, `dax.wherePrice`,
   `dax.priceFilters`: the arguments of a `CALCULATETABLE`, on the fact's own `date` and on
   the unit's attributes); the `sql` ones next to them are Analyze's.
-  **Rooftop solar is not a unit.** It has its own table, which no filter on the units
-  reaches, so a query that lists units by fuel or by region adds it as one more branch of a
-  `UNION` (`dax.rooftop`, `dax.rooftopInRange`, `dax.withRooftop`): `[Rooftop MW]` at 5
-  minutes, `[Rooftop MWh]` per day, under the fuel "Rooftop solar", following the region
-  filter, absent when units are picked or another fuel is. What the model does not hold is
-  the page's, where it draws: the newest half hour carried forward for up to 55 minutes,
-  never past the newest unit interval (`heldRooftop`), and so the renewable share and the
-  average day are divided in JS. Rooftop is in no unit list, search or Analyze row.
+  **Rooftop solar is five units** (since 2026-10-07): `ROOFTOP_<region>`, fuel "Rooftop
+  solar", rows of `fct_summary` like any unit's, so every filter on the units reaches it and
+  no query adds it on its own. Until then it was a table of its own, joined in by the page
+  as one more branch of a `UNION`, with its newest half hour carried forward in JS. It is
+  in the unit picker, search and Analyze; not on the map (no position) and not in `[Units]`.
 - `semantic_model/model.bim` is the semantic model, **the same file Power BI runs**
   (see "The Power BI model"): TMSL, compatibility level 1604, every table one Direct Lake
   partition on a `mart` table, single-column relationships, and the measures. It holds DAX
@@ -336,8 +330,8 @@ and anything that serves the page from the repo has to do the same.
     the daily table itself, with figures of its own.)
   - **A measure of another table is a subquery of its own** (2026-10-06). A SELECT is about
     one table, the one its first measure is defined on. A measure defined on another
-    (`[Hours]`, the regions', inside `[Capacity factor]`; `[Rooftop MWh]` inside
-    `[Renewable share]`; `[Month days]` inside `[Average MW at hour]`) is written as a
+    (`[Hours]`, the regions', inside `[Capacity factor]`; `[Month days]` inside
+    `[Average MW at hour]`) is written as a
     subquery: that measure under the filters around it that reach its table along the
     relationships, grouped by the keys that do and matched on them. It is what the filter
     context does: a filter on `dim_calendar` reaches every fact, one on `dim_duid` or on
@@ -347,14 +341,12 @@ and anything that serves the page from the repo has to do the same.
     `fct_region[date]` and `dim_calendar[date]`, beyond `dim_calendar[date]` with
     `wholeDays`; and the region on `dim_region[Region]`, which reaches all three.
     The subquery is a CTE, read once per query and looked up per row of the result:
-    `[Rooftop MWh]` is on both sides of `[Renewable share]`, and written inline the share
-    per day of the whole history took 1.3 s against 0.25.
+    written inline, a measure named twice was read twice (the renewable share per day of
+    the whole history took 1.3 s against 0.25, when rooftop's energy was on both sides).
     A blank from such a subquery is 0, as DAX adds it. Not supported: under a subtotal of
     a key that reaches it. In a measure of the model `<>` is DAX's (`IS DISTINCT FROM`: a
     blank fuel is not "Grid"); in the page's own filters it stays SQL's.
-  - Its fixed cases for this model: `[Rooftop MW]` is `SUM(mw)` over `v_fct_rooftop_5min`,
-    a view whose SQL is in the file (a half hour and the five times after it on the line
-    to the next half hour). The days the daily table lacks, which a measure adds from the
+  - Its fixed cases for this model: the days the daily table lacks, which a measure adds from the
     5-minute table (`late`, an `EXCEPT`), are none: the page restricts a long range to the
     days the daily table holds (`dax.wholeDays`, `dax.wholeRegionDays`), which makes that
     set empty in DAX too. So a long range ends on the newest whole day on the page, and
@@ -430,8 +422,8 @@ rather than round them:
   vision; black coal (a neutral) and rooftop solar (a lighter solar) are off the checker's
   bands on purpose. A region keeps its colour on every chart.
 - The Dashboard tab leads with "Right now" (`renderNow`): the newest interval from
-  `fct_summary` and `fct_region`, with rooftop's newest half hour carried forward, following
-  the region filter only. With the pointer on the generation or the price chart (the fuel
+  `fct_summary` and `fct_region`, its renewable share the model's measure, following the
+  region filter only. With the pointer on the generation or the price chart (the fuel
   view only) it shows that interval instead (`scrubHero`), from what those charts and the
   Renewables KPI already read: no query of its own.
 - **One screen per tab on a desktop** (the owner's, 2026-10-06: no scrolling page). At 1100 px
@@ -618,7 +610,7 @@ to it (the import ends as a copy with no rule of its own). **All of it is done
 `scripts/cache_catalog.py` is the import, a plain copy. The old facts in `landing` stay:
 they are what these tables are built from.
 - **The tables** are dbt models in schema `mart`, tagged `powerbi`: `fct_summary`,
-  `fct_region`, `fct_rooftop`, `fct_interconnector`, `fct_curtailment`, `dim_region`,
+  `fct_region`, `fct_interconnector`, `fct_curtailment`, `dim_region`,
   `dim_time`, the aggregates `fct_summary_daily`, `fct_region_daily`, `fct_summary_hourly`,
   `fct_region_hourly` and `dim_month` (and the existing `dim_duid`, `dim_calendar`). Each of
   the new ones is a query that
@@ -650,8 +642,10 @@ they are what these tables are built from.
   Direct Lake the Iceberg tables as Delta on its own), single-column relationships, and the
   measures. `{WS_ID}`/`{LH_ID}` in the `DirectLake` expression are placeholders. A measure
   cannot have the name of a column of its table, in any case (`Price` on `fct_region` was
-  refused). Rooftop has no unit, so a filter on `dim_duid` does not reach it:
-  `[Total generation MWh]` and `[Renewable share]` are for slicing by region or date.
+  refused). Rooftop solar is five units of `fct_summary` (2026-10-07): `fct_rooftop`, its
+  source, is a dbt model and not a table of the model, and no measure adds rooftop to the
+  units. `[Units]` leaves those five out; `[Capacity MW]` and `[Capacity factor]` do too, as
+  they have no registered capacity.
 - **A quantity is one measure, and the measure picks the table.** Direct Lake has no
   aggregation tables (user-defined aggregations are not supported), so the switch is DAX:
   `[Generation MWh]`, `[Charging MWh]`, `[Revenue]`, `[Capture price]`, `[Units]` and
@@ -678,15 +672,10 @@ they are what these tables are built from.
   them, as `[Negative price days share]`, `[Lowest daily price]` and `[Average MWh a day]`
   name the daily tables: a share of days is not a share of intervals.
   **An average MW is energy over `[Hours]`** (2026-10-06): `[Average generation MW]`,
-  `[Average total generation MW]` (with rooftop), `[Average rooftop MW]`,
   `[Average demand MW]`. The hours are the regions' (the intervals the price data holds),
   nights included, so rooftop's average over 3 days is its energy over 72 hours, not over
-  its daylight intervals as the page's KPI had it. `[Capacity MW]` is the registered
-  capacity of the units with output, which `[Capacity factor]` divides by;
-  `[Renewable share of units]` is the share without rooftop, for when units are picked.
-- **Rooftop at 5 minutes is a measure**, `[Rooftop MW]`: only the half-hourly estimate is
-  stored, and the measure draws the straight line between two consecutive half hours
-  (nothing across a missing one). The newest value is not held forward: that is the chart's.
+  its daylight intervals. `[Capacity MW]` is the registered capacity of the units with
+  output, which `[Capacity factor]` divides by.
 - **The report is `dashboard/powerbi/nem.Report`**, in PBIR (a JSON file per page and per
   visual; schema versions and base theme as Power BI Desktop wrote them in 2026). One page,
   "Overview": the model's measures by day, fuel, region and station, over the last 30 days
@@ -745,12 +734,12 @@ they are what these tables are built from.
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
 | fct_interconnector_today | landing | incremental insert-only merge (by file) — the INTERCONNECTORRES rows of the same archived DispatchIS files as fct_price_today **and, despite the name, the whole history**: AEMO's monthly MMSDM archive of the same record, 2018-01 → 2026-08 (source_type `interconnector_monthly`, a finite backfill; read with `strict_mode = false`, which the files from 2024-08 need). August 2026 is in both sources, so `fct_interconnector` takes one row per interval (`MAX … GROUP BY`); the Flows page plays any range ≤ 30 days |
 | fct_regionsum_today | landing | incremental insert-only merge (by file) — the REGIONSUM rows (v9) of the same files: demand, net interchange (positive = export), regional semi-scheduled UIGF/availability/cleared MW. History's demand/net interchange come from fct_price's DREGION rows |
-| fct_summary | mart | incremental insert-only merge on (date, time, DUID) — the Power BI fact: `fct_scada` joined to `dim_duid` and `fct_price` (inner joins), then the intraday feed after the newest daily interval, for the units the daily files know (`dispatch_duids`). Every run recomputes the newest daily date minus six days on; missing keys are added, a stored value is never revised. The dates come from the Iceberg manifests and are written as literals (no scan to find them); a refill takes `process_limit` dates below the oldest it holds, newest first. `rebuild=fct_summary` resets it |
+| fct_summary | mart | incremental insert-only merge on (date, time, DUID) — the Power BI fact: `fct_scada` joined to `dim_duid` and `fct_price` (inner joins), then the intraday feed after the newest daily interval, for the units the daily files know (`dispatch_duids`), and rooftop solar as five units, `ROOFTOP_<region>`: `fct_rooftop` on the straight line between two half hours, with `fct_region`'s price. An interval is written once both sources have it (every branch stops at the newest half hour all five regions' rooftop has), so the units run 30-60 minutes late. `backfill_rooftop` (a dispatch input of `process_data.yml`) added rooftop's history once, 2026-10-07. Every run recomputes the newest daily date minus six days on; missing keys are added, a stored value is never revised. The dates come from the Iceberg manifests and are written as literals (no scan to find them); a refill takes `process_limit` dates below the oldest it holds, newest first. `rebuild=fct_summary` resets it |
 | fct_region | mart | incremental insert-only merge on (REGIONID, date, time) — for Power BI: price, demand, net interchange and the regional semi-scheduled wind and solar. The intraday record where `fct_price_today` and `fct_regionsum_today` both have the interval, else `fct_price`'s. Recomputed whole every run (4.5M rows); the merge adds what is missing |
-| fct_rooftop | mart | incremental insert-only merge on (REGIONID, date, time) — for Power BI: the `MEASUREMENT` estimate per region and half hour as published (zeros kept, blanks out), with the half hour's average price from `fct_region`; written once its six prices exist |
+| fct_rooftop | mart | incremental insert-only merge on (REGIONID, date, time) — the source `fct_summary`'s rooftop units are built from (not a table of the semantic model since 2026-10-07): the `MEASUREMENT` estimate per region and half hour as published (zeros kept, blanks out), with the half hour's average price from `fct_region`; written once its six prices exist |
 | fct_interconnector | mart | incremental insert-only merge on (interconnector, date, time) — for Power BI: `MWFLOW` and the two limits, the pricing run, one row per interval |
 | fct_curtailment | mart | incremental insert-only merge on (DUID, date) — for Power BI: curtailed and available MWh per semi-scheduled unit and day. A day is written once `fct_scada` holds its 288 intervals: the days after the newest one here, and in a refill `process_limit` days below the oldest, newest first (`macros/whole_days.sql`) |
-| dim_region | mart | incremental insert-only merge on Region — for Power BI: the regions of `dim_duid`, the one filter that reaches units, regional data and rooftop |
+| dim_region | mart | incremental insert-only merge on Region — for Power BI: the regions of `dim_duid`, the one filter that reaches the units and the regional data |
 | dim_interconnector | mart | incremental insert-only merge on interconnector — the links between regions of `dim_region` (from MMSDM `INTERCONNECTOR`): `from_region`/`to_region` (a positive `mw` flows from the first to the second) and AEMO's `description`. The Flows page names a link by its id on the map and by the description on its board; only the bend of each arc is typed there (`LINK_CURVES`) |
 | dim_time | mart | incremental insert-only merge on time — the 288 5-minute times of a day (`time` HHMM, `minute`, `hour`): the time axis of the 5-minute facts, and what the measures look at to choose a table |
 | fct_region_daily | mart | incremental insert-only merge on (REGIONID, date) — the plain average of a day's 288 intervals of `fct_region` (price, demand, net interchange); a day is written once it has all 288 |
@@ -760,12 +749,13 @@ they are what these tables are built from.
 | fct_region_hourly | mart | incremental insert-only merge on (REGIONID, month, hour) — average price per region, whole month and hour of day, with the number of intervals averaged |
 | fct_rooftop_pv | landing | incremental insert-only merge (by file) — rooftop solar per region and half hour, AEMO's `ROOFTOP_PV_ACTUAL` estimate **kept as published**: the current folder, the monthly MMSDM archive 2018-01 → 2026-08 and the weekly archives after it. The monthly files from 2024-08 swap `QI` and `LASTCHANGED`; the model reads each file's `I` row to tell |
 
-**Rooftop solar is a table of its own, `fct_rooftop`, never units.** AEMO's `MEASUREMENT`
-estimate per region and half hour, as published (it starts 2018-03-06); a blank (`QI = 0`)
-is missing, not zero. Nothing held, carried forward or interpolated is stored in it: the model's
-`[Rooftop MW]` draws the straight line between two consecutive half hours (nothing across a
-missing one), and the page carries the newest half hour forward where it draws (the next
-estimate lands 30 to 60 minutes late). On the generation chart the dashed Demand line is
+**Rooftop solar's source is a table of its own, `fct_rooftop`, never units.** AEMO's
+`MEASUREMENT` estimate per region and half hour, as published (it starts 2018-03-06); a
+blank (`QI = 0`) is missing, not zero. Nothing held, carried forward or interpolated is
+stored in it. The derived table is where rooftop meets the units (2026-10-07): `fct_summary`
+holds it as five units, `ROOFTOP_<region>` in `dim_duid`, the straight line between two
+consecutive half hours (nothing across a missing one, nothing carried forward), and writes
+an interval once both sources have it. On the generation chart the dashed Demand line is
 operational demand **plus** the rooftop in the stack. AEMO's data model 5.6 report says
 `ROOFTOP_PV_ACTUAL` will be removed in a later release in favour of
 `ROOFTOP_PV_ACTUAL_PRED`/`_RUN` (5-minute), neither published yet: when the current folder

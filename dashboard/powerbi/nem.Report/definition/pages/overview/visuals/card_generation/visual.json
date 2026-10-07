@@ -23,11 +23,11 @@
                       "Entity": "fct_summary"
                     }
                   },
-                  "Property": "Total generation MWh"
+                  "Property": "Generation MWh"
                 }
               },
-              "queryRef": "fct_summary.Total generation MWh",
-              "nativeQueryRef": "Total generation MWh"
+              "queryRef": "fct_summary.Generation MWh",
+              "nativeQueryRef": "Generation MWh"
             }
           ]
         }
