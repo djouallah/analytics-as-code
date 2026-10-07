@@ -17,16 +17,14 @@ Open items only: a finished item is removed, not ticked.
 
 ## To do
 
-- [ ] **The tables as views.** A table is split over files (`today`, the half-years, `agg`),
-  and the compiler's `build()` (`../github-dax/semantic/compiler.js`) puts them back together
-  as views after every attach. That part is not DAX and stays, as a small `storage/views.js`:
-  one view per table, by name (`fct_summary`, `dim_duid`, ...), and nothing from `model.bim`.
-- [ ] **`frontend/queries.js` in SQL.** Each of the 74 members becomes a SQL string over those
-  views, built from the page's state. A measure is written in SQL where a chart uses it
+- [ ] **`frontend/queries.js` in SQL.** Each of the 74 members becomes a SQL string over the
+  views the page already has (`v_fct_summary`, `v_dim_duid`, ...: what the Analyze tab reads),
+  built from the page's state. A measure is written in SQL where a chart uses it
   (capture price is `SUM(mw * price) / SUM(mw)`); a figure that grows complicated becomes a
-  column or a table in dbt, not page code. The joins are written out.
-- [ ] **The page talks to `data.query(sql)`**: no `createModel`, no `semantic/`, no `model.bim`
-  in the deploy. The Logs tab shows the SQL alone. Analyze is unchanged.
+  column or a table in dbt, not page code. A query that needs the unit's attributes reads the
+  relationship's view (`fct_summary_to_dim_duid`), as Analyze can.
+- [ ] **The page sends SQL**: no `toDax`, no query words. The Logs tab shows the SQL alone.
+  Analyze is unchanged.
 - [ ] **Headline check against Power BI.** In `deploy_model.yml`, a dozen figures compared to a
   cent between this page's SQL and the deployed model, for the newest settled days: generation
   by fuel per day, average price by region, renewable share, emissions intensity, curtailment.
@@ -36,6 +34,6 @@ Open items only: a finished item is removed, not ticked.
 
 ## What it drops
 
-`compiler.js`, the query words (`select`, `where`, `totals`, ...), the page's copy of
-`model.bim`, and for this page the full parity harness and the no-arithmetic lint
+The DAX half of `compiler.js` (`toDax`, `toSQL`), the query words (`select`, `where`,
+`totals`, ...), and for this page the full parity harness and the no-arithmetic lint
 (`scripts/parity/page_lint.mjs` reads `index.html` and `queries.js` of `../github-dax/` only).
