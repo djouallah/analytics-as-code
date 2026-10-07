@@ -67,3 +67,22 @@ jobs:
         env:
           PYTHONNET_RUNTIME: coreclr
         run: python scripts/check_model.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: The page's queries, on the model and on the dashboard's files
+        # scripts/parity: every query the page sends, as the compiler writes its DAX and its
+        # SQL, run over the files the dashboard has deployed (DuckDB) and asked of the model
+        # just deployed (XMLA); the rows have to be the same. The model is the reference.
+        env:
+          PYTHONNET_RUNTIME: coreclr
+        run: |
+          set -euo pipefail
+          data="$RUNNER_TEMP/data" && mkdir -p "$data"
+          site=https://nemtracker.github.io/data
+          curl -fsS -o "$data/mart_manifest.json" "$site/mart_manifest.json"
+          for f in mart_dim mart_today mart_agg $(python -c "import json,sys; print(' '.join('mart_' + p for p in json.load(open(sys.argv[1]))['periods'][-2:]))" "$data/mart_manifest.json"); do
+            curl -fsS -o "$data/$f.duckdb" "$site/$f.duckdb"
+          done
+          (cd scripts/parity && npm ci --no-audit --no-fund && node page_queries.mjs "$data" "$RUNNER_TEMP/parity.json")
+          python scripts/parity_model.py "$RUNNER_TEMP/parity.json"

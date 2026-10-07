@@ -1,0 +1,9 @@
+{
+  "name": "parity",
+  "private": true,
+  "type": "module",
+  "description": "The page's queries through the compiler over the deployed files (page_queries.mjs); scripts/parity_model.py asks the deployed model the same DAX and compares.",
+  "dependencies": {
+    "@duckdb/node-api": "1.5.6-r.1"
+  }
+}
