@@ -707,21 +707,24 @@
     import { renderLogs } from "./frontend/logs.js";
 
     // =========================================================================
-    // 1. DAX QUERIES: every query the visuals send, and the filters they are built from
+    // 1. QUERIES: every query the visuals send, and the filters they are built from
     // =========================================================================
 
-    // The tables and the measures are the model's (semantic_model/model.bim), and the queries are
-    // DAX: `fct_summary` is the generation per unit, with the price of its region on the row,
+    // The page writes no DAX. A query names the model's fields (semantic_model/model.bim):
+    // the columns it groups by, the measures, and conditions on columns, in the words the
+    // compiler knows (semantic/compiler.js, toDax); the compiler writes the DAX, and the DAX's
+    // SQL. `fct_summary` is the generation per unit, with the price of its region on the row,
     // `dim_duid` the units, `fct_region` the regions' price and demand. A query that names a
     // column of `dim_duid` next to a fact reads the two joined; one that does not reads the
-    // fact alone. That is the compiler's doing (semantic/compiler.js), as is the SQL.
+    // fact alone. That is the compiler's doing, as is the SQL.
     // A FIGURE THE MODEL CAN EXPRESS IS A MEASURE THERE, the one Power BI calls, and the page
     // asks for it: an average, a share, a rate, a factor is never worked out here from its
     // parts. A query groups, filters and names measures. What stays the page's is what the
     // model does not hold or what is not a figure: shaping rows (rename, add up the rows of a
     // station or of a stack), the rows as they are stored (the filter lists, the newest
     // interval, the Flows rows), and presentation (a share of what is shown, the change
-    // between two values).
+    // between two values). A figure a query cannot name is a measure of the model first; a
+    // word the query does not have is the owner's to add, not the page's.
     // Rooftop solar is five units of the model (ROOFTOP_<region>, fuel ROOFTOP): every filter
     // on the units reaches it, and no query adds it on its own.
     // What a date range reads: the 5-minute tables up to 30 days, the daily ones beyond (they
@@ -736,45 +739,65 @@
     const ENERGY = '[Generation MWh]', CAPTURE = '[Capture price]';
     function grain() {
       return isIntradayMode()
-        ? { fact: 'fct_summary', unit: 'fct_summary', price: 'fct_region', region: 'fct_region[REGIONID]', regionKey: '[REGIONID]',
+        ? { fact: 'fct_summary', unit: 'fct_summary', price: 'fct_region', region: 'fct_region[REGIONID]',
             output: '[Generation MW]', charging: '[Charging MW]', average: '[Average MW]', demand: '[Demand MW]' }
-        : { fact: 'dim_calendar', unit: 'dim_duid', price: 'dim_calendar', region: 'dim_region[Region]', regionKey: '[Region]',
+        : { fact: 'dim_calendar', unit: 'dim_duid', price: 'dim_calendar', region: 'dim_region[Region]',
             output: ENERGY, charging: '[Charging MWh]', average: '[Average MWh a day]', demand: '[Demand MWh]' };
     }
-    const daxStr = v => `"${String(v).replace(/"/g, '""')}"`;
-    const daxDate = d => `dt"${d}"`;
-    const daxDuids = () => `{${crossFilter.duids.map(daxStr).join(', ')}}`;
     // The unit's fuel, and the rules on a unit the charts filter by. Storage is a rule on the
     // fuel: batteries are "Grid". A unit with no fuel is a generator, which GENERATOR has to
     // say: in DAX a blank is not "Grid", in SQL a NULL is not unequal to anything.
     // A chart that leaves storage out under the header's fuel filter uses generatorUnits():
     // with a fuel picked, the bare rule is the same thing, and with the filter on Grid the
-    // engine then sees fuel = 'Grid' AND fuel <> 'Grid' and reads nothing. It is never
-    // written NOT STORAGE, which the engine does not see through.
+    // engine then sees fuel = 'Grid' AND fuel <> 'Grid' and reads nothing. Storage is never
+    // left out as "not storage", which the engine does not see through.
     const FUEL = 'dim_duid[FuelSourceDescriptor]';
-    const STORAGE = `${FUEL} = "Grid"`;
-    const GENERATOR = `(${FUEL} <> "Grid" || ISBLANK(${FUEL}))`;
-    const generatorUnits = () => activeFuel() && activeFuel() !== UNKNOWN ? `${FUEL} <> "Grid"` : GENERATOR;
-    const fuelIs = fuel => fuel === UNKNOWN ? `ISBLANK(${FUEL})` : `${FUEL} = ${daxStr(fuel)}`;
+    const STORAGE = [FUEL, '=', 'Grid'];
+    const GENERATOR = { any: [[FUEL, '<>', 'Grid'], [FUEL, 'blank']] };
+    const generatorUnits = () => activeFuel() && activeFuel() !== UNKNOWN ? [FUEL, '<>', 'Grid'] : GENERATOR;
+    const fuelIs = fuel => fuel === UNKNOWN ? [FUEL, 'blank'] : [FUEL, '=', fuel];
+    // The date (and time) columns of a grain, as a select, and their names, as an order.
+    const at = (table, intraday) => ({ date: `${table}[date]`, ...(intraday ? { time: `${table}[time]` } : {}) });
+    const byTime = intraday => intraday ? ['date', 'time'] : ['date'];
+    // What a series of the generation chart is: the fuel, the unit, or the unit and its station
+    // (the page adds a station's units up: stationSeries).
+    const seriesOf = (by, unit) => by === 'fuel' ? { series: FUEL }
+      : by === 'duid' ? { series: `${unit}[DUID]` } : { series: `${unit}[DUID]`, station: 'dim_duid[StationName]' };
+
+    // The days the daily tables hold, `units` (fct_summary_daily) and `regions`
+    // (fct_region_daily), read once agg is attached (loadDailyAggDatabase). Beyond 30 days a
+    // range is cut to them, which is what makes the days a measure adds from the 5-minute
+    // table (the ones the daily table lacks) none.
+    let WHOLE_DAYS = null;
+    const wholeDaysQuery = table => ({ select: { first: { min: `${table}[date]` }, last: { max: `${table}[date]` } } });
+    async function readWholeDays() {
+      const [[units], [regions]] = await Promise.all(['fct_summary_daily', 'fct_region_daily'].map(t => runQuery(wholeDaysQuery(t))));
+      WHOLE_DAYS = { units, regions };
+    }
 
     const dax = {
-      // --- Filters: the arguments of a CALCULATETABLE ---
-      dates: (table, from, to) => [`${table}[date] >= ${daxDate(from)}`, `${table}[date] <= ${daxDate(to)}`],
+      // --- Filters: the conditions of a query's `where` ---
+      dates: (table, from, to) => [[`${table}[date]`, 'between', from, to]],
+      // A range cut to the days a daily table holds, on dim_calendar.
+      wholeDays(which, from, to) {
+        if (!WHOLE_DAYS) throw new Error('the daily tables are not attached yet');
+        const { first, last } = WHOLE_DAYS[which];
+        return dax.dates('dim_calendar', !from || from < first ? first : from, !to || to > last ? last : to);
+      },
 
       // The header's filters on the units, at the range's grain.
       whereGen({ withFuel = true } = {}) {
         const { from, to } = getDateRange(), { fact, unit } = grain();
-        return [...dax.dates(fact, from, to), ...(isIntradayMode() ? [] : [dax.wholeDays]), ...dax.unitFilters(unit, withFuel)];
+        return [...(isIntradayMode() ? dax.dates(fact, from, to) : dax.wholeDays('units', from, to)), ...dax.unitFilters(unit, withFuel)];
       },
 
       // Region / fuel / unit filters on `dim_duid` or on a fact related to it.
       unitFilters(fact, withFuel = true) {
         const region = activeRegion(), fuel = withFuel ? activeFuel() : null;
-        const filters = [];
-        if (region) filters.push(`dim_duid[Region] = ${daxStr(region)}`);
-        if (fuel) filters.push(fuelIs(fuel));
-        if (crossFilter.duids.length) filters.push(`${fact}[DUID] IN ${daxDuids()}`);
-        return filters;
+        return [
+          ...(region ? [['dim_duid[Region]', '=', region]] : []),
+          ...(fuel ? [fuelIs(fuel)] : []),
+          ...(crossFilter.duids.length ? [[`${fact}[DUID]`, 'in', crossFilter.duids]] : [])];
       },
 
       // The header's filters on the regions, at the range's grain; or on a table named
@@ -782,18 +805,22 @@
       wherePrice(table) {
         const { from, to } = getDateRange(), { price, region } = grain();
         if (table) return [...dax.dates(table, from, to), ...dax.priceFilters(`${table}[REGIONID]`)];
-        return [...dax.dates(price, from, to), ...(isIntradayMode() ? [] : [dax.wholeRegionDays]), ...dax.priceFilters(region)];
+        return [...(isIntradayMode() ? dax.dates(price, from, to) : dax.wholeDays('regions', from, to)), ...dax.priceFilters(region)];
       },
 
-      // The region filter on a regional table; a fuel or unit pick narrows it to their regions.
-      // The fuel is matched under the name the charts give it, whether it came from the
-      // dropdown or a click. Rooftop solar is in every region.
+      // The region filter on a regional table; a fuel or unit pick narrows it to their regions,
+      // which the units' list says (allDuids, rows as stored). The fuel is matched under the
+      // name the charts give it, whether it came from the dropdown or a click. Rooftop solar is
+      // in every region.
       priceFilters(regionCol) {
         const region = activeRegion(), fuel = activeFuel();
-        const regionsOf = filter => [`TREATAS(CALCULATETABLE(VALUES(dim_duid[Region]), ${filter}), ${regionCol})`];
-        if (region) return [`${regionCol} = ${daxStr(region)}`];
-        if (crossFilter.duids.length) return regionsOf(`dim_duid[DUID] IN ${daxDuids()}`);
-        if (fuel) return regionsOf(fuelIs(fuel));
+        const regionsOf = keep => {
+          const regions = [...new Set(allDuids.filter(keep).map(d => d.Region).filter(Boolean))];
+          return [[regionCol, 'in', regions.length ? regions : ['']]];   // '' is no region: no rows
+        };
+        if (region) return [[regionCol, '=', region]];
+        if (crossFilter.duids.length) return regionsOf(d => crossFilter.duids.includes(d.DUID));
+        if (fuel) return regionsOf(d => d.fuel === fuel);
         return [];
       },
 
@@ -804,234 +831,153 @@
       // table holds (the regions' daily table holds them too). The region is dim_region's,
       // which reaches the units and the regions.
       whereAll({ withFuel = true } = {}) {
-        const { from, to } = getDateRange(), { unit } = grain(), intraday = isIntradayMode();
-        return [
-          ...(intraday ? [...dax.dates('fct_summary', from, to), ...dax.dates('fct_region', from, to)] : []),
-          ...dax.dates('dim_calendar', from, to), ...(intraday ? [] : [dax.wholeDays]),
-          ...dax.allFilters(unit, withFuel)];
+        const { from, to } = getDateRange(), { unit } = grain();
+        const days = isIntradayMode()
+          ? [...dax.dates('fct_summary', from, to), ...dax.dates('fct_region', from, to), ...dax.dates('dim_calendar', from, to)]
+          : dax.wholeDays('units', from, to);
+        return [...days, ...dax.allFilters(unit, withFuel)];
       },
       allFilters(unit, withFuel = true) {
         const region = activeRegion(), fuel = withFuel ? activeFuel() : null;
         return [
-          ...(region ? [`dim_region[Region] = ${daxStr(region)}`] : []),
+          ...(region ? [['dim_region[Region]', '=', region]] : []),
           ...(fuel ? [fuelIs(fuel)] : []),
-          ...(crossFilter.duids.length ? [`${unit}[DUID] IN ${daxDuids()}`] : [])];
+          ...(crossFilter.duids.length ? [[`${unit}[DUID]`, 'in', crossFilter.duids]] : [])];
       },
       // Beyond 30 days the hour-of-day tables are by whole month: the months the range touches.
       months(table) {
         const { from, to } = getDateRange();
-        return [`${table}[month] >= ${daxDate(from.slice(0, 8) + '01')}`, `${table}[month] <= ${daxDate(to)}`];
+        return [[`${table}[month]`, 'between', from.slice(0, 8) + '01', to]];
       },
 
-      // Beyond 30 days, the days the daily table holds and no other: the units' measures
-      // then read that table alone (in the model, the days it lacks are added from the
-      // 5-minute one). The same for the regions' table.
-      wholeDays: 'TREATAS(VALUES(fct_summary_daily[date]), dim_calendar[date])',
-      wholeRegionDays: 'TREATAS(VALUES(fct_region_daily[date]), dim_calendar[date])',
-
       // =====================================================================
-      // The queries, by tab and chart. Each is an EVALUATE the page sends as it is: through
-      // compiler.js on DuckDB, to Power BI on the VertiPaq app.
+      // The queries, by tab and chart. Each is a query of the model's fields that the page
+      // sends as it is: the compiler writes its DAX, and the DAX's SQL.
       // =====================================================================
 
       // --- Filter lists, and the dates the date inputs offer ---
       // The regions of the market: the ones that have a price (dim_region also holds
       // Western Australia, another market).
-      regions: 'EVALUATE SELECTCOLUMNS(VALUES(fct_region[REGIONID]), "Region", [REGIONID]) ORDER BY [Region]',
-      regionNames: `EVALUATE CALCULATETABLE(SELECTCOLUMNS(dim_region, "region", dim_region[Region], "state", dim_region[State]),
-        NOT ISBLANK(dim_region[State]))`,
-      fuels: `EVALUATE CALCULATETABLE(SELECTCOLUMNS(VALUES(${FUEL}), "fuel", [FuelSourceDescriptor]),
-        NOT ISBLANK(${FUEL})) ORDER BY [fuel]`,
-      allDuids: `EVALUATE SELECTCOLUMNS(dim_duid, "DUID", dim_duid[DUID], "Region", dim_duid[Region], "fuel", ${FUEL})
-        ORDER BY [DUID]`,
-      newestDate: 'EVALUATE ROW("d", MAX(fct_summary[date]))',
-      oldestDate: 'EVALUATE ROW("d", MIN(dim_calendar[date]))',
+      regions: { select: { Region: 'fct_region[REGIONID]' }, orderBy: ['Region'] },
+      regionNames: { select: { region: 'dim_region[Region]', state: 'dim_region[State]' }, where: [['dim_region[State]', 'notBlank']] },
+      fuels: { select: { fuel: FUEL }, where: [[FUEL, 'notBlank']], orderBy: ['fuel'] },
+      // A list of a dimension's rows says its key is not blank: in DAX a query of columns alone
+      // also returns the blank row a dimension gets when a fact names a key it lacks.
+      allDuids: { select: { DUID: 'dim_duid[DUID]', Region: 'dim_duid[Region]', fuel: FUEL }, where: [['dim_duid[DUID]', 'notBlank']], orderBy: ['DUID'] },
+      newestDate: { select: { d: { max: 'fct_summary[date]' } } },
+      oldestDate: { select: { d: { min: 'dim_calendar[date]' } } },
 
       // --- Cutoff: the newest interval of the units, as a date and a time ---
       // On the newest date, which the date inputs know (populateFilters): a constant, so only
       // that day is read.
-      cutoff: () => `EVALUATE CALCULATETABLE(ROW("date", MAX(fct_summary[date]), "time", MAX(fct_summary[time])),
-        fct_summary[date] = ${daxDate(document.getElementById('dateTo').max)})`,
+      cutoff: () => ({ select: { date: { max: 'fct_summary[date]' }, time: { max: 'fct_summary[time]' } },
+        where: [['fct_summary[date]', '=', document.getElementById('dateTo').max]] }),
 
       // --- Dashboard: Right now ---
       // Per fuel at the newest interval: its output and what of it is charging; and the
       // renewable share there, the model's measure. The region filter only.
-      nowFilters: (now, region) => [`fct_summary[date] = ${daxDate(now.date)}`, `fct_summary[time] = ${now.time}`,
-        ...(region ? [`dim_duid[Region] = ${daxStr(region)}`] : [])].join(', '),
-      nowByFuel: (now, region) => `
-          EVALUATE SELECTCOLUMNS(
-            CALCULATETABLE(
-              SUMMARIZECOLUMNS(${FUEL}, "mw", [Generation MW], "charging", [Charging MW]),
-              ${dax.nowFilters(now, region)}),
-            "fuel", [FuelSourceDescriptor], "mw", [mw], "charging", [charging])`,
-      nowShare: (now, region) => `EVALUATE CALCULATETABLE(ROW("share", [Renewable share]), ${dax.nowFilters(now, region)})`,
-      // Each region at the newest interval of the regional table, which can be ahead of the units'.
-      nowByRegion: `
-          EVALUATE VAR newestDate = MAX(fct_region[date])
-          VAR newestTime = CALCULATE(MAX(fct_region[time]), fct_region[date] = newestDate)
-          RETURN CALCULATETABLE(
-            SELECTCOLUMNS(fct_region, "region", fct_region[REGIONID], "price", fct_region[price],
-              "demand", fct_region[demand], "net", fct_region[net_interchange]),
-            fct_region[date] = newestDate, fct_region[time] = newestTime)
-          ORDER BY [region]`,
+      nowFilters: (now, region) => [['fct_summary[date]', '=', now.date], ['fct_summary[time]', '=', now.time],
+        ...(region ? [['dim_duid[Region]', '=', region]] : [])],
+      nowByFuel: (now, region) => ({ select: { fuel: FUEL, mw: '[Generation MW]', charging: '[Charging MW]' },
+        where: dax.nowFilters(now, region) }),
+      nowShare: (now, region) => ({ select: { share: '[Renewable share]' }, where: dax.nowFilters(now, region) }),
+      // The newest interval of the regional table, which can be ahead of the units': its date,
+      // then its time on that date, then each region there.
+      regionNewestDate: { select: { date: { max: 'fct_region[date]' } } },
+      regionNewestTime: date => ({ select: { time: { max: 'fct_region[time]' } }, where: [['fct_region[date]', '=', date]] }),
+      nowByRegion: (date, time) => ({
+        select: { region: 'fct_region[REGIONID]', price: 'fct_region[price]', demand: 'fct_region[demand]', net: 'fct_region[net_interchange]' },
+        where: [['fct_region[date]', '=', date], ['fct_region[time]', '=', time]], orderBy: ['region'] }),
 
       // --- Dashboard: generation chart ---
       // One row per series and interval (day), with what it made and what it took (charging,
       // negative) apart: the chart draws the second as its own "<series> (charging)" series,
       // below the axis, instead of netting it into the stack. `by` is the series: the fuel,
-      // the unit, or the unit's station (a unit without one stays on its own; a station's
-      // units are added up).
+      // the unit, or the unit's station (stationSeries adds a station's units up; a unit
+      // without one stays on its own).
       generation(by, intraday) {
         const { fact, unit, output, charging } = grain();
-        const keys = `[date]${intraday ? ', [time]' : ''}`, named = `"date", [date]${intraday ? ', "time", [time]' : ''}`;
-        const cols = [`${fact}[date]`, ...(intraday ? [`${fact}[time]`] : []),
-          ...(by === 'fuel' ? [FUEL] : [`${unit}[DUID]`]), ...(by === 'station' ? ['dim_duid[StationName]'] : [])];
-        const series = { fuel: '[FuelSourceDescriptor]', duid: '[DUID]', station: 'COALESCE([StationName], [DUID])' }[by];
-        const rows = `SELECTCOLUMNS(
-            CALCULATETABLE(
-              SUMMARIZECOLUMNS(${cols.join(', ')}, "output", ${output}, "charging", ${charging}),
-              ${dax.whereGen().join(', ')}),
-            ${named}, "series", ${series}, "output", [output], "charging", [charging])`;
-        const units = by !== 'station' ? rows : `GROUPBY(${rows},
-            ${keys}, [series], "output", SUMX(CURRENTGROUP(), [output]), "charging", SUMX(CURRENTGROUP(), [charging]))`;
-        return `
-          EVALUATE ${units}
-          ORDER BY ${keys}, [series]`;
+        return { select: { ...at(fact, intraday), ...seriesOf(by, unit), output, charging },
+          where: dax.whereGen(), orderBy: [...byTime(intraday), 'series'] };
       },
 
       // The averages behind the generation KPIs: each series of the chart as an average MW
       // over the range, [Average generation MW] (energy over the hours the range holds). One
       // denominator, so their sum is the total.
-      averages(by) {
-        const { unit } = grain();
-        const cols = [...(by === 'fuel' ? [FUEL] : [`${unit}[DUID]`]), ...(by === 'station' ? ['dim_duid[StationName]'] : [])];
-        const series = { fuel: '[FuelSourceDescriptor]', duid: '[DUID]', station: 'COALESCE([StationName], [DUID])' }[by];
-        const rows = `SELECTCOLUMNS(
-            CALCULATETABLE(
-              SUMMARIZECOLUMNS(${cols.join(', ')}, "avg", [Average generation MW]),
-              ${dax.whereAll().join(', ')}),
-            "series", ${series}, "avg", [avg])`;
-        const units = by !== 'station' ? rows : `GROUPBY(${rows}, [series], "avg", SUMX(CURRENTGROUP(), [avg]))`;
-        return `
-          EVALUATE ${units}`;
-      },
+      averages: by => ({ select: { ...seriesOf(by, grain().unit), avg: '[Average generation MW]' }, where: dax.whereAll() }),
 
       // The units of a station, which a click on it in the drill toggles as a group.
-      stationUnits: name => `EVALUATE CALCULATETABLE(VALUES(dim_duid[DUID]), dim_duid[StationName] = ${daxStr(name)})`,
+      stationUnits: name => ({ select: { DUID: 'dim_duid[DUID]' }, where: [['dim_duid[StationName]', '=', name]] }),
 
       // --- Dashboard: demand line over the generation chart ---
       // Operational demand of the filtered region, or the sum of all regions: MW per interval
       // ([Demand MW], blank when a region has none yet, so the interval is left out and not
       // undercounted), MWh per day.
       demand(intraday) {
-        const region = activeRegion();
-        const { from, to } = getDateRange();
-        const g = grain();
-        const keys = `${g.price}[date]${intraday ? `, ${g.price}[time]` : ''}`;
-        return `
-          EVALUATE FILTER(
-            CALCULATETABLE(
-              SUMMARIZECOLUMNS(${keys}, "demand", ${g.demand}),
-              ${[...dax.dates(g.price, from, to), ...(intraday ? [] : [dax.wholeRegionDays]),
-                ...(region ? [`${g.region} = ${daxStr(region)}`] : [])].join(', ')}),
-            NOT ISBLANK([demand]))
-          ORDER BY ${keys}`;
+        const region = activeRegion(), { from, to } = getDateRange(), g = grain();
+        return { select: { ...at(g.price, intraday), demand: g.demand },
+          where: [...(intraday ? dax.dates(g.price, from, to) : dax.wholeDays('regions', from, to)), ...(region ? [[g.region, '=', region]] : [])],
+          orderBy: byTime(intraday) };
       },
 
       // --- Dashboard: price chart ---
       // Per region, and with them the rows of all the regions together ("total"): the
       // sparkline of the price KPI.
       price(intraday) {
-        const { price, region, regionKey } = grain();
-        return `
-          EVALUATE SELECTCOLUMNS(
-            CALCULATETABLE(
-              SUMMARIZECOLUMNS(${price}[date]${intraday ? `, ${price}[time]` : ''}, ROLLUPADDISSUBTOTAL(${region}, "allRegions"),
-                "avg_price", [Average price]),
-              ${dax.wherePrice().join(', ')}),
-            "date", [date]${intraday ? ', "time", [time]' : ''}, "Region", ${regionKey}, "total", [allRegions], "avg_price", [avg_price])
-          ORDER BY [date]${intraday ? ', [time]' : ''}`;
+        const { price, region } = grain();
+        return { select: { ...at(price, intraday), Region: region, avg_price: '[Average price]' }, totals: { total: [region] },
+          where: dax.wherePrice(), orderBy: byTime(intraday) };
       },
       // The plain average over the range: the price KPI, and the capture chart's dashed line.
-      averagePrice: () => `EVALUATE CALCULATETABLE(ROW("avg", [Average price]), ${dax.wherePrice().join(', ')})`,
+      averagePrice: () => ({ select: { avg: '[Average price]' }, where: dax.wherePrice() }),
 
       // --- Dashboard: KPIs (and the Renewables chart, which draws the KPI's rows) ---
-      generatorCount: () => `EVALUATE CALCULATETABLE(ROW("cnt", [Units]), ${dax.whereGen().join(', ')})`,
+      generatorCount: () => ({ select: { cnt: '[Units]' }, where: dax.whereGen() }),
       // Emissions of what the generation chart shows (rooftop solar has no factor):
       // the model's tonnes and intensity per interval (day), the sparkline, and over the
-      // range, the subtotal row ("all"). One query: the range is one more grouping set.
+      // range, the subtotal row ("all"). One query: the range is one more set of rows.
       emissions(intraday) {
-        const { fact } = grain();
-        const keys = [`${fact}[date]`, ...(intraday ? [`${fact}[time]`] : [])];
-        return `
-          EVALUATE SELECTCOLUMNS(
-            CALCULATETABLE(
-              SUMMARIZECOLUMNS(ROLLUPADDISSUBTOTAL(ROLLUPGROUP(${keys.join(', ')}), "all"), "t", [Emissions t], "i", [Emissions intensity]),
-              ${dax.whereGen().join(', ')}),
-            "date", [date]${intraday ? ', "time", [time]' : ''}, "all", [all], "t", [t], "i", [i])
-          ORDER BY [date]${intraday ? ', [time]' : ''}`;
+        const keys = at(grain().fact, intraday);
+        return { select: { ...keys, t: '[Emissions t]', i: '[Emissions intensity]' }, totals: { all: Object.values(keys) },
+          where: dax.whereGen(), orderBy: byTime(intraday) };
       },
 
       // Renewable share, the model's measure: per interval (day) and over the range. The fuel
       // filter is ignored on purpose.
-      renewableShareByPeriod(intraday) {
-        const { fact } = grain();
-        return `
-            EVALUATE SELECTCOLUMNS(
-              CALCULATETABLE(SUMMARIZECOLUMNS(${fact}[date]${intraday ? `, ${fact}[time]` : ''}, "share", [Renewable share]),
-                ${dax.whereGen({ withFuel: false }).join(', ')}),
-              "date", [date]${intraday ? ', "time", [time]' : ''}, "share", [share])
-            ORDER BY [date]${intraday ? ', [time]' : ''}`;
-      },
-      renewableShareOfRange: () => `EVALUATE CALCULATETABLE(ROW("share", [Renewable share]), ${dax.whereGen({ withFuel: false }).join(', ')})`,
+      renewableShareByPeriod: intraday => ({ select: { ...at(grain().fact, intraday), share: '[Renewable share]' },
+        where: dax.whereGen({ withFuel: false }), orderBy: byTime(intraday) }),
+      renewableShareOfRange: () => ({ select: { share: '[Renewable share]' }, where: dax.whereGen({ withFuel: false }) }),
 
-      // The KPIs' change against the days just before the range. One row: a measure and its
-      // hours over the range (n1, v1) and over the days before (n0, v0), on the days a daily
-      // table holds. `span` is { from, prevFrom, last } (updateKpiDeltas).
-      delta(span, measure, days, filters) {
-        const { from, prevFrom, last } = span;
-        // KEEPFILTERS: in DAX a filter inside CALCULATE replaces the ones around it on the
-        // same column, and these two must narrow the range set below, not replace it.
-        const side = (i, cmp) => `"n${i}", CALCULATE([Hours], KEEPFILTERS(dim_calendar[date] ${cmp} ${daxDate(from)})), `
-          + `"v${i}", CALCULATE(${measure}, KEEPFILTERS(dim_calendar[date] ${cmp} ${daxDate(from)}))`;
-        return `EVALUATE CALCULATETABLE(ROW(${side(1, '>=')}, ${side(0, '<')}),
-          ${[...dax.dates('dim_calendar', prevFrom, last), days, ...filters].join(', ')})`;
+      // The KPIs' change against the days just before the range: a measure and its hours over
+      // the range (side 1) and over the days before (side 0), on the days a daily table holds
+      // (`which`). Two queries; `span` is { from, prevFrom, last } (updateKpiDeltas).
+      delta({ from, prevFrom, last }, measure, which, filters) {
+        const side = (a, b) => ({ select: { n: '[Hours]', v: measure }, where: [...dax.wholeDays(which, a, b), ...filters] });
+        return [side(from, last), side(prevFrom, shiftDate(from, -1))];
       },
       // The average MW of what the generation chart shows.
-      deltaGeneration: span => dax.delta(span, '[Average generation MW]', dax.wholeDays, dax.allFilters('dim_duid')),
-      deltaPrice: span => dax.delta(span, '[Average price]', dax.wholeRegionDays, dax.priceFilters('dim_region[Region]')),
-      deltaRenewables: span => dax.delta(span, '[Renewable share]', dax.wholeDays, dax.allFilters('dim_duid', false)),
-      deltaEmissions: span => dax.delta(span, '[Emissions intensity]', dax.wholeDays, dax.allFilters('dim_duid')),
+      deltaGeneration: span => dax.delta(span, '[Average generation MW]', 'units', dax.allFilters('dim_duid')),
+      deltaPrice: span => dax.delta(span, '[Average price]', 'regions', dax.priceFilters('dim_region[Region]')),
+      deltaRenewables: span => dax.delta(span, '[Renewable share]', 'units', dax.allFilters('dim_duid', false)),
+      deltaEmissions: span => dax.delta(span, '[Emissions intensity]', 'units', dax.allFilters('dim_duid')),
 
       // --- Dashboard: map ---
       mapScatter() {
         const { unit, average } = grain();
-        return `
-          EVALUATE SELECTCOLUMNS(
-            CALCULATETABLE(
-              SUMMARIZECOLUMNS(${unit}[DUID], ${FUEL}, dim_duid[Region], dim_duid[latitude], dim_duid[longitude], "mw", ${average}),
-              ${[...dax.whereGen(), 'NOT ISBLANK(dim_duid[latitude])'].join(', ')}),
-            "DUID", [DUID], "fuel", [FuelSourceDescriptor], "Region", [Region], "lat", [latitude], "lon", [longitude], "mw", [mw])`;
+        return { select: { DUID: `${unit}[DUID]`, fuel: FUEL, Region: 'dim_duid[Region]', lat: 'dim_duid[latitude]', lon: 'dim_duid[longitude]', mw: average },
+          where: [...dax.whereGen(), ['dim_duid[latitude]', 'notBlank']] };
       },
 
       // --- Insights, renewables: average day by fuel ---
       // The units' rows are the model's measures: [Generation MW on an average day] at 5
       // minutes, [Average MW at hour] beyond, over the whole months the range touches
-      // (profileMonths says which). Generators only.
-      profileMonths: () => `EVALUATE CALCULATETABLE(ROW("first", MIN(dim_month[month]), "last", MAX(dim_month[month])), ${dax.months('dim_month').join(', ')})`,
-      profile: intraday => intraday ? `
-          EVALUATE SELECTCOLUMNS(
-            CALCULATETABLE(
-              SUMMARIZECOLUMNS(${FUEL}, fct_summary[time], "mw", [Generation MW on an average day]),
-              ${[...dax.whereGen(), generatorUnits()].join(', ')}),
-            "fuel", [FuelSourceDescriptor], "time", [time], "mw", [mw])
-          ORDER BY [fuel], [time]` : `
-          EVALUATE SELECTCOLUMNS(
-            CALCULATETABLE(
-              SUMMARIZECOLUMNS(${FUEL}, fct_summary_hourly[hour], "mw", [Average MW at hour]),
-              ${[...dax.months('dim_month'), ...dax.unitFilters('fct_summary_hourly'), generatorUnits()].join(', ')}),
-            "fuel", [FuelSourceDescriptor], "time", [hour] * 100, "mw", [mw])
-          ORDER BY [fuel], [time]`,
+      // (profileMonths says which), by hour. Generators only.
+      profileMonths: () => ({ select: { first: { min: 'dim_month[month]' }, last: { max: 'dim_month[month]' } }, where: dax.months('dim_month') }),
+      profile: intraday => intraday
+        ? { select: { fuel: FUEL, time: 'fct_summary[time]', mw: '[Generation MW on an average day]' },
+            where: [...dax.whereGen(), generatorUnits()], orderBy: ['fuel', 'time'] }
+        : { select: { fuel: FUEL, hour: 'fct_summary_hourly[hour]', mw: '[Average MW at hour]' },
+            where: [...dax.months('dim_month'), ...dax.unitFilters('fct_summary_hourly'), generatorUnits()], orderBy: ['fuel', 'hour'] },
 
       // --- Insights, renewables: curtailment ---
       // Per day (per month with `byMonth`, by year and month of the calendar) and fuel: the
@@ -1043,74 +989,44 @@
         const { from, to } = getDateRange(), region = activeRegion(), fuel = activeFuel();
         const dates = dax.dates('dim_calendar', from, to);
         return crossFilter.duids.length
-          ? { fuel: FUEL, name: '[FuelSourceDescriptor]', cur: '[Curtailed MWh]', avail: '[Available MWh]', rate: '[Curtailment rate]',
+          ? { fuel: FUEL, cur: '[Curtailed MWh]', avail: '[Available MWh]', rate: '[Curtailment rate]',
               filters: [...dates, ...dax.unitFilters('fct_curtailment')] }
-          : { fuel: 'fct_curtailment_region[fuel]', name: '[fuel]', cur: '[Wind and solar curtailed MWh]',
+          : { fuel: 'fct_curtailment_region[fuel]', cur: '[Wind and solar curtailed MWh]',
               avail: '[Wind and solar available MWh]', rate: '[Wind and solar curtailment rate]',
-              filters: [...dates, ...(region ? [`fct_curtailment_region[REGIONID] = ${daxStr(region)}`] : []),
-                ...(fuel ? [`fct_curtailment_region[fuel] = ${daxStr(fuel)}`] : [])] };
+              filters: [...dates, ...(region ? [['fct_curtailment_region[REGIONID]', '=', region]] : []),
+                ...(fuel ? [['fct_curtailment_region[fuel]', '=', fuel]] : [])] };
       },
       curtailment(byMonth) {
         const f = dax.curtailmentFrom();
-        const keys = byMonth ? ['dim_calendar[year]', 'dim_calendar[month]'] : ['dim_calendar[date]'];
-        return `
-          EVALUATE SELECTCOLUMNS(
-            CALCULATETABLE(
-              SUMMARIZECOLUMNS(${keys.join(', ')}, ${f.fuel}, "cur", ${f.cur}, "avail", ${f.avail}, "rate", ${f.rate}),
-              ${f.filters.join(', ')}),
-            ${byMonth ? '"year", [year], "month", [month]' : '"date", [date]'}, "fuel", ${f.name}, "cur", [cur], "avail", [avail], "rate", [rate])
-          ORDER BY ${byMonth ? '[year], [month]' : '[date]'}, [fuel]`;
+        const keys = byMonth ? { year: 'dim_calendar[year]', month: 'dim_calendar[month]' } : { date: 'dim_calendar[date]' };
+        return { select: { ...keys, fuel: f.fuel, cur: f.cur, avail: f.avail, rate: f.rate },
+          where: f.filters, orderBy: [...Object.keys(keys), 'fuel'] };
       },
       curtailmentTotal() {
         const f = dax.curtailmentFrom();
-        return `EVALUATE CALCULATETABLE(ROW("cur", ${f.cur}, "rate", ${f.rate}), ${f.filters.join(', ')})`;
+        return { select: { cur: f.cur, rate: f.rate }, where: f.filters };
       },
       // The 15 farms that lost the most.
       curtailedFarms() {
         const { from, to } = getDateRange();
-        return `
-          EVALUATE TOPN(15,
-            FILTER(
-              SELECTCOLUMNS(
-                CALCULATETABLE(
-                  SUMMARIZECOLUMNS(dim_duid[DUID], ${FUEL}, "station", SELECTEDVALUE(dim_duid[StationName]),
-                    "cur", [Curtailed MWh], "rate", [Curtailment rate]),
-                  ${[...dax.dates('fct_curtailment', from, to), ...dax.unitFilters('fct_curtailment')].join(', ')}),
-                "DUID", [DUID], "fuel", [FuelSourceDescriptor], "station", [station], "cur", [cur], "rate", [rate]),
-              [cur] > 0),
-            [cur], DESC)
-          ORDER BY [cur] DESC`;
+        return { select: { DUID: 'dim_duid[DUID]', fuel: FUEL, station: 'dim_duid[StationName]', cur: '[Curtailed MWh]', rate: '[Curtailment rate]' },
+          where: [...dax.dates('fct_curtailment', from, to), ...dax.unitFilters('fct_curtailment')],
+          having: [['cur', '>', 0]], orderBy: [['cur', 'desc']], top: 15 };
       },
-      curtailmentLastDay: 'EVALUATE ROW("d", MAX(fct_curtailment[date]))',
+      curtailmentLastDay: { select: { d: { max: 'fct_curtailment[date]' } } },
 
       // --- Insights, market: price by hour of day ---
       // x date up to 30 days; beyond, x month, from the hour-of-day table.
-      heatmap: intraday => intraday ? `
-          EVALUATE SELECTCOLUMNS(
-            CALCULATETABLE(
-              SUMMARIZECOLUMNS(fct_region[date], dim_time[hour], "price", [Average price]),
-              ${dax.wherePrice().join(', ')}),
-            "date", [date], "y", [hour], "price", [price])
-          ORDER BY [date], [y]` : `
-          EVALUATE SELECTCOLUMNS(
-            CALCULATETABLE(
-              SUMMARIZECOLUMNS(fct_region_hourly[month], fct_region_hourly[hour], "price", [Price at hour]),
-              ${[...dax.months('fct_region_hourly'), ...dax.priceFilters('fct_region_hourly[REGIONID]')].join(', ')}),
-            "date", [month], "y", [hour], "price", [price])
-          ORDER BY [date], [y]`,
+      heatmap: intraday => intraday
+        ? { select: { date: 'fct_region[date]', y: 'dim_time[hour]', price: '[Average price]' }, where: dax.wherePrice(), orderBy: ['date', 'y'] }
+        : { select: { date: 'fct_region_hourly[month]', y: 'fct_region_hourly[hour]', price: '[Price at hour]' },
+            where: [...dax.months('fct_region_hourly'), ...dax.priceFilters('fct_region_hourly[REGIONID]')], orderBy: ['date', 'y'] },
 
       // --- Insights, market: capture price by fuel ---
       // The generators' capture price and energy per fuel. The plain average next to it is
       // averagePrice.
-      capture: () => `
-        EVALUATE FILTER(
-          SELECTCOLUMNS(
-            CALCULATETABLE(
-              SUMMARIZECOLUMNS(${FUEL}, "capture", ${CAPTURE}, "volume", ${ENERGY}),
-              ${[...dax.whereGen({ withFuel: false }), GENERATOR].join(', ')}),
-            "fuel", [FuelSourceDescriptor], "capture", [capture], "volume", [volume]),
-          [volume] > 0)
-        ORDER BY [capture]`,
+      capture: () => ({ select: { fuel: FUEL, capture: CAPTURE, volume: ENERGY },
+        where: [...dax.whereGen({ withFuel: false }), GENERATOR], having: [['volume', '>', 0]], orderBy: ['capture'] }),
 
       // --- Insights, market: negative prices ---
       // Two figures, each its own measure: the share of 5-minute intervals, and beyond 30
@@ -1118,132 +1034,81 @@
       negativePrices(intraday) {
         const [p, pct, lowest] = intraday ? ['fct_region', '[Negative price share]', '[Lowest price]']
           : ['fct_region_daily', '[Negative price days share]', '[Lowest daily price]'];
-        return `
-        EVALUATE SELECTCOLUMNS(
-          CALCULATETABLE(SUMMARIZECOLUMNS(${p}[REGIONID], "pct", ${pct}, "lowest", ${lowest}), ${dax.wherePrice(p).join(', ')}),
-          "region", [REGIONID], "pct", [pct], "lowest", [lowest])
-        ORDER BY [region]`;
+        return { select: { region: `${p}[REGIONID]`, pct, lowest }, where: dax.wherePrice(p), orderBy: ['region'] };
       },
 
       // --- Insights, market: net exports by region ---
       netExports(intraday) {
-        const { price, region, regionKey } = grain();
-        return `
-        EVALUATE SELECTCOLUMNS(
-          CALCULATETABLE(
-            SUMMARIZECOLUMNS(${price}[date]${intraday ? `, ${price}[time]` : ''}, ${region}, "mw", [Net interchange MW]),
-            ${dax.wherePrice().join(', ')}),
-          "date", [date]${intraday ? ', "time", [time]' : ''}, "region", ${regionKey}, "mw", [mw])
-        ORDER BY [date]${intraday ? ', [time]' : ''}, [region]`;
+        const { price, region } = grain();
+        return { select: { ...at(price, intraday), region, mw: '[Net interchange MW]' },
+          where: dax.wherePrice(), orderBy: [...byTime(intraday), 'region'] };
       },
 
       // --- Insights, fleet: capacity factor ---
-      // The model's [Capacity factor] at two grains in one query: per fuel (the subtotal
-      // rows), and per unit. Energy over what the registered capacity of the units with
-      // output ([Capacity MW]) could make in the hours the price data holds for the range.
+      // The model's [Capacity factor] at two grains in one query: per unit, and per fuel (the
+      // rows on which `total` is true). Energy over what the registered capacity of the units
+      // with output ([Capacity MW]) could make in the hours the price data holds for the range.
       // Grouped by dim_duid[DUID], not the fact's: in DAX a fact's column does not filter
       // dim_duid, and the station would be blank. The compiler reads that key off the fact,
-      // so it costs no join.
-      // FILTER: the station is a value for every unit, so in DAX SUMMARIZECOLUMNS keeps the units
-      // that made nothing in the range (a unit pick is on the fact, which does not filter
-      // dim_duid); they have no capacity factor.
-      capacityFactor: () => `
-        EVALUATE FILTER(
-          SELECTCOLUMNS(
-            CALCULATETABLE(
-              SUMMARIZECOLUMNS(${FUEL}, ROLLUPADDISSUBTOTAL(dim_duid[DUID], "allUnits"),
-                "station", SELECTEDVALUE(dim_duid[StationName]), "cap", [Capacity MW], "cf", [Capacity factor]),
-              ${[...dax.whereAll(), 'dim_duid[RegCapMW] > 0', generatorUnits()].join(', ')}),
-            "DUID", [DUID], "fuel", [FuelSourceDescriptor], "total", [allUnits], "station", [station], "cap", [cap], "cf", [cf]),
-          NOT ISBLANK([cf]))
-        ORDER BY [cf]`,
+      // so it costs no join. A unit pick is on the fact, which does not filter dim_duid, so
+      // the units that made nothing in the range are rows too: they have no capacity factor.
+      capacityFactor: () => ({
+        select: { fuel: FUEL, DUID: 'dim_duid[DUID]', station: 'dim_duid[StationName]', cap: '[Capacity MW]', cf: '[Capacity factor]' },
+        totals: { total: ['dim_duid[DUID]', 'dim_duid[StationName]'] },
+        where: [...dax.whereAll(), ['dim_duid[RegCapMW]', '>', 0], generatorUnits()],
+        having: [['cf', 'notBlank']], orderBy: ['cf'] }),
 
       // --- Insights, fleet: batteries ---
       // Storage under the header's filters but the fuel's (the chart is about one fuel).
-      batteries: () => [...dax.whereGen({ withFuel: false }), STORAGE].join(', '),
+      batteries: () => [...dax.whereGen({ withFuel: false }), STORAGE],
       // Per time of day: the output and the charging of an average day, and the price seen.
-      batteryDay: () => `
-          EVALUATE CALCULATETABLE(
-            SUMMARIZECOLUMNS(fct_summary[time],
-              "discharge", [Generation MW on an average day], "charge", [Charging MW on an average day],
-              "price", [Price seen]),
-            ${dax.batteries()})
-          ORDER BY fct_summary[time]`,
+      batteryDay: () => ({ select: { time: 'fct_summary[time]', discharge: '[Generation MW on an average day]',
+        charge: '[Charging MW on an average day]', price: '[Price seen]' }, where: dax.batteries(), orderBy: ['time'] }),
       // "Sold" and "bought": the prices weighted by the energy discharged and charged.
-      batterySpread: () => `EVALUATE CALCULATETABLE(ROW("sold", ${CAPTURE}, "bought", [Charging price]), ${dax.batteries()})`,
+      batterySpread: () => ({ select: { sold: CAPTURE, bought: '[Charging price]' }, where: dax.batteries() }),
       // The fleet the filters leave: its units, registered MW and storage MWh.
-      batteryFleet: () => `
-          EVALUATE CALCULATETABLE(
-            ROW("units", [Registered units], "mw", [Registered MW], "mwh", [Storage MWh]),
-            ${[STORAGE, ...dax.unitFilters('dim_duid', false)].join(', ')})`,
+      batteryFleet: () => ({ select: { units: '[Registered units]', mw: '[Registered MW]', mwh: '[Storage MWh]' },
+        where: [STORAGE, ...dax.unitFilters('dim_duid', false)] }),
 
       // --- Insights, fleet: owners ---
-      // Each unit's energy, then added up by owner and station. Rooftop solar's units have no
-      // owner in dim_duid: they are under ROOFTOP_OWNER, each region its own "station".
-      owners: () => `
-          EVALUATE FILTER(
-            GROUPBY(
-              SELECTCOLUMNS(
-                CALCULATETABLE(
-                  SUMMARIZECOLUMNS(${grain().unit}[DUID], dim_duid[Participant], dim_duid[StationName], ${FUEL}, "mwh", ${ENERGY}),
-                  ${dax.whereGen().join(', ')}),
-                "owner", COALESCE([Participant], IF([FuelSourceDescriptor] = ${daxStr(ROOFTOP)}, ${daxStr(ROOFTOP_OWNER)}, "Unknown")),
-                "station", COALESCE([StationName], [DUID]), "fuel", [FuelSourceDescriptor], "mwh", [mwh]),
-              [owner], [station], [fuel], "mwh", SUMX(CURRENTGROUP(), [mwh])),
-            [mwh] > 0)
-          ORDER BY [mwh] DESC`,
+      // Each unit's energy with its owner and station; the page adds them up (renderOwners).
+      owners: () => ({ select: { DUID: `${grain().unit}[DUID]`, owner: 'dim_duid[Participant]', station: 'dim_duid[StationName]',
+        fuel: FUEL, mwh: ENERGY }, where: dax.whereGen() }),
 
       // --- Flows ---
       // Every unit's fuel, region and position, once.
-      flowUnits: `EVALUATE SELECTCOLUMNS(dim_duid, "DUID", dim_duid[DUID], "fuel", ${FUEL},
-        "Region", dim_duid[Region], "renewable", dim_duid[Renewable], "generator", ${GENERATOR},
-        "lat", dim_duid[latitude], "lon", dim_duid[longitude])`,
-      // A day of the units' output, one row per interval ("DUID:mw,DUID:mw,...").
-      flowGens: date => `
-          EVALUATE CALCULATETABLE(
-            SUMMARIZECOLUMNS(fct_summary[time], "g", CONCATENATEX(fct_summary, fct_summary[DUID] & ":" & ROUND(fct_summary[mw], 0), ",")),
-            fct_summary[date] = ${daxDate(date)}, ABS(fct_summary[mw]) >= 1)`,
+      flowUnits: { select: { DUID: 'dim_duid[DUID]', fuel: FUEL, Region: 'dim_duid[Region]', renewable: 'dim_duid[Renewable]',
+        lat: 'dim_duid[latitude]', lon: 'dim_duid[longitude]' }, where: [['dim_duid[DUID]', 'notBlank']] },
+      // A day of the units' output, one row per unit and interval, the units at 1 MW or more
+      // either way.
+      flowGens: date => ({ select: { time: 'fct_summary[time]', DUID: 'fct_summary[DUID]', mw: 'fct_summary[mw]' },
+        where: [['fct_summary[date]', '=', date], { any: [['fct_summary[mw]', '>=', 1], ['fct_summary[mw]', '<=', -1]] }] }),
       // The links between regions.
-      interconnectors: `EVALUATE SELECTCOLUMNS(dim_interconnector, "id", dim_interconnector[interconnector],
-        "from_region", dim_interconnector[from_region], "to_region", dim_interconnector[to_region],
-        "description", dim_interconnector[description])`,
+      interconnectors: { select: { id: 'dim_interconnector[interconnector]', from_region: 'dim_interconnector[from_region]',
+        to_region: 'dim_interconnector[to_region]', description: 'dim_interconnector[description]' },
+        where: [['dim_interconnector[interconnector]', 'notBlank']] },
       // The interconnectors' flows and limits, and each region's price, per interval.
-      flows: (from, to) => `
-          EVALUATE CALCULATETABLE(
-            SELECTCOLUMNS(fct_interconnector, "id", fct_interconnector[interconnector], "date", fct_interconnector[date],
-              "time", fct_interconnector[time], "mw", fct_interconnector[mw],
-              "export_limit", fct_interconnector[export_limit], "import_limit", fct_interconnector[import_limit]),
-            ${dax.dates('fct_interconnector', from, to).join(', ')})
-          ORDER BY [date], [time]`,
-      flowPrices: (from, to) => `
-          EVALUATE CALCULATETABLE(
-            SELECTCOLUMNS(fct_region, "region", fct_region[REGIONID], "date", fct_region[date], "time", fct_region[time], "price", fct_region[price]),
-            ${dax.dates('fct_region', from, to).join(', ')})`,
+      flows: (from, to) => ({ select: { id: 'fct_interconnector[interconnector]', date: 'fct_interconnector[date]',
+        time: 'fct_interconnector[time]', mw: 'fct_interconnector[mw]', export_limit: 'fct_interconnector[export_limit]',
+        import_limit: 'fct_interconnector[import_limit]' }, where: dax.dates('fct_interconnector', from, to), orderBy: ['date', 'time'] }),
+      flowPrices: (from, to) => ({ select: { region: 'fct_region[REGIONID]', date: 'fct_region[date]', time: 'fct_region[time]',
+        price: 'fct_region[price]' }, where: dax.dates('fct_region', from, to) }),
 
       // --- History ---
-      // Every day of a daily table, under the region filter, but the newest: it is still
+      // Every day a daily table holds, under the region filter, but the newest: it is still
       // filling, so its energy and its share are not a day's yet.
-      historyDays(table) {
+      historyDays(which) {
         const region = activeRegion();
-        const before = `< ${daxDate(document.getElementById('dateTo').max)}`;
-        return `dim_calendar[date] ${before}, ${table}${region ? `, dim_region[Region] = ${daxStr(region)}` : ''}`;
+        return [...dax.wholeDays(which, null, shiftDate(document.getElementById('dateTo').max, -1)),
+          ...(region ? [['dim_region[Region]', '=', region]] : [])];
       },
-      // Per day: the model's renewable share, the solar and wind farms' energy, and
-      // rooftop's, which is solar too.
-      historyGeneration() {
-        const only = fuel => `CALCULATE(${ENERGY}, ${fuelIs(fuel)})`;
-        return `
-          EVALUATE CALCULATETABLE(
-            SUMMARIZECOLUMNS(dim_calendar[date], "re", [Renewable share],
-              "solar", ${only('Solar')}, "wind", ${only('Wind')}, "rooftop", ${only(ROOFTOP)}),
-            ${dax.historyDays(dax.wholeDays)})
-          ORDER BY dim_calendar[date]`;
-      },
-      historyPrice: () => `
-          EVALUATE CALCULATETABLE(
-            SUMMARIZECOLUMNS(dim_calendar[date], "price", [Average price], "demand", [Average demand MW]),
-            ${dax.historyDays(dax.wholeRegionDays)})
-          ORDER BY dim_calendar[date]`,
+      // Per day: the model's renewable share; and the solar, wind and rooftop energy (rooftop
+      // is solar too), per fuel.
+      historyShare: () => ({ select: { date: 'dim_calendar[date]', re: '[Renewable share]' }, where: dax.historyDays('units'), orderBy: ['date'] }),
+      historyEnergy: () => ({ select: { date: 'dim_calendar[date]', fuel: FUEL, mwh: ENERGY },
+        where: [...dax.historyDays('units'), [FUEL, 'in', ['Solar', 'Wind', ROOFTOP]]] }),
+      historyPrice: () => ({ select: { date: 'dim_calendar[date]', price: '[Average price]', demand: '[Average demand MW]' },
+        where: dax.historyDays('regions'), orderBy: ['date'] }),
     };
 
     // =========================================================================
@@ -1433,7 +1298,7 @@
     let _aggLoading = null;
     function loadDailyAggDatabase() {
       return _aggLoading ??= data.attachAgg().then(
-        () => { aggLoaded = true; viewsChanged(); },
+        async () => { viewsChanged(); await readWholeDays(); aggLoaded = true; },
         e => { _aggLoading = null; throw e; });
     }
 
@@ -1444,31 +1309,32 @@
       setConnected();
     }
 
-    // Keyed on the view generation as well as the SQL: a query that started before the views
-    // were rebuilt and finishes after it stores its result under the old generation.
+    // Keyed on the view generation as well as the query (the page's, or Analyze's SQL): a
+    // query that started before the views were rebuilt and finishes after it stores its result
+    // under the old generation.
     const _queryCache = new Map();
     let _viewGen = 0;
     function clearQueryCache() { _queryCache.clear(); }
-    // The views were rebuilt over more files. Queries keep the same SQL text, so results
-    // cached before must never be served after (see runQuery).
+    // The views were rebuilt over more files. Queries stay the same, so results cached before
+    // must never be served after (see runQuery).
     function viewsChanged() { _viewGen++; clearQueryCache(); }
 
     let _queriesRun = 0;   // queries that reached the engine (cache misses), for the status readout
-    // The cache holds the promise, not the rows: two charts asking for the same SQL in one
+    // The cache holds the promise, not the rows: two charts asking the same query in one
     // render share one run. A query that fails is forgotten, so the next call tries again.
-    function runQuery(sqlStr) {
-      const key = `${_viewGen}|${sqlStr}`;
+    function runQuery(q) {
+      const key = `${_viewGen}|${typeof q === 'string' ? q : JSON.stringify(q)}`;
       const cached = _queryCache.get(key);
       if (cached) return cached;
       _queriesRun++;
-      const rows = fetchRows(sqlStr);
+      const rows = fetchRows(q);
       if (_queryCache.size >= 200) _queryCache.delete(_queryCache.keys().next().value);  // oldest first
       _queryCache.set(key, rows);
       rows.catch(() => { if (_queryCache.get(key) === rows) _queryCache.delete(key); });
       return rows;
     }
-    async function fetchRows(sqlStr) {
-      const result = await data.query(sqlStr);
+    async function fetchRows(q) {
+      const result = await data.query(q);
       const numRows = Number(result.numRows);
       const fields = result.schema.fields;
       // Columnar: extract all columns as arrays at once (much faster than per-row .get())
@@ -1758,9 +1624,29 @@
         + `<polyline points="${line}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
     }
 
+    // A station's units added up, per `keys` (the interval), as one series named after it; a
+    // unit without a station stays a series of its own. `values` are additive measures.
+    function stationSeries(rows, keys, values) {
+      const out = new Map();
+      for (const r of rows) {
+        const series = r.station ?? r.series, k = [...keys.map(x => r[x]), series].join('|');
+        let o = out.get(k);
+        if (!o) out.set(k, o = { ...Object.fromEntries(keys.map(x => [x, r[x]])), series, ...Object.fromEntries(values.map(v => [v, null])) });
+        for (const v of values) if (r[v] != null) o[v] = (o[v] ?? 0) + r[v];
+      }
+      return [...out.values()];
+    }
+
     // The newest interval of the units (and so of rooftop solar: fct_summary writes an
     // interval once both have it).
     const newestInterval = async () => (await runQuery(dax.cutoff()))[0];
+    // Each region at the newest interval of the regional table.
+    async function newestRegions() {
+      const [{ date } = {}] = await runQuery(dax.regionNewestDate);
+      if (!date) return [];
+      const [{ time } = {}] = await runQuery(dax.regionNewestTime(date));
+      return time == null ? [] : runQuery(dax.nowByRegion(date, time));
+    }
     // --- Generation by Fuel Type (stacked area) ---
     // In drill mode the chart shows the top `drillShown` series; clicking "Other units" shows
     // 15 more. Back to 15 whenever the drill (fuel, region, dates) changes.
@@ -1787,11 +1673,13 @@
 
       // Demand is regional, so it only sits over the fuel view, not over a drill or a unit pick.
       const withDemand = !drillFuel && !crossFilter.duids.length;
-      const [rows, demandRows, averages] = await Promise.all([
+      const [found, demandRows, averaged] = await Promise.all([
         runQuery(dax.generation(seriesBy, intraday)),
         withDemand ? runQuery(dax.demand(intraday)) : [],
         runQuery(dax.averages(seriesBy)),
       ]);
+      const rows = byStation ? stationSeries(found, byTime(intraday), ['output', 'charging']) : found;
+      const averages = byStation ? stationSeries(averaged, [], ['avg']) : averaged;
       if (seq !== _renderSeq) return;
       // The series under the names the chart gives them: a unit without a fuel, what is
       // charging.
@@ -1980,7 +1868,7 @@
       const [units, share, prices] = await Promise.all([
         now?.date ? runQuery(dax.nowByFuel(now, region)) : [],
         now?.date ? runQuery(dax.nowShare(now, region)) : [],
-        runQuery(dax.nowByRegion),
+        newestRegions(),
       ]);
       if (seq !== _renderSeq) return;
       const mix = units.filter(r => r.mw != null).map(r => ({ ...r, fuel: fuelName(r.fuel) }));
@@ -2305,15 +2193,16 @@
       if (!aggLoaded || !(days >= 1) || prevFrom < minDate) return ids.forEach(id => show(id));
 
       const span = { from, prevFrom, last };
+      const sides = qs => Promise.all(qs.map(q => runQuery(q).then(([r]) => r)));
       const [gen, price, re, co2] = await Promise.all([
-        runQuery(dax.deltaGeneration(span)), runQuery(dax.deltaPrice(span)), runQuery(dax.deltaRenewables(span)),
-        runQuery(dax.deltaEmissions(span)),
+        sides(dax.deltaGeneration(span)), sides(dax.deltaPrice(span)), sides(dax.deltaRenewables(span)),
+        sides(dax.deltaEmissions(span)),
       ]);
       if (seq !== _renderSeq) return;
       const vs = days === 1 ? 'vs the day before' : `vs previous ${days} days`;
       // A side that doesn't hold every day of its period (a gap in the data, a daily table
       // that is behind) gives no comparison.
-      const pair = ([r]) => [1, 0].map(i => r?.[`n${i}`] === 24 * days ? r[`v${i}`] : undefined);
+      const pair = rs => rs.map(r => r?.n === 24 * days ? r.v : undefined);
       // A change that rounds to zero reads "unchanged", not as an arrow on 0.0. `colour` is
       // 'rise' when a rise is good (renewables) and 'fall' when a fall is (emissions).
       const delta = (id, d, fmt, colour = '') => {
@@ -2420,7 +2309,8 @@
     const GEN_LEGEND = ['Black coal', 'Brown coal', 'Natural gas', 'Water', 'Wind', 'Solar', 'Grid'];
     let _genUnits = null;
     async function genUnits() {
-      _genUnits ??= new Map((await runQuery(dax.flowUnits)).map(u => [u.DUID, { ...u, fuel: fuelName(u.fuel) }]));
+      // A generator is anything but storage (fuel "Grid"); a unit with no fuel is one.
+      _genUnits ??= new Map((await runQuery(dax.flowUnits)).map(u => [u.DUID, { ...u, generator: u.fuel !== 'Grid', fuel: fuelName(u.fuel) }]));
       return _genUnits;
     }
     async function ensureGens(date) {
@@ -2428,7 +2318,14 @@
       icState.gensLoading.add(date);
       try {
         const [rows] = await Promise.all([runQuery(dax.flowGens(date)), genUnits()]);
-        icState.gens.set(date, new Map(rows.map(r => [padTime(r.time), r.g])));
+        // Per interval, its units and their output to the MW (half away from zero).
+        const byTime = new Map();
+        for (const r of rows) {
+          const t = padTime(r.time);
+          if (!byTime.has(t)) byTime.set(t, []);
+          byTime.get(t).push({ duid: r.DUID, mw: Math.sign(r.mw) * Math.round(Math.abs(r.mw)) });
+        }
+        icState.gens.set(date, byTime);
       } catch (e) {
         console.warn('[Flows] generators unavailable:', e);
         icState.gens.set(date, new Map());
@@ -2440,15 +2337,14 @@
         && icState.frames[icState.frame]?.key.startsWith(date + '|')) icShow(icState.frame);
     }
     // The units of one interval as { duid, mw, unit }, within the region filter.
-    function frameGens(packed) {
-      if (!packed) return [];
+    function frameGens(units) {
+      if (!units) return [];
       const region = activeRegion();
       const out = [];
-      for (const part of packed.split(',')) {
-        const i = part.lastIndexOf(':');
-        const duid = part.slice(0, i), unit = _genUnits.get(duid);
+      for (const { duid, mw } of units) {
+        const unit = _genUnits.get(duid);
         if (region && unit?.Region !== region) continue;
-        out.push({ duid, mw: +part.slice(i + 1), unit });
+        out.push({ duid, mw, unit });
       }
       return out;
     }
@@ -2898,7 +2794,7 @@
       const span = intraday ? null : (await runQuery(dax.profileMonths()))[0];
       const units = await runQuery(dax.profile(intraday));
       if (seq !== _renderSeq) return;
-      const profile = units.filter(r => r.mw != null).map(r => ({ fuel: fuelName(r.fuel), time: r.time, mw: r.mw }));
+      const profile = units.filter(r => r.mw != null).map(r => ({ fuel: fuelName(r.fuel), time: r.time ?? r.hour * 100, mw: r.mw }));
       if (!profile.length) return showEmpty('chart-profile');
       if (span?.first) document.getElementById('title-profile').textContent =
         `Average day by fuel (MW, hourly, ${formatMonth(span.first)}${span.last !== span.first ? ` – ${formatMonth(span.last)}` : ''})`;
@@ -3167,9 +3063,17 @@
     // dim_duid are grouped as "Unknown", rooftop solar's under ROOFTOP_OWNER.
     async function renderOwners(seq) {
       if (!data.has('v_dim_duid', 'Participant')) return showEmpty('chart-owners', 'Ownership data not deployed yet');
-      const found = await runQuery(dax.owners(isIntradayMode()));
+      const found = await runQuery(dax.owners());
       if (seq !== _renderSeq) return;
-      const rows = found.map(r => ({ ...r, fuel: fuelName(r.fuel) }));
+      // Each unit's energy added up by owner and station (a unit without a station on its own).
+      const byStation = new Map();
+      for (const u of found) {
+        const owner = u.owner ?? (u.fuel === ROOFTOP ? ROOFTOP_OWNER : UNKNOWN), station = u.station ?? u.DUID, fuel = fuelName(u.fuel);
+        const k = `${owner}|${station}|${fuel}`;
+        if (!byStation.has(k)) byStation.set(k, { owner, station, fuel, mwh: 0 });
+        byStation.get(k).mwh += u.mwh ?? 0;
+      }
+      const rows = [...byStation.values()].filter(r => r.mwh > 0).sort((a, b) => b.mwh - a.mwh);
       if (!rows.length) return showEmpty('chart-owners');
       const total = rows.reduce((s, r) => s + r.mwh, 0);
       const owners = new Map();
@@ -3235,9 +3139,15 @@
         return showEmpty('chart-calendar', 'Loading history...');
       }
       const region = activeRegion();
-      const [found, price] = await Promise.all([runQuery(dax.historyGeneration()), runQuery(dax.historyPrice())]);
+      const [share, energy, price] = await Promise.all([runQuery(dax.historyShare()), runQuery(dax.historyEnergy()), runQuery(dax.historyPrice())]);
       if (seq !== _renderSeq) return;
-      const gen = found.map(r => ({ ...r, solar: (r.solar ?? 0) + (r.rooftop ?? 0) }));
+      // Per day: the share, and the energy of solar (rooftop's included) and of wind.
+      const byDay = new Map(share.map(r => [r.date, { date: r.date, re: r.re, solar: 0, wind: 0 }]));
+      for (const r of energy) {
+        if (!byDay.has(r.date)) byDay.set(r.date, { date: r.date, re: null, solar: 0, wind: 0 });
+        byDay.get(r.date)[r.fuel === 'Wind' ? 'wind' : 'solar'] += r.mwh ?? 0;
+      }
+      const gen = [...byDay.values()].sort((a, b) => a.date < b.date ? -1 : 1);
       const days = {
         re: gen.filter(r => r.re != null).map(r => [r.date, r.re]),
         solar: gen.filter(r => r.solar > 0).map(r => [r.date, r.solar]),
