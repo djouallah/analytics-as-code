@@ -12,6 +12,14 @@ on:
         description: 'Copy, rebuild and redeploy ALL history, not just the latest two half-years (after a backfill of old data)'
         type: boolean
         default: false
+      with_page:
+        description: 'Publish the page (as build.yml does) in the same deploy commit as the data: for a change the old page cannot read, so the site switches once'
+        type: boolean
+        default: false
+      publish:
+        description: 'Deploy to the site. Off: the files that would be deployed are uploaded as an artifact instead, to check them first'
+        type: boolean
+        default: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -123,6 +131,8 @@ jobs:
             cp mart_data/mart_dim.duckdb deploy_data/data/
           fi
       - name: Deploy to nemtracker (today + dims)
+        # With the page, everything goes out in one commit (below).
+        if: github.event_name != 'workflow_dispatch' || (inputs.publish && !inputs.with_page)
         env:
           NEMTRACKER_TOKEN: ${{ secrets.NEMTRACKER_TOKEN }}
         run: bash scripts/deploy_pages.sh ./deploy_data "deploy from ${{ github.repository }}@${{ github.sha }}"
@@ -150,15 +160,36 @@ jobs:
           # rollover miss: the deploy repo's .gitignore had *.duckdb, and the old deploy
           # action's `git add --all` skipped new ignored files. scripts/deploy_pages.sh
           # adds the published paths with -f.
+      - name: Stage the page with the data
+        # with_page: the page goes out in the same commit as the data, so the site never holds
+        # the new page with the old data or the other way round. The copy is build.yml's
+        # "Prepare deploy directory".
+        if: github.event_name == 'workflow_dispatch' && inputs.with_page
+        run: |
+          cp deploy_data/data/* deploy_daily/data/
+          cp dashboard/github/index.html deploy_daily/
+          cp -r dashboard/github/frontend dashboard/github/semantic dashboard/github/storage deploy_daily/
+          cp semantic_model/model.bim deploy_daily/semantic/
+          sed -i "s/__BUILD__/${GITHUB_SHA::7}/" deploy_daily/frontend/perflog.js
+          cp -r dashboard/github/dag deploy_daily/
+      - name: Upload instead of deploying
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy
+          path: |
+            deploy_daily
+            deploy_data
+          retention-days: 3
       - name: Deploy to nemtracker (daily)
-        if: steps.mode.outputs.is_daily == 'true'
+        if: steps.mode.outputs.is_daily == 'true' && (github.event_name != 'workflow_dispatch' || inputs.publish)
         env:
           NEMTRACKER_TOKEN: ${{ secrets.NEMTRACKER_TOKEN }}
         run: bash scripts/deploy_pages.sh ./deploy_daily "deploy from ${{ github.repository }}@${{ github.sha }}"
 
       # --- Phase 3: Publish manifest LAST, from files actually deployed ---
       - name: Build manifest from deployed files
-        if: steps.mode.outputs.is_daily == 'true'
+        if: steps.mode.outputs.is_daily == 'true' && (github.event_name != 'workflow_dispatch' || inputs.publish)
         env:
           GH_TOKEN: ${{ secrets.NEMTRACKER_TOKEN }}
         run: |
@@ -184,7 +215,7 @@ jobs:
           print("Manifest:", tags)
           PY
       - name: Deploy manifest to nemtracker
-        if: steps.mode.outputs.is_daily == 'true'
+        if: steps.mode.outputs.is_daily == 'true' && (github.event_name != 'workflow_dispatch' || inputs.publish)
         env:
           NEMTRACKER_TOKEN: ${{ secrets.NEMTRACKER_TOKEN }}
         run: bash scripts/deploy_pages.sh ./deploy_manifest "deploy from ${{ github.repository }}@${{ github.sha }}"

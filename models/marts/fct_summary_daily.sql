@@ -13,6 +13,10 @@
 -- only from the day fct_summary has reached: it fills its history newest first. The price
 -- comes from fct_region_daily, so a day that table does not hold yet waits. Insert-only
 -- merge on the grain; rebuild=fct_summary_daily resets it.
+--
+-- Rooftop solar is five units of fct_summary since 2026-10-07. var backfill_rooftop (a
+-- dispatch input of process_data.yml, once) also adds their rows for every day this table
+-- already holds: those days were written before fct_summary had them.
 {{ config(
     materialized='incremental',
     incremental_strategy='merge',
@@ -26,6 +30,8 @@
     not hold yet waits. From the manifests, like the ranges (macros/whole_days.sql). #}
 {%- set summary_min, summary_max = date_bounds(ref('fct_summary'), 'date') %}
 {%- set ranges = pending_day_ranges(floor=summary_min) %}
+{%- set backfill_rooftop = var('backfill_rooftop', false) and is_incremental() %}
+{%- set this_min, this_max = date_bounds(this, 'date') if backfill_rooftop else (none, none) %}
 
 WITH
 days AS (
@@ -43,6 +49,9 @@ SELECT
 FROM {{ ref('fct_summary') }} s
 JOIN {{ ref('dim_duid') }} d ON d.DUID = s.DUID
 JOIN {{ ref('fct_region_daily') }} p ON p.REGIONID = d.Region AND p.date = s.date
-WHERE {{ date_ranges_sql(ranges, 's.date') }}
-  AND s.date IN (SELECT date FROM days)
+WHERE ({{ date_ranges_sql(ranges, 's.date') }}
+  AND s.date IN (SELECT date FROM days))
+  {%- if backfill_rooftop and this_max %}
+  OR (starts_with(s.DUID, 'ROOFTOP_') AND s.date <= DATE '{{ this_max }}')
+  {%- endif %}
 GROUP BY s.DUID, s.date

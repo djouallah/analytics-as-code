@@ -2,7 +2,10 @@
     registration.csv, the generator sheet of AEMO's current NEM Registration and Exemption
     List, and duid_unregistered.csv, the units in the data that the list doesn't have. Their
     CO2-e factors come from genunits.csv and dualloc.csv, AEMO's MMSDM tables.
-    Every file read here is declared in models/sources.yml (source duid_reference). -#}
+    Every file read here is declared in models/sources.yml (source duid_reference).
+    Plus one unit per NEM region for rooftop solar (ROOFTOP_<region>, added 2026-10-07): a
+    derived reporting row, not a registered unit, so that fct_summary can carry rooftop as
+    units of the fuel "Rooftop solar" and every filter on the units reaches it. -#}
 
 {# Check if there are new DUIDs not in the existing table #}
 {%- set check_new_duids_query -%}
@@ -12,6 +15,8 @@
     SELECT DUID FROM read_csv({{ source('duid_reference', 'duid_unregistered') }}, all_varchar = true) WHERE length(DUID) > 2
     UNION
     SELECT "Facility Code" AS DUID FROM read_csv_auto({{ source('duid_reference', 'facilities') }})
+    UNION
+    SELECT 'ROOFTOP_' || unnest(['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1'])
   ) source_duids
   WHERE DUID NOT IN (SELECT DUID FROM {{ this }})
 {%- endset -%}
@@ -60,7 +65,8 @@ WITH
   -- reaches the rows already in the table with a rebuild=dim_duid.
   renewable_fuels AS (
     SELECT unnest(['Solar', 'Wind', 'Water', 'Bagasse', 'Biogas - sludge',
-                   'Landfill methane / landfill gas', 'Sewerage / waste water']) AS fuel
+                   'Landfill methane / landfill gas', 'Sewerage / waste water',
+                   'Rooftop solar']) AS fuel
   ),
 
   -- One row per DUID. The registration list wins over duid_unregistered.csv (a unit can
@@ -139,10 +145,30 @@ WITH
     LEFT JOIN wa_energy ON wa_facilities.DUID = wa_energy.DUID
   ),
 
+  -- Rooftop solar, one unit per NEM region (see the header): no capacity, no classification,
+  -- no owner, no coordinates.
+  duid_rooftop AS (
+    SELECT
+      'ROOFTOP_' || RegionID AS DUID,
+      RegionID AS Region,
+      'Rooftop solar' AS FuelSourceDescriptor,
+      NULL::VARCHAR AS Participant,
+      'Rooftop solar ' || State AS StationName,
+      NULL::VARCHAR AS TechnologyType,
+      NULL::DOUBLE AS RegCapMW,
+      NULL::DOUBLE AS MaxCapMW,
+      NULL::DOUBLE AS StorageMWh,
+      NULL::VARCHAR AS Classification
+    FROM states
+    WHERE RegionID <> 'WA1'
+  ),
+
   duid_all AS (
     SELECT * FROM duid_aemo
     UNION ALL
     SELECT * FROM duid_wa
+    UNION ALL
+    SELECT * FROM duid_rooftop
   ),
 
   -- Each unit's CO2-e emissions factor, t per MWh sent out (added 2026-10-07), from AEMO's

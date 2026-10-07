@@ -1,6 +1,8 @@
 -- depends_on: {{ ref('fct_scada_today') }}
 -- depends_on: {{ ref('fct_price_today') }}
 -- depends_on: {{ ref('fct_price') }}
+-- depends_on: {{ ref('fct_rooftop') }}
+-- depends_on: {{ ref('fct_region') }}
 
 -- The table Power BI reads: one row per unit and 5 minutes with its MW and the price of its
 -- region, so no report joins two facts. The idea is the fct_summary of the iceberg tree of
@@ -49,6 +51,22 @@
 -- at the price of a full scan. A unit new to the next-day files is gated in from the day
 -- its first file lands. Treat any edit to it as load-bearing.
 --
+-- ROOFTOP SOLAR (2026-10-07) is five units of this table, ROOFTOP_<region> (dim_duid): the
+-- half-hourly estimate of fct_rooftop, kept there as published, on the straight line between
+-- two consecutive half hours (a half hour and the five times after it; nothing across a
+-- missing one, nothing carried forward), with the region's price of that interval
+-- (fct_region). 0 MW rows are left out, as for the units. A derived reporting table may hold
+-- what the source must not (AGENTS.md): this is where rooftop and the units meet, so that a
+-- report reads one table.
+-- An interval is written only when both sources have it: every branch stops at the newest
+-- half hour all five regions' rooftop has (`both_until`, a literal). The units of the
+-- intraday feed are 30-60 minutes later for it; they are written by the run after rooftop
+-- catches up, as the tail is recomputed every run. Before 2018-03-06 there is no rooftop
+-- and the units are on their own.
+-- The rooftop branch takes the same dates as the others. var backfill_rooftop (a dispatch
+-- input of process_data.yml) makes it take all of rooftop's history, once: rooftop alone,
+-- about 2.5M rows, which is what the merge is handed.
+--
 -- Tagged `powerbi`: process_data.yml builds the mart tables in a step of their own, after
 -- the landing facts they read, so a failure here cannot fail the load of those.
 {{ config(
@@ -91,7 +109,17 @@
                                      ~ " WHERE DATE >= DATE '" ~ scada_max ~ "'").rows[0][0] %}
   {%- endif %}
 {%- endif %}
+{#- The newest interval both sources have: the newest half hour that every region's rooftop
+    has. fct_rooftop is small (a row per region and half hour); read whole. #}
+{%- set backfill_rooftop = var('backfill_rooftop', false) %}
+{%- set both_until = none %}
+{%- if execute and flags.WHICH in ('run', 'build', 'retry') %}
+  {%- set both_until = run_query("SELECT CAST(MIN(newest) AS VARCHAR) FROM (SELECT REGIONID, MAX(CAST(date AS TIMESTAMP)"
+                                  ~ " + to_minutes((time // 100) * 60 + time % 100)) AS newest FROM " ~ ref('fct_rooftop')
+                                  ~ " GROUP BY REGIONID)").rows[0][0] %}
+{%- endif %}
 {%- if execute %}
+  {%- do log("fct_summary: both sources until " ~ both_until ~ (", rooftop backfill: all of its history" if backfill_rooftop else ""), info=True) %}
   {%- do log("fct_summary: fct_scada " ~ scada_min ~ " .. " ~ scada_max ~ " (newest interval " ~ scada_max_ts
              ~ "), this " ~ summary_min ~ " .. " ~ summary_max ~ "; recomputing " ~ ranges_text(ranges), info=True) %}
 {%- endif %}
@@ -152,6 +180,44 @@ daily_summary AS (
     AND FALSE
     {%- endif %}
   GROUP BY ALL
+),
+
+-- Rooftop at 5 minutes: a half hour (its value) and the five times after it, on the line to
+-- the next half hour, which must exist. 23:30's next half hour is 00:00 of the next date.
+rooftop_half_hours AS (
+  SELECT REGIONID, date, time, mw, (time // 100) * 60 + time % 100 AS minute
+  FROM {{ ref('fct_rooftop') }}
+),
+
+rooftop AS (
+  SELECT
+    a.date,
+    CAST((a.minute + 5 * s.step) // 60 * 100 + (a.minute + 5 * s.step) % 60 AS INT) AS time,
+    'ROOFTOP_' || a.REGIONID AS DUID,
+    a.REGIONID,
+    CASE WHEN s.step = 0 THEN a.mw ELSE a.mw + (b.mw - a.mw) * s.step / 6.0 END AS mw
+  FROM rooftop_half_hours a
+  CROSS JOIN range(6) s(step)
+  LEFT JOIN rooftop_half_hours b
+    ON b.REGIONID = a.REGIONID
+    AND b.date = CASE WHEN a.minute = 1410 THEN a.date + 1 ELSE a.date END
+    AND b.minute = CASE WHEN a.minute = 1410 THEN 0 ELSE a.minute + 30 END
+  WHERE (s.step = 0 OR b.mw IS NOT NULL)
+    {%- if not backfill_rooftop %}
+    AND {{ date_ranges_sql(ranges, 'a.date') }}
+    {%- endif %}
+),
+
+summary AS (
+  SELECT date, time, DUID, mw, price FROM daily_summary
+  UNION ALL
+  SELECT r.date, r.time, r.DUID, r.mw, p.price
+  FROM rooftop r
+  JOIN {{ ref('fct_region') }} p ON p.REGIONID = r.REGIONID AND p.date = r.date AND p.time = r.time
+  WHERE r.mw <> 0
+    {%- if not backfill_rooftop %}
+    AND {{ date_ranges_sql(ranges, 'p.date') }}
+    {%- endif %}
 )
 
 SELECT
@@ -168,7 +234,10 @@ SELECT
               {%- if scada_max %} WHERE DATE >= DATE '{{ scada_max }}'{% else %} WHERE FALSE{% endif %}),
              TIMESTAMPTZ '1900-01-01 00:00:00+00')
   ) AS cutoff
-FROM daily_summary
+FROM summary
+{%- if both_until %}
+WHERE CAST(date AS TIMESTAMP) + to_minutes((time // 100) * 60 + time % 100) <= TIMESTAMP '{{ both_until }}'
+{%- endif %}
 -- As in the sibling's copies. It makes no claim about physical layout: this SQL is a merge
 -- SOURCE, so nothing about the ordering reaches the stored table.
 ORDER BY date, time

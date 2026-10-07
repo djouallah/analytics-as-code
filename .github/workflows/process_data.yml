@@ -26,6 +26,10 @@ on:
         description: 'Print every statement dbt runs, with its timing: where a model spends its time'
         type: boolean
         default: false
+      backfill_rooftop:
+        description: 'Once: add rooftop solar (units ROOFTOP_<region>) to fct_summary for all its history, and to the daily and hourly tables for what they hold'
+        type: boolean
+        default: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -112,5 +116,5 @@ jobs:
         # reads, and so Power BI and the dashboard. A failure fails the job: Import Data only
         # runs after a green Process Data, so the dashboard keeps the files it has and the
         # red run says why.
-        timeout-minutes: 45
-        run: dbt ${{ inputs.debug && '--debug' || '' }} run --target prod --profiles-dir . --select tag:powerbi
+        timeout-minutes: ${{ inputs.backfill_rooftop && 85 || 45 }}
+        run: dbt ${{ inputs.debug && '--debug' || '' }} run --target prod --profiles-dir . --select tag:powerbi ${{ inputs.backfill_rooftop && '--vars "{backfill_rooftop: true}"' || '' }}
