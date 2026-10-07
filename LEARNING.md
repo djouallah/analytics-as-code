@@ -186,7 +186,6 @@ Two serving paths read the same semantic model and the same DAX.
   the VertiPaq app is built but not deployed.
 - **DAX semantics differ from the compiler's in places:** `SUMMARIZECOLUMNS` drops all-blank
   groups, `TOPN` keeps ties. The page's queries are written for DAX.
-- **Direct Lake takes about 7 minutes to see a recreated table.**
 
 ## 6. Clients
 
