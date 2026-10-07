@@ -44,10 +44,12 @@
 //     a blank limit is 0 not 1, and NOT (x IN {..}) leaves out a blank x, which DAX keeps
 //   - text compares and groups case-sensitively; DAX does neither (dim_duid keeps one
 //     spelling per name for that reason)
-//   - "the days the daily table lacks are none" is taken for both daily tables at once: a
-//     range cut to one table's days (queries.wholeDays) can still lack the other's newest
-//     day, and the 5-minute rows DAX adds for it are 0 here (demand's rooftop beyond 30
-//     days, on a day fct_region_daily has and fct_summary_daily not yet)
+// The data keeps the queries of the page off those paths, and the dbt tests keep the data
+// so: no blank in dim_duid's Storage and Plant or in a link's limits (not_null), no fact key
+// a dimension lacks (relationships, and fct_summary's inner join), one spelling per name
+// (assert_dim_duid_one_spelling). "The days the daily table lacks are none" holds for both
+// daily tables because the page cuts a long range to the newest day both hold
+// (queries.wholeDays).
 //
 // Part 1, the model. What model.bim holds and what each entry becomes:
 //   tables               a view each, v_<table>: the table of the lakehouse its partition

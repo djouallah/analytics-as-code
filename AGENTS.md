@@ -323,7 +323,7 @@ and anything that serves the page from the repo has to do the same.
   30 days, the daily ones beyond), and with it which measure a chart draws at that grain. The page does not name the table for it: up to 30 days it
   filters and groups by the fact's own columns (`fct_summary.date`, `fct_region.REGIONID`),
   beyond by the dimensions' (`dim_calendar.date`, `dim_duid.DUID`, `dim_region.Region`)
-  with `queries.wholeDays` (the range cut to the first and last day the daily table holds, read
+  with `queries.wholeDays` (the range cut to the first day the daily table holds and the newest day both daily tables hold, read
   once `agg` is attached), and the same measure reads the 5-minute table or the daily one, as
   the model's `[Reads 5 minutes]` says. Where the two grains are different figures, each is
   its own measure and `grain()` names it: `[Generation MW]` at a time and `[Generation MWh]`

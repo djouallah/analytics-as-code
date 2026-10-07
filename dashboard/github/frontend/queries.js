@@ -81,10 +81,15 @@ export function createQueries(page) {
 
     // --- Filters: the conditions of a query's `where` ---
     dates: (table, from, to) => [[`${table}.date`, 'between', from, to]],
-    // A range cut to the days a daily table holds, on dim_calendar.
+    // A range cut to the days a daily table holds, on dim_calendar; and to the newest day
+    // both hold. A measure of one table can reach the other ([Hours] in an average, rooftop's
+    // energy in the demand line): a day only one of them holds is one the model completes
+    // from the 5-minute table, which the compiler does not (2026-10-07: for some hours each
+    // night the regional table has a day the units' has not yet).
     wholeDays(which, from, to) {
       if (!wholeDaysHeld) throw new Error('the daily tables are not attached yet');
-      const { first, last } = wholeDaysHeld[which];
+      const { first } = wholeDaysHeld[which], { units, regions } = wholeDaysHeld;
+      const last = units.last < regions.last ? units.last : regions.last;
       return queries.dates('dim_calendar', !from || from < first ? first : from, !to || to > last ? last : to);
     },
 
