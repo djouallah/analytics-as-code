@@ -21,8 +21,9 @@ fixed upstream.
 5. **Every table a reader needs is a dbt model**, because Direct Lake has no views. The
    import to the browser is a plain copy.
 6. **One semantic model serves four clients.** A measure is defined once, in DAX.
-7. **The browser has no DAX engine.** A small compiler turns the page's DAX into SQL for
-   DuckDB-WASM, by fixed cases.
+7. **Two serving paths: client side and VertiPaq.** Client side, DuckDB-WASM reads a copy
+   of the tables and a small compiler turns the page's DAX into SQL by fixed cases.
+   VertiPaq runs the same DAX as written, in Direct Lake over the Iceberg tables.
 8. **There is no open-source language and runtime with DAX's semantics.** That is the main
    risk for an AI-written client: SQL with WHERE clauses is always the shortest path.
 9. **A browser can authenticate to OneLake's catalog and storage directly** (CORS passes
@@ -129,19 +130,27 @@ fixed upstream.
 ### Limits and next
 - **Try measures against the deployed model before deploying them**, and the page's queries
   too (section 7).
-- **Direct Lake takes about 7 minutes to see a recreated table**; a refresh before that
-  fails.
 - **TMSL is open JSON, but one engine runs it.** The browser needs the compiler to read it.
 - **JSON has no comments:** the why of a measure goes in its `description`.
 
 ## 5. Serving
 
-### Now
+Two serving paths read the same semantic model and the same DAX.
+
+| | Client side | VertiPaq |
+|---|---|---|
+| Engine | DuckDB-WASM 1.5, in the reader's browser | Power BI (VertiPaq), in Fabric |
+| Data | a copy of the `mart` tables as `.duckdb` files | the `mart` Iceberg tables, in Direct Lake, no copy |
+| DAX | turned into SQL by `compiler.js` | run as written |
+| Clients | GitHub page, Fabric app (DuckDB-WASM) | Power BI report, Fabric app (VertiPaq) |
+| Reader identity | none (GitHub) or Fabric sign-in with a SAS | the reader's own access to the model |
+
+### Client side: now
 - `scripts/cache_catalog.py` copies the `mart` tables into `.duckdb` files and only decides
   the split: a half-year per file (GitHub's 100 MB limit), the newest 14 days hourly, the
   dimensions and aggregates whole.
-- The browser is the server: DuckDB-WASM 1.5, single-threaded, files downloaded whole into
-  OPFS and attached in place.
+- DuckDB-WASM runs single-threaded, with files downloaded whole into OPFS and attached in
+  place.
   - Remote reads go one block at a time, three round trips each, about 700 ms per round
     trip to OneLake (one 2024 day: 38 s). Downloading whole is faster; a block cache in
     the engine would change that.
@@ -149,18 +158,35 @@ fixed upstream.
 - `compiler.js` turns the model into views and the page's DAX into one SQL query, by fixed
   cases, and throws on anything it doesn't know. It implements by hand what DAX gives for
   free: measures inlined; filters reaching another fact only along relationships (one CTE
-  per fact); `ISFILTERED` for the grain switch; `KEEPFILTERS`; blank against NULL.
+  per fact); `ISFILTERED` for the grain switch; `KEEPFILTERS`; blank against NULL. Where
+  DAX and SQL differ, the result is SQL's.
 - Measured in the browser: a measure of another fact as a CTE 0.25 s (1.3 s inline);
   capacity per unit in two levels 0.8 s (2.7 s); `MAX(col, 0)` as DOUBLE 335 ms (623 ms).
 
-### Limits and next
+### Client side: limits and next
 - **The site is about 880 MB against GitHub Pages' 1 GB**, growing about 125 MB a year.
   Where the 5-minute history lives is a decision: another host, or recent years only.
 - **The deploy repo is squashed weekly**, because the hourly file grows its history by
   gigabytes.
-- **An open semantic runtime would replace the compiler** (section 9).
-- **The `data.js` interface is the real contract** across three hosts; it could be written
-  down as one.
+- **The compiler covers this page only.** An open semantic runtime would replace it
+  (section 9).
+- **Reading the catalog directly** instead of a copy (section 10).
+
+### VertiPaq: now
+- `deploy_model.yml` deploys `model.bim` to workspace `power`; Direct Lake reads the `mart`
+  Iceberg tables as Fabric exposes them, so nothing is copied and the data is as fresh as
+  the last run.
+- The measures' grain switch reads the daily tables when no time of day is asked: the whole
+  history by year and fuel takes 0.43 s from them, 1.9 s from the 5-minute table, same total.
+- The Fabric app on VertiPaq sends the page's DAX through a Rayfin connector, as the
+  signed-in reader; its `storage/data.js` only reshapes the rows (column names, dates).
+
+### VertiPaq: limits and next
+- **Fabric apps aren't available in Australia Southeast**, the model's capacity region, so
+  the VertiPaq app is built but not deployed.
+- **DAX semantics differ from the compiler's in places:** `SUMMARIZECOLUMNS` drops all-blank
+  groups, `TOPN` keeps ties. The page's queries are written for DAX.
+- **Direct Lake takes about 7 minutes to see a recreated table.**
 
 ## 6. Clients
 
