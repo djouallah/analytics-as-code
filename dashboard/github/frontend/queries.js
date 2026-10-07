@@ -5,16 +5,16 @@
 // A query names the model's fields (semantic_model/model.bim): a column as 'table.column',
 // a measure by its name, and says how to group, filter and order them, in the words the
 // compiler knows (semantic/compiler.js lists them). The compiler turns it into what the
-// engine runs. A query holds no expression of its own: a figure the model can express is a
-// measure there, and the page asks for it. What stays the page's (index.html) is shaping
-// rows (rename, add up the rows of a station or of a stack), the rows as they are stored
-// (the filter lists, the newest interval, the Flows rows), and presentation (a share of what
-// is shown, the change between two values). A word a query does not have is the owner's to
-// add, not the page's.
+// engine runs. A query holds no expression of its own, and the page works no figure out of
+// what comes back: a figure is a measure of the model, a total is a `totals` row, a group is
+// a column of the model, an order is an `orderBy`. The page draws the rows. A word a query
+// does not have is the owner's to add, not the page's.
 // `fct_summary` is the generation per unit, with the price of its region on the row,
 // `dim_duid` the units, `fct_region` the regions' price and demand. A query that names a
 // column of `dim_duid` next to a fact reads the two joined; one that does not reads the fact
-// alone (the compiler's doing).
+// alone (the compiler's doing). A filter on `dim_duid` reaches the regional tables too, as
+// the regions those units are in: the model's relationship from dim_duid to dim_region
+// filters both ways.
 // Rooftop solar is five units of the model (ROOFTOP_<region>, fuel ROOFTOP): every filter on
 // the units reaches it, and no query adds it on its own.
 // What a date range reads: the 5-minute tables up to 30 days, the daily ones beyond (they
@@ -23,41 +23,46 @@
 // 5-minute one when the query filters or groups by the fact's own columns, the daily one when
 // it goes through the dimensions. So `fact`, `unit` and `price` (grain()) are the tables
 // whose date (and time), DUID and region a query uses at this grain: the fact's up to 30
-// days, the dimensions' beyond, cut to the days the daily tables hold (wholeDays).
-// `output`, `charging` and `demand` are in the grain's unit (MW at a time, MWh a day);
-// energy and its capture price are the same measures at both.
+// days, the dimensions' beyond, cut to the days the daily tables hold (wholeDays). Which
+// measure a chart draws at a grain is the chart's choice, as a report visual's is: MW at a
+// time, MWh a day (`output`, `charging`, `demand`).
+// Raw columns are read only as the rows they are, never added up: the Flows rows (a unit's
+// MW, a link's flow and limits, for the bubbles and the small charts) and the lists.
 //
 // createQueries(page) takes what the page's state is, as functions: range() { from, to },
-// intraday(), region(), fuel(), picked() (the units picked), units() (every unit with its
-// region and fuel), newestDate(), shiftDate(date, n), and the names UNKNOWN and ROOFTOP.
+// intraday(), region(), fuel(), picked() (the units picked), newestDate(), shiftDate(date, n),
+// and the names UNKNOWN and ROOFTOP.
 // =============================================================================
 
 export function createQueries(page) {
   const { UNKNOWN, ROOFTOP, shiftDate } = page;
-  const ENERGY = 'Generation MWh', CAPTURE = 'Capture price';
+  const ENERGY = 'Generation MWh', CAPTURE = 'Capture price', SHARE = 'Generation share';
   const grain = () => page.intraday()
     ? { fact: 'fct_summary', unit: 'fct_summary', price: 'fct_region', region: 'fct_region.REGIONID',
-        output: 'Generation MW', charging: 'Charging MW', average: 'Average MW', demand: 'Demand MW' }
+        output: 'Generation MW', charging: 'Charging MW', average: 'Average MW', demand: 'Demand with rooftop MW' }
     : { fact: 'dim_calendar', unit: 'dim_duid', price: 'dim_calendar', region: 'dim_region.Region',
-        output: ENERGY, charging: 'Charging MWh', average: 'Average MWh a day', demand: 'Demand MWh' };
-  // The unit's fuel, and the rules on a unit the charts filter by. Storage is a rule on the
-  // fuel: batteries are "Grid". A unit with no fuel is a generator, which GENERATOR says.
-  // A chart that leaves storage out under the header's fuel filter uses generatorUnits():
-  // with a fuel picked, the bare rule is the same thing, and with the filter on Grid the
-  // engine then sees fuel = 'Grid' AND fuel <> 'Grid' and reads nothing. Storage is never
-  // left out as "not storage", which the engine does not see through.
+        output: ENERGY, charging: 'Charging MWh', average: 'Average MWh a day', demand: 'Demand with rooftop MWh' };
+  // The unit's fuel, and whether it is storage (a battery): dim_duid says, as it says what is
+  // renewable. A generator is any unit that is not storage, a unit with no fuel included.
   const FUEL = 'dim_duid.FuelSourceDescriptor';
-  const STORAGE = [FUEL, '=', 'Grid'];
-  const GENERATOR = { any: [[FUEL, '<>', 'Grid'], [FUEL, 'blank']] };
-  const generatorUnits = () => page.fuel() && page.fuel() !== UNKNOWN ? [FUEL, '<>', 'Grid'] : GENERATOR;
+  const STORAGE = ['dim_duid.Storage', '=', true];
+  const GENERATOR = ['dim_duid.Storage', '=', false];
   const fuelIs = fuel => fuel === UNKNOWN ? [FUEL, 'blank'] : [FUEL, '=', fuel];
+  // Fuels by the names the charts give them: a list of them, the blank one as UNKNOWN.
+  const fuelsIn = fuels => {
+    const named = fuels.filter(f => f !== UNKNOWN), blank = fuels.includes(UNKNOWN);
+    return blank ? { any: [[FUEL, 'blank'], ...(named.length ? [[FUEL, 'in', named]] : [])] } : [FUEL, 'in', named];
+  };
+  const fuelsNotIn = fuels => {
+    const named = fuels.filter(f => f !== UNKNOWN);
+    return [...(named.length ? [{ any: [[FUEL, 'notIn', named], [FUEL, 'blank']] }] : []), ...(fuels.includes(UNKNOWN) ? [[FUEL, 'notBlank']] : [])];
+  };
   // The date (and time) columns of a grain, as a select, and their names, as an order.
   const at = (table, intraday) => ({ date: `${table}.date`, ...(intraday ? { time: `${table}.time` } : {}) });
   const byTime = intraday => intraday ? ['date', 'time'] : ['date'];
-  // What a series of the generation chart is: the fuel, the unit, or the unit and its station
-  // (the page adds a station's units up).
-  const seriesOf = (by, unit) => by === 'fuel' ? { series: FUEL }
-    : by === 'duid' ? { series: `${unit}.DUID` } : { series: `${unit}.DUID`, station: 'dim_duid.StationName' };
+  // What a series of the generation chart is: the fuel, the unit, or the plant (the station,
+  // or the unit that has none: dim_duid's Plant).
+  const seriesCol = (by, unit) => by === 'fuel' ? FUEL : by === 'duid' ? `${unit}.DUID` : 'dim_duid.Plant';
 
   // The days the daily tables hold, `units` (fct_summary_daily) and `regions`
   // (fct_region_daily), read once the aggregates are attached (readWholeDays). Beyond 30 days
@@ -106,20 +111,14 @@ export function createQueries(page) {
       return [...(page.intraday() ? queries.dates(price, from, to) : queries.wholeDays('regions', from, to)), ...queries.priceFilters(region)];
     },
 
-    // The region filter on a regional table; a fuel or unit pick narrows it to their regions,
-    // which the units' list says (rows as stored). The fuel is matched under the name the
-    // charts give it, whether it came from the dropdown or a click. Rooftop solar is in every
-    // region.
+    // The region filter on a regional table, and the fuel and unit picks on dim_duid, which
+    // reach it as the regions those units are in (the model's relationship filters both ways).
     priceFilters(regionCol) {
       const region = page.region(), fuel = page.fuel(), picked = page.picked();
-      const regionsOf = keep => {
-        const regions = [...new Set(page.units().filter(keep).map(d => d.Region).filter(Boolean))];
-        return [[regionCol, 'in', regions.length ? regions : ['']]];   // '' is no region: no rows
-      };
-      if (region) return [[regionCol, '=', region]];
-      if (picked.length) return regionsOf(d => picked.includes(d.DUID));
-      if (fuel) return regionsOf(d => d.fuel === fuel);
-      return [];
+      return [
+        ...(region ? [[regionCol, '=', region]] : []),
+        ...(fuel ? [fuelIs(fuel)] : []),
+        ...(picked.length ? [['dim_duid.DUID', 'in', picked]] : [])];
     },
 
     // The header's filters for a measure that reads more than the units: the regions' table
@@ -145,7 +144,7 @@ export function createQueries(page) {
     // Beyond 30 days the hour-of-day tables are by whole month: the months the range touches.
     months(table) {
       const { from, to } = page.range();
-      return [[`${table}.month`, 'between', from.slice(0, 8) + '01', to]];
+      return [[`${table}.month`, 'between', `${from.slice(0, 8)}01`, to]];
     },
 
     // =====================================================================
@@ -168,51 +167,71 @@ export function createQueries(page) {
       where: [['fct_summary.date', '=', page.newestDate()]] }),
 
     // --- Dashboard: Right now ---
-    // Per fuel at the newest interval: its output and what of it is charging; and the
-    // renewable share there, the model's measure. The region filter only.
+    // Per fuel at the newest interval: its output, what of it is charging and its share of
+    // the output, and the same added up (the row `all`); the renewable share there, the
+    // model's measure. The region filter only.
     nowFilters: (now, region) => [['fct_summary.date', '=', now.date], ['fct_summary.time', '=', now.time],
       ...(region ? [['dim_duid.Region', '=', region]] : [])],
-    nowByFuel: (now, region) => ({ select: { fuel: FUEL, mw: 'Generation MW', charging: 'Charging MW' },
-      where: queries.nowFilters(now, region) }),
+    nowByFuel: (now, region) => ({ select: { fuel: FUEL, mw: 'Generation MW', charging: 'Charging MW', share: SHARE },
+      totals: { all: [FUEL] }, where: queries.nowFilters(now, region) }),
     nowShare: (now, region) => ({ select: { share: 'Renewable share' }, where: queries.nowFilters(now, region) }),
+    // The output of some fuels together at that interval: the hero's "Other".
+    nowOf: (now, region, fuels) => ({ select: { mw: 'Generation MW' }, where: [...queries.nowFilters(now, region), fuelsIn(fuels)] }),
     // The newest interval of the regional table, which can be ahead of the units': its date,
     // then its time on that date, then each region there.
     regionNewestDate: { select: { date: { max: 'fct_region.date' } } },
     regionNewestTime: date => ({ select: { time: { max: 'fct_region.time' } }, where: [['fct_region.date', '=', date]] }),
     nowByRegion: (date, time) => ({
-      select: { region: 'fct_region.REGIONID', price: 'fct_region.price', demand: 'fct_region.demand', net: 'fct_region.net_interchange' },
+      select: { region: 'fct_region.REGIONID', price: 'Average price', demand: 'Demand MW', net: 'Net interchange MW' },
       where: [['fct_region.date', '=', date], ['fct_region.time', '=', time]], orderBy: ['region'] }),
 
     // --- Dashboard: generation chart ---
     // One row per series and interval (day), with what it made and what it took (charging,
     // negative) apart: the chart draws the second as its own "<series> (charging)" series,
-    // below the axis, instead of netting it into the stack. `by` is the series: the fuel,
-    // the unit, or the unit's station (the page adds a station's units up; a unit without one
-    // stays on its own).
+    // below the axis, instead of netting it into the stack; and per interval the series added
+    // up (`all`), the height of the stack. `by` is the series: the fuel, the unit, or the
+    // plant. By fuel each row also has its share of the interval's output (the hero's).
     generation(by, intraday) {
-      const { fact, unit, output, charging } = grain();
-      return { select: { ...at(fact, intraday), ...seriesOf(by, unit), output, charging },
-        where: queries.whereGen(), orderBy: [...byTime(intraday), 'series'] };
+      const { fact, unit, output, charging } = grain(), series = seriesCol(by, unit);
+      return { select: { ...at(fact, intraday), series, output, charging, ...(by === 'fuel' ? { share: SHARE } : {}) },
+        totals: { all: [series] }, where: queries.whereGen(), orderBy: [...byTime(intraday), 'series'] };
+    },
+    // The series the chart does not draw one by one, added up per interval: "Other units"
+    // in a drill, the hero's "Other" fuels.
+    generationOf(by, intraday, shown) {
+      const { fact, unit, output, charging } = grain(), series = seriesCol(by, unit);
+      return { select: { ...at(fact, intraday), output, charging },
+        where: [...queries.whereGen(), ...(by === 'fuel' ? [fuelsIn(shown)] : [[series, 'in', shown]])], orderBy: byTime(intraday) };
+    },
+    generationNotOf(by, intraday, shown) {
+      const { fact, unit, output, charging } = grain(), series = seriesCol(by, unit);
+      return { select: { ...at(fact, intraday), output, charging },
+        where: [...queries.whereGen(), ...(by === 'fuel' ? fuelsNotIn(shown) : [[series, 'notIn', shown]])], orderBy: byTime(intraday) };
     },
 
     // The averages behind the generation KPIs: each series of the chart as an average MW
-    // over the range, "Average generation MW" (energy over the hours the range holds). One
-    // denominator, so their sum is the total.
-    averages: by => ({ select: { ...seriesOf(by, grain().unit), avg: 'Average generation MW' }, where: queries.whereAll() }),
+    // over the range, "Average generation MW" (energy over the hours the range holds), the
+    // largest first (the chart's order), with its share of the output; and the same for all
+    // of them (`generationAverage`).
+    averages: by => ({ select: { series: seriesCol(by, grain().unit), avg: 'Average generation MW', share: SHARE },
+      where: queries.whereAll(), orderBy: [['avg', 'desc']] }),
+    generationAverage: () => ({ select: { avg: 'Average generation MW' }, where: queries.whereAll() }),
 
-    // The units of a station, which a click on it in the drill toggles as a group.
-    stationUnits: name => ({ select: { DUID: 'dim_duid.DUID' }, where: [['dim_duid.StationName', '=', name]] }),
+    // The units of a plant, which a click on it in the drill toggles as a group.
+    stationUnits: name => ({ select: { DUID: 'dim_duid.DUID' }, where: [['dim_duid.Plant', '=', name]] }),
 
     // --- Dashboard: demand line over the generation chart ---
-    // Operational demand of the filtered region, or the sum of all regions: MW per interval
-    // ("Demand MW", blank when a region has none yet, so the interval is left out and not
-    // undercounted), MWh per day.
+    // Operational demand of the filtered region, or of all of them, with the rooftop solar
+    // the stack has: "Demand with rooftop MW" per interval (blank when a region has none
+    // yet), MWh per day. Through the dimensions, which reach the regions and the units. And
+    // its peak, the largest of those rows.
     demand(intraday) {
       const region = page.region(), { from, to } = page.range(), g = grain();
-      return { select: { ...at(g.price, intraday), demand: g.demand },
-        where: [...(intraday ? queries.dates(g.price, from, to) : queries.wholeDays('regions', from, to)), ...(region ? [[g.region, '=', region]] : [])],
+      return { select: { date: 'dim_calendar.date', ...(intraday ? { time: 'dim_time.time' } : {}), demand: g.demand },
+        where: [...(intraday ? queries.dates('dim_calendar', from, to) : queries.wholeDays('regions', from, to)), ...(region ? [['dim_region.Region', '=', region]] : [])],
         orderBy: byTime(intraday) };
     },
+    demandPeak: intraday => ({ ...queries.demand(intraday), orderBy: [['demand', 'desc']], top: 1 }),
 
     // --- Dashboard: price chart ---
     // Per region, and with them the rows of all the regions together ("total"): the
@@ -242,18 +261,17 @@ export function createQueries(page) {
       where: queries.whereGen({ withFuel: false }), orderBy: byTime(intraday) }),
     renewableShareOfRange: () => ({ select: { share: 'Renewable share' }, where: queries.whereGen({ withFuel: false }) }),
 
-    // The KPIs' change against the days just before the range: a measure and its hours over
-    // the range (side 1) and over the days before (side 0), on the days a daily table holds
-    // (`which`). Two queries; `span` is { from, prevFrom, last }.
-    delta({ from, prevFrom, last }, measure, which, filters) {
-      const side = (a, b) => ({ select: { n: 'Hours', v: measure }, where: [...queries.wholeDays(which, a, b), ...filters] });
-      return [side(from, last), side(prevFrom, shiftDate(from, -1))];
+    // The KPIs' change against the days just before the range, as many: the model's
+    // "... change" measures, over the days the daily tables hold (`which`), blank when either
+    // side lacks an hour of its days.
+    change(measure, which, filters) {
+      const { from, to } = page.range();
+      return { select: { v: measure }, where: [...queries.wholeDays(which, from, to), ...filters] };
     },
-    // The average MW of what the generation chart shows.
-    deltaGeneration: span => queries.delta(span, 'Average generation MW', 'units', queries.allFilters('dim_duid')),
-    deltaPrice: span => queries.delta(span, 'Average price', 'regions', queries.priceFilters('dim_region.Region')),
-    deltaRenewables: span => queries.delta(span, 'Renewable share', 'units', queries.allFilters('dim_duid', false)),
-    deltaEmissions: span => queries.delta(span, 'Emissions intensity', 'units', queries.allFilters('dim_duid')),
+    changeGeneration: () => queries.change('Average generation MW change', 'units', queries.allFilters('dim_duid')),
+    changePrice: () => queries.change('Average price change', 'regions', queries.priceFilters('dim_region.Region')),
+    changeRenewables: () => queries.change('Renewable share change', 'units', queries.allFilters('dim_duid', false)),
+    changeEmissions: () => queries.change('Emissions intensity change', 'units', queries.allFilters('dim_duid')),
 
     // --- Dashboard: map ---
     mapScatter() {
@@ -265,13 +283,14 @@ export function createQueries(page) {
     // --- Insights, renewables: average day by fuel ---
     // The units' rows are the model's measures: "Generation MW on an average day" at 5
     // minutes, "Average MW at hour" beyond, over the whole months the range touches
-    // (profileMonths says which), by hour. Generators only.
+    // (profileMonths says which), by time or hour. Generators only. The fuels are drawn in
+    // the generation chart's order (averages('fuel')).
     profileMonths: () => ({ select: { first: { min: 'dim_month.month' }, last: { max: 'dim_month.month' } }, where: queries.months('dim_month') }),
     profile: intraday => intraday
       ? { select: { fuel: FUEL, time: 'fct_summary.time', mw: 'Generation MW on an average day' },
-          where: [...queries.whereGen(), generatorUnits()], orderBy: ['fuel', 'time'] }
+          where: [...queries.whereGen(), GENERATOR], orderBy: ['time', 'fuel'] }
       : { select: { fuel: FUEL, hour: 'fct_summary_hourly.hour', mw: 'Average MW at hour' },
-          where: [...queries.months('dim_month'), ...queries.unitFilters('fct_summary_hourly'), generatorUnits()], orderBy: ['fuel', 'hour'] },
+          where: [...queries.months('dim_month'), ...queries.unitFilters('fct_summary_hourly'), GENERATOR], orderBy: ['hour', 'fuel'] },
 
     // --- Insights, renewables: curtailment ---
     // Per day (per month with `byMonth`, by year and month of the calendar) and fuel: the
@@ -317,10 +336,10 @@ export function createQueries(page) {
           where: [...queries.months('fct_region_hourly'), ...queries.priceFilters('fct_region_hourly.REGIONID')], orderBy: ['date', 'y'] },
 
     // --- Insights, market: capture price by fuel ---
-    // The generators' capture price and energy per fuel. The plain average next to it is
-    // averagePrice.
-    capture: () => ({ select: { fuel: FUEL, capture: CAPTURE, volume: ENERGY },
-      where: [...queries.whereGen({ withFuel: false }), GENERATOR], having: [['volume', '>', 0]], orderBy: ['capture'] }),
+    // The generators' capture price and energy per fuel, the fuels with half a percent or more
+    // of their output. The plain average next to it is averagePrice.
+    capture: () => ({ select: { fuel: FUEL, capture: CAPTURE, volume: ENERGY, share: SHARE },
+      where: [...queries.whereGen({ withFuel: false }), GENERATOR], having: [['volume', '>', 0], ['share', '>=', 0.5]], orderBy: ['capture'] }),
 
     // --- Insights, market: negative prices ---
     // Two figures, each its own measure: the share of 5-minute intervals, and beyond 30
@@ -348,7 +367,7 @@ export function createQueries(page) {
     capacityFactor: () => ({
       select: { fuel: FUEL, DUID: 'dim_duid.DUID', station: 'dim_duid.StationName', cap: 'Capacity MW', cf: 'Capacity factor' },
       totals: { total: ['dim_duid.DUID', 'dim_duid.StationName'] },
-      where: [...queries.whereAll(), ['dim_duid.RegCapMW', '>', 0], generatorUnits()],
+      where: [...queries.whereAll(), ['dim_duid.RegCapMW', '>', 0], GENERATOR],
       having: [['cf', 'notBlank']], orderBy: ['cf'] }),
 
     // --- Insights, fleet: batteries ---
@@ -357,34 +376,49 @@ export function createQueries(page) {
     // Per time of day: the output and the charging of an average day, and the price seen.
     batteryDay: () => ({ select: { time: 'fct_summary.time', discharge: 'Generation MW on an average day',
       charge: 'Charging MW on an average day', price: 'Price seen' }, where: queries.batteries(), orderBy: ['time'] }),
-    // "Sold" and "bought": the prices weighted by the energy discharged and charged.
-    batterySpread: () => ({ select: { sold: CAPTURE, bought: 'Charging price' }, where: queries.batteries() }),
+    // "Sold" and "bought": the prices weighted by the energy discharged and charged, and the
+    // spread between them.
+    batterySpread: () => ({ select: { sold: CAPTURE, bought: 'Charging price', spread: 'Battery spread' }, where: queries.batteries() }),
     // The fleet the filters leave: its units, registered MW and storage MWh.
     batteryFleet: () => ({ select: { units: 'Registered units', mw: 'Registered MW', mwh: 'Storage MWh' },
       where: [STORAGE, ...queries.unitFilters('dim_duid', false)] }),
 
     // --- Insights, fleet: owners ---
-    // Each unit's energy with its owner and station; the page adds them up.
-    owners: () => ({ select: { DUID: `${grain().unit}.DUID`, owner: 'dim_duid.Participant', station: 'dim_duid.StationName',
-      fuel: FUEL, mwh: ENERGY }, where: queries.whereGen() }),
+    // The energy by owner and plant (and the plant's fuel), with its share of the output
+    // shown; and each owner's share (ownerShares).
+    owners: () => ({ select: { owner: 'dim_duid.Owner', plant: 'dim_duid.Plant', fuel: FUEL, mwh: ENERGY, share: SHARE },
+      where: queries.whereGen(), having: [['mwh', '>', 0]], orderBy: [['mwh', 'desc']] }),
+    ownerShares: () => ({ select: { owner: 'dim_duid.Owner', mwh: ENERGY, share: SHARE },
+      where: queries.whereGen(), having: [['mwh', '>', 0]] }),
 
     // --- Flows ---
     // Every unit's fuel, region and position, once.
-    flowUnits: { select: { DUID: 'dim_duid.DUID', fuel: FUEL, Region: 'dim_duid.Region', renewable: 'dim_duid.Renewable',
+    flowUnits: { select: { DUID: 'dim_duid.DUID', fuel: FUEL, storage: 'dim_duid.Storage',
       lat: 'dim_duid.latitude', lon: 'dim_duid.longitude' } },
-    // A day of the units' output, one row per unit and interval, the units at 1 MW or more
-    // either way.
+    // A day of the units' output in the region filter, one row per unit and interval, the
+    // units at 1 MW or more either way: the bubbles, the rows as stored.
     flowGens: date => ({ select: { time: 'fct_summary.time', DUID: 'fct_summary.DUID', mw: 'fct_summary.mw' },
-      where: [['fct_summary.date', '=', date], { any: [['fct_summary.mw', '>=', 1], ['fct_summary.mw', '<=', -1]] }] }),
+      where: [['fct_summary.date', '=', date], { any: [['fct_summary.mw', '>=', 1], ['fct_summary.mw', '<=', -1]] },
+        ...(page.region() ? [['dim_duid.Region', '=', page.region()]] : [])] }),
+    // A day of what the generators made and their renewable share, per interval, in the
+    // region filter: the readout under the clock.
+    flowNow: date => ({ select: { time: 'fct_summary.time', mw: 'Generation MW', share: 'Renewable share' },
+      where: [['fct_summary.date', '=', date], GENERATOR, ...(page.region() ? [['dim_duid.Region', '=', page.region()]] : [])] }),
     // The links between regions.
     interconnectors: { select: { id: 'dim_interconnector.interconnector', from_region: 'dim_interconnector.from_region',
       to_region: 'dim_interconnector.to_region', description: 'dim_interconnector.description' } },
-    // The interconnectors' flows and limits, and each region's price, per interval.
+    // The interconnectors' flows and limits per interval (the rows, for the small charts),
+    // with the share of the limit and whether the link is out (the model's); with a region
+    // filter, the links that start or end there.
     flows: (from, to) => ({ select: { id: 'fct_interconnector.interconnector', date: 'fct_interconnector.date',
       time: 'fct_interconnector.time', mw: 'fct_interconnector.mw', export_limit: 'fct_interconnector.export_limit',
-      import_limit: 'fct_interconnector.import_limit' }, where: queries.dates('fct_interconnector', from, to), orderBy: ['date', 'time'] }),
+      import_limit: 'fct_interconnector.import_limit', util: 'Flow utilisation', out: 'No flow' },
+      where: [...queries.dates('fct_interconnector', from, to), ...(page.region()
+        ? [{ any: [['dim_interconnector.from_region', '=', page.region()], ['dim_interconnector.to_region', '=', page.region()]] }] : [])],
+      orderBy: ['date', 'time'] }),
+    // Each region's price and net interchange per interval.
     flowPrices: (from, to) => ({ select: { region: 'fct_region.REGIONID', date: 'fct_region.date', time: 'fct_region.time',
-      price: 'fct_region.price' }, where: queries.dates('fct_region', from, to) }),
+      price: 'Average price', net: 'Net interchange MW' }, where: queries.dates('fct_region', from, to) }),
 
     // --- History ---
     // Every day a daily table holds, under the region filter, but the newest: it is still
@@ -394,11 +428,12 @@ export function createQueries(page) {
       return [...queries.wholeDays(which, null, shiftDate(page.newestDate(), -1)),
         ...(region ? [['dim_region.Region', '=', region]] : [])];
     },
-    // Per day: the model's renewable share; and the solar, wind and rooftop energy (rooftop
-    // is solar too), per fuel.
+    // Per day: the model's renewable share; the energy of solar (rooftop's included) and of wind.
     historyShare: () => ({ select: { date: 'dim_calendar.date', re: 'Renewable share' }, where: queries.historyDays('units'), orderBy: ['date'] }),
-    historyEnergy: () => ({ select: { date: 'dim_calendar.date', fuel: FUEL, mwh: ENERGY },
-      where: [...queries.historyDays('units'), [FUEL, 'in', ['Solar', 'Wind', ROOFTOP]]] }),
+    historyEnergy: fuels => ({ select: { date: 'dim_calendar.date', mwh: ENERGY },
+      where: [...queries.historyDays('units'), [FUEL, 'in', fuels]], orderBy: ['date'] }),
+    historySolar: () => queries.historyEnergy(['Solar', ROOFTOP]),
+    historyWind: () => queries.historyEnergy(['Wind']),
     historyPrice: () => ({ select: { date: 'dim_calendar.date', price: 'Average price', demand: 'Average demand MW' },
       where: queries.historyDays('regions'), orderBy: ['date'] }),
   };

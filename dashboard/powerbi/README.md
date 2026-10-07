@@ -13,10 +13,10 @@ One page, "Overview", over the last 30 days (a page filter, which the filter pan
 | Visual | Reads |
 |---|---|
 | Slicers | `dim_calendar[date]`, `dim_region[Region]` |
-| Cards | `[Total generation MWh]`, `[Renewable share]`, `[Average price]`, `[Latest update]` |
+| Cards | `[Generation MWh]`, `[Renewable share]`, `[Average price]`, `[Latest update]` |
 | Generation by fuel | `[Generation MWh]` by day and `dim_duid[FuelSourceDescriptor]` |
 | Price by region | `[Average price]` by day and `dim_region[Region]` |
-| Stations | `[Generation MWh]`, `[Capture price]`, `[Capacity factor]`, `[Revenue]` per station |
+| Stations | `[Generation MWh]`, `[Capture price]`, `[Capacity factor]`, `[Revenue]` per station and fuel |
 
 The filters are on the dimensions, so the measures read the daily tables.
 

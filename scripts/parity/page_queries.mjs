@@ -64,21 +64,18 @@ const rows = q => run(model.toSQL(model.toDax(q)));
 
 // --- The page's state, as index.html gives it to createQueries ---
 const UNKNOWN = 'Unknown', ROOFTOP = 'Rooftop solar';
-const fuelName = fuel => fuel ?? UNKNOWN;
 const shiftDate = (date, n) => {
   const d = new Date(`${date}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 };
-const allDuids = (await rows({ select: { DUID: 'dim_duid.DUID', Region: 'dim_duid.Region', fuel: 'dim_duid.FuelSourceDescriptor' }, orderBy: ['DUID'] }))
-  .map(d => ({ ...d, fuel: fuelName(d.fuel) }));
 const [{ d: newest }] = await rows({ select: { d: { max: 'fct_summary.date' } } });
 const [{ d: oldest }] = await rows({ select: { d: { min: 'dim_calendar.date' } } });
 const to = shiftDate(newest, -2);
 let state;
 const queries = createQueries({
   range: () => state.range, intraday: () => days(state.range) <= 30, region: () => state.region,
-  fuel: () => state.fuel, picked: () => state.picked, units: () => allDuids, newestDate: () => newest,
+  fuel: () => state.fuel, picked: () => state.picked, newestDate: () => newest,
   shiftDate, UNKNOWN, ROOFTOP });
 const days = ({ from, to }) => Math.round((new Date(to) - new Date(from)) / 86400000);
 await queries.readWholeDays(rows);
@@ -89,19 +86,19 @@ const FILTERS = { all: {}, 'region SA1': { region: 'SA1' }, 'fuel Wind': { fuel:
 
 // What each chart asks in a state, with the arguments index.html passes.
 function asked() {
-  const intraday = days(state.range) <= 30, { from } = state.range;
-  // The KPI deltas' span, as renderDeltas works it out.
-  const last = state.range.to >= newest ? shiftDate(newest, -1) : state.range.to;
-  const n = Math.round((new Date(last) - new Date(from)) / 86400000) + 1;
-  const span = { from, prevFrom: shiftDate(from, -n), last };
+  const intraday = days(state.range) <= 30;
   const now = { date: state.range.to, time: 1200 };
   const list = {
     'generation fuel': queries.generation('fuel', intraday),
     'generation duid': queries.generation('duid', intraday),
     'generation station': queries.generation('station', intraday),
+    'generationNotOf duid': queries.generationNotOf('duid', intraday, ['HPR1', 'BALDHWF1']),
+    'generationOf fuel': queries.generationOf('fuel', intraday, ['Diesel', 'Unknown']),
     'averages fuel': queries.averages('fuel'),
     'averages station': queries.averages('station'),
+    generationAverage: queries.generationAverage(),
     demand: queries.demand(intraday),
+    demandPeak: queries.demandPeak(intraday),
     price: queries.price(intraday),
     averagePrice: queries.averagePrice(),
     generatorCount: queries.generatorCount(),
@@ -110,6 +107,7 @@ function asked() {
     renewableShareOfRange: queries.renewableShareOfRange(),
     nowByFuel: queries.nowByFuel(now, state.region),
     nowShare: queries.nowShare(now, state.region),
+    nowOf: queries.nowOf(now, state.region, ['Diesel', 'Unknown']),
     nowByRegion: queries.nowByRegion(now.date, now.time),
     mapScatter: queries.mapScatter(),
     profile: queries.profile(intraday),
@@ -122,19 +120,22 @@ function asked() {
     netExports: queries.netExports(intraday),
     capacityFactor: queries.capacityFactor(),
     owners: queries.owners(),
+    ownerShares: queries.ownerShares(),
     historyShare: queries.historyShare(),
-    historyEnergy: queries.historyEnergy(),
+    historySolar: queries.historySolar(),
+    historyWind: queries.historyWind(),
     historyPrice: queries.historyPrice(),
+    changeGeneration: queries.changeGeneration(),
+    changePrice: queries.changePrice(),
+    changeRenewables: queries.changeRenewables(),
+    changeEmissions: queries.changeEmissions(),
   };
   if (!intraday) list.profileMonths = queries.profileMonths();
-  if (span.prevFrom >= oldest)
-    for (const k of ['deltaGeneration', 'deltaPrice', 'deltaRenewables', 'deltaEmissions'])
-      queries[k](span).forEach((q, i) => { list[`${k} side ${1 - i}`] = q; });
   // Flows and Batteries draw up to 30 days.
   if (intraday) Object.assign(list, {
     batteryDay: queries.batteryDay(), batterySpread: queries.batterySpread(), batteryFleet: queries.batteryFleet(),
-    flowGens: queries.flowGens(state.range.to), flows: queries.flows(state.range.from, state.range.to),
-    flowPrices: queries.flowPrices(state.range.from, state.range.to) });
+    flowGens: queries.flowGens(state.range.to), flowNow: queries.flowNow(state.range.to),
+    flows: queries.flows(state.range.from, state.range.to), flowPrices: queries.flowPrices(state.range.from, state.range.to) });
   return list;
 }
 
@@ -160,7 +161,7 @@ const add = async (stateName, name, q) => {
 };
 for (const [n, q] of Object.entries({ regions: queries.regions, regionNames: queries.regionNames, fuels: queries.fuels,
   allDuids: queries.allDuids, oldestDate: queries.oldestDate, flowUnits: queries.flowUnits,
-  interconnectors: queries.interconnectors, stationUnits: queries.stationUnits('Hornsdale Wind Farm') }))
+  interconnectors: queries.interconnectors, stationUnits: queries.stationUnits('Hornsdale Power Reserve') }))
   await add('lists', n, q);
 for (const [r, from] of Object.entries(RANGES))
   for (const [f, filters] of Object.entries(FILTERS)) {

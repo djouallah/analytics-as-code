@@ -14,7 +14,7 @@ The entire analytics stack — ingestion, transformation, storage, and visualiza
 - **Iceberg REST catalog** — the single persistent layer. All warehouse state lives here as Iceberg tables, and the gzipped source CSVs are archived next to them in object storage, so nothing depends on the ephemeral CI runner's disk.
 - **GitHub Actions** — orchestrates everything. Scheduled workflows replace traditional schedulers (Airflow, Dagster, etc.).
 - **One semantic model** — a Power BI model (`semantic_model/model.bim`) over the Iceberg tables: what a table is, how tables relate, and every measure, in DAX. Every client reads the data through it.
-- **Four clients** — a static HTML page that queries a cached copy of the tables in the browser (DuckDB-WASM, no backend API), deployed to GitHub Pages (public) and as a Microsoft Fabric app (sign-in, data in a lakehouse); the same page as a second Fabric app, with no copy and no engine in the browser: its DAX is run by the deployed model (VertiPaq); and a Power BI report on the same model in Direct Lake. See [Four Clients](#four-clients).
+- **The clients** — a static HTML page that queries a cached copy of the tables in the browser (DuckDB-WASM, no backend API), deployed to GitHub Pages (public) and as a Microsoft Fabric app (sign-in, data in a lakehouse), and a Power BI report on the same model in Direct Lake. A third host of the page, a Fabric app whose queries the deployed model runs (VertiPaq), waits for Fabric apps in the model's region. See [The clients](#the-clients).
 
 ## Design Principles
 
@@ -42,36 +42,35 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 2. **Transform** — dbt SQL models read those archived CSVs, apply transformations, and write incrementally to Iceberg tables as insert-only merges (one append snapshot per commit)
 3. **Model** — more dbt SQL models turn the raw tables into the ones a reader wants (`mart`), and one semantic model describes those: relationships and measures
 4. **Cache** — A script copies the `mart` tables from the Iceberg catalog into DuckDB files, as they are
-5. **Visualize** — The page loads DuckDB-WASM, fetches the files and asks its questions in DAX, which a small compiler turns into SQL; Power BI reads the same tables through the same model, with no copy (Direct Lake)
+5. **Visualize** — The page loads DuckDB-WASM, fetches the files and asks its questions as queries of the model's fields, which a small compiler writes as DAX and turns into SQL; Power BI reads the same tables through the same model, with no copy (Direct Lake). The page draws what comes back and works out no figure of its own
 
-## Four Clients
+## The clients
 
-One semantic model (`semantic_model/model.bim`), four clients under `dashboard/`:
+One semantic model (`semantic_model/model.bim`), its clients under `dashboard/`:
 
 - `github/` and `fabric_app_wasm/` are one page (`dashboard/github/index.html`) on two hosts. A
   host only decides where the data files live and how the browser gets them
   (`storage/data.js`), so a chart is written once and reaches both.
-- `fabric_app_vertipaq/` is that page again, as a Fabric app next to the deployed model. It
-  has no data files, no DuckDB and no compiler: the DAX the page writes is sent to the model
-  as it is, and Power BI runs it (VertiPaq, in Direct Lake over the Iceberg tables). It is
-  the check that the page's DAX is DAX. The Analyze tab, which is SQL, is not in it.
-  **It is built but could not be tested:** the model's workspace is in Australia
-  Southeast, a region where Fabric apps (preview) are not available yet, so it was never
-  deployed and has never run in a browser.
+- `fabric_app_vertipaq/` is to be that page again, as a Fabric app next to the deployed
+  model, its queries run by Power BI (VertiPaq). **It is not available yet:** the model's
+  workspace is in Australia Southeast, a region where Fabric apps (preview) are not
+  available, and the folder holds a README until they are. That the page's DAX is DAX is
+  checked meanwhile by `scripts/parity`: the page's queries through the compiler on the
+  dashboard's files and through the deployed model, rows compared.
 - `powerbi/` is a Power BI report (`nem.Report`, as JSON) on the model as deployed to Fabric,
   which reads the Iceberg tables in Direct Lake. `deploy_model.yml` publishes the two together.
 
 A measure is written once, in the model, and reaches all four.
 
-| | GitHub Pages | Fabric app, DuckDB-WASM | Fabric app, VertiPaq |
-|---|---|---|---|
-| Live at | [nemtracker.github.io](https://nemtracker.github.io/) | inside a Fabric workspace | inside the model's Fabric workspace |
-| Who can open it | anyone | people the app is shared with, after Fabric sign-in | the same, and they need read access to the model |
-| Engine | DuckDB-WASM, in the browser | DuckDB-WASM, in the browser | VertiPaq, in Power BI |
-| Data files | next to the page | a lakehouse, under `Files/data` | none: the model reads the Iceberg tables |
-| 5-minute history | one file per half-year (GitHub's 100 MB limit), downloaded | the same half-year files, downloaded as parallel range requests | in the model |
-| Host code | `dashboard/github/storage/data.js` | `dashboard/fabric_app_wasm/site/storage/` | `dashboard/fabric_app_vertipaq/site/` |
-| Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `dashboard/fabric_app_wasm/` (page), `import_onelake.yml` (data) | `deploy_fabric.yml` (page; not deployed yet), `deploy_model.yml` (model) |
+| | GitHub Pages | Fabric app, DuckDB-WASM |
+|---|---|---|
+| Live at | [nemtracker.github.io](https://nemtracker.github.io/) | inside a Fabric workspace |
+| Who can open it | anyone | people the app is shared with, after Fabric sign-in |
+| Engine | DuckDB-WASM, in the browser | DuckDB-WASM, in the browser |
+| Data files | next to the page | a lakehouse, under `Files/data` |
+| 5-minute history | one file per half-year (GitHub's 100 MB limit), downloaded | the same half-year files, downloaded as parallel range requests |
+| Host code | `dashboard/github/storage/data.js` | `dashboard/fabric_app_wasm/site/storage/` |
+| Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `dashboard/fabric_app_wasm/` (page), `import_onelake.yml` (data) |
 
 ### The layers of the dashboard
 
@@ -81,28 +80,27 @@ on purpose: the point is the layers, not their maturity.
 | Layer | Here | In a real product |
 |---|---|---|
 | Consumer | `dashboard/github/index.html` | the BI tool |
-| Query language | DAX, written in the page | DAX, MDX, VizQL, Malloy, a metrics request |
+| Query language | a query of the model's fields (`frontend/queries.js`), which the compiler writes as DAX | DAX, MDX, VizQL, Malloy, a metrics request |
 | Semantic model | `semantic_model/model.bim`, a Tabular model in TMSL | a Tabular model (TMSL, TMDL), LookML, MetricFlow YAML |
 | Compiler | `dashboard/github/semantic/compiler.js` | MetricFlow, Cube's schema compiler, Malloy's compiler, Looker's SQL generator, Power BI's formula engine, Tableau's VizQL |
 | Engine | DuckDB-WASM | the warehouse, VertiPaq, Hyper |
 | Storage | `dashboard/github/storage/` | the lakehouse or warehouse connection |
 
-In the Fabric app on VertiPaq the right-hand column is the real thing: the same page sends
-the same DAX to the deployed model, and Power BI's formula engine and VertiPaq stand where
-`compiler.js` and DuckDB-WASM do here.
 
 - **The semantic model** describes the tables, their relationships and the measures, each
   with a description. It is a real Power BI model (`model.bim`), the same file that is
   deployed to Fabric: it holds DAX only, and nothing in it is written for the page.
-- **The compiler** turns it into DuckDB views, and turns the page's DAX queries
-  into SQL over them. It is a toy, on purpose: the file is there to show where that layer
+- **The compiler** turns it into DuckDB views, writes the page's queries as DAX, and
+  turns the DAX into SQL over the views. It is a toy, on purpose: the file is there to show where that layer
   sits. It knows the constructs this
   page uses and nothing else.
 - **The query language** is where the layers show. SQL asks for tables, while a semantic
-  model offers tables that know how they relate; the page asks in DAX for `fct_summary[mw]`
-  by `dim_duid[FuelSourceDescriptor]` and the compiler works out that the two have to be
-  joined, and writes the SQL. Which grain to read is still the page's to say. The Analyze
-  tab is the exception: it is SQL, written against the same views.
+  model offers tables that know how they relate; the page asks for `Generation MW` by
+  `dim_duid.FuelSourceDescriptor` and the compiler works out that the two have to be
+  joined, and writes the SQL. Which measure a chart draws at which grain is the page's to
+  say, as a report visual's is; every figure is a measure, and the page draws the rows
+  (`scripts/parity/page_lint.mjs` checks that its code works out none). The Analyze tab is
+  the exception: it is SQL, written by whoever uses it, against the same views.
 
 ### How a Power BI report asks
 
@@ -116,8 +114,9 @@ grouped how, filtered by what (the `visual.json` files of `nem.Report`).
 - A click on one visual adds a filter to the semantic queries of the others: that is
   cross-filtering, and it runs on the same path.
 
-The page skips the first step: it writes its DAX itself, a query per chart, and a click
-changes the filters of those queries.
+The page does the same in its own words: each chart sends a description of the model's
+fields (`frontend/queries.js`), the compiler writes the DAX, and a click changes the filters
+of those queries.
 
 ### The Fabric app
 
@@ -151,7 +150,7 @@ no query service.
 ├── dashboard/            # Its four clients
 │   ├── github/           # The page, and a folder per layer: frontend/, semantic/ (the compiler), storage/ (the GitHub Pages host)
 │   ├── fabric_app_wasm/     # The same page as a Fabric app on DuckDB-WASM: its host code, sign-in, and the Rayfin project
-│   ├── fabric_app_vertipaq/ # The same page as a Fabric app on the deployed model: its DAX is run by Power BI
+│   ├── fabric_app_vertipaq/ # The same page as a Fabric app on the deployed model: not available yet (a README)
 │   └── powerbi/          # A report over the deployed model
 ├── tests/                # dbt data tests
 ├── .github/workflows/    # CI/CD pipelines

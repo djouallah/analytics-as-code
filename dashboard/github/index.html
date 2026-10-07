@@ -649,33 +649,14 @@
 
   <div id="view-analyze" role="tabpanel" aria-labelledby="tab-analyze" style="display:none">
     <div class="analyze-controls">
-      <label>Measures</label>
-      <div class="multi-dropdown" id="measDropdown">
-        <button class="dd-trigger" id="measTrigger" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="measPanel">Generation, Price</button>
-        <div class="dd-panel" id="measPanel">
-          <label><input type="checkbox" id="measGeneration" checked> Generation</label>
-          <label><input type="checkbox" id="measPrice" checked> Price</label>
-        </div>
-      </div>
-      <label>Dimensions</label>
-      <div class="multi-dropdown" id="dimDropdown">
-        <button class="dd-trigger" id="dimTrigger" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="dimPanel">Date</button>
-        <div class="dd-panel" id="dimPanel">
-          <label class="disabled"><input type="checkbox" checked disabled> Date</label>
-          <label><input type="checkbox" id="dimTime"> Time</label>
-          <label><input type="checkbox" id="dimDUID"> DUID</label>
-          <label><input type="checkbox" id="dimFuel"> Fuel</label>
-          <label><input type="checkbox" id="dimRegion"> Region</label>
-        </div>
-      </div>
       <button class="btn-analyze" id="analyzePreview" type="button">Preview</button>
       <button class="btn-analyze" id="analyzePlan" type="button">Show plan</button>
       <button class="btn-analyze primary" id="analyzeDownload" type="button">Download CSV</button>
     </div>
     <div class="analyze-sql">
       <div class="analyze-sql-head">
-        <label for="analyzeSql">SQL <span>— editable; Preview / Download run this</span></label>
-        <button class="btn-analyze" id="analyzeSqlReset" type="button">Reset to generated</button>
+        <label for="analyzeSql">SQL <span>— over the views of the model's tables: their stored columns, not the model's measures, so a figure here is what the query works out, not a chart's</span></label>
+        <button class="btn-analyze" id="analyzeSqlReset" type="button">Example</button>
       </div>
       <textarea id="analyzeSql" spellcheck="false" wrap="off"></textarea>
     </div>
@@ -706,6 +687,10 @@
     import { createModel } from "./semantic/compiler.js";
     import { renderLogs } from "./frontend/logs.js";
     import { createQueries } from "./frontend/queries.js";
+    import { largestBy, smallestBy, orderBy, cycle, pick, hashIndex, clampIndex, axisClip, percentiles, daysApart, dayCount,
+      shiftDate, formatTime, dayAhead, playStep, playDelay, renderCost, round1, round2, kLabel, mwhAxis, fmtGwh, fmtMwh,
+      fmtTonnes, fmtMwAbs, pinSide, easeTo, progress, tipPlace, legendColumns, calendarLayout, bandSeries, barPercent,
+      bubbleSize, arrowWidth, arrowLabelled, dotSize, unitSize, sparkline, nightBands, moreOf, writeCsv } from "./frontend/draw.js";
 
     // =========================================================================
     // 1. QUERIES: what each chart asks the model is frontend/queries.js (createQueries,
@@ -759,7 +744,7 @@
     // with room. `x` is the index on the category axis, `n` the axis length.
     const pinAt = (x, y, n, text) => ({ silent: true, animation: false, symbol: 'circle', symbolSize: 7,
       itemStyle: { color: cssVar('--text'), borderColor: cssVar('--card'), borderWidth: 2 },
-      label: { show: true, position: x > n / 2 ? 'left' : 'right', distance: 6, formatter: text,
+      label: { show: true, position: pinSide(x, n), distance: 6, formatter: text,
         color: cssVar('--text'), fontSize: 11, fontWeight: 600, backgroundColor: cssVar('--raised'),
         borderColor: cssVar('--border'), borderWidth: 1, borderRadius: 6, padding: [3, 7] },
       data: [{ coord: [x, y] }] });
@@ -774,8 +759,6 @@
     const DEMAND = 'Demand';
     // Rooftop solar's fuel: five units of the model, one per region (dim_duid).
     const ROOFTOP = 'Rooftop solar';
-    // Where units are listed by owner, rooftop's (which have none) are under this one.
-    const ROOFTOP_OWNER = 'Rooftop solar (AEMO estimate)';
     // A unit the model gives no fuel.
     const UNKNOWN = 'Unknown';
     const fuelName = fuel => fuel ?? UNKNOWN;
@@ -815,7 +798,7 @@
     function fuelColor(name) {
       if (name.endsWith(CHARGING)) name = name.slice(0, -CHARGING.length);
       const p = palette();
-      return FUEL_COLORS[name] ? themed(FUEL_COLORS[name]) : p[Math.abs([...name].reduce((h,c)=>h*31+c.charCodeAt(0)|0,0)) % p.length];
+      return FUEL_COLORS[name] ? themed(FUEL_COLORS[name]) : p[hashIndex(name, p.length)];
     }
     // A region keeps its colour on every chart, whichever regions are shown.
     const REGION_COLORS = { NSW1: ['#3987e5', '#2a78d6'], QLD1: ['#d95926', '#eb6834'], SA1: ['#199e70', '#1baf7a'],
@@ -838,11 +821,11 @@
     // (populateFilters); a code without one shows as the code. Display only: filters, SQL and
     // joins keep using the codes, and every UI element maps back to them.
     const REGION_NAMES = {};
+    // The regions of the market, as the model lists them (populateFilters).
+    const MARKET_REGIONS = [];
     const regionName = code => REGION_NAMES[code] ?? code;
     const regionCode = name => Object.keys(REGION_NAMES).find(c => REGION_NAMES[c] === name) ?? name;
     const activeFuel = () => document.getElementById("fuelFilter").value || crossFilter.fuel;
-    const sqlStr = v => `'${String(v).replace(/'/g, "''")}'`;
-    const duidList = () => crossFilter.duids.map(sqlStr).join(',');
     let aggLoaded = false;
     let _renderSeq = 0;
     // Nothing is drawn until init has filled the filters: a click before that would query a
@@ -889,7 +872,7 @@
     // What each chart asks the model (frontend/queries.js), over the page's state.
     const queries = createQueries({
       range: getDateRange, intraday: isIntradayMode, region: activeRegion, fuel: activeFuel,
-      picked: () => crossFilter.duids, units: () => allDuids, newestDate: () => document.getElementById('dateTo').max,
+      picked: () => crossFilter.duids, newestDate: () => document.getElementById('dateTo').max,
       shiftDate, UNKNOWN, ROOFTOP });
     let _db = null;
 
@@ -978,26 +961,13 @@
     }
     function rangeDays() {
       const { from, to } = getDateRange();
-      return Math.round((new Date(to) - new Date(from)) / 86400000);
+      return daysApart(from, to);
     }
     function isIntradayMode() {
       return rangeDays() <= 30;
     }
 
-    // A date string moved by n days.
-    function shiftDate(date, n) {
-      const d = new Date(`${date}T00:00:00Z`);
-      d.setUTCDate(d.getUTCDate() + n);
-      return d.toISOString().slice(0, 10);
-    }
-
     function padTime(time) { return String(time).padStart(4, '0'); }
-
-    function formatTime(time) {
-      const hh = String(Math.floor(time / 100)).padStart(2, '0');
-      const mm = String(time % 100).padStart(2, '0');
-      return `${hh}:${mm}`;
-    }
 
     function formatDate(str) {
       const [y, m, d] = str.split('-');
@@ -1031,97 +1001,12 @@
         : [];
     }
 
-    function yieldToUI() { return new Promise(r => setTimeout(r, 0)); }
-
-    function csvCell(v, kind) {
-      if (v == null) return '';
-      if (typeof v === 'bigint') v = Number(v);
-      if (typeof v === 'number' && kind.startsWith('Date')) v = new Date(v).toISOString().slice(0, 10);
-      else if (typeof v === 'number' && kind.startsWith('Timestamp')) v = new Date(v).toISOString().replace('T', ' ').replace(/(\.000)?Z$/, '');
-      const s = String(v);
-      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    }
-
     function escapeHtml(v) {
       return String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    async function downloadCSVDirect(sqlStr, filename) {
-      const exportConn = await _db.connect();
-      try {
-        const reader = await exportConn.send(sqlStr);
-        const chunks = [];
-        let headerWritten = false;
-        let rowCount = 0;
-        for await (const batch of reader) {
-          const fields = batch.schema.fields;
-          const cols = fields.map(f => f.name);
-          const kinds = fields.map(f => String(f.type));
-          let chunk = '';
-          if (!headerWritten) {
-            chunk += cols.join(',') + '\n';
-            headerWritten = true;
-          }
-          const n = Number(batch.numRows);
-          for (let i = 0; i < n; i++) {
-            const vals = cols.map((c, j) => csvCell(batch.getChild(c).get(i), kinds[j]));
-            chunk += vals.join(',') + '\n';
-          }
-          chunks.push(chunk);
-          rowCount += n;
-          await yieldToUI();
-        }
-        const blob = new Blob(chunks, { type: 'text/csv' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(a.href);
-        return rowCount;
-      } finally {
-        await exportConn.close();
-      }
-    }
-
-    // =========================================================================
-    // 6. SQL FILTERS (the Analyze tab)
-    // =========================================================================
-
-    // The same filters in SQL, for the Analyze tab: its queries are SQL over the model's views
-    // (a unit fact joined to dim_duid read as `g`, a regional table as `p`), shown to the user
-    // and edited by hand.
-    const sql = {
-      whereGen({ withFuel = true } = {}) {
-        const { from, to } = getDateRange();
-        return [`g.date >= ${sqlStr(from)} AND g.date <= ${sqlStr(to)}`, ...sql.unitFilters('g', withFuel)].join(" AND ");
-      },
-
-      // A unit without a fuel is under UNKNOWN, as in the charts.
-      fuel: `COALESCE(g.FuelSourceDescriptor, ${sqlStr(UNKNOWN)}) AS fuel`,
-      fuelIs: (col, fuel) => fuel === UNKNOWN ? `${col} IS NULL` : `${col} = ${sqlStr(fuel)}`,
-
-      unitFilters(a, withFuel = true) {
-        const region = activeRegion(), fuel = withFuel ? activeFuel() : null;
-        const clauses = [];
-        if (region) clauses.push(`${a}.Region = ${sqlStr(region)}`);
-        if (fuel) clauses.push(sql.fuelIs(`${a}.FuelSourceDescriptor`, fuel));
-        if (crossFilter.duids.length) clauses.push(`${a}.DUID IN (${duidList()})`);
-        return clauses;
-      },
-
-      wherePrice() {
-        const { from, to } = getDateRange();
-        return [`p.date >= ${sqlStr(from)} AND p.date <= ${sqlStr(to)}`, ...sql.priceFilters('p.REGIONID')].join(" AND ");
-      },
-
-      priceFilters(regionCol) {
-        const region = activeRegion(), fuel = activeFuel();
-        if (region) return [`${regionCol} = ${sqlStr(region)}`];
-        if (crossFilter.duids.length) return [`${regionCol} IN (SELECT Region FROM v_dim_duid WHERE DUID IN (${duidList()}))`];
-        if (fuel) return [`${regionCol} IN (SELECT Region FROM v_dim_duid WHERE ${sql.fuelIs('FuelSourceDescriptor', fuel)})`];
-        return [];
-      },
-    };
+    // Analyze's CSV: the rows of its SQL, written out as they come (frontend/draw.js).
+    const downloadCSVDirect = async (sqlText, filename) => writeCsv(await _db.connect(), sqlText, filename);
 
     // =========================================================================
     // 7. CHART RENDERERS
@@ -1199,49 +1084,24 @@
       if (matchMedia('(prefers-reduced-motion: reduce)').matches) { el.textContent = format(value); return; }
       const t0 = performance.now();
       const tick = now => {
-        const t = Math.min(1, (now - t0) / 400);
-        el.textContent = format(from + (value - from) * (1 - Math.pow(1 - t, 3)));
+        const t = progress(now, t0, 400);
+        el.textContent = format(easeTo(from, value, t));
         if (t < 1) _kpiAnim.set(id, requestAnimationFrame(tick));
       };
       _kpiAnim.set(id, requestAnimationFrame(tick));
     }
     // Sparkline of a KPI's own series: an SVG line over a faint fill, in the tile's muted ink,
-    // averaged down to 80 points. `clip` keeps the scale to the 2nd-98th percentile so one
-    // price spike doesn't flatten the rest.
+    // a point per value the model gave. `clip` keeps the scale to the 2nd-98th percentile so
+    // one price spike doesn't flatten the rest.
     function setSpark(id, values, clip = false) {
       const el = document.getElementById(id);
-      let v = values.filter(x => x != null && isFinite(x));
-      if (v.length < 2) { el.innerHTML = ''; return; }
-      if (clip) {
-        const s = [...v].sort((a, b) => a - b);
-        const lo = s[Math.floor(0.02 * s.length)], hi = s[Math.min(s.length - 1, Math.floor(0.98 * s.length))];
-        v = v.map(x => Math.min(hi, Math.max(lo, x)));
-      }
-      const n = Math.min(80, v.length), step = v.length / n;
-      const pts = Array.from({ length: n }, (_, i) => {
-        const part = v.slice(Math.floor(i * step), Math.max(Math.floor(i * step) + 1, Math.floor((i + 1) * step)));
-        return part.reduce((s, x) => s + x, 0) / part.length;
-      });
-      const min = Math.min(...pts), span = (Math.max(...pts) - min) || 1;
       const W = 100, H = 24;
-      const line = pts.map((p, i) => `${(i * W / (n - 1)).toFixed(1)},${(H - 2 - (p - min) / span * (H - 4)).toFixed(1)}`).join(' ');
+      const line = sparkline(values, W, H, clip);
+      if (!line) { el.innerHTML = ''; return; }
       el.setAttribute('viewBox', `0 0 ${W} ${H}`);
       el.setAttribute('preserveAspectRatio', 'none');
       el.innerHTML = `<polygon points="0,${H} ${line} ${W},${H}" fill="currentColor" opacity="0.12"/>`
         + `<polyline points="${line}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
-    }
-
-    // A station's units added up, per `keys` (the interval), as one series named after it; a
-    // unit without a station stays a series of its own. `values` are additive measures.
-    function stationSeries(rows, keys, values) {
-      const out = new Map();
-      for (const r of rows) {
-        const series = r.station ?? r.series, k = [...keys.map(x => r[x]), series].join('|');
-        let o = out.get(k);
-        if (!o) out.set(k, o = { ...Object.fromEntries(keys.map(x => [x, r[x]])), series, ...Object.fromEntries(values.map(v => [v, null])) });
-        for (const v of values) if (r[v] != null) o[v] = (o[v] ?? 0) + r[v];
-      }
-      return [...out.values()];
     }
 
     // The newest interval of the units (and so of rooftop solar: fct_summary writes an
@@ -1259,13 +1119,20 @@
     // 15 more. Back to 15 whenever the drill (fuel, region, dates) changes.
     const DRILL_STEP = 15;
     let drillShown = DRILL_STEP, drillKey = '';
+    // The generation chart's layout for the hero, once this render has it (renderNow waits).
+    let _layoutReady = Promise.resolve(), _layoutDone = () => {};
+    function startLayout() { _layoutReady = new Promise(r => { _layoutDone = r; }); }
     async function renderGeneration(seq) {
+      const done = _layoutDone;
+      try { await drawGeneration(seq); } finally { done(); }
+    }
+    async function drawGeneration(seq) {
       const intraday = isIntradayMode();
       const unit = intraday ? 'MW' : 'MWh';
       // A fuel chosen in the dropdown drills into its units exactly like clicking the fuel.
       const drillFuel = activeFuel();
 
-      // In a drill, units can be grouped by power station (units without one stay on their own).
+      // In a drill, units can be grouped by plant (dim_duid's Plant: the station, or the unit).
       const stationsAvailable = drillFuel ? hasCapacity() : false;
       document.getElementById('drillLevelWrap').hidden = !stationsAvailable;
       const byStation = stationsAvailable && document.getElementById('drillLevel').value === 'station';
@@ -1280,22 +1147,25 @@
 
       // Demand is regional, so it only sits over the fuel view, not over a drill or a unit pick.
       const withDemand = !drillFuel && !crossFilter.duids.length;
-      const [found, demandRows, averaged] = await Promise.all([
+      const [found, demandRows, peakRows, averages, overall] = await Promise.all([
         runQuery(queries.generation(seriesBy, intraday)),
         withDemand ? runQuery(queries.demand(intraday)) : [],
+        withDemand ? runQuery(queries.demandPeak(intraday)) : [],
         runQuery(queries.averages(seriesBy)),
+        runQuery(queries.generationAverage()),
       ]);
-      const rows = byStation ? stationSeries(found, queries.byTime(intraday), ['output', 'charging']) : found;
-      const averages = byStation ? stationSeries(averaged, [], ['avg']) : averaged;
       if (seq !== _renderSeq) return;
+      // The series' rows, and the stack: the series added up per interval (the `all` rows).
+      const rows = found.filter(r => !r.all), keyOf = r => intraday ? `${r.date}|${padTime(r.time)}` : r.date;
+      const stackAt = new Map(found.filter(r => r.all).map(r => [keyOf(r), r]));
       // The series under the names the chart gives them: a unit without a fuel, what is
       // charging.
       const named = fuelName;
       const data = [];
       for (const r of rows) {
         const series = named(r.series);
-        if (r.output > 0) data.push({ date: r.date, time: r.time, series, total_mw: r.output });
-        if (r.charging < 0) data.push({ date: r.date, time: r.time, series: series + CHARGING, total_mw: r.charging });
+        if (r.output > 0) data.push({ key: keyOf(r), date: r.date, time: r.time, series, total_mw: r.output, share: r.share });
+        if (r.charging < 0) data.push({ key: keyOf(r), date: r.date, time: r.time, series: `${series}${CHARGING}`, total_mw: r.charging });
       }
       if (!data.length) {
         _scrub.gen = null;
@@ -1306,33 +1176,39 @@
       }
 
       const { xKeys, xLabels } = buildTimeAxis(data, intraday);
-      const lookup = buildLookup(data,
-        row => intraday ? `${row.date}|${padTime(row.time)}|${row.series}` : `${row.date}|${row.series}`,
-        row => row.total_mw
-      );
+      const lookup = buildLookup(data, row => `${row.key}|${row.series}`, row => row.total_mw);
+      const shareAt = buildLookup(data, row => `${row.key}|${row.series}`, row => row.share);
 
-      // Sort series by absolute total, descending. In drill mode the top series are drawn and
-      // the rest summed into "Other units" (click it for more), so the stack still adds up.
-      const seriesTotals = {};
-      for (const row of data) seriesTotals[row.series] = (seriesTotals[row.series] || 0) + row.total_mw;
-      let seriesNames = Object.entries(seriesTotals).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).map(e => e[0]);
-      // Two buckets, so the charging remainder stays below the axis with the other charging series.
-      const OTHER = 'Other units', OTHER_CHARGING = OTHER + CHARGING;
-      const buckets = { [OTHER]: [], [OTHER_CHARGING]: [] };
-      const totalSeries = seriesNames.length;
+      // The series in the order of their average output over the range, the largest first
+      // (the model's, `averages`), each one's charging below the axis in the same order. A
+      // series with charging alone comes after.
+      const drawn = new Set(data.map(d => d.series));
+      const outputs = averages.map(r => named(r.series)).filter(n => drawn.has(n));
+      const charges = [...outputs.map(n => `${n}${CHARGING}`), ...data.map(d => d.series).filter(n => n.endsWith(CHARGING))]
+        .filter((n, i, all) => drawn.has(n) && all.indexOf(n) === i);
+      // In drill mode the top series are drawn and the rest added up by the model into "Other
+      // units" (click it for more), so the stack still adds up: the rows of the series not
+      // drawn, per interval (`generationNotOf`).
+      const OTHER = 'Other units', OTHER_CHARGING = `${OTHER}${CHARGING}`;
+      const totalSeries = outputs.length;
+      let shown = outputs, otherAt = null;
       if (drillFuel && totalSeries > drillShown) {
-        for (const n of seriesNames.slice(drillShown)) buckets[n.endsWith(CHARGING) ? OTHER_CHARGING : OTHER].push(n);
-        seriesNames = [...seriesNames.slice(0, drillShown), ...Object.keys(buckets).filter(b => buckets[b].length)];
+        shown = outputs.slice(0, drillShown);
+        const others = await runQuery(queries.generationNotOf(seriesBy, intraday, shown));
+        if (seq !== _renderSeq) return;
+        otherAt = new Map(others.map(r => [keyOf(r), r]));
         document.getElementById("title-generation").textContent +=
           ` (top ${drillShown} of ${totalSeries}; click "Other units" for ${DRILL_STEP} more)`;
       }
+      const shownCharges = charges.filter(n => shown.includes(n.slice(0, -CHARGING.length)));
+      const seriesNames = [...shown, ...(otherAt ? [OTHER] : []), ...shownCharges, ...(otherAt ? [OTHER_CHARGING] : [])];
       // On one screen the title is one line, cut short; the whole of it is its tooltip.
       document.getElementById("title-generation").title = document.getElementById("title-generation").textContent;
-      const isOther = name => name in buckets;
-      const valueAt = (k, name) => isOther(name)
-        ? buckets[name].reduce((s, n) => s + (lookup.get(`${k}|${n}`) || 0), 0)
+      const isOther = name => name === OTHER || name === OTHER_CHARGING;
+      const valueAt = (k, name) => name === OTHER ? otherAt.get(k)?.output ?? 0
+        : name === OTHER_CHARGING ? otherAt.get(k)?.charging ?? 0
         : (lookup.get(`${k}|${name}`) || 0);
-      const colorOf = (name, i) => isOther(name) ? fuelColor('Other') : drillFuel ? palette()[i % palette().length] : fuelColor(name);
+      const colorOf = (name, i) => isOther(name) ? fuelColor('Other') : drillFuel ? pick(palette(), i) : fuelColor(name);
 
       const largeMode = xKeys.length > 2000;
       const series = seriesNames.map((name, i) => ({
@@ -1355,21 +1231,21 @@
         data: xKeys.map(k => valueAt(k, name)),
       }));
       // Not stacked: the gap between the stack and the line is the region's net exports (or
-      // imports), plus the small non-scheduled generation AEMO's demand leaves out. AEMO's
-      // operational demand doesn't count what rooftop solar supplies, so the rooftop in the
-      // stack is added to it: the line and the stack then measure the same thing.
-      const demandAt = buildLookup(demandRows,
-        r => intraday ? `${r.date}|${padTime(r.time)}` : r.date, r => r.demand);
+      // imports), plus the small non-scheduled generation AEMO's demand leaves out. The line
+      // is the model's "Demand with rooftop": AEMO's operational demand doesn't count what
+      // rooftop solar supplies, the stack does, so the line and the stack measure the same
+      // thing. Its peak is the largest of its rows (`demandPeak`).
+      const demandAt = buildLookup(demandRows, keyOf, r => r.demand);
       const hasDemand = demandRows.length > 0;
       if (hasDemand) {
-        const demand = xKeys.map(k => demandAt.has(k) ? demandAt.get(k) + (lookup.get(`${k}|${ROOFTOP}`) || 0) : null);
-        const peak = demand.reduce((best, v, i) => v != null && (best < 0 || v > demand[best]) ? i : best, -1);
+        const demand = xKeys.map(k => demandAt.get(k) ?? null);
+        const peak = peakRows[0] ? xKeys.indexOf(keyOf(peakRows[0])) : -1;
         series.push({
           name: DEMAND, type: 'line', symbol: 'none', z: 5, sampling: 'average',
           lineStyle: { width: 1.5, type: 'dashed', color: cssVar('--text') }, itemStyle: { color: cssVar('--text') },
           data: demand,
-          markPoint: peak < 0 ? undefined : pinAt(peak, demand[peak], xKeys.length,
-            `Peak demand ${Math.round(demand[peak]).toLocaleString()} ${unit} · ${xLabels[peak]}`),
+          markPoint: peak < 0 ? undefined : pinAt(peak, peakRows[0].demand, xKeys.length,
+            `Peak demand ${Math.round(peakRows[0].demand).toLocaleString()} ${unit} · ${xLabels[peak]}`),
         });
       }
 
@@ -1382,10 +1258,10 @@
         tooltip: { trigger: 'axis', axisPointer: { type: 'line' }, formatter: params => {
           const gen = params.filter(p => p.seriesName !== DEMAND);
           const target = hoveredSeries && hoveredSeries !== DEMAND ? gen.find(p => p.seriesName === hoveredSeries) : null;
-          const p = target || gen.filter(p => p.value !== 0).sort((a, b) => Math.abs(b.value) - Math.abs(a.value))[0];
+          const p = target || largestBy(gen.filter(p => p.value !== 0), p => Math.abs(p.value));
           const d = params.find(p => p.seriesName === DEMAND && p.value != null);
           if (!p && !d) return '';
-          const hint = p && isOther(p.seriesName) ? `<div style="color:${cssVar('--muted')};margin-top:2px">${buckets[p.seriesName].length} series, click to show ${DRILL_STEP} more</div>` : '';
+          const hint = p && isOther(p.seriesName) ? `<div style="color:${cssVar('--muted')};margin-top:2px">${outputs.slice(shown.length).length} series, click to show ${DRILL_STEP} more</div>` : '';
           const line = q => `${q.marker} ${escapeHtml(q.seriesName)}: ${Math.round(q.value).toLocaleString()} ${unit}`;
           return `<div style="color:${cssVar('--muted')};margin-bottom:2px">${params[0].axisValueLabel}</div>`
             + (p ? `<div style="font-weight:600">${line(p)}</div>${hint}` : '')
@@ -1398,25 +1274,32 @@
         ] },
         grid: plot({ legend: true, zoom: intraday }),
         xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true } },
-        yAxis: { type: 'value', axisLabel: { formatter: v => Math.abs(v) >= 1000 ? (v/1000).toFixed(0) + 'k' : v } },
+        yAxis: { type: 'value', axisLabel: { formatter: v => kLabel(v) } },
         dataZoom: dataZoomConfig(intraday),
         series,
         animationDuration: 600,
         animationEasing: 'cubicOut',
       }, true);
 
-      // The hero follows the pointer while this is the fuel view (scrubHero).
+      // The hero follows the pointer while this is the fuel view (scrubHero): the fuels in the
+      // chart's order, the ones under MIX_MIN_SHARE % of the range's output (the model's
+      // "Generation share") together as "Other", whose output per interval the model adds up
+      // (`generationOf`). The stack's height and charging are the `all` rows.
+      const shareOfRange = new Map(averages.map(r => [named(r.series), r.share]));
+      const small = outputs.filter(n => (shareOfRange.get(n) ?? 0) < MIX_MIN_SHARE);
+      const layout = { order: outputs, charging: charges.length > 0, other: new Set(small) };
+      let smallAt = new Map();
+      if (!drillFuel && !crossFilter.duids.length && small.length) {
+        const rowsOf = await runQuery(queries.generationOf('fuel', intraday, small));
+        if (seq !== _renderSeq) return;
+        smallAt = new Map(rowsOf.map(r => [keyOf(r), r.output]));
+      }
       const labelAt = new Map(xKeys.map((k, i) => [k, intraday ? `${xLabels[i]} AEST` : xLabels[i]]));
-      const outputs = seriesNames.filter(n => !n.endsWith(CHARGING)), charges = seriesNames.filter(n => n.endsWith(CHARGING));
-      const outputTotal = Object.fromEntries(outputs.map(n => [n, seriesTotals[n]]));
-      const rangeTotal = outputs.reduce((s, n) => s + outputTotal[n], 0);
-      const layout = { order: outputs, charging: charges.length > 0,
-        other: new Set(outputs.filter(n => outputTotal[n] < MIX_MIN_SHARE * rangeTotal)) };
       _scrub.gen = drillFuel || crossFilter.duids.length ? null : { unit, layout, at: k => {
         if (!labelAt.has(k)) return null;
-        const mix = outputs.map(n => ({ fuel: n, mw: valueAt(k, n) }));
-        return { label: labelAt.get(k), mix, total: mix.reduce((s, r) => s + r.mw, 0),
-          charging: -charges.reduce((s, n) => s + valueAt(k, n), 0) };
+        const mix = outputs.map(n => ({ fuel: n, mw: valueAt(k, n), share: shareAt.get(`${k}|${n}`) ?? null }));
+        return { label: labelAt.get(k), mix, total: stackAt.get(k)?.output ?? 0, charging: stackAt.get(k)?.charging ?? 0,
+          other: smallAt.get(k) ?? 0 };
       } };
       scrubFrom(chart, xKeys);
       // The hero takes the chart's fuels and order (paintHero).
@@ -1426,10 +1309,10 @@
       chart.off('click');
       chart.on('click', async (params) => {
         if (!params.seriesName || params.seriesName === DEMAND) return;
-        if (isOther(params.seriesName)) { drillShown += DRILL_STEP; renderAll(); return; }
+        if (isOther(params.seriesName)) { drillShown = moreOf(drillShown, DRILL_STEP); renderAll(); return; }
         const name = params.seriesName.endsWith(CHARGING) ? params.seriesName.slice(0, -CHARGING.length) : params.seriesName;
         if (drillFuel) {
-          // A station toggles all its units as a group; a unit toggles itself.
+          // A plant toggles all its units as a group; a unit toggles itself.
           const duids = byStation
             ? (await runQuery(queries.stationUnits(name))).map(r => r.DUID)
             : [];
@@ -1445,32 +1328,26 @@
         renderAll();
       });
 
-      // KPIs: the model's average MW of each series (output only: charging is not in it).
-      // The total is their sum, the top series the largest. The sparkline is the stack's
-      // height, the chart's own rows added up.
-      const average = averages.filter(r => r.avg > 0).map(r => ({ series: named(r.series), avg: r.avg }));
-      setKpiNumber('kpiGen', average.reduce((s, r) => s + r.avg, 0), v => Math.round(v).toLocaleString(), 'Average MW');
-      const totalAt = new Map();
-      for (const d of data) {
-        const k = intraday ? `${d.date}|${padTime(d.time)}` : d.date;
-        totalAt.set(k, (totalAt.get(k) || 0) + Math.max(d.total_mw, 0));
-      }
-      setSpark('kpiGenSpark', xKeys.map(k => totalAt.get(k) ?? 0));
-
-      const top = average.reduce((best, r) => !best || r.avg > best.avg ? r : best, null);
-      if (top) setKpi('kpiTopFuel', top.series, `${Math.round(top.avg).toLocaleString()} MW avg`);
+      // KPIs: the model's average MW of what the chart shows ("Average generation MW"), and
+      // its largest series; the sparkline is the stack's height per interval.
+      const avg = overall[0]?.avg;
+      if (avg == null) setKpi('kpiGen', '--'); else setKpiNumber('kpiGen', avg, v => Math.round(v).toLocaleString(), 'Average MW');
+      setSpark('kpiGenSpark', xKeys.map(k => stackAt.get(k)?.output ?? 0));
+      const top = averages.find(r => r.avg > 0);
+      if (top) setKpi('kpiTopFuel', named(top.series), `${Math.round(top.avg).toLocaleString()} MW avg`);
     }
 
     // --- Right now: the newest interval, whatever the date range ---
     // The page's lead: the renewable share of the output, the output by fuel as one bar, and
     // each region's price, demand and net flow. It follows the region filter only (the fuel,
-    // unit and date filters are about the charts below). The share is worked out like the
-    // Renewables KPI's (the model's measure); the bar is the stack of the generation chart at
-    // its last interval, so batteries discharging are in it, and what is charging is said
-    // beside it.
-    const MIX_MIN_SHARE = 0.01;   // fuels below this share of the output are drawn as one "Other"
+    // unit and date filters are about the charts below). The share is the model's measure,
+    // like the Renewables KPI's; the bar is the stack of the generation chart at its last
+    // interval, so batteries discharging are in it, and what is charging is said beside it.
+    // Every figure is the model's: each fuel's output and share, their sum (the `all` row),
+    // and the small fuels' output together ("Other", `nowOf`).
+    const MIX_MIN_SHARE = 1;   // fuels under this % of the output are drawn as one "Other"
     async function renderNow(seq) {
-      const region = activeRegion();
+      const region = activeRegion(), layoutReady = _layoutReady;
       const now = await newestInterval();
       const [units, share, prices] = await Promise.all([
         now?.date ? runQuery(queries.nowByFuel(now, region)) : [],
@@ -1478,12 +1355,20 @@
         newestRegions(),
       ]);
       if (seq !== _renderSeq) return;
-      const mix = units.filter(r => r.mw != null).map(r => ({ ...r, fuel: fuelName(r.fuel) }));
-      const sum = column => mix.reduce((s, r) => s + (r[column] ?? 0), 0);
+      const all = units.find(r => r.all) ?? {};
+      const mix = units.filter(r => !r.all && r.mw != null).map(r => ({ fuel: fuelName(r.fuel), mw: r.mw, share: r.share }));
+      // The small fuels: those of the generation chart's "Other" while it is by fuel, else
+      // the ones under MIX_MIN_SHARE % of this interval's output.
+      await layoutReady;
+      if (seq !== _renderSeq) return;
+      const layout = _scrub.gen?.layout;
+      const small = mix.filter(r => r.mw > 0 && (layout ? layout.other.has(r.fuel) || !layout.order.includes(r.fuel) : r.share < MIX_MIN_SHARE)).map(r => r.fuel);
+      const other = small.length ? (await runQuery(queries.nowOf(now, region, small)))[0]?.mw ?? 0 : 0;
+      if (seq !== _renderSeq) return;
       _heroNow = {
         when: 'Right now',
         asOf: now?.date ? `as of ${formatDate(now.date).replace(/ \d{4}$/, '')}, ${formatTime(now.time)} AEST` : '',
-        unit: 'MW', mix: mix.map(r => ({ fuel: r.fuel, mw: r.mw })), total: sum('mw'), charging: -sum('charging'),
+        unit: 'MW', mix, total: all.mw ?? 0, charging: all.charging ?? 0, other, small,
         share: share[0]?.share ?? null,
         regions: prices,
       };
@@ -1491,9 +1376,10 @@
     }
 
     // The hero draws one interval: the newest (renderNow), or the one under the pointer on the
-    // generation or the price chart (scrubHero). `state` holds what it shows: the mix as
-    // { fuel, mw } and its total, what is charging, the renewable share, and the regions as { region,
-    // price, demand, net } (an interval under the pointer has no demand or net).
+    // generation or the price chart (scrubHero). `state` holds what it shows, every figure
+    // the model's: the mix as { fuel, mw, share } and its total, what is charging (negative),
+    // the small fuels' output together (`other`), the renewable share, and the regions as
+    // { region, price, demand, net } (an interval under the pointer has no demand or net).
     let _heroNow = null;
     function paintHero(state, animate) {
       const region = activeRegion(), { unit } = state;
@@ -1529,21 +1415,21 @@
       // the same items at every interval, so hovering changes the figures and the segments'
       // sizes and nothing moves. Otherwise, this interval's fuels by size.
       const layout = _scrub.gen?.layout;
-      const fuels = state.mix.filter(r => r.mw > 0).sort((a, b) => b.mw - a.mw);
-      const own = layout ? fuels.filter(r => layout.order.includes(r.fuel) && !layout.other.has(r.fuel)) : fuels.filter(r => r.mw >= MIX_MIN_SHARE * total);
-      const rest = fuels.filter(r => !own.includes(r));
+      const fuels = orderBy(state.mix.filter(r => r.mw > 0), r => r.mw, 'desc');
+      const small = new Set(state.small ?? (layout ? [...layout.other] : []));
+      const own = fuels.filter(r => !small.has(r.fuel));
+      const rest = fuels.filter(r => small.has(r.fuel));
       const label = fuel => fuel === 'Grid' ? 'Battery' : fuel;
-      const share = v => total ? `${(100 * v / total).toFixed(v >= 0.1 * total ? 0 : 1)}%` : '';
+      const share = v => v == null ? '' : `${v.toFixed(v >= 10 ? 0 : 1)}%`;
       const picked = activeFuel();
-      const mwOf = new Map(own.map(r => [r.fuel, r.mw]));
+      const byFuel = new Map(own.map(r => [r.fuel, r]));
       const items = (layout ? layout.order.filter(f => !layout.other.has(f)) : own.map(r => r.fuel))
-        .map(fuel => ({ fuel, name: label(fuel), mw: mwOf.get(fuel) ?? 0, color: fuelColor(fuel) }));
-      const restMw = rest.reduce((s, r) => s + r.mw, 0);
-      if (rest.length || layout?.other.size) items.push({ name: 'Other', mw: restMw, color: fuelColor('Other'),
+        .map(fuel => ({ fuel, name: label(fuel), mw: byFuel.get(fuel)?.mw ?? 0, share: byFuel.get(fuel)?.share ?? null, color: fuelColor(fuel) }));
+      if (rest.length || layout?.other.size) items.push({ name: 'Other', mw: state.other ?? 0, color: fuelColor('Other'),
         tip: rest.length ? rest.map(r => `${escapeHtml(label(r.fuel))} <i>${mwText(r.mw)}</i>`).join('<br>') : `Other ${mwText(0)}` });
-      const tipOf = it => it.tip ?? `<b>${escapeHtml(it.name)}</b> ${mwText(it.mw)} <i>${share(it.mw)}</i>`;
+      const tipOf = it => it.tip ?? `<b>${escapeHtml(it.name)}</b> ${mwText(it.mw)} <i>${share(it.share)}</i>`;
       const attrs = it => `${it.fuel ? `data-fuel="${escapeHtml(it.fuel)}"` : 'tabindex="-1"'} data-tip="${escapeHtml(tipOf(it))}"`;
-      const largest = items.reduce((a, b) => b.mw > (a?.mw ?? 0) ? b : a, null);
+      const largest = largestBy(items, it => it.mw);
       document.getElementById('hero').style.setProperty('--glow', largest?.color ?? 'transparent');
       document.getElementById('mixTitle').textContent = `Generation by fuel ${where} (${unit})`;
       // The segments are kept, and their size changed, while the fuels are the same ones in the
@@ -1560,11 +1446,12 @@
         bar.innerHTML = items.map(it =>
           `<button type="button" class="mix-seg${it.fuel ? '' : ' static'}" style="flex-grow:${Math.round(it.mw)};background:${it.color}" ${attrs(it)} aria-label="${escapeHtml(it.name)} ${mwText(it.mw)}"></button>`).join('');
       }
-      const charging = state.charging;
-      document.getElementById('mixLegend').innerHTML = items.map(it =>
+      const charging = Math.abs(state.charging);
+      const chips = items.map(it =>
         `<button type="button" class="mix-chip${it.fuel ? '' : ' static'}${it.fuel && it.fuel === picked ? ' active' : ''}" ${attrs(it)}>
-          <span class="sw" style="background:${it.color}"></span><span class="nm">${escapeHtml(it.name)}</span> <b>${Math.round(it.mw).toLocaleString()}</b> <i>${share(it.mw)}</i></button>`).join('')
-        + (charging >= 1 || layout?.charging ? `<span class="mix-chip static" data-tip="Batteries and pumped hydro taking power from the grid"><span class="sw ring" style="border-color:${fuelColor('Grid')}"></span><span class="nm">Charging</span> <b>${Math.round(charging).toLocaleString()}</b></span>` : '');
+          <span class="sw" style="background:${it.color}"></span><span class="nm">${escapeHtml(it.name)}</span> <b>${Math.round(it.mw).toLocaleString()}</b> <i>${share(it.share)}</i></button>`).join('');
+      const chargingChip = charging >= 1 || layout?.charging ? `<span class="mix-chip static" data-tip="Batteries and pumped hydro taking power from the grid"><span class="sw ring" style="border-color:${fuelColor('Grid')}"></span><span class="nm">Charging</span> <b>${Math.round(charging).toLocaleString()}</b></span>` : '';
+      document.getElementById('mixLegend').innerHTML = `${chips}${chargingChip}`;
 
       fitLegend();
 
@@ -1584,9 +1471,9 @@
     function fitLegend() {
       const legend = document.getElementById('mixLegend'), n = legend.children.length;
       if (!n || getComputedStyle(legend).display !== 'grid') return;
-      const min = parseFloat(getComputedStyle(legend).getPropertyValue('--chip-min')) * parseFloat(getComputedStyle(document.documentElement).fontSize);
-      const two = Math.ceil(n / 2);
-      legend.style.setProperty('--cols', legend.clientWidth / two >= 0.9 * min ? two : Math.ceil(n / 3));
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+      const min = parseFloat(getComputedStyle(legend).getPropertyValue('--chip-min'));
+      legend.style.setProperty('--cols', legendColumns(n, legend.clientWidth, min, rem));
     }
     new ResizeObserver(fitLegend).observe(document.getElementById('mixLegend'));
 
@@ -1613,7 +1500,7 @@
         }
         hero.classList.add('scrubbing');
         paintHero({
-          when: 'At', asOf: at.label, unit: _scrub.gen.unit, mix: at.mix, total: at.total, charging: at.charging,
+          when: 'At', asOf: at.label, unit: _scrub.gen.unit, mix: at.mix, total: at.total, charging: at.charging, other: at.other,
           share: _scrub.share.get(key) ?? null,
           regions: _heroNow.regions.map(p => ({ region: p.region, price: _scrub.price?.get(`${key}|${p.region}`) ?? null })),
         }, false);
@@ -1645,9 +1532,9 @@
       _tip.classList.toggle('show', !!tip);
       if (!tip) return;
       _tip.innerHTML = tip;
-      const w = _tip.offsetWidth;
-      _tip.style.left = `${Math.max(8, Math.min(e.clientX - w / 2, innerWidth - w - 8))}px`;
-      _tip.style.top = `${e.clientY + 18}px`;
+      const place = tipPlace(e.clientX, e.clientY, _tip.offsetWidth, innerWidth);
+      _tip.style.left = `${place.left}px`;
+      _tip.style.top = `${place.top}px`;
     });
     document.getElementById('hero').addEventListener('pointerleave', () => _tip.classList.remove('show'));
 
@@ -1688,29 +1575,24 @@
         progressive: largeModeP ? 500 : 0,
         data: xKeys.map(k => {
           const v = lookup.get(`${k}|${region}`);
-          return v != null ? Math.round(v * 100) / 100 : null;
+          return round2(v ?? null);
         }),
       }));
 
       // One $15k interval flattens a week of $50-150 prices into a line on zero. "Clip spikes"
       // caps the axis at the 1st/99th percentile; the tooltip still shows the real value.
       const clip = document.getElementById('clipSpikes').checked;
-      const vals = data.map(d => d.avg_price).sort((a, b) => a - b);
-      const pct = q => vals[Math.min(vals.length - 1, Math.floor(q * vals.length))];
-      const nice = v => Math.sign(v) * Math.ceil(Math.abs(v) / 50) * 50;
-      const yMax = clip ? nice(pct(0.99)) : null;
-      const yMin = clip ? Math.min(0, nice(pct(0.01))) : null;
+      const { lo: yMin = null, hi: yMax = null } = clip ? axisClip(data.map(d => d.avg_price), 0.01, 0.99, 50) : {};
 
       // On the chart itself: its highest price (at the top edge, with an arrow, when the axis
       // is clipped below it), and the band below $0 when a price went there.
-      let top = null;
-      series.forEach((sr, si) => sr.data.forEach((v, i) => { if (v != null && (!top || v > top.v)) top = { si, i, v }; }));
+      const top = largestBy(series.flatMap((sr, si) => sr.data.map((v, i) => ({ si, i, v }))).filter(p => p.v != null), p => p.v);
       if (top) {
         const off = yMax != null && top.v > yMax;
         series[top.si].markPoint = pinAt(top.i, off ? yMax : top.v, xKeys.length,
           `${off ? '↑ ' : ''}${fmtPrice(top.v)} ${short(regions[top.si])} · ${xLabels[top.i]}`);
       }
-      const lowest = vals[0];
+      const lowest = smallestBy(data, d => d.avg_price)?.avg_price;
       if (lowest < 0 && series.length) series[0].markArea = { silent: true, animation: false,
         itemStyle: { color: PRICE_BANDS[0].color, opacity: isLight() ? 0.08 : 0.12 },
         label: { show: true, position: 'insideBottomLeft', formatter: 'below $0', color: cssVar('--muted'), fontSize: 10 },
@@ -1766,8 +1648,7 @@
       const range = rows.find(r => r.all);
       setSpark('kpiCO2Spark', rows.filter(r => !r.all).map(r => r.i));
       if (range?.i == null) return setKpi('kpiCO2', '--', 't CO2-e per MWh');
-      const tonnes = range.t >= 1e6 ? `${(range.t / 1e6).toFixed(1)} Mt` : `${Math.round(range.t / 1e3).toLocaleString()} kt`;
-      setKpiNumber('kpiCO2', range.i, v => v.toFixed(3), `t CO2-e per MWh, ${tonnes} in all`);
+      setKpiNumber('kpiCO2', range.i, v => v.toFixed(3), `t CO2-e per MWh, ${fmtTonnes(range.t)} in all`);
     }
 
     async function updateRenewablesKpi(seq) {
@@ -1776,14 +1657,15 @@
       _scrub.share = new Map(rows.map(r => [r.time != null ? `${r.date}|${padTime(r.time)}` : r.date, r.share]));
       setSpark('kpiRESpark', rows.map(r => r.share));
       if (overall == null) return setKpi('kpiRE', '--', 'share of generation');
-      const peak = rows.reduce((best, r) => r.share != null && (!best || r.share > best.share) ? r : best, null);
+      const peak = largestBy(rows.filter(r => r.share != null), r => r.share);
       const when = peak.time != null ? `${formatDate(peak.date).replace(/ \d{4}$/, '')} ${formatTime(peak.time)}` : formatDate(peak.date);
       setKpiNumber('kpiRE', overall, v => `${v.toFixed(1)}%`, `peak ${peak.share.toFixed(0)}% (${when})`);
     }
 
-    // Change against the days just before the range, as many as the range has. Both sides come
-    // from the daily tables in one query each, so this never opens the 5-minute history. The
-    // newest day in the data is still filling and is left out of both sides.
+    // Change against the days just before the range, as many as the range has: the model's
+    // "... change" measures, over the days the daily tables hold (the newest day is still
+    // filling and is not one of them), so this never opens the 5-minute history. Blank when
+    // either side lacks an hour of its days, or there are no days before.
     async function updateKpiDeltas(seq) {
       const show = (id, text = '', cls = '') => {
         const el = document.getElementById(id);
@@ -1791,41 +1673,29 @@
         el.className = `kpi-sub kpi-delta ${cls}`;
       };
       const ids = ['kpiGenDelta', 'kpiPriceDelta', 'kpiREDelta', 'kpiCO2Delta'];
-      const { from, to } = getDateRange();
-      const maxDate = document.getElementById('dateTo').max, minDate = document.getElementById('dateFrom').min;
-      const last = to >= maxDate ? shiftDate(maxDate, -1) : to;
-      const days = Math.round((new Date(last) - new Date(from)) / 86400000) + 1;
-      const prevFrom = shiftDate(from, -days);
       // The daily tables come with agg; init draws this again once it is attached.
-      if (!aggLoaded || !(days >= 1) || prevFrom < minDate) return ids.forEach(id => show(id));
-
-      const span = { from, prevFrom, last };
-      const sides = qs => Promise.all(qs.map(q => runQuery(q).then(([r]) => r)));
+      if (!aggLoaded) return ids.forEach(id => show(id));
+      const { from, to } = getDateRange();
+      const [[, , first, last]] = queries.wholeDays('units', from, to);
+      const days = dayCount(first, last);
+      if (!(days >= 1)) return ids.forEach(id => show(id));
+      const one = q => runQuery(q).then(([r]) => r?.v ?? null);
       const [gen, price, re, co2] = await Promise.all([
-        sides(queries.deltaGeneration(span)), sides(queries.deltaPrice(span)), sides(queries.deltaRenewables(span)),
-        sides(queries.deltaEmissions(span)),
-      ]);
+        one(queries.changeGeneration()), one(queries.changePrice()), one(queries.changeRenewables()), one(queries.changeEmissions())]);
       if (seq !== _renderSeq) return;
       const vs = days === 1 ? 'vs the day before' : `vs previous ${days} days`;
-      // A side that doesn't hold every day of its period (a gap in the data, a daily table
-      // that is behind) gives no comparison.
-      const pair = rs => rs.map(r => r?.n === 24 * days ? r.v : undefined);
       // A change that rounds to zero reads "unchanged", not as an arrow on 0.0. `colour` is
       // 'rise' when a rise is good (renewables) and 'fall' when a fall is (emissions).
       const delta = (id, d, fmt, colour = '') => {
+        if (d == null) return show(id);
         const size = Math.abs(d).toFixed(1);
         if (+size === 0) show(id, `unchanged ${vs}`);
         else show(id, `${d > 0 ? '▲' : '▼'} ${fmt(size)} ${vs}`, colour && ((d > 0) === (colour === 'rise') ? 'up' : 'down'));
       };
-      const [g1, g0] = pair(gen), [p1, p0] = pair(price), [r1, r0] = pair(re), [e1, e0] = pair(co2);
-      if (g1 == null || !g0) show(ids[0]);
-      else delta(ids[0], 100 * (g1 - g0) / g0, s => `${s}%`);
-      if (p1 == null || p0 == null) show(ids[1]);
-      else delta(ids[1], p1 - p0, s => `$${s}`);
-      if (r1 == null || r0 == null) show(ids[2]);
-      else delta(ids[2], r1 - r0, s => `${s} pts`, 'rise');
-      if (e1 == null || !e0) show(ids[3]);
-      else delta(ids[3], 100 * (e1 - e0) / e0, s => `${s}%`, 'fall');
+      delta(ids[0], gen, s => `${s}%`);
+      delta(ids[1], price, s => `$${s}`);
+      delta(ids[2], re, s => `${s} pts`, 'rise');
+      delta(ids[3], co2, s => `${s}%`, 'fall');
     }
     // Insights is three pages of four charts, and only the page shown is drawn.
     const INSIGHTS_PAGES = {
@@ -1841,7 +1711,7 @@
     for (const btn of subtabs) {
       btn.addEventListener('keydown', e => {
         if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
-        const next = subtabs[(subtabs.indexOf(btn) + (e.key === 'ArrowRight' ? 1 : subtabs.length - 1)) % subtabs.length];
+        const next = cycle(subtabs, btn, e.key === 'ArrowRight' ? 1 : -1);
         next.focus(); next.click();
       });
       btn.addEventListener('click', () => {
@@ -1870,19 +1740,21 @@
     const linkOrder = id => { const i = Object.keys(LINK_CURVES).indexOf(id); return i < 0 ? Infinity : i; };
     let INTERCONNECTORS = null;
     async function interconnectors() {
-      INTERCONNECTORS ??= Object.fromEntries((await runQuery(queries.interconnectors))
-        .sort((a, b) => linkOrder(a.id) - linkOrder(b.id) || a.id.localeCompare(b.id))
+      INTERCONNECTORS ??= Object.fromEntries(orderBy(orderBy(await runQuery(queries.interconnectors), l => l.id), l => linkOrder(l.id))
         .map(l => [l.id, { from: l.from_region, to: l.to_region, name: l.id, description: l.description,
           curve: LINK_CURVES[l.id] ?? 0.15 }]));
       return INTERCONNECTORS;
     }
     // Rough load centres, where the arrows start and end.
     const REGION_ANCHORS = { QLD1: [151.6, -26.6], NSW1: [149.6, -32.9], VIC1: [144.6, -37.4], SA1: [138.7, -33.6], TAS1: [146.8, -42.0] };
-    // GeoJSON states coloured by their region's price (ACT is in NSW1; WA and NT aren't in the NEM).
-    const STATE_REGION = { 'Queensland': 'QLD1', 'New South Wales': 'NSW1', 'Australian Capital Territory': 'NSW1',
-      'Victoria': 'VIC1', 'South Australia': 'SA1', 'Tasmania': 'TAS1' };
+    // GeoJSON states coloured by their region's price: a region's state is dim_region's, and
+    // the ACT is drawn inside New South Wales, so it takes NSW1's (WA and NT aren't in the NEM).
+    const MAP_ALIASES = { 'Australian Capital Territory': 'New South Wales' };
+    const stateRegions = () => MARKET_REGIONS.filter(code => REGION_NAMES[code]).map(code => [REGION_NAMES[code], code])
+      .flatMap(([state, code]) => [[state, code], ...Object.entries(MAP_ALIASES).filter(([, of]) => of === state).map(([alias]) => [alias, code])]);
+    const stateRegion = name => stateRegions().find(([state]) => state === name)?.[1];
     const short = code => code.replace('1', '');
-    const utilColor = u => cssVar(u >= 0.9 ? '--bad' : u >= 0.7 ? '--warn' : '--good');
+    const utilColor = u => cssVar(u >= 90 ? '--bad' : u >= 70 ? '--warn' : '--good');   // % of the limit
     // Price bands shared by the map shading and the region board.
     const PRICE_BANDS = [
       { lt: 0, color: '#2c7bb6', label: '< $0' },
@@ -1893,73 +1765,57 @@
       { gte: 1000, lt: 5000, color: '#a50026', label: '$1k–5k' },
       { gte: 5000, color: '#ff4fd8', label: '≥ $5k' },
     ];
-    // What makes a frame stand out: a region at a spike price pulses, a link carrying nothing
-    // is drawn dashed, and a jump of this size between two intervals is written under the clock.
+    // What makes a frame stand out: a region at a spike price pulses, a link that is out (the
+    // model's "No flow") is drawn dashed.
     const SPIKE_PRICE = 5000, SPIKE_COLOR = '#ff4fd8', OUT_COLOR = '#f85149';
-    const JUMP_MW = 300, JUMP_PRICE = 2000;
-    const fmtDuration = frames => {
-      const m = frames * 5;
-      return m < 60 ? `${m} min` : m < 1440 ? `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`
-        : `${Math.floor(m / 1440)} d ${Math.floor(m % 1440 / 60)} h`;
-    };
     const fmtPrice = (v, dp = 0) => v == null ? '--'
       : `${v < 0 ? '-' : ''}$${Math.abs(v).toLocaleString('en-AU', { minimumFractionDigits: dp, maximumFractionDigits: dp })}`;
     const priceColor = v => v == null ? '#888' : PRICE_BANDS.find(b => (b.gte == null || v >= b.gte) && (b.lt == null || v < b.lt)).color;
 
-    const icState = { frames: [], flows: new Map(), prices: new Map(), frame: 0, timer: null, ids: [],
-      gens: new Map(), gensLoading: new Set(), idle: new Map(), events: [] };
+    const icState = { frames: [], flows: new Map(), prices: new Map(), net: new Map(), frame: 0, timer: null, ids: [],
+      gens: new Map(), gensLoading: new Set() };
 
-    // Generators on the flow map. Every unit's fuel, region and position once; their output one
-    // day at a time, one row per interval ("DUID:mw,DUID:mw,..."). Rooftop solar's units have
-    // no position, so they are not drawn, but they are in the readout of what is generating.
+    // Generators on the flow map. Every unit's fuel and position once; their output one day
+    // at a time, under the region filter, one row per unit and interval (the rows as stored),
+    // and what the generators made and their renewable share per interval (the model's), for
+    // the readout. Rooftop solar's units have no position, so they are not drawn, but they
+    // are in the readout.
     const GEN_FULL_MW = 750;   // output drawn at the largest bubble size
     const GEN_LEGEND = ['Black coal', 'Brown coal', 'Natural gas', 'Water', 'Wind', 'Solar', 'Grid'];
     let _genUnits = null;
     async function genUnits() {
-      // A generator is anything but storage (fuel "Grid"); a unit with no fuel is one.
-      _genUnits ??= new Map((await runQuery(queries.flowUnits)).map(u => [u.DUID, { ...u, generator: u.fuel !== 'Grid', fuel: fuelName(u.fuel) }]));
+      _genUnits ??= new Map((await runQuery(queries.flowUnits)).map(u => [u.DUID, { ...u, fuel: fuelName(u.fuel) }]));
       return _genUnits;
     }
+    const gensKey = date => `${date}|${activeRegion() ?? ''}`;
     async function ensureGens(date) {
-      if (icState.gens.has(date) || icState.gensLoading.has(date)) return;
-      icState.gensLoading.add(date);
+      const key = gensKey(date);
+      if (icState.gens.has(key) || icState.gensLoading.has(key)) return;
+      icState.gensLoading.add(key);
       try {
-        const [rows] = await Promise.all([runQuery(queries.flowGens(date)), genUnits()]);
-        // Per interval, its units and their output to the MW (half away from zero).
+        const [rows, readout] = await Promise.all([runQuery(queries.flowGens(date)), runQuery(queries.flowNow(date)), genUnits()]);
+        // Per interval, its units and their output, and the readout.
         const byTime = new Map();
         for (const r of rows) {
           const t = padTime(r.time);
           if (!byTime.has(t)) byTime.set(t, []);
-          byTime.get(t).push({ duid: r.DUID, mw: Math.sign(r.mw) * Math.round(Math.abs(r.mw)) });
+          byTime.get(t).push({ duid: r.DUID, mw: r.mw, unit: _genUnits.get(r.DUID) });
         }
-        icState.gens.set(date, byTime);
+        icState.gens.set(key, { byTime, now: new Map(readout.map(r => [padTime(r.time), r])) });
       } catch (e) {
         console.warn('[Flows] generators unavailable:', e);
-        icState.gens.set(date, new Map());
+        icState.gens.set(key, { byTime: new Map(), now: new Map() });
       } finally {
-        icState.gensLoading.delete(date);
+        icState.gensLoading.delete(key);
       }
       // Draw them if the map is still on that day.
       if (document.getElementById('view-flows').style.display !== 'none'
         && icState.frames[icState.frame]?.key.startsWith(date + '|')) icShow(icState.frame);
     }
-    // The units of one interval as { duid, mw, unit }, within the region filter.
-    function frameGens(units) {
-      if (!units) return [];
-      const region = activeRegion();
-      const out = [];
-      for (const { duid, mw } of units) {
-        const unit = _genUnits.get(duid);
-        if (region && unit?.Region !== region) continue;
-        out.push({ duid, mw, unit });
-      }
-      return out;
-    }
 
     async function renderFlows(seq) {
       icStop();
       const { from, to } = getDateRange();
-      const region = activeRegion();
       const board = document.getElementById('icBoard');
       const disposeMinis = () => {
         for (const id of Object.keys(charts).filter(k => k.startsWith('chart-mini-'))) {
@@ -1987,8 +1843,7 @@
       ]);
       const mapReady = await registerAustraliaMap();
       if (seq !== _renderSeq) return;
-      const shown = flows.filter(r => INTERCONNECTORS[r.id] &&
-        (!region || INTERCONNECTORS[r.id].from === region || INTERCONNECTORS[r.id].to === region));
+      const shown = flows.filter(r => INTERCONNECTORS[r.id]);
       if (!shown.length) return empty('No flows for these dates');
       const { xKeys, xLabels } = buildTimeAxis(shown, true);
       icState.frames = xKeys.map((k, i) => ({ key: k, label: xLabels[i] }));
@@ -1998,50 +1853,14 @@
         if (!icState.flows.has(k)) icState.flows.set(k, []);
         icState.flows.get(k).push(r);
       }
-      // Prices per frame, carried forward so a frame without a fresh price keeps the last one.
-      const raw = new Map(prices.map(p => [`${p.date}|${padTime(p.time)}|${p.region}`, p.price]));
-      icState.prices = new Map();
-      const last = {};
-      const firstPrice = {};
-      for (const p of [...prices].sort((a, b) => a.date.localeCompare(b.date) || a.time - b.time)) firstPrice[p.region] ??= p.price;
-      for (const k of xKeys) {
-        for (const code of Object.keys(REGION_ANCHORS)) {
-          const v = raw.get(`${k}|${code}`);
-          if (v != null) last[code] = v;
-          const use = last[code] ?? firstPrice[code];
-          if (use != null) icState.prices.set(`${k}|${code}`, use);
-        }
-      }
-      // At every frame: how many frames each link has now carried nothing, and what jumped
-      // since the frame before (a link by JUMP_MW, a price by JUMP_PRICE).
-      icState.idle = new Map();
-      icState.events = [];
-      const idleRun = {}, prevMw = {};
-      xKeys.forEach((k, i) => {
-        const jumps = [];
-        for (const r of icState.flows.get(k) ?? []) {
-          idleRun[r.id] = Math.abs(r.mw) < 1 ? (idleRun[r.id] || 0) + 1 : 0;
-          icState.idle.set(`${k}|${r.id}`, idleRun[r.id]);
-          const was = prevMw[r.id], name = INTERCONNECTORS[r.id].name;
-          const mwText = v => Math.round(Math.abs(v)).toLocaleString();
-          // Losing a link (flow to nothing, limits closed) is news whatever it carried before.
-          if (was != null && Math.abs(was) >= 1 && idleRun[r.id] === 1 && r.export_limit - r.import_limit < 5)
-            jumps.push(`${name} ${mwText(was)} MW → no flow`);
-          else if (was != null && Math.abs(r.mw - was) >= JUMP_MW)
-            jumps.push(`${name} ${was * r.mw < 0 ? 'reversed, ' : ''}${mwText(was)} → ${mwText(r.mw)} MW`);
-          prevMw[r.id] = r.mw;
-        }
-        if (i) for (const code of Object.keys(REGION_ANCHORS)) {
-          if (region && code !== region) continue;
-          const was = icState.prices.get(`${xKeys[i - 1]}|${code}`), now = icState.prices.get(`${k}|${code}`);
-          if (was != null && now != null && Math.abs(now - was) >= JUMP_PRICE) jumps.push(`${short(code)} ${fmtPrice(was)} → ${fmtPrice(now)}`);
-        }
-        if (jumps.length) icState.events.push({ i, text: jumps.join(' · ') });
-      });
+      // Each region's price and net interchange per frame, as the model has them: a frame
+      // without them has none.
+      icState.prices = new Map(prices.map(p => [`${p.date}|${padTime(p.time)}|${p.region}`, p.price]));
+      icState.net = new Map(prices.map(p => [`${p.date}|${padTime(p.time)}|${p.region}`, p.net]));
       const swatch =(color, label) => `<span><span class="rg-swatch" style="background:${color}"></span>${label}</span>`;
       document.getElementById('priceLegend').innerHTML =
         `<div><b>Arrows</b> power flowing now (MW), thicker = more; colour = share of the link's limit ` +
-          [[0, '&lt; 70%'], [0.7, '70&ndash;90%'], [0.9, '&ge; 90%']].map(([u, l]) => swatch(utilColor(u), l)).join(' ') +
+          [[0, '&lt; 70%'], [70, '70&ndash;90%'], [90, '&ge; 90%']].map(([u, l]) => swatch(utilColor(u), l)).join(' ') +
           ` ${swatch(OUT_COLOR, 'dashed &#10005; = no flow')}</div>` +
         `<div><b>Dots</b> ${swatch(cssVar('--export'), 'net exporter')} ${swatch(cssVar('--import'), 'net importer')}</div>` +
         `<div><b>Bubbles</b> generators, sized by output; ring = charging ` +
@@ -2059,26 +1878,25 @@
         const ser = xKeys.map(k => lookup.get(`${k}|${id}`));
         const chart = getChart(`chart-mini-${id}`);
         chart.group = 'ic-minis';
+        const [base, band] = bandSeries(ser.map(r => r?.import_limit ?? null), ser.map(r => r?.export_limit ?? null));
         chart.setOption({
           tooltip: { trigger: 'axis', confine: true, formatter: ps => {
             const r = ser[ps[0].dataIndex];
             if (!r) return '';
             const ic = INTERCONNECTORS[id], [a, b] = r.mw >= 0 ? [ic.from, ic.to] : [ic.to, ic.from];
-            return `<div style="color:${cssVar('--muted')}">${ps[0].axisValueLabel}</div><b>${Math.round(Math.abs(r.mw))} MW</b> ${short(a)}&rarr;${short(b)}<br>limits ${Math.round(r.import_limit)} / ${Math.round(r.export_limit)} MW`;
+            return `<div style="color:${cssVar('--muted')}">${ps[0].axisValueLabel}</div><b>${fmtMwAbs(r.mw)} MW</b> ${short(a)}&rarr;${short(b)}<br>limits ${Math.round(r.import_limit)} / ${Math.round(r.export_limit)} MW`;
           } },
           // A sparkline: the readout beside it carries the numbers, the tooltip the rest.
           grid: { left: 2, right: 2, top: 4, bottom: 4 },
           xAxis: { type: 'category', data: xLabels, boundaryGap: false, show: false },
           yAxis: { type: 'value', show: false },
           series: [
-            // The band: an invisible base at the import limit, then the gap up to the export limit.
-            // stackStrategy 'all': the default stacks negatives and positives apart, which
-            // splits a band that crosses zero.
+            // The band from the import limit to the export limit: an invisible base, then the
+            // band on it. stackStrategy 'all': the default stacks negatives and positives
+            // apart, which splits a band that crosses zero.
+            { type: 'line', stack: 'band', stackStrategy: 'all', symbol: 'none', lineStyle: { opacity: 0 }, silent: true, data: base },
             { type: 'line', stack: 'band', stackStrategy: 'all', symbol: 'none', lineStyle: { opacity: 0 }, silent: true,
-              data: ser.map(r => r ? r.import_limit : null) },
-            { type: 'line', stack: 'band', stackStrategy: 'all', symbol: 'none', lineStyle: { opacity: 0 }, silent: true,
-              areaStyle: { color: cssVar('--muted'), opacity: 0.16 },
-              data: ser.map(r => r ? r.export_limit - r.import_limit : null) },
+              areaStyle: { color: cssVar('--muted'), opacity: 0.16 }, data: band },
             { type: 'line', symbol: 'none', sampling: 'average', lineStyle: { width: 1.6, color: cssVar('--text') },
               data: ser.map(r => r ? Math.round(r.mw) : null),
               markLine: { symbol: 'none', silent: true, label: { show: false },
@@ -2098,110 +1916,43 @@
       icShow(icState.frames.length - 1);   // the latest interval in the range
     }
 
-    // --- Night on the Flows map ---
-    // Where the sun is below the horizon at an interval (NEM time, UTC+10): from the sun's
-    // declination and the equation of time, astronomy, not data. One polygon per band, the
-    // sun 0, 6 and 12 degrees under the horizon, each drawn over the last, so dusk and dawn
-    // are lighter than the night. Along a parallel of this window the night is one end of
-    // it (the window is too narrow to hold both a sunset and a sunrise): the polygon is that
-    // end, cut where the sun sets, found by bisection.
-    const NIGHT_LON = [95, 175], NIGHT_LAT = [-60, 5];
-    function nightBands(date, hhmm) {
-      const rad = Math.PI / 180;
-      const [y, m, d] = date.split('-').map(Number);
-      const utc = Date.UTC(y, m - 1, d, +hhmm.slice(0, 2) - 10, +hhmm.slice(2));
-      const day = (utc - Date.UTC(y, 0, 1)) / 86400000;
-      const decl = -23.44 * rad * Math.cos(2 * Math.PI * (day + 10) / 365);
-      const b = 2 * Math.PI * (day - 81) / 364;
-      const eot = 9.87 * Math.sin(2 * b) - 7.53 * Math.cos(b) - 1.5 * Math.sin(b);   // minutes
-      const hours = ((utc / 3600000) % 24 + 24) % 24;
-      const sunLon = -15 * (hours - 12 + eot / 60);
-      const elevation = (lon, lat) => Math.asin(Math.sin(lat * rad) * Math.sin(decl)
-        + Math.cos(lat * rad) * Math.cos(decl) * Math.cos((lon - sunLon) * rad)) / rad;
-      const [w, e] = NIGHT_LON, lats = [];
-      for (let lat = NIGHT_LAT[0]; lat <= NIGHT_LAT[1]; lat += 0.5) lats.push(lat);
-      return [0, -6, -12].map(below => {
-        const dark = (lon, lat) => elevation(lon, lat) < below;
-        const rows = lats.map(lat => ({ lat, w: dark(w, lat), e: dark(e, lat) }));
-        const east = rows.filter(r => r.e && !r.w).length, west = rows.filter(r => r.w && !r.e).length;
-        if (!east && !west) return rows.some(r => r.w) ? [[w, lats[0]], [e, lats[0]], [e, lats.at(-1)], [w, lats.at(-1)]] : null;
-        const sunset = r => {
-          let lo = w, hi = e;
-          for (let k = 0; k < 18; k++) { const mid = (lo + hi) / 2; if (dark(mid, r.lat) === r.w) lo = mid; else hi = mid; }
-          return (lo + hi) / 2;
-        };
-        // Night on the east end: from the sunset line to the east edge; on the west, the mirror.
-        const cut = east >= west
-          ? rows.map(r => [r.w && r.e ? w : !r.e ? e : sunset(r), r.lat])
-          : rows.map(r => [r.w && r.e ? e : !r.w ? w : sunset(r), r.lat]);
-        const edge = (east >= west ? [...rows].reverse().map(r => [e, r.lat]) : [...rows].reverse().map(r => [w, r.lat]));
-        return [...cut, ...edge];
-      }).filter(Boolean);
-    }
-
     function icShow(i) {
       if (!icState.frames.length) return;
-      icState.frame = Math.max(0, Math.min(i, icState.frames.length - 1));
+      icState.frame = clampIndex(i, icState.frames.length);
       const { key, label } = icState.frames[icState.frame];
       document.getElementById('icFrame').value = String(icState.frame);
       document.getElementById('flowsTime').firstChild.textContent = label + ' ';
       const rows = icState.flows.get(key) ?? [];
       const price = code => icState.prices.get(`${key}|${code}`);
+      const net = code => icState.net.get(`${key}|${code}`);
 
       // --- generators in this interval (loaded a day at a time, the next day ahead of play) ---
       const [day, hhmm] = key.split('|');
-      let gens = [], gensTime = hhmm;
+      let gens = [], now = null;
       if (document.getElementById('icGens').checked) {
-        if (icState.gens.has(day)) {
-          // The generators' feed can trail the flows by an interval or two: such a frame shows
-          // their latest interval within 15 minutes, and the readout says which one.
-          const dayGens = icState.gens.get(day);
-          const mins = t => 60 * +t.slice(0, 2) + +t.slice(2);
-          if (!dayGens.has(hhmm)) gensTime = [...dayGens.keys()].filter(t => t < hhmm && mins(hhmm) - mins(t) <= 15).sort().pop();
-          gens = frameGens(dayGens.get(gensTime));
+        const loaded = icState.gens.get(gensKey(day));
+        if (loaded) {
+          gens = loaded.byTime.get(hhmm) ?? [];
+          now = loaded.now.get(hhmm) ?? null;
         } else ensureGens(day);
-        ensureGens(icState.frames[Math.min(icState.frame + 288, icState.frames.length - 1)].key.split('|')[0]);
+        ensureGens(icState.frames[dayAhead(icState.frame, icState.frames.length)].key.split('|')[0]);
       }
-      // Same definition as the Renewables KPI: output only, batteries on neither side. No
-      // share when the deployed dim_duid doesn't say what is renewable.
-      let genMw = 0, reMw = 0;
-      for (const g of gens) {
-        if (g.mw <= 0 || g.unit?.generator === false) continue;
-        genMw += g.mw;
-        if (g.unit?.renewable) reMw += g.mw;
-      }
-      const share = data.has('v_dim_duid', 'Renewable') ? ` &middot; <b>${Math.round(100 * reMw / genMw)}%</b> renewable` : '';
-      document.getElementById('flowsNow').innerHTML = genMw
-        ? `${Math.round(genMw).toLocaleString()} MW generating${share}`
-          + (gensTime === hhmm ? '' :` <span style="color:var(--muted);font-weight:500">(generators at ${formatTime(+gensTime)})</span>`)
-        : '';
+      // What the generators made and their renewable share, the model's ("Generation MW",
+      // "Renewable share"), at this interval.
+      const share = now?.share != null && data.has('v_dim_duid', 'Renewable') ? ` &middot; <b>${Math.round(now.share)}%</b> renewable` : '';
+      document.getElementById('flowsNow').innerHTML = now?.mw ? `${Math.round(now.mw).toLocaleString()} MW generating${share}` : '';
       document.getElementById('flowsNow').title = document.getElementById('flowsNow').textContent;
-      // The two latest jumps within the last 3 hours of frames, newest first, so they stay
-      // readable while playing.
-      const flowsEvent = document.getElementById('flowsEvent');
-      flowsEvent.textContent = flowsEvent.title = icState.events
-        .filter(e => e.i <= icState.frame && icState.frame - e.i <= 36).slice(-2).reverse()
-        .map(e => `${icState.frames[e.i].label.split(' ').pop()} ${e.text}`).join('   |   ');
-      const net = {};   // + exporting, - importing
-      for (const r of rows) {
-        const ic = INTERCONNECTORS[r.id];
-        net[ic.from] = (net[ic.from] || 0) + r.mw;
-        net[ic.to] = (net[ic.to] || 0) - r.mw;
-      }
-      const maxAbs = Math.max(150, ...rows.map(r => Math.abs(r.mw)));
-      const enriched = rows.map(r => {
+      document.getElementById('flowsEvent').textContent = document.getElementById('flowsEvent').title = '';
+      // Each link at this interval: which way it flows, its share of the limit that way and
+      // whether it is out, the model's ("Flow utilisation", "No flow").
+      const largest = largestBy(rows, r => Math.abs(r.mw))?.mw ?? 0;
+      const enriched = orderBy(rows.map(r => {
         const ic = INTERCONNECTORS[r.id];
         const [a, b] = r.mw >= 0 ? [ic.from, ic.to] : [ic.to, ic.from];
-        const limit = r.mw >= 0 ? r.export_limit : -r.import_limit;
-        // Out: carrying nothing, with its two limits closed on each other or for an hour already
-        // (a link can idle at zero for a few intervals without anything being wrong).
-        const idle = icState.idle.get(`${key}|${r.id}`) || 0;
-        const dead = Math.abs(r.mw) < 1 && (r.export_limit - r.import_limit < 5 || idle >= 12);
-        // A run that reaches back to the first frame started before the range did.
-        const since = `${idle > icState.frame ? 'at least ' : ''}${fmtDuration(idle)}`;
-        return { r, ic, a, b, dead, since, util: limit > 0 ? Math.min(1.5, Math.abs(r.mw) / limit) : 0 };
-      }).sort((x, y) => Object.keys(INTERCONNECTORS).indexOf(x.r.id) - Object.keys(INTERCONNECTORS).indexOf(y.r.id));
-      const spikes = Object.keys(REGION_ANCHORS).filter(code => price(code) >= SPIKE_PRICE);
+        return { r, ic, a, b, dead: !!r.out, util: r.util ?? 0 };
+      }), e => Object.keys(INTERCONNECTORS).indexOf(e.r.id));
+      const regions = MARKET_REGIONS.filter(code => REGION_ANCHORS[code]);
+      const spikes = regions.filter(code => price(code) >= SPIKE_PRICE);
 
       // --- board: each link's readout, beside its small chart (renderFlows built the rows) ---
       for (const id of icState.ids) {
@@ -2217,17 +1968,17 @@
           <div class="ic-name">${desc}<span class="ic-dir">${short(ic.from)} &ndash; ${short(ic.to)}</span></div>
           <div class="ic-mw">0 MW</div>
           <div class="ic-bar"><span style="width:100%"></span></div>
-          <div class="ic-util">${ic.name} &middot; &#10005; No flow for ${e.since}</div>` : `
+          <div class="ic-util">${ic.name} &middot; &#10005; No flow</div>` : `
           <div class="ic-name">${desc}<span class="ic-dir">${short(e.a)} &rarr; ${short(e.b)}</span></div>
-          <div class="ic-mw">${Math.round(Math.abs(e.r.mw)).toLocaleString()} MW</div>
-          <div class="ic-bar"><span style="width:${Math.min(100, Math.round(100 * e.util))}%;background:${utilColor(e.util)}"></span></div>
-          <div class="ic-util">${ic.name} &middot; ${Math.round(100 * e.util)}% of its ${short(e.a)}&rarr;${short(e.b)} limit</div>`;
+          <div class="ic-mw">${fmtMwAbs(e.r.mw)} MW</div>
+          <div class="ic-bar"><span style="width:${barPercent(e.util)}%;background:${utilColor(e.util)}"></span></div>
+          <div class="ic-util">${ic.name} &middot; ${Math.round(e.util)}% of its ${short(e.a)}&rarr;${short(e.b)} limit</div>`;
       }
-      document.getElementById('regionBoard').innerHTML = Object.keys(REGION_ANCHORS).map(code => {
-        const p = price(code), n = Math.round(net[code] || 0);
+      document.getElementById('regionBoard').innerHTML = regions.map(code => {
+        const p = price(code), n = net(code);
         return `<div class="rg-row"><div><span class="rg-swatch" style="background:${priceColor(p)}"></span>${escapeHtml(regionName(code))}</div>
           <div class="rg-price"${p >= SPIKE_PRICE ? ` style="color:${SPIKE_COLOR};font-weight:700"` : ''}>${fmtPrice(p)}${p == null ? '' : '<small style="color:var(--muted);font-weight:400">/MWh</small>'}</div>
-          <div class="rg-net" style="color:var(${n >= 0 ? '--export' : '--import'})">${n >= 0 ? 'exports' : 'imports'} ${Math.abs(n).toLocaleString()} MW</div></div>`;
+          <div class="rg-net" style="color:var(${(n ?? 0) >= 0 ? '--export' : '--import'})">${n == null ? '' : `${n >= 0 ? 'exports' : 'imports'} ${fmtMwAbs(n)} MW`}</div></div>`;
       }).join('');
 
       // --- map ---
@@ -2236,10 +1987,10 @@
       const night = document.getElementById('icNight').checked ? nightBands(day, hhmm) : [];
       getChart('chart-flowmap').setOption({
         tooltip: { trigger: 'item', formatter: p => {
-          if (p.seriesType === 'lines' && p.data.dead) return `<b>${p.data.name}</b><br>no flow for ${p.data.since}`;
-          if (p.seriesType === 'lines') return `<b>${p.data.name}</b> ${p.data.dir}<br>${p.data.value.toLocaleString()} MW &middot; ${Math.round(100 * p.data.util)}% of limit`;
-          if (p.seriesType === 'effectScatter') return `<b>${escapeHtml(regionName(p.name))}</b><br>${p.value[2] >= 0 ? 'exporting' : 'importing'} ${Math.abs(p.value[2]).toLocaleString()} MW`;
-          if (p.seriesType === 'scatter') return `<b>${escapeHtml(p.name)}</b><br>${escapeHtml(p.data.fuel)} &middot; ${Math.abs(p.value[2]).toLocaleString()} MW${p.value[2] < 0 ? ' charging' : ''}`;
+          if (p.seriesType === 'lines' && p.data.dead) return `<b>${p.data.name}</b><br>no flow`;
+          if (p.seriesType === 'lines') return `<b>${p.data.name}</b> ${p.data.dir}<br>${p.data.value.toLocaleString()} MW &middot; ${Math.round(p.data.util)}% of limit`;
+          if (p.seriesType === 'effectScatter') return `<b>${escapeHtml(regionName(p.name))}</b><br>${p.value[2] >= 0 ? 'exporting' : 'importing'} ${fmtMwAbs(p.value[2])} MW`;
+          if (p.seriesType === 'scatter') return `<b>${escapeHtml(p.name)}</b><br>${escapeHtml(p.data.fuel)} &middot; ${fmtMwAbs(p.value[2])} MW${p.value[2] < 0 ? ' charging' : ''}`;
           return '';
         } },
         geo: { map: 'australia', nameProperty: 'STATE_NAME', roam: true, ...geoView('chart-flowmap', [145.4, -31.8], 1.85),
@@ -2247,15 +1998,15 @@
           itemStyle: { areaColor: land, borderColor: cssVar('--map-border'), borderWidth: 1 },
           emphasis: { disabled: true },
           tooltip: { show: true, formatter: p => {
-            const code = STATE_REGION[p.name], v = code ? price(code) : null;
+            const code = stateRegion(p.name), v = code ? price(code) : null;
             return code ? `<b>${escapeHtml(p.name)}</b> (${code})<br>${v == null ? 'no price' : fmtPrice(v, 2) + '/MWh'}` : `${escapeHtml(p.name)}<br>not in the NEM`;
           } },
           // NEM states shaded by their region's price in this interval.
-          regions: Object.entries(STATE_REGION).map(([state, code]) => ({
+          regions: stateRegions().map(([state, code]) => ({
             name: state, itemStyle: { areaColor: price(code) == null ? land : priceColor(price(code)), opacity: isLight() ? 0.75 : 0.55 } })) },
         series: [
           { type: 'scatter', coordinateSystem: 'geo', zlevel: 1, animation: false,
-            symbolSize: v => 3 + 20 * Math.sqrt(Math.min(1, Math.abs(v[2]) / GEN_FULL_MW)),
+            symbolSize: v => bubbleSize(v[2], GEN_FULL_MW),
             data: gens.filter(g => g.unit?.lat != null && g.unit.lon != null).map(g => {
               const fuel = g.unit.fuel, color = fuelColor(fuel);
               return { name: g.duid, fuel, value: [g.unit.lon, g.unit.lat, g.mw],
@@ -2268,15 +2019,15 @@
             data: enriched.filter(e => !e.dead).map(({ r, ic, a, b, util }) => ({
               name: ic.name, dir: `${short(a)}→${short(b)}`, value: Math.round(Math.abs(r.mw)), util,
               coords: [REGION_ANCHORS[a], REGION_ANCHORS[b]],
-              lineStyle: { width: 2 + 9 * Math.abs(r.mw) / maxAbs, color: utilColor(util), curveness: ic.curve, opacity: 0.9 },
-              label: { show: Math.abs(r.mw) >= 0.08 * maxAbs },
+              lineStyle: { width: arrowWidth(r.mw, largest), color: utilColor(util), curveness: ic.curve, opacity: 0.9 },
+              label: { show: arrowLabelled(r.mw, largest) },
             })) },
           // Links carrying nothing: dashed, no moving arrow, always named.
           { type: 'lines', coordinateSystem: 'geo', zlevel: 2,
             label: { show: true, position: 'middle', fontSize: 13, fontWeight: 700, color: OUT_COLOR,
               textBorderColor: halo, textBorderWidth: 3, formatter: p => `✕ ${p.data.name} no flow` },
-            data: enriched.filter(e => e.dead).map(({ ic, since }) => ({
-              name: ic.name, dead: true, since, coords: [REGION_ANCHORS[ic.from], REGION_ANCHORS[ic.to]],
+            data: enriched.filter(e => e.dead).map(({ ic }) => ({
+              name: ic.name, dead: true, coords: [REGION_ANCHORS[ic.from], REGION_ANCHORS[ic.to]],
               lineStyle: { width: 3, type: 'dashed', color: OUT_COLOR, curveness: ic.curve, opacity: 0.95 },
             })) },
           // Night, under everything drawn on the land (nightBands).
@@ -2289,13 +2040,13 @@
             rippleEffect: { scale: 5, period: 1.6, number: 3, brushType: 'stroke' }, itemStyle: { color: SPIKE_COLOR },
             data: spikes.map(code => ({ name: code, value: REGION_ANCHORS[code] })) },
           { type: 'effectScatter', coordinateSystem: 'geo', zlevel: 3, rippleEffect: { scale: 3, brushType: 'stroke' },
-            symbolSize: v => 9 + Math.min(14, Math.abs(v[2]) / 120),
+            symbolSize: v => dotSize(v[2]),
             label: { show: true, position: 'right', fontSize: 12, fontWeight: 700, color: ink,
               textBorderColor: halo, textBorderWidth: 3,
-              formatter: p => { const pr = price(p.name); return `${short(p.name)}${pr == null ? '' : '  ' + fmtPrice(pr) + '/MWh'}`; } },
-            data: Object.entries(REGION_ANCHORS).map(([code, xy]) => ({
-              name: code, value: [...xy, Math.round(net[code] || 0)],
-              itemStyle: { color: cssVar((net[code] || 0) >= 0 ? '--export' : '--import'), borderColor: halo, borderWidth: 1.5 },
+              formatter: p => { const pr = price(p.name); return `${short(p.name)}${pr == null ? '' : `  ${fmtPrice(pr)}/MWh`}`; } },
+            data: regions.map(code => ({
+              name: code, value: [...REGION_ANCHORS[code], Math.round(net(code) ?? 0)],
+              itemStyle: { color: cssVar((net(code) ?? 0) >= 0 ? '--export' : '--import'), borderColor: halo, borderWidth: 1.5 },
               ...(spikes.includes(code) ? { label: { fontSize: 16, color: SPIKE_COLOR } } : {}),
             })) },
         ],
@@ -2320,10 +2071,10 @@
       // this one is drawn, so a slow frame slows the playback instead of queueing ticks
       // behind it; the speed is read every frame.
       const speed = () => +document.getElementById('icSpeed').value;
-      const next = () => { icState.timer = setTimeout(tick, Math.round(50 / Math.min(1, speed()))); };
+      const next = () => { icState.timer = setTimeout(tick, playDelay(speed())); };
       const tick = () => {
         if (icState.frame >= icState.frames.length - 1) return icStop();
-        icShow(icState.frame + Math.max(1, Math.round(speed())));
+        icShow(playStep(icState.frame, speed()));
         next();
       };
       next();
@@ -2339,7 +2090,7 @@
       if (!rows.length) return showEmpty('chart-re');
       const { xKeys, xLabels } = buildTimeAxis(rows, intraday);
       const lookup = buildLookup(rows, r => intraday ? `${r.date}|${padTime(r.time)}` : r.date,
-        r => r.share == null ? null : Math.round(10 * r.share) / 10);
+        r => round1(r.share));
       getChart('chart-re').setOption({
         tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '-' : `${v}%` },
         grid: plot({ zoom: intraday }),
@@ -2374,15 +2125,14 @@
       const xLabel = intraday ? formatDate : formatMonth;
       const ys = [...Array(24).keys()];
       const yLabels = ys.map(h => `${String(h).padStart(2, '0')}:00`);
-      const vals = rows.map(r => r.price).sort((a, b) => a - b);
-      const q = f => vals[Math.min(vals.length - 1, Math.floor(f * vals.length))];
+      const scale = percentiles(rows.map(r => r.price), 0.02, 0.98);
       getChart('chart-heat').setOption({
         tooltip: { position: 'top', formatter: p => `${xLabel(dates[p.value[0]])} &middot; ${yLabels[p.value[1]]}<br><b>$${p.value[2].toFixed(1)}</b>` },
         grid: plot({ bottom: 52 }),
         xAxis: { type: 'category', data: dates.map(d => intraday ? formatDate(d).replace(/ \d{4}$/, '') : formatMonth(d)), axisLabel: { hideOverlap: true } },
         yAxis: { type: 'category', data: yLabels, axisLabel: { fontSize: 10 } },
         // Scale clipped to the 2nd-98th percentile so one spike doesn't wash out the rest.
-        visualMap: { min: Math.min(0, Math.floor(q(0.02))), max: Math.max(1, Math.ceil(q(0.98))), calculable: true,
+        visualMap: { min: Math.min(0, Math.floor(scale.lo)), max: Math.max(1, Math.ceil(scale.hi)), calculable: true,
           orient: 'horizontal', left: 'center', bottom: 0, itemHeight: 120, textStyle: { fontSize: 10 },
           inRange: { color: ['#2c7bb6', '#abd9e9', '#ffffbf', '#fdae61', '#d7191c'] } },
         series: [{ type: 'heatmap', progressive: 2000,
@@ -2399,23 +2149,24 @@
       document.getElementById('title-profile').textContent = 'Average day by fuel (MW)';
       if (!intraday && hourlyMissing('chart-profile', 'v_fct_summary_hourly')) return;
       const span = intraday ? null : (await runQuery(queries.profileMonths()))[0];
-      const units = await runQuery(queries.profile(intraday));
+      // The rows by time (by hour beyond 30 days), and the fuels in the generation chart's
+      // order, the largest first (the model's "Average generation MW").
+      const [units, order] = await Promise.all([runQuery(queries.profile(intraday)), runQuery(queries.averages('fuel'))]);
       if (seq !== _renderSeq) return;
-      const profile = units.filter(r => r.mw != null).map(r => ({ fuel: fuelName(r.fuel), time: r.time ?? r.hour * 100, mw: r.mw }));
+      const profile = units.filter(r => r.mw != null).map(r => ({ fuel: fuelName(r.fuel), time: r.time != null ? formatTime(r.time) : `${String(r.hour).padStart(2, '0')}:00`, mw: r.mw }));
       if (!profile.length) return showEmpty('chart-profile');
       if (span?.first) document.getElementById('title-profile').textContent =
         `Average day by fuel (MW, hourly, ${formatMonth(span.first)}${span.last !== span.first ? ` – ${formatMonth(span.last)}` : ''})`;
-      const times = [...new Set(profile.map(r => r.time))].sort((a, b) => a - b);
-      const totals = {};
-      for (const r of profile) totals[r.fuel] = (totals[r.fuel] || 0) + r.mw;
-      const fuels = Object.keys(totals).sort((a, b) => totals[b] - totals[a]);
+      const times = [...new Set(profile.map(r => r.time))];
+      const present = new Set(profile.map(r => r.fuel));
+      const fuels = [...order.map(r => fuelName(r.series)).filter(f => present.has(f)), ...[...present].filter(f => !order.some(r => fuelName(r.series) === f))];
       const lookup = buildLookup(profile, r => `${r.fuel}|${r.time}`, r => r.mw);
       getChart('chart-profile').setOption({
         tooltip: { trigger: 'axis', valueFormatter: v => `${Math.round(v).toLocaleString()} MW` },
         legend: { type: 'scroll', top: 0 },
         grid: plot({ legend: true }),
-        xAxis: { type: 'category', data: times.map(formatTime), boundaryGap: false, axisLabel: { hideOverlap: true } },
-        yAxis: { type: 'value', axisLabel: { formatter: v => v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v } },
+        xAxis: { type: 'category', data: times, boundaryGap: false, axisLabel: { hideOverlap: true } },
+        yAxis: { type: 'value', axisLabel: { formatter: v => kLabel(v) } },
         series: fuels.map(f => ({ name: f, type: 'line', stack: 'total', symbol: 'none', lineStyle: { width: 1, color: cssVar('--card') },
           areaStyle: { opacity: 0.92 }, itemStyle: { color: fuelColor(f) },
           data: times.map(t => lookup.get(`${f}|${t}`) || 0) })),
@@ -2423,14 +2174,13 @@
     }
     // Generation-weighted price each fuel earned in its own region, against the plain average.
     async function renderCapture(seq) {
-      const found = await runQuery(queries.capture(isIntradayMode()));
+      const found = await runQuery(queries.capture());
       const avg = await runQuery(queries.averagePrice());
       if (seq !== _renderSeq) return;
       document.getElementById('title-capture').textContent = 'Capture price by fuel ($/MWh)';
-      // Fuels with a sliver of output make noisy bars; keep those above 0.5% of the volume.
-      const rows = found.map(r => ({ ...r, fuel: fuelName(r.fuel) }));
-      const total = rows.reduce((s, r) => s + r.volume, 0);
-      const shown = rows.filter(r => r.volume >= 0.005 * total);
+      // Fuels with a sliver of output make noisy bars: the query keeps those with half a
+      // percent or more of it (the model's "Generation share").
+      const shown = found.map(r => ({ ...r, fuel: fuelName(r.fuel) }));
       if (!shown.length) return showEmpty('chart-capture');
       getChart('chart-capture').setOption({
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => `$${v.toFixed(1)}` },
@@ -2438,9 +2188,9 @@
         xAxis: { type: 'value', axisLabel: { formatter: '${value}' } },
         yAxis: { type: 'category', data: shown.map(r => r.fuel) },
         series: [{ type: 'bar', name: 'Capture price', barMaxWidth: 18, itemStyle: { borderRadius: [0, 4, 4, 0] },
-          data: shown.map(r => ({ value: Math.round(r.capture * 10) / 10, itemStyle: { color: fuelColor(r.fuel) } })),
+          data: shown.map(r => ({ value: round1(r.capture), itemStyle: { color: fuelColor(r.fuel) } })),
           markLine: avg[0]?.avg == null ? undefined : { symbol: 'none', label: { formatter: 'avg price ${c}', position: 'end', fontSize: 11, color: cssVar('--muted') },
-            lineStyle: { type: 'dashed', color: cssVar('--muted') }, data: [{ xAxis: Math.round(avg[0].avg * 10) / 10 }] } }],
+            lineStyle: { type: 'dashed', color: cssVar('--muted') }, data: [{ xAxis: round1(avg[0].avg) }] } }],
       }, true);
     }
 
@@ -2459,7 +2209,7 @@
         yAxis: { type: 'category', data: rows.map(r => regionName(r.region)) },
         // The colour of the "< $0" price band.
         series: [{ type: 'bar', barMaxWidth: 18, itemStyle: { color: PRICE_BANDS[0].color, borderRadius: [0, 4, 4, 0] },
-          data: rows.map(r => Math.round(r.pct * 10) / 10) }],
+          data: rows.map(r => round1(r.pct)) }],
       }, true);
     }
 
@@ -2480,7 +2230,7 @@
         legend: { type: 'scroll', top: 0 },
         grid: plot({ legend: true, zoom: intraday }),
         xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true } },
-        yAxis: { type: 'value', axisLabel: { formatter: v => Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + 'k' : v } },
+        yAxis: { type: 'value', axisLabel: { formatter: v => kLabel(v, 1) } },
         dataZoom: dataZoomConfig(intraday),
         series: regions.map(region => ({ name: regionName(region), type: 'line', symbol: 'none', sampling: 'lttb',
           itemStyle: { color: regionColor(region) }, lineStyle: { width: 1.5 },
@@ -2510,7 +2260,7 @@
         xAxis: pctAxis,
         yAxis: { type: 'category', data: byFuel.map(r => r.fuel) },
         series: [{ type: 'bar', barMaxWidth: 18, itemStyle: { borderRadius: [0, 4, 4, 0] },
-          data: byFuel.map(r => ({ value: Math.round(r.cf * 10) / 10, itemStyle: { color: fuelColor(r.fuel) } })) }],
+          data: byFuel.map(r => ({ value: round1(r.cf), itemStyle: { color: fuelColor(r.fuel) } })) }],
       }, true);
       if (!topAsc.length) showEmpty('chart-cfunits');
       else getChart('chart-cfunits').setOption({
@@ -2521,7 +2271,7 @@
         xAxis: pctAxis,
         yAxis: { type: 'category', data: topAsc.map(r => r.DUID), axisLabel: { fontSize: 11 } },
         series: [{ type: 'bar', barMaxWidth: 14, itemStyle: { borderRadius: [0, 4, 4, 0] },
-          data: topAsc.map(r => ({ value: Math.round(r.cf * 10) / 10, itemStyle: { color: fuelColor(r.fuel) } })) }],
+          data: topAsc.map(r => ({ value: round1(r.cf), itemStyle: { color: fuelColor(r.fuel) } })) }],
       }, true);
       // Clicking a unit filters the whole page to it, like a click on the map.
       const chart = getChart('chart-cfunits');
@@ -2542,8 +2292,6 @@
     // reads the daily table, which ends with the newest complete next-day file.
     const CURTAIL_FUELS = ['Wind', 'Solar'];
     const rate = v => v == null ? '--' : `${v.toFixed(1)}%`;
-    const fmtMwh = v => v >= 1e6 ? `${(v / 1e6).toFixed(2)} TWh` : v >= 10000 ? fmtGwh(v) : `${Math.round(v).toLocaleString()} MWh`;
-    const mwhAxis = v => v >= 1e6 ? `${v / 1e6}M` : v >= 1000 ? `${v / 1000}k` : v;
     async function renderCurtailment(seq) {
       const ids = ['chart-curtail', 'chart-curtailunits'];
       const titles = { curtail: document.getElementById('title-curtail'), units: document.getElementById('title-curtailunits') };
@@ -2640,10 +2388,10 @@
       if (seq !== _renderSeq) return;
       if (!rows.length) return showEmpty('chart-battery', 'No battery output for the selected filters');
 
-      const { sold, bought } = spread[0] ?? {};
+      const { sold, bought, spread: gap } = spread[0] ?? {};
       const f = fleet[0];
       title.innerHTML = 'Batteries: average day'
-        + (sold != null && bought != null ? `, bought at ${fmtPrice(bought)}, sold at ${fmtPrice(sold)} (spread ${fmtPrice(sold - bought)}/MWh)` : '')
+        + (gap != null ? `, bought at ${fmtPrice(bought)}, sold at ${fmtPrice(sold)} (spread ${fmtPrice(gap)}/MWh)` : '')
         + (f?.units ? ` <span class="chart-note">${f.units} unit${f.units === 1 ? '' : 's'}${f.mw ? `, ${Math.round(f.mw).toLocaleString()} MW` : ''}${f.mwh ? ` / ${Math.round(f.mwh).toLocaleString()} MWh` : ''}</span>` : '');
 
       const color = fuelColor('Grid'), gold = cssVar('--warn');
@@ -2661,40 +2409,30 @@
         series: [
           area('Output (MW)', 'discharge', 0.85), area('Charging (MW)', 'charge', 0.45),
           { name: 'Price ($/MWh)', type: 'line', yAxisIndex: 1, symbol: 'none', lineStyle: { width: 1.5, color: gold },
-            itemStyle: { color: gold }, data: rows.map(r => r.price == null ? null : Math.round(r.price * 10) / 10) },
+            itemStyle: { color: gold }, data: rows.map(r => round1(r.price)) },
         ],
       }, true);
     }
 
-    // Energy by owner and power station, coloured by fuel. Units that have no owner in
-    // dim_duid are grouped as "Unknown", rooftop solar's under ROOFTOP_OWNER.
+    // Energy by owner and plant, coloured by fuel: the model's rows, by dim_duid's Owner and
+    // Plant, with their shares of the energy shown. The treemap draws an owner as its
+    // plants together. A unit with no owner in dim_duid is under "Unknown".
     async function renderOwners(seq) {
-      if (!data.has('v_dim_duid', 'Participant')) return showEmpty('chart-owners', 'Ownership data not deployed yet');
-      const found = await runQuery(queries.owners());
+      if (!data.has('v_dim_duid', 'Owner')) return showEmpty('chart-owners', 'Ownership data not deployed yet');
+      const [found, shares] = await Promise.all([runQuery(queries.owners()), runQuery(queries.ownerShares())]);
       if (seq !== _renderSeq) return;
-      // Each unit's energy added up by owner and station (a unit without a station on its own).
-      const byStation = new Map();
-      for (const u of found) {
-        const owner = u.owner ?? (u.fuel === ROOFTOP ? ROOFTOP_OWNER : UNKNOWN), station = u.station ?? u.DUID, fuel = fuelName(u.fuel);
-        const k = `${owner}|${station}|${fuel}`;
-        if (!byStation.has(k)) byStation.set(k, { owner, station, fuel, mwh: 0 });
-        byStation.get(k).mwh += u.mwh ?? 0;
-      }
-      const rows = [...byStation.values()].filter(r => r.mwh > 0).sort((a, b) => b.mwh - a.mwh);
-      if (!rows.length) return showEmpty('chart-owners');
-      const total = rows.reduce((s, r) => s + r.mwh, 0);
-      const owners = new Map();
-      for (const r of rows) {
-        if (!owners.has(r.owner)) owners.set(r.owner, { name: r.owner, value: 0, children: [] });
-        const o = owners.get(r.owner);
-        o.value += r.mwh;
-        o.children.push({ name: r.station, value: r.mwh, fuel: r.fuel, itemStyle: { color: fuelColor(r.fuel) } });
+      if (!found.length) return showEmpty('chart-owners');
+      const ownerName = owner => owner ?? UNKNOWN;
+      const owners = new Map(shares.map(r => [ownerName(r.owner), { name: ownerName(r.owner), share: r.share, children: [] }]));
+      for (const r of found) {
+        const fuel = fuelName(r.fuel), o = owners.get(ownerName(r.owner));
+        o?.children.push({ name: r.plant, value: r.mwh, share: r.share, fuel, itemStyle: { color: fuelColor(fuel) } });
       }
       getChart('chart-owners').setOption({
         tooltip: { formatter: p => {
-          const share = `${(100 * p.value / total).toFixed(1)}% of the energy shown`;
+          const share = p.data.share == null ? '' : ` &middot; ${p.data.share.toFixed(1)}% of the energy shown`;
           const path = p.treePathInfo.slice(1).map(n => escapeHtml(n.name)).join(' &middot; ');
-          return `<b>${path}</b>${p.data.fuel ? `<br>${escapeHtml(p.data.fuel)}` : ''}<br>${fmtGwh(p.value)} &middot; ${share}`;
+          return `<b>${path}</b>${p.data.fuel ? `<br>${escapeHtml(p.data.fuel)}` : ''}<br>${fmtGwh(p.value)}${share}`;
         } },
         series: [{ type: 'treemap', name: 'All owners', roam: false, nodeClick: 'zoomToNode',
           left: 0, right: 0, top: 0, bottom: 22,
@@ -2707,7 +2445,7 @@
             { itemStyle: { borderColor: cssVar('--border'), borderWidth: 2, gapWidth: 1 } },
             { itemStyle: { borderColor: cssVar('--card'), borderWidth: 0 } },
           ],
-          data: [...owners.values()] }],
+          data: [...owners.values()].filter(o => o.children.length) }],
       }, true);
     }
 
@@ -2722,7 +2460,6 @@
       yellow: { dark: ['#2a2208', '#8a6a10', '#f7c948', '#fff3b0'], light: ['#fdf6d8', '#f7dc7a', '#e3b111', '#7a5a00'] },
     };
     const PRICE_RAMP = ['#2c7bb6', '#abd9e9', '#ffffbf', '#fdae61', '#d7191c'];
-    const fmtGwh = v => `${(v / 1000).toFixed(1)} GWh`;
     const CAL_METRICS = {
       re:     { title: 'renewable share of generation', fmt: v => `${v.toFixed(1)}%`, ramp: () => RAMPS.green[isLight() ? 'light' : 'dark'] },
       price:  { title: 'average price', fmt: v => `${fmtPrice(v, 1)}/MWh`, ramp: () => PRICE_RAMP },
@@ -2746,33 +2483,29 @@
         return showEmpty('chart-calendar', 'Loading history...');
       }
       const region = activeRegion();
-      const [share, energy, price] = await Promise.all([runQuery(queries.historyShare()), runQuery(queries.historyEnergy()), runQuery(queries.historyPrice())]);
+      // Per day, the model's: the renewable share, the energy of solar (rooftop's included)
+      // and of wind, the average price and demand.
+      const [share, solar, wind, price] = await Promise.all([runQuery(queries.historyShare()), runQuery(queries.historySolar()),
+        runQuery(queries.historyWind()), runQuery(queries.historyPrice())]);
       if (seq !== _renderSeq) return;
-      // Per day: the share, and the energy of solar (rooftop's included) and of wind.
-      const byDay = new Map(share.map(r => [r.date, { date: r.date, re: r.re, solar: 0, wind: 0 }]));
-      for (const r of energy) {
-        if (!byDay.has(r.date)) byDay.set(r.date, { date: r.date, re: null, solar: 0, wind: 0 });
-        byDay.get(r.date)[r.fuel === 'Wind' ? 'wind' : 'solar'] += r.mwh ?? 0;
-      }
-      const gen = [...byDay.values()].sort((a, b) => a.date < b.date ? -1 : 1);
+      const pairs = (rows, key) => rows.filter(r => r[key] != null).map(r => [r.date, r[key]]);
       const days = {
-        re: gen.filter(r => r.re != null).map(r => [r.date, r.re]),
-        solar: gen.filter(r => r.solar > 0).map(r => [r.date, r.solar]),
-        wind: gen.filter(r => r.wind > 0).map(r => [r.date, r.wind]),
-        price: price.filter(r => r.price != null).map(r => [r.date, r.price]),
-        demand: price.filter(r => r.demand != null).map(r => [r.date, r.demand]),
+        re: pairs(share, 're'),
+        solar: pairs(solar, 'mwh').filter(d => d[1] > 0),
+        wind: pairs(wind, 'mwh').filter(d => d[1] > 0),
+        price: pairs(price, 'price'),
+        demand: pairs(price, 'demand'),
       };
 
       // --- records: the best day of each measure; "new" when it fell in the last 14 days ---
       const newSince = shiftDate(document.getElementById('dateTo').max, -14);
-      const best = (list, sign = 1) => list.reduce((b, d) => !b || sign * d[1] > sign * b[1] ? d : b, null);
       const records = [
-        ['Highest renewable share', 're', best(days.re)],
-        ['Biggest solar day', 'solar', best(days.solar)],
-        ['Biggest wind day', 'wind', best(days.wind)],
-        ['Highest demand day', 'demand', best(days.demand)],
-        ['Highest price day', 'price', best(days.price)],
-        ['Lowest price day', 'price', best(days.price, -1)],
+        ['Highest renewable share', 're', largestBy(days.re, d => d[1])],
+        ['Biggest solar day', 'solar', largestBy(days.solar, d => d[1])],
+        ['Biggest wind day', 'wind', largestBy(days.wind, d => d[1])],
+        ['Highest demand day', 'demand', largestBy(days.demand, d => d[1])],
+        ['Highest price day', 'price', largestBy(days.price, d => d[1])],
+        ['Lowest price day', 'price', smallestBy(days.price, d => d[1])],
       ].filter(([, , d]) => d && d[1] != null);
       recordsEl.innerHTML = records.map(([label, metric, [date, v]]) => `
         <button type="button" class="kpi-card record-card" data-date="${date}" title="Open ${formatDate(date)} on the Dashboard">
@@ -2791,32 +2524,18 @@
       // Where the page scrolls, a strip per year, as tall as it needs. On one screen the years
       // fill the card, in as many columns as keep the day cells closest to square.
       const box = document.getElementById('chart-calendar');
-      const fit = onOneScreen();
-      let layout;
-      if (fit) {
-        box.style.height = '';
-        const W = box.clientWidth, H = box.clientHeight - 60;
-        const cols = [1, 2, 3].map(c => {
-          const rows = Math.ceil(years.length / c);
-          return { c, rows, cell: Math.min((W / c - 70) / 53, (H / rows - 36) / 7) };
-        }).reduce((a, b) => b.cell > a.cell ? b : a);
-        const cw = W / cols.c, rh = H / cols.rows;
-        layout = (i => ({ left: Math.round((i % cols.c) * cw + 60), top: Math.round(60 + Math.floor(i / cols.c) * rh + 22),
-          width: Math.round(cw - 74), height: Math.round(rh - 34) }));
-      } else {
-        const STRIP = 140;
-        box.style.height = `${55 + years.length * STRIP}px`;
-        layout = (i => ({ top: 70 + i * STRIP, left: 70, right: 20, cellSize: ['auto', 15] }));
-      }
+      if (onOneScreen()) box.style.height = '';
+      const placed = calendarLayout(years.length, box.clientWidth, box.clientHeight, onOneScreen());
+      if (placed.height != null) box.style.height = `${placed.height}px`;
+      const layout = placed.at;
       const chart = getChart('chart-calendar');
       chart.resize();
       // Scale clipped to the 2nd-98th percentile so one extreme day doesn't wash out the rest.
-      const vals = shown.map(d => d[1]).sort((a, b) => a - b);
-      const q = f => vals[Math.min(vals.length - 1, Math.floor(f * vals.length))];
+      const scale = percentiles(shown.map(d => d[1]), 0.02, 0.98);
       const muted = cssVar('--muted');
       chart.setOption({
         tooltip: { formatter: p => `${formatDate(p.value[0])}<br><b>${metric.fmt(p.value[1])}</b>` },
-        visualMap: { min: q(0.02), max: Math.max(q(0.98), q(0.02) + 1e-6), calculable: true, orient: 'horizontal',
+        visualMap: { min: scale.lo, max: scale.hi, calculable: true, orient: 'horizontal',
           left: 'center', top: 0, itemHeight: 160, textStyle: { fontSize: 10, color: muted },
           formatter: v => metric.fmt(v), seriesIndex: years.map((_, i) => i), inRange: { color: metric.ramp() } },
         calendar: years.map((year, i) => ({
@@ -2864,7 +2583,7 @@
       if (seq !== _renderSeq) return;
 
       const fuels = [...new Set(data.map(d => d.fuel))].sort();
-      const maxMw = Math.max(1, ...data.map(d => d.mw));
+      const largest = largestBy(data, d => d.mw)?.mw ?? 1;
 
       const series = fuels.map(fuel => ({
         name: fuel,
@@ -2876,7 +2595,7 @@
           region: regionName(d.Region),
           itemStyle: { opacity: 0.85 },
         })),
-        symbolSize: d => Math.max(5, Math.sqrt(Math.max(d[2], 0) / maxMw) * 25),
+        symbolSize: d => unitSize(d[2], largest),
         itemStyle: { color: fuelColor(fuel) },
         emphasis: { itemStyle: { shadowBlur: 10, shadowColor: cssVar('--muted') }, scale: 1.3 },
       }));
@@ -2996,7 +2715,7 @@
     for (const btn of tabs) {
       btn.addEventListener('keydown', e => {
         if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
-        const next = tabs[(tabs.indexOf(btn) + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+        const next = cycle(tabs, btn, e.key === 'ArrowRight' ? 1 : -1);
         next.focus(); next.click();
       });
       btn.addEventListener('click', () => {
@@ -3025,125 +2744,16 @@
       });
     }
 
-    // --- Analyze: dropdown open/close ---
-    function setupDropdown(triggerId, panelId) {
-      const trigger = document.getElementById(triggerId);
-      const panel = document.getElementById(panelId);
-      trigger.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const open = !panel.classList.contains('open');
-        closeAllPanels();
-        setPanel(panel, open);
-      });
-      panel.addEventListener('click', e => e.stopPropagation());
-    }
-    setupDropdown('measTrigger', 'measPanel');
-    setupDropdown('dimTrigger', 'dimPanel');
-
-    function updateMeasTrigger() {
-      const parts = [];
-      if (document.getElementById('measGeneration').checked) parts.push('Generation');
-      if (document.getElementById('measPrice').checked) parts.push('Price');
-      document.getElementById('measTrigger').textContent = parts.length ? parts.join(', ') : 'None selected';
-    }
-
-    function updateDimTrigger() {
-      const parts = ['Date'];
-      if (document.getElementById('dimTime').checked) parts.push('Time');
-      if (document.getElementById('dimDUID').checked) parts.push('DUID');
-      if (document.getElementById('dimFuel').checked) parts.push('Fuel');
-      if (document.getElementById('dimRegion').checked) parts.push('Region');
-      document.getElementById('dimTrigger').textContent = parts.join(', ');
-    }
-
-    // --- Analyze: read checkboxes ---
-    function getAnalyzeOptions() {
-      return {
-        measures: {
-          generation: document.getElementById('measGeneration').checked,
-          price: document.getElementById('measPrice').checked,
-        },
-        dimensions: {
-          time: document.getElementById('dimTime').checked,
-          duid: document.getElementById('dimDUID').checked,
-          fuel: document.getElementById('dimFuel').checked,
-          region: document.getElementById('dimRegion').checked,
-        },
-      };
-    }
-
-    // --- Analyze: query builder ---
-    function buildAnalyzeSQL() {
-      const { measures, dimensions } = getAnalyzeOptions();
-      const hasGen = measures.generation;
-      const hasPrice = measures.price;
-      const raw = dimensions.time; // time dimension = 5-min raw, else daily
-      if (hasGen && hasPrice) return buildGenPriceSQL(dimensions, raw);
-
-      // Generation reads a unit fact joined to dim_duid as g, price alone a regional table as p.
-      const a = hasGen ? 'g' : 'p';
-      const sel = [`CAST(${a}.date AS VARCHAR) AS date`];
-      const grp = [`${a}.date`];
-      const ord = [`${a}.date`];
-
-      if (raw) {
-        sel.push(`lpad(CAST(${a}.time AS VARCHAR), 4, '0') AS time`);
-        grp.push(`${a}.time`);
-        ord.push(`${a}.time`);
-      }
-
-      if (dimensions.duid && hasGen) { sel.push('g.DUID'); grp.push('g.DUID'); ord.push('g.DUID'); }
-      if (dimensions.fuel && hasGen) { sel.push(sql.fuel); grp.push('g.FuelSourceDescriptor'); }
-      if (dimensions.region) {
-        if (hasGen) { sel.push('g.Region AS region'); grp.push('g.Region'); }
-        else { sel.push('p.REGIONID AS region'); grp.push('p.REGIONID'); }
-      }
-
-      // Measures
-      if (hasGen) {
-        if (raw) sel.push('ROUND(SUM(g.mw)::DOUBLE, 2) AS mw');
-        else sel.push('ROUND(SUM(g.mwh)::DOUBLE, 2) AS mwh');
-      }
-      if (hasPrice) {
-        sel.push('ROUND(AVG(p.price)::DOUBLE, 2) AS price');
-      }
-
-      const from = hasGen ? `${raw ? 'fct_summary_to_dim_duid' : 'fct_summary_daily_to_dim_duid'} g`
-        : `${raw ? 'v_fct_region' : 'v_fct_region_daily'} p`;
-      const where = hasGen ? sql.whereGen() : sql.wherePrice();
-
-      return `SELECT ${sel.join(', ')}\nFROM ${from}\nWHERE ${where}\nGROUP BY ${grp.join(', ')}\nORDER BY ${ord.join(', ')}`;
-    }
-
-    // Generation and price together: the price of the unit's region is on the unit's row. A
-    // price is one value per region and interval (day), so generation is summed to that grain
-    // first and a row's price is then the plain average of its regions' prices. Averaging over
-    // the unit rows instead would weight each region by how many units it has.
-    function buildGenPriceSQL(dimensions, raw) {
-      const val = raw ? 'mw' : 'mwh';
-      const inner = ['CAST(g.date AS VARCHAR) AS date'], outer = ['date'];
-      if (raw) { inner.push(`lpad(CAST(g.time AS VARCHAR), 4, '0') AS time`); outer.push('time'); }
-      if (dimensions.duid) { inner.push('g.DUID'); outer.push('DUID'); }
-      if (dimensions.fuel) { inner.push(sql.fuel); outer.push('fuel'); }
-      inner.push('g.Region AS region');
-      if (dimensions.region) outer.push('region');
-      return `SELECT ${outer.join(', ')}, ROUND(SUM(${val}), 2) AS ${val}, ROUND(AVG(price), 2) AS price
-FROM (
-  SELECT ${inner.join(', ')}, SUM(g.${val})::DOUBLE AS ${val}, AVG(g.price)::DOUBLE AS price
-  FROM ${raw ? 'fct_summary_to_dim_duid' : 'fct_summary_daily_to_dim_duid'} g
-  WHERE ${sql.whereGen()}
-  GROUP BY ALL
-)
-GROUP BY ALL
-ORDER BY ALL`;
-    }
-
-    // The Analyze SQL textarea is the source of truth for Preview/Plan/Download — it shows the
-    // tool-generated query and the user can edit it freely. It's regenerated whenever the
-    // builder inputs (measures / dimensions / filters) change, or via "Reset to generated".
+    // --- Analyze: SQL, and only SQL ---
+    // The box is SQL over the views the compiler builds from the model (a table's view
+    // v_<table>, a relationship's view under its name): what the files store, as they store
+    // it. The page writes no SQL here; the example lists the views and their columns.
     function syncAnalyzeSql() {
       const ta = document.getElementById('analyzeSql');
-      if (ta) ta.value = buildAnalyzeSQL();
+      if (!ta) return;
+      const views = data.views().map(v => `--   ${v.name}: ${v.columns.join(', ')}`).join('\n');
+      ta.value = `-- The views of the model's tables and relationships, over the attached files:\n${views}\n`
+        + 'SELECT * FROM v_fct_region_daily ORDER BY date DESC LIMIT 100';
     }
     function getAnalyzeSql() {
       return document.getElementById('analyzeSql').value.trim().replace(/;+\s*$/, '');
@@ -3297,17 +2907,12 @@ ORDER BY ALL`;
     document.getElementById('analyzePlan').addEventListener('click', analyzePlan);
     document.getElementById('analyzeDownload').addEventListener('click', analyzeDownload);
     document.getElementById('analyzeSqlReset').addEventListener('click', syncAnalyzeSql);
-    for (const id of ['measGeneration', 'measPrice']) {
-      document.getElementById(id).addEventListener('change', () => { updateMeasTrigger(); clearAnalyzePreview(); });
-    }
-    for (const id of ['dimTime', 'dimDUID', 'dimFuel', 'dimRegion']) {
-      document.getElementById(id).addEventListener('change', () => { updateDimTrigger(); clearAnalyzePreview(); });
-    }
 
     // --- Filter population ---
     async function populateFilters() {
       for (const r of await runQuery(queries.regionNames)) REGION_NAMES[r.region] = r.state;
       const regions = await runQuery(queries.regions);
+      MARKET_REGIONS.push(...regions.map(r => r.Region));
       const fuels = await runQuery(queries.fuels);
       const regionSelect = document.getElementById("regionFilter");
       for (const r of regions) regionSelect.add(new Option(regionName(r.Region), r.Region));
@@ -3320,12 +2925,11 @@ ORDER BY ALL`;
       const minDateResult = await runQuery(queries.oldestDate);
       const maxDate = maxDateResult[0].d;
       const minDate = minDateResult[0].d;
-      const fromDate = new Date(`${maxDate}T00:00:00Z`);
-      fromDate.setUTCDate(fromDate.getUTCDate() - 3);
+
       document.getElementById("dateTo").value = maxDate;
       document.getElementById("dateTo").min = minDate;
       document.getElementById("dateTo").max = maxDate;
-      document.getElementById("dateFrom").value = fromDate.toISOString().split('T')[0];
+      document.getElementById("dateFrom").value = shiftDate(maxDate, -3);
       document.getElementById("dateFrom").min = minDate;
       document.getElementById("dateFrom").max = maxDate;
       syncPresets();
@@ -3335,7 +2939,6 @@ ORDER BY ALL`;
     function clearAnalyzePreview() {
       document.getElementById('analyzeTable').innerHTML = '';
       document.getElementById('analyzeInfo').textContent = '';
-      syncAnalyzeSql();   // builder inputs changed -> refresh the generated SQL
     }
 
     for (const id of ["dateFrom", "dateTo"]) {
@@ -3405,6 +3008,7 @@ ORDER BY ALL`;
       if (!window._cutoffCached) setStatus("Querying...", "loading");
       dim(true);
       updateFilterTags();
+      startLayout();
       const range = getDateRange();
       if (range.from && range.to && range.from > range.to) {
         dim(false);
@@ -3439,8 +3043,7 @@ ORDER BY ALL`;
           }
         }
         // What this render cost: queries that ran (a cached view runs none) and wall time.
-        const ran = _queriesRun - ranBefore;
-        setConnected(`${ran} ${ran === 1 ? 'query' : 'queries'}, ${((performance.now() - started) / 1000).toFixed(2)} s`);
+        setConnected(renderCost(ranBefore, _queriesRun, started, performance.now()));
       } catch (e) {
         console.error(e);
         if (seq !== _renderSeq) return;   // a newer render owns the page now

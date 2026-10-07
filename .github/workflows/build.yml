@@ -24,6 +24,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: The page works out no figure
+        # scripts/parity/page_lint.mjs: no arithmetic in the page's script or its queries; a
+        # figure is a measure of semantic_model/model.bim. How the page draws (scales, sizes,
+        # text) is in dashboard/github/frontend/draw.js, which a review reads.
+        run: cd scripts/parity && npm ci --no-audit --no-fund && node page_lint.mjs
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
