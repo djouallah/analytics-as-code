@@ -89,8 +89,12 @@ const days = ({ from, to }) => Math.round((new Date(to) - new Date(from)) / 8640
 await queries.readWholeDays(rows);
 
 const RANGES = { '3 days': shiftDate(to, -2), '30 days': shiftDate(to, -30), '1 year': shiftDate(to, -365) };
+// The last state sets two unit filters that no unit passes together (HPR1 is registered as
+// Wind, BALDHWF1 is Wind): a regional query reads the regions of the units that pass both,
+// none, not the regions of the units that pass each (2026-10-07).
 const FILTERS = { all: {}, 'region SA1': { region: 'SA1' }, 'fuel Wind': { fuel: 'Wind' },
-  'units HPR1 BALDHWF1': { picked: ['HPR1', 'BALDHWF1'] } };
+  'units HPR1 BALDHWF1': { picked: ['HPR1', 'BALDHWF1'] },
+  'fuel Solar, units HPR1 BALDHWF1': { fuel: 'Solar', picked: ['HPR1', 'BALDHWF1'] } };
 
 // What each chart asks in a state, with the arguments index.html passes.
 function asked() {
@@ -151,8 +155,9 @@ function asked() {
 const keysOf = q => [...Object.entries(q.select).filter(([, f]) => typeof f === 'string' && f.includes('.')).map(([n]) => n),
   ...Object.keys(q.totals ?? {})];
 
-// What a query's check depends on, without its literals (the dates move every day): its DAX,
-// its SQL, and the DAX of every measure it reaches. A query whose key was checked at the
+// What a query's check depends on, without its dates and strings (the dates move every day;
+// a number stays: a changed / 12 or >= 0.5 is a changed query): its DAX, its SQL, and the
+// DAX of every measure it reaches. A query whose key was checked at the
 // commit compared with need not be asked again (parity_model.py --since).
 const MEASURES = new Map(bim.model.tables.flatMap(t => (t.measures ?? []).map(m =>
   [m.name, Array.isArray(m.expression) ? m.expression.join('\n') : m.expression])));
@@ -161,8 +166,7 @@ const reached = (text, out = new Set()) => {
     if (MEASURES.has(n) && !out.has(n)) { out.add(n); reached(MEASURES.get(n), out); }
   return out;
 };
-const shape = s => (s ?? '').replace(/dt"[^"]*"|DATE '[^']*'/g, 'D').replace(/"(?:[^"]|"")*"|'(?:[^']|'')*'/g, 'S')
-  .replace(/\b\d+(\.\d+)?\b/g, 'N');
+const shape = s => (s ?? '').replace(/dt"[^"]*"|DATE '[^']*'/g, 'D').replace(/"(?:[^"]|"")*"|'(?:[^']|'')*'/g, 'S');
 const keyOf = e => JSON.stringify([shape(e.dax), shape(e.sql), [...reached(e.dax)].sort().map(n => [n, MEASURES.get(n)])]);
 
 const MAX_ROWS = 20000;

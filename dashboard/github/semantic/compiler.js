@@ -31,11 +31,23 @@
 //   - BLANK + x is NULL here and x in DAX; COUNT of no rows is blank in both (NULLIF)
 //   - ISFILTERED counts a column the query groups by as filtered on its subtotal row too
 //   - RELATED(x) is x: the view already has the column
-//   - a measure of another table that is blank for a group is 0 (COALESCE), as DAX adds it
+//   - a subquery (a measure of another table, ALLSELECTED, DATESBETWEEN) that is blank for
+//     a group is 0 (COALESCE), as DAX adds it
 //   - ORDER BY puts NULLs last; DAX puts blanks first
 //   - every relationship view is a LEFT JOIN, whatever relyOnReferentialIntegrity says
 //   - a subquery is grouped only by the keys that reach its table forwards: [Hours] per
 //     unit is the hours of all the regions selected (every region has every interval)
+//   - a dimension's key is read off the fact's column: a fact key the dimension lacks is a
+//     group of its own here, and DAX's one blank row there
+//   - a blank in a comparison is NULL (<, =, IN), where DAX reads 0, FALSE or "": so
+//     dim_duid[Storage] = FALSE() leaves out the units the dimension lacks, [No flow] with
+//     a blank limit is 0 not 1, and NOT (x IN {..}) leaves out a blank x, which DAX keeps
+//   - text compares and groups case-sensitively; DAX does neither (dim_duid keeps one
+//     spelling per name for that reason)
+//   - "the days the daily table lacks are none" is taken for both daily tables at once: a
+//     range cut to one table's days (queries.wholeDays) can still lack the other's newest
+//     day, and the 5-minute rows DAX adds for it are 0 here (demand's rooftop beyond 30
+//     days, on a day fct_region_daily has and fct_summary_daily not yet)
 //
 // Part 1, the model. What model.bim holds and what each entry becomes:
 //   tables               a view each, v_<table>: the table of the lakehouse its partition
@@ -344,15 +356,24 @@ function reach(table, forward = false) {
 // that filters both ways: the keys of the `to` side that rows of that table have. A unit
 // filter on a regional table is its regions: REGIONID IN (SELECT Region FROM v_dim_duid
 // WHERE ...), the way DAX filters dim_region from dim_duid.
-function backward(f, r, q) {
+// The table a filter reaches the SELECT's table only that way, or null when it reaches it
+// forwards (or the SELECT reads it).
+function backTable(f, r) {
   const tables = new Set(colsIn(f).map(c => c.table));
   const fwd = reach(r.home, true);
   if (!r.home || [...tables].every(t => fwd.has(t) || r.tables.has(t))) return null;
-  const [x] = tables;
-  const bridge = tables.size === 1 && RELS.find(b => b.both && b.from === x && fwd.has(b.to));
-  if (!bridge) throw new Error(`DAX: a filter on ${[...tables].join(', ')} does not reach ${r.home}`);
+  if (tables.size !== 1) throw new Error(`DAX: a filter on ${[...tables].join(', ')} does not reach ${r.home}`);
+  return [...tables][0];
+}
+// All the query's filters on that table in one list, as DAX filters the table with all of
+// them and then carries its rows' keys over. One list per filter (until 2026-10-07) was the
+// regions of the Wind units and the regions of the picked units: more regions than the
+// picked Wind units are in.
+function backward(x, fs, r, q) {
+  const bridge = RELS.find(b => b.both && b.from === x && reach(r.home, true).has(b.to));
+  if (!bridge) throw new Error(`DAX: a filter on ${x} does not reach ${r.home}`);
   const inner = rel({ tables: new Set([x]), cols: [{ name: 'k', sql: `t.${bridge.fromColumn}` }] });
-  inner.where.push(condition(f, inner, q));
+  for (const f of fs) inner.where.push(condition(f, inner, q));
   return `t.KEY$${bridge.to}$${bridge.toColumn} IN (${select(inner, true)})`;
 }
 // A measure that lives on another table than the one this SELECT is about: [Hours] (the
@@ -498,7 +519,8 @@ function scalar(e, cx) {
     case 'bin': {
       const l = go(e.l), r = go(e.r);
       // In a measure of the model, <> is DAX's: a blank is not "Grid". (The page's own
-      // filters keep SQL's, where a NULL is unequal to nothing: see its generatorUnits.)
+      // filters keep SQL's, where a NULL is unequal to nothing: queries.js says `blank`
+      // on its own where it means it, as fuelsNotIn does.)
       if (e.op === '<>' && cx.model && (l.t === 'string' || r.t === 'string'))
         return { s: `${par(l, P.cmp + 1)} IS DISTINCT FROM ${par(r, P.cmp + 1)}`, t: 'bool', p: P.cmp };
       const [sym, p, bool] = OPS[e.op];
@@ -720,7 +742,13 @@ function table(e, q) {
       // A filter on another fact than the one the table is about says nothing here: it is
       // for a measure of that fact (see `elsewhere`).
       const here = c => !r.home || r.tables.has(c.table) || reach(r.home).has(c.table);
-      for (const f of a.slice(1)) if (colsIn(f).every(here)) r.where.push(backward(f, r, q) ?? condition(f, r, q));
+      const back = new Map();
+      for (const f of a.slice(1)) {
+        if (!colsIn(f).every(here)) continue;
+        const x = backTable(f, r);
+        if (x) (back.get(x) ?? back.set(x, []).get(x)).push(f); else r.where.push(condition(f, r, q));
+      }
+      for (const [x, fs] of back) r.where.push(backward(x, fs, r, q));
       return r;
     }
     case 'FILTER': {

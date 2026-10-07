@@ -112,7 +112,9 @@ def rows_of(rows):
 
 def same(a, b):
     if isinstance(a, float) and isinstance(b, float):
-        return math.isclose(a, b, rel_tol=1e-6, abs_tol=CENT)
+        # A cent is for prices and revenue; on a figure under 1 (an intensity in t/MWh, a
+        # share near its 0.5% cut) it would be several percent of it.
+        return math.isclose(a, b, rel_tol=1e-6, abs_tol=CENT if max(abs(a), abs(b)) >= 1 else CENT / 100)
     return a == b
 
 
