@@ -162,7 +162,7 @@
     @keyframes shimmer { to { background-position: -200% 0; } }
 
     /* --- KPI tiles (and the History records) --- */
-    .kpi-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--gap); padding: var(--gap) var(--gutter) 0; }
+    .kpi-row { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--gap); padding: var(--gap) var(--gutter) 0; }
     /* The figure on the left, its sparkline beside it; a tile without one gives the figure the whole width. */
     .kpi-card { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 36%; column-gap: 0.8rem; align-content: start; background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 0.9rem 1rem; box-shadow: var(--card-shadow); }
     .kpi-card > * { grid-column: 1 / -1; }
@@ -474,6 +474,7 @@
     <div class="kpi-card"><div class="kpi-label">Total generation</div><div class="kpi-value skeleton" id="kpiGen">--</div><div class="kpi-sub" id="kpiGenSub">Average MW</div><div class="kpi-sub kpi-delta" id="kpiGenDelta"></div><svg class="kpi-spark" id="kpiGenSpark" aria-hidden="true"></svg></div>
     <div class="kpi-card"><div class="kpi-label">Average price</div><div class="kpi-value skeleton" id="kpiPrice">--</div><div class="kpi-sub">$/MWh across regions</div><div class="kpi-sub kpi-delta" id="kpiPriceDelta"></div><svg class="kpi-spark" id="kpiPriceSpark" aria-hidden="true"></svg></div>
     <div class="kpi-card"><div class="kpi-label">Renewables</div><div class="kpi-value skeleton" id="kpiRE">--</div><div class="kpi-sub" id="kpiRESub">share of generation</div><div class="kpi-sub kpi-delta" id="kpiREDelta"></div><svg class="kpi-spark" id="kpiRESpark" aria-hidden="true"></svg></div>
+    <div class="kpi-card"><div class="kpi-label">Emissions</div><div class="kpi-value skeleton" id="kpiCO2">--</div><div class="kpi-sub" id="kpiCO2Sub">t CO2-e per MWh</div><div class="kpi-sub kpi-delta" id="kpiCO2Delta"></div><svg class="kpi-spark" id="kpiCO2Spark" aria-hidden="true"></svg></div>
     <div class="kpi-card"><div class="kpi-label">Active generators</div><div class="kpi-value skeleton" id="kpiGens">--</div><div class="kpi-sub">DUIDs reporting</div></div>
     <div class="kpi-card"><div class="kpi-label">Top fuel source</div><div class="kpi-value skeleton" id="kpiTopFuel">--</div><div class="kpi-sub" id="kpiTopFuelSub">by generation</div></div>
   </div>
@@ -1017,6 +1018,20 @@
 
       // --- Dashboard: KPIs (and the Renewables chart, which draws the KPI's rows) ---
       generatorCount: () => `EVALUATE CALCULATETABLE(ROW("cnt", [Units]), ${dax.whereGen().join(', ')})`,
+      // Emissions of what the generation chart shows (rooftop has no unit and emits nothing):
+      // the model's tonnes and intensity per interval (day), the sparkline, and over the
+      // range, the subtotal row ("all"). One query: the range is one more grouping set.
+      emissions(intraday) {
+        const { fact } = grain();
+        const keys = [`${fact}[date]`, ...(intraday ? [`${fact}[time]`] : [])];
+        return `
+          EVALUATE SELECTCOLUMNS(
+            CALCULATETABLE(
+              SUMMARIZECOLUMNS(ROLLUPADDISSUBTOTAL(ROLLUPGROUP(${keys.join(', ')}), "all"), "t", [Emissions t], "i", [Emissions intensity]),
+              ${dax.whereGen().join(', ')}),
+            "date", [date]${intraday ? ', "time", [time]' : ''}, "all", [all], "t", [t], "i", [i])
+          ORDER BY [date]${intraday ? ', [time]' : ''}`;
+      },
 
       // Renewable share. The fuel filter is ignored on purpose. Beyond 30 days the model's
       // measure, per day and over the range.
@@ -1065,6 +1080,7 @@
         : activeFuel() === ROOFTOP ? '[Average rooftop MW]' : '[Average total generation MW]', dax.wholeDays, dax.allFilters('dim_duid')),
       deltaPrice: span => dax.delta(span, '[Average price]', dax.wholeRegionDays, dax.priceFilters('dim_region[Region]')),
       deltaRenewables: span => dax.delta(span, dax.renewableMeasure(), dax.wholeDays, dax.allFilters('dim_duid', false)),
+      deltaEmissions: span => dax.delta(span, '[Emissions intensity]', dax.wholeDays, dax.allFilters('dim_duid')),
 
       // --- Dashboard: map ---
       mapScatter() {
@@ -2413,6 +2429,18 @@
       return { rows: shares, overall: shareOf(range) };
     }
 
+    // Emissions: the model's intensity over the range, its tonnes under it, and the intensity
+    // per interval (day) as the sparkline. Blank (no unit with a factor) reads "--".
+    async function updateEmissionsKpi(seq) {
+      const rows = await runQuery(dax.emissions(isIntradayMode()));
+      if (seq !== _renderSeq) return;
+      const range = rows.find(r => r.all);
+      setSpark('kpiCO2Spark', rows.filter(r => !r.all).map(r => r.i));
+      if (range?.i == null) return setKpi('kpiCO2', '--', 't CO2-e per MWh');
+      const tonnes = range.t >= 1e6 ? `${(range.t / 1e6).toFixed(1)} Mt` : `${Math.round(range.t / 1e3).toLocaleString()} kt`;
+      setKpiNumber('kpiCO2', range.i, v => v.toFixed(3), `t CO2-e per MWh, ${tonnes} in all`);
+    }
+
     async function updateRenewablesKpi(seq) {
       const { rows, overall } = await renewableShare();
       if (seq !== _renderSeq) return;
@@ -2433,7 +2461,7 @@
         el.textContent = text;
         el.className = `kpi-sub kpi-delta ${cls}`;
       };
-      const ids = ['kpiGenDelta', 'kpiPriceDelta', 'kpiREDelta'];
+      const ids = ['kpiGenDelta', 'kpiPriceDelta', 'kpiREDelta', 'kpiCO2Delta'];
       const { from, to } = getDateRange();
       const maxDate = document.getElementById('dateTo').max, minDate = document.getElementById('dateFrom').min;
       const last = to >= maxDate ? shiftDate(maxDate, -1) : to;
@@ -2443,27 +2471,31 @@
       if (!aggLoaded || !(days >= 1) || prevFrom < minDate) return ids.forEach(id => show(id));
 
       const span = { from, prevFrom, last };
-      const [gen, price, re] = await Promise.all([
+      const [gen, price, re, co2] = await Promise.all([
         runQuery(dax.deltaGeneration(span)), runQuery(dax.deltaPrice(span)), runQuery(dax.deltaRenewables(span)),
+        runQuery(dax.deltaEmissions(span)),
       ]);
       if (seq !== _renderSeq) return;
       const vs = days === 1 ? 'vs the day before' : `vs previous ${days} days`;
       // A side that doesn't hold every day of its period (a gap in the data, a daily table
       // that is behind) gives no comparison.
       const pair = ([r]) => [1, 0].map(i => r?.[`n${i}`] === 24 * days ? r[`v${i}`] : undefined);
-      // A change that rounds to zero reads "unchanged", not as an arrow on 0.0.
-      const delta = (id, d, fmt, cls = '') => {
+      // A change that rounds to zero reads "unchanged", not as an arrow on 0.0. `colour` is
+      // 'rise' when a rise is good (renewables) and 'fall' when a fall is (emissions).
+      const delta = (id, d, fmt, colour = '') => {
         const size = Math.abs(d).toFixed(1);
         if (+size === 0) show(id, `unchanged ${vs}`);
-        else show(id, `${d > 0 ? '▲' : '▼'} ${fmt(size)} ${vs}`, cls && (d > 0 ? 'up' : 'down'));
+        else show(id, `${d > 0 ? '▲' : '▼'} ${fmt(size)} ${vs}`, colour && ((d > 0) === (colour === 'rise') ? 'up' : 'down'));
       };
-      const [g1, g0] = pair(gen), [p1, p0] = pair(price), [r1, r0] = pair(re);
+      const [g1, g0] = pair(gen), [p1, p0] = pair(price), [r1, r0] = pair(re), [e1, e0] = pair(co2);
       if (g1 == null || !g0) show(ids[0]);
       else delta(ids[0], 100 * (g1 - g0) / g0, s => `${s}%`);
       if (p1 == null || p0 == null) show(ids[1]);
       else delta(ids[1], p1 - p0, s => `$${s}`);
       if (r1 == null || r0 == null) show(ids[2]);
-      else delta(ids[2], r1 - r0, s => `${s} pts`, 'coloured');
+      else delta(ids[2], r1 - r0, s => `${s} pts`, 'rise');
+      if (e1 == null || !e0) show(ids[3]);
+      else delta(ids[3], 100 * (e1 - e0) / e0, s => `${s}%`, 'fall');
     }
     // Insights is three pages of four charts, and only the page shown is drawn.
     const INSIGHTS_PAGES = {
@@ -4077,7 +4109,7 @@ ORDER BY ALL`;
           await loadDailyAggDatabase();
         }
         const visible = id => document.getElementById(id).style.display !== 'none';
-        await Promise.all([renderNow(seq), renderGeneration(seq), renderPrice(seq), renderMap(seq), updateRenewablesKpi(seq),
+        await Promise.all([renderNow(seq), renderGeneration(seq), renderPrice(seq), renderMap(seq), updateRenewablesKpi(seq), updateEmissionsKpi(seq),
           updateKpiDeltas(seq).catch(e => console.warn('[KPI] deltas unavailable:', e)),
           visible('view-insights') ? renderInsights(seq) : null,
           visible('view-history') ? renderHistory(seq) : null,

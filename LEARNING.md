@@ -307,8 +307,3 @@ browser, is the natural place.
   `app=wasm`, item `nemtracker`).
 - AEMO publishing `ROOFTOP_PV_ACTUAL_PRED`/`_RUN`: move `fct_rooftop_pv` to the 5-minute
   estimate.
-
-**Ideas**
-- Emissions on the page. The data and the measures are deployed (`dim_duid.CO2eFactor`,
-  `[Emissions t]`, `[Emissions intensity]`); left: where it goes (a KPI or an Insights chart)
-  and a check that the compiler translates the measures.
