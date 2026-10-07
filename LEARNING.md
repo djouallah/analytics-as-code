@@ -9,14 +9,20 @@ model, serving and the clients.
 [AGENTS.md](AGENTS.md) says how things are. This file says what they cost and what was
 learned. Where the two overlap, AGENTS.md is the reference.
 
+Much of the stack is pre-release: writes to OneLake's Iceberg catalog are not released yet,
+DuckDB is a 2.0 development build, and Fabric apps are a preview. A limit below that comes
+from one of them describes the version used, at the date given. It is not a verdict on the
+product: several are already fixed upstream.
+
 ## The short version
 
 1. **A durable archive plus an append-only log removes reconciliation code.** An interrupted
    run is just picked up by the next one.
-2. **A catalog that refuses an upsert in one commit shapes everything downstream.** OneLake
-   takes a DELETE, but not a commit that mixes delete files with data files. Hence
-   insert-only merges, values that are never revised, rebuilds by DROP and CTAS. Probe the
-   catalog's write path and design for it from day one.
+2. **On a pre-release catalog, design for the write path it has today.** OneLake's Iceberg
+   writes are not released yet. In the version used, a DELETE works, but a commit that
+   mixes delete files with data files does not (fixed upstream, rolling out). Insert-only
+   merges kept the pipeline running meanwhile. Probe the catalog, and probe again when it
+   moves.
 3. **Decide time semantics on day one.** A wall-clock time stored as UTC is now a rule every
    reader has to follow forever, because fixing it at the writer means rebuilding seven
    facts.
@@ -65,8 +71,9 @@ learned. Where the two overlap, AGENTS.md is the reference.
 - **`MERGE` dedupes against the target, never within a batch.** The log is append-only and
   can list a file twice, so without a `DISTINCT` a backlog is read 2-N times and turns into
   duplicate keys.
-- **Appending the whole log every run.** The log table grew by its own size 48 times a day
-  until the OneLake catalog answered HTTP 500 to every load and commit. Now only the missing
+- **Appending the whole log every run** (this repo's bug). The log table grew by its own size
+  48 times a day until the catalog answered HTTP 500 to every load and commit of that table.
+  Now only the missing
   rows are appended, and the parquet file is the source of truth: the Iceberg table can be
   rebuilt from it.
 
@@ -86,9 +93,11 @@ learned. Where the two overlap, AGENTS.md is the reference.
 - **The refill path is not exercised by CI.** The next `rebuild=` of a mart fact is the
   first time it runs on the real catalog.
 
-## 2. Storage: Iceberg on the OneLake REST catalog
+## 2. Storage: Iceberg on the OneLake REST catalog (pre-release)
 
 ### What worked
+- **Direct Lake reads the same tables, with no copy.** Fabric shows the Iceberg tables to
+  the semantic model on its own, so Power BI and the pipeline share one set of tables.
 - **One persistent layer.** The catalog and the archive next to it are the only state. The
   runner, dbt and DuckDB are ephemeral, and nothing depends on a server or on the runner's
   disk.
@@ -99,10 +108,11 @@ learned. Where the two overlap, AGENTS.md is the reference.
   against its matrix, not remembered.
 
 ### What it cost
-- **One add-snapshot per commit; a commit mixing delete files with data files is rejected
-  (400).** A DELETE on its own is accepted. What is refused is an upsert: a `MERGE` that
-  updates matched rows. Every write became an insert-only merge (`WHEN MATCHED DO NOTHING`),
-  and the consequences go all the way to the dashboard:
+- **The pre-release write path: one add-snapshot per commit, and a commit that mixes delete
+  files with data files is rejected (400).** A DELETE on its own is accepted. What is
+  refused is an upsert: a `MERGE` that updates matched rows. It is fixed upstream and
+  rolling out. Until it lands, every write is an insert-only merge
+  (`WHEN MATCHED DO NOTHING`), and the consequences go all the way to the dashboard:
   - a stored value is never revised, so a late correction from AEMO never lands;
   - `dim_duid`'s attributes never change in place, so a changed rule needs a
     `rebuild=dim_duid`;
@@ -118,13 +128,14 @@ learned. Where the two overlap, AGENTS.md is the reference.
   the browser reads, because DuckDB-WASM is on 1.5 and the file format must match. Parquet
   is the handoff, because 1.5 can't read tables that 2.0 compaction rewrote.
 - **Maintenance needs two tools.** Compaction is DuckDB. Snapshot expiry is pyiceberg,
-  because duckdb-iceberg has no `expire_snapshots` yet, and the pyiceberg script reaches
-  into a private attribute in case the catalog doesn't advertise the commit endpoint.
+  because duckdb-iceberg has no `expire_snapshots` yet. The script carries a fallback for a
+  catalog that doesn't advertise the commit endpoint; OneLake advertises it, so the fallback
+  never fires.
   Maintenance must never fail its workflow, so a compaction that has stopped working shows
   only in a log.
 
 ### Could be better
-- **A catalog that accepts a `MERGE` with updates in one commit** would remove most of the
+- **Merges that update, once the upstream fix rolls out.** That removes most of the
   workarounds above: corrections and attribute updates. Until then, a DELETE commit followed
   by an INSERT commit could do a correction. It is not atomic, so it needs a re-count after
   each step.
@@ -212,8 +223,9 @@ learned. Where the two overlap, AGENTS.md is the reference.
   the newest 14 days hourly, the dimensions and aggregates whole.
 - **The browser is the server.** DuckDB-WASM, single-threaded, files downloaded whole into
   OPFS and attached in place.
-  - Reading a remote file in place costs three round trips per block, and OneLake answers
-    one in about 700 ms: one 2024 day took 38 s that way. Downloading whole is faster.
+  - DuckDB-WASM reads a remote file one block at a time, three round trips per block, at
+    about 700 ms a round trip from the browser to OneLake: one 2024 day took 38 s that way.
+    Downloading whole is faster. A block cache in the engine would change that.
   - The threaded build couldn't load ICU (so no `SET TimeZone`) or share the OPFS handle,
     and gained only about 1.4x.
   - An `opfs://` ATTACH also opens a `.wal` that was never registered, so the plain
@@ -396,8 +408,9 @@ it already runs in the browser.
 ## 10. If starting again
 
 - Decide the time semantics of every timestamp before the first write.
-- Probe the catalog first (the capability matrix), and design the write path around what
-  it refuses.
+- Probe the catalog first (the capability matrix), design the write path around what it
+  does today, and probe again at each release: a pre-release changes under you, mostly for
+  the better.
 - Put the rules in the models from the start; make the import a copy from the start.
 - Write the semantic model before the first chart, and have the first chart call a measure.
 - Run two engines on the same queries from the first day: the second engine is the test.
