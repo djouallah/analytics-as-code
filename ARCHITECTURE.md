@@ -48,7 +48,7 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 
 One semantic model (`semantic_model/model.bim`), its clients under `dashboard/`:
 
-- `github/` and `fabric_app_wasm/` are one page (`dashboard/github/index.html`) on two hosts. A
+- `github/` and `fabric_app_wasm/` are one page (`dashboard/github-dax/index.html`) on two hosts. A
   host only decides where the data files live and how the browser gets them
   (`storage/data.js`), so a chart is written once and reaches both.
 - `fabric_app_vertipaq/` is to be that page again, as a Fabric app next to the deployed
@@ -69,7 +69,7 @@ A measure is written once, in the model, and reaches all four.
 | Engine | DuckDB-WASM, in the browser | DuckDB-WASM, in the browser |
 | Data files | next to the page | a lakehouse, under `Files/data` |
 | 5-minute history | one file per half-year (GitHub's 100 MB limit), downloaded | the same half-year files, downloaded as parallel range requests |
-| Host code | `dashboard/github/storage/data.js` | `dashboard/fabric_app_wasm/site/storage/` |
+| Host code | `dashboard/github-dax/storage/data.js` | `dashboard/fabric_app_wasm/site/storage/` |
 | Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `dashboard/fabric_app_wasm/` (page), `import_onelake.yml` (data) |
 
 ### The layers of the dashboard
@@ -79,12 +79,12 @@ on purpose: the point is the layers, not their maturity.
 
 | Layer | Here | In a real product |
 |---|---|---|
-| Consumer | `dashboard/github/index.html` | the BI tool |
+| Consumer | `dashboard/github-dax/index.html` | the BI tool |
 | Query language | a query of the model's fields (`frontend/queries.js`), which the compiler writes as DAX | DAX, MDX, VizQL, Malloy, a metrics request |
 | Semantic model | `semantic_model/model.bim`, a Tabular model in TMSL | a Tabular model (TMSL, TMDL), LookML, MetricFlow YAML |
-| Compiler | `dashboard/github/semantic/compiler.js` | MetricFlow, Cube's schema compiler, Malloy's compiler, Looker's SQL generator, Power BI's formula engine, Tableau's VizQL |
+| Compiler | `dashboard/github-dax/semantic/compiler.js` | MetricFlow, Cube's schema compiler, Malloy's compiler, Looker's SQL generator, Power BI's formula engine, Tableau's VizQL |
 | Engine | DuckDB-WASM | the warehouse, VertiPaq, Hyper |
-| Storage | `dashboard/github/storage/` | the lakehouse or warehouse connection |
+| Storage | `dashboard/github-dax/storage/` | the lakehouse or warehouse connection |
 
 
 - **The semantic model** describes the tables, their relationships and the measures, each

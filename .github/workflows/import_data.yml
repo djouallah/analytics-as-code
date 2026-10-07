@@ -172,11 +172,11 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.with_page
         run: |
           cp deploy_data/data/* deploy_daily/data/
-          cp dashboard/github/index.html deploy_daily/
-          cp -r dashboard/github/frontend dashboard/github/semantic dashboard/github/storage deploy_daily/
+          cp dashboard/github-dax/index.html deploy_daily/
+          cp -r dashboard/github-dax/frontend dashboard/github-dax/semantic dashboard/github-dax/storage deploy_daily/
           cp semantic_model/model.bim deploy_daily/semantic/
           node scripts/stamp_build.mjs deploy_daily "${GITHUB_SHA::7}"
-          cp -r dashboard/github/dag deploy_daily/
+          cp -r dashboard/github-dax/dag deploy_daily/
       - name: Upload instead of deploying
         if: github.event_name == 'workflow_dispatch' && !inputs.publish
         uses: actions/upload-artifact@v4

@@ -30,7 +30,7 @@ jobs:
       - name: The page works out no figure
         # scripts/parity/page_lint.mjs: no arithmetic in the page's script or its queries; a
         # figure is a measure of semantic_model/model.bim. How the page draws (scales, sizes,
-        # text) is in dashboard/github/frontend/draw.js, which a review reads.
+        # text) is in dashboard/github-dax/frontend/draw.js, which a review reads.
         run: cd scripts/parity && npm ci --no-audit --no-fund && node page_lint.mjs
       - uses: actions/setup-python@v5
         with:
@@ -53,16 +53,16 @@ jobs:
         run: |
           dbt build --target ci --profiles-dir .
           dbt docs generate --target ci --profiles-dir . --empty-catalog
-          mkdir -p dashboard/github/dag
-          cp target/index.html dashboard/github/dag/
-          cp target/manifest.json dashboard/github/dag/
-          cp target/catalog.json dashboard/github/dag/
+          mkdir -p dashboard/github-dax/dag
+          cp target/index.html dashboard/github-dax/dag/
+          cp target/manifest.json dashboard/github-dax/dag/
+          cp target/catalog.json dashboard/github-dax/dag/
       - name: Commit dbt docs
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add dashboard/github/dag/
+          git add dashboard/github-dax/dag/
           git diff --cached --quiet || (git commit -m "Update dbt docs" && git pull --rebase && git push)
       - name: Prepare deploy directory
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
@@ -70,13 +70,13 @@ jobs:
           mkdir -p deploy
           # The page and one folder per layer, as they are in the repo, and the semantic
           # model next to its compiler: it is the repo's (semantic_model/), not this client's.
-          cp dashboard/github/index.html deploy/
-          cp -r dashboard/github/frontend dashboard/github/semantic dashboard/github/storage deploy/
+          cp dashboard/github-dax/index.html deploy/
+          cp -r dashboard/github-dax/frontend dashboard/github-dax/semantic dashboard/github-dax/storage deploy/
           cp semantic_model/model.bim deploy/semantic/
           # The build stamp (the Logs panel shows it) and ?v=<build> on every relative
           # import, so a browser's cached modules never run with a new page.
           node scripts/stamp_build.mjs deploy "${GITHUB_SHA::7}"
-          cp -r dashboard/github/dag deploy/
+          cp -r dashboard/github-dax/dag deploy/
       - name: Deploy to nemtracker
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:

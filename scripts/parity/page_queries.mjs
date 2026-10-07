@@ -18,7 +18,7 @@
 // queries that read the newest interval or day are left out for the same reason.
 // =============================================================================
 
-import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DuckDBInstance } from '@duckdb/node-api';
@@ -35,8 +35,11 @@ globalThis.fetch = async url => {
   if (!String(url).includes('model.bim')) throw new Error(`no fetch here: ${url}`);
   return { ok: true, json: async () => bim };
 };
-const { createModel } = await import(pathToFileURL(path.join(ROOT, 'dashboard/github/semantic/compiler.js')));
-const { createQueries } = await import(pathToFileURL(path.join(ROOT, 'dashboard/github/frontend/queries.js')));
+// The page's folder: dashboard/github-dax, dashboard/github in a checkout from before the
+// rename (2026-10-07), which `since` can compare with.
+const PAGE = ['dashboard/github-dax', 'dashboard/github'].map(d => path.join(ROOT, d)).find(d => existsSync(d));
+const { createModel } = await import(pathToFileURL(path.join(PAGE, 'semantic/compiler.js')));
+const { createQueries } = await import(pathToFileURL(path.join(PAGE, 'frontend/queries.js')));
 
 // --- The engine: the files attached as data.js attaches them, every half-year at once ---
 const instance = await DuckDBInstance.create(':memory:');

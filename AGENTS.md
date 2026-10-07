@@ -198,7 +198,7 @@ the deployed model). The two Fabric apps are named by their engine (the owner's,
 is not the end of the world if one does. So a change that touches what they share (the
 model, the `mart` tables, the page's files) is checked on the public page first and goes
 out only when that check is clean, and where the clients pull apart the public page wins.
-The page has the layers of a BI stack, each in its own place under `dashboard/github/` (the
+The page has the layers of a BI stack, each in its own place under `dashboard/github-dax/` (the
 table of what stands in each place in a real product is in `ARCHITECTURE.md`), and two hosts
 that run it on DuckDB-WASM: GitHub Pages and a Fabric app. Everything is the same file on
 both except `storage/data.js`. On the third host, the Fabric app on VertiPaq, the last three
@@ -257,7 +257,7 @@ change against the days before is a `[... change]` measure. When the model or th
 cannot say something, the model gets the measure or the column, or the compiler the case,
 never the page the formula. What numbers the page does handle is how it draws (an axis cut
 at a percentile, a bubble's size, a layout, a number written as text, which row is the
-largest), and all of it is in `dashboard/github/frontend/draw.js`.
+largest), and all of it is in `dashboard/github-dax/frontend/draw.js`.
 **`scripts/parity/page_lint.mjs` enforces it** (`build.yml`, on every push): no `+ - * / %`
 on numbers, no `+= -=`, no `.reduce()` in the script of `index.html` or in `queries.js`; it
 does not read `draw.js`, which a review reads instead. The rows the page uses as they are
@@ -305,14 +305,14 @@ over 20 s means the capacity is throttling, and the check waits 5 minutes after 
 `publish=false` runs the check alone, on the model as deployed: publishing needs memory the
 model may not have left (3,069 MB of a 3 GB limit after a day of parity, run 37617689613).
 
-`index.html` is the one file at the top of `dashboard/github/`: it is the site's URL, and `data.js`
+`index.html` is the one file at the top of `dashboard/github-dax/`: it is the site's URL, and `data.js`
 finds `data/` from the page's URL. The deployed tree is the repo tree, so a relative import
 resolves the same locally and deployed, with one exception: `model.bim` is not in this
 folder. Both builds (`build.yml`, `dashboard/fabric_app_wasm/build.mjs`) copy
 `semantic_model/model.bim` to `semantic/model.bim`, next to the compiler that fetches it,
 and anything that serves the page from the repo has to do the same.
-- `dashboard/github/index.html` is the page: the charts, which draw what
-  `dashboard/github/frontend/queries.js` asks: every query the charts send, by tab and chart
+- `dashboard/github-dax/index.html` is the page: the charts, which draw what
+  `dashboard/github-dax/frontend/queries.js` asks: every query the charts send, by tab and chart
   (`createQueries(page)`, over the page's state passed in as functions; the renderers only
   call it). The queries name the model's tables, columns and measures (`fct_summary.mw`,
   `dim_duid.FuelSourceDescriptor`, `Capture price`). **The page joins nothing** and names no
@@ -345,7 +345,7 @@ and anything that serves the page from the repo has to do the same.
   otherwise. `.platform` and `definition.pbism` next to it make the folder a Fabric item.
   It is JSON, so a browser reads it with no library: there are no comments, so the why goes
   in a `description`, and a long expression is an array of lines.
-- `dashboard/github/semantic/compiler.js` has two parts (`createModel(dataSource)`: the data
+- `dashboard/github-dax/semantic/compiler.js` has two parts (`createModel(dataSource)`: the data
   source's members plus `has`, `views`, `needs`, `toDax` and `toSQL`). **It is a toy on purpose** (the owner,
   2026-10-05): an example of where that layer of the stack sits, not a DAX engine. It
   translates what this page asks, by fixed cases; it does not plan, and a construct it cannot
@@ -426,7 +426,7 @@ and anything that serves the page from the repo has to do the same.
   `today`, `agg` and the 5-minute history, and builds no view. On both the files are
   downloaded whole into OPFS, and the history is the half-year files (`p2026_h1`, ...), the
   ones a range needs. There are two, with the same members:
-  - `dashboard/github/storage/data.js`, GitHub Pages: the files sit in `data/` (`mart_dim`, `mart_today`,
+  - `dashboard/github-dax/storage/data.js`, GitHub Pages: the files sit in `data/` (`mart_dim`, `mart_today`,
     `mart_agg`, `mart_<YYYY>_h<N>`), with `mart_manifest.json` listing the half-years.
   - `dashboard/fabric_app_wasm/site/storage/data.js`, the Fabric app: the files are in a lakehouse behind a
     Fabric sign-in, read with a short-lived read-only SAS, and downloaded as 2 MB Range
@@ -439,10 +439,10 @@ and anything that serves the page from the repo has to do the same.
   (one 2024 day took 38 s that way, 2026-10-04).
   Both set the session to Brisbane time, on purpose: the files carry `date` and `time`, no
   TIMESTAMPTZ, and the only thing the zone decides is that `CURRENT_DATE` is the NEM's day.
-- `dashboard/github/storage/history.js` is what both `data.js` share about the half-year history
+- `dashboard/github-dax/storage/history.js` is what both `data.js` share about the half-year history
   files: `periodsForRange` (which ones a date range needs) and `attachCached` (ATTACH from
   OPFS in place, into memory if a second tab holds the file).
-- `dashboard/github/frontend/perflog.js` and `dashboard/github/frontend/logs.js` are the Logs tab, on both
+- `dashboard/github-dax/frontend/perflog.js` and `dashboard/github-dax/frontend/logs.js` are the Logs tab, on both
   hosts: a table of what this session fetched, attached and ran, with timings, and the build
   stamp. This session only: it lives in the page's memory, nothing is stored, written to a
   file or uploaded, and the Copy button is the one way out. A host's `data.js` does the
@@ -551,7 +551,7 @@ it is viewed.
 **The Fabric app is `dashboard/fabric_app_wasm/`**, a Rayfin project: static hosting, Fabric sign-in, and one
 function, `getDataSas` (`dashboard/fabric_app_wasm/rayfin/functions`), which signs a read-only SAS on the data
 folder so that the browser never holds a storage token. `dashboard/fabric_app_wasm/build.mjs` assembles
-`dashboard/fabric_app_wasm/dist`: `index.html`, the three folders and `dag/` from `dashboard/github/`,
+`dashboard/fabric_app_wasm/dist`: `index.html`, the three folders and `dag/` from `dashboard/github-dax/`,
 `semantic_model/model.bim`, with
 `dashboard/fabric_app_wasm/site/` copied over them (`storage/data.js`, its own, `storage/auth.js` and
 `storage/sas.js`), and
@@ -925,7 +925,7 @@ the same pins, and pins the two Azure SDK packages its upload uses.
 - **The dashboard pins `@duckdb/duckdb-wasm@1.33.1-dev65.0`** (DuckDB 1.5.x line), a dev build
   because nothing stable has shipped since 1.33.0. Don't take npm's `latest` tag: it points
   at `1.33.1-dev57.0`, which the DuckDB blog says breaks OPFS. The dev build lets
-  `attachCached` (`dashboard/github/storage/history.js`) read the OPFS-cached files in place
+  `attachCached` (`dashboard/github-dax/storage/history.js`) read the OPFS-cached files in place
   (`registerFileHandle` + `BROWSER_FSACCESS`) instead of copying each one into the WASM heap.
   Register the plain filename, not `opfs://`: an `opfs://` ATTACH also opens `<file>.wal`,
   which is never registered, so the ATTACH fails. The handle is exclusive, so a second tab
