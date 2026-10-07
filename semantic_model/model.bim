@@ -134,6 +134,15 @@
             "summarizeBy": "none"
           },
           {
+            "name": "CO2eFactor",
+            "dataType": "double",
+            "description": "CO2-e emitted per MWh sent out, tonnes: AEMO's factor for the unit's gensets (MMSDM GENUNITS through DUALLOC), registered or not. Blank for loads, AEMO's dummy units, the gensets AEMO lists \"On Exclusion List\" and WA.",
+            "sourceColumn": "CO2eFactor",
+            "sourceLineageTag": "CO2eFactor",
+            "summarizeBy": "none",
+            "formatString": "0.000"
+          },
+          {
             "name": "Renewable",
             "dataType": "boolean",
             "description": "Whether the unit's fuel is renewable; the list of fuels is in dim_duid.sql.",
@@ -456,6 +465,25 @@
             "formatString": "#,##0.0",
             "expression": "DIVIDE([Charging MW], [Days with output])",
             "description": "By time of day: what the units took at that time on an average day, MW, negative. [Charging MW] over the days that have a row at it. Always from fct_summary."
+          },
+          {
+            "name": "Emissions t",
+            "formatString": "#,##0",
+            "expression": [
+              "VAR late = EXCEPT(VALUES(dim_calendar[date]), CALCULATETABLE(VALUES(fct_summary_daily[date]), REMOVEFILTERS(dim_duid), REMOVEFILTERS(dim_region)))",
+              "RETURN",
+              "    IF([Reads 5 minutes],",
+              "        SUMX(fct_summary, MAX(fct_summary[mw], 0) * RELATED(dim_duid[CO2eFactor])) / 12,",
+              "        SUMX(fct_summary_daily, fct_summary_daily[output_mwh] * RELATED(dim_duid[CO2eFactor]))",
+              "            + CALCULATE(SUMX(fct_summary, MAX(fct_summary[mw], 0) * RELATED(dim_duid[CO2eFactor])), late) / 12)"
+            ],
+            "description": "Tonnes of CO2-e emitted: each unit's output ([Generation MWh]'s, from the same table) times its dim_duid[CO2eFactor]. A unit with no factor counts nothing: loads, and the gensets AEMO lists \"On Exclusion List\" (Colongra, Jeeralang, Braemar 3 and 6), so the total is short of AEMO's by what those emit. Rooftop solar has no unit and emits nothing."
+          },
+          {
+            "name": "Emissions intensity",
+            "formatString": "0.000",
+            "expression": "DIVIDE([Emissions t], CALCULATE([Generation MWh], NOT ISBLANK(dim_duid[CO2eFactor])))",
+            "description": "Tonnes of CO2-e per MWh, over the units that have a factor: [Emissions t] divided by their [Generation MWh]. Rooftop solar is not in it."
           }
         ],
         "partitions": [
@@ -944,6 +972,58 @@
             "source": {
               "type": "entity",
               "entityName": "fct_interconnector",
+              "expressionSource": "DirectLake",
+              "schemaName": "mart"
+            }
+          }
+        ]
+      },
+      {
+        "name": "dim_interconnector",
+        "description": "One row per link between two regions, from AEMO's MMSDM INTERCONNECTOR: what fct_interconnector's id stands for.",
+        "sourceLineageTag": "[mart].[dim_interconnector]",
+        "columns": [
+          {
+            "name": "interconnector",
+            "dataType": "string",
+            "description": "AEMO's id of the link, as fct_interconnector carries it.",
+            "sourceColumn": "interconnector",
+            "sourceLineageTag": "interconnector",
+            "summarizeBy": "none",
+            "isKey": true
+          },
+          {
+            "name": "from_region",
+            "dataType": "string",
+            "description": "The region a positive flow leaves.",
+            "sourceColumn": "from_region",
+            "sourceLineageTag": "from_region",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "to_region",
+            "dataType": "string",
+            "description": "The region a positive flow enters.",
+            "sourceColumn": "to_region",
+            "sourceLineageTag": "to_region",
+            "summarizeBy": "none"
+          },
+          {
+            "name": "description",
+            "dataType": "string",
+            "description": "AEMO's description of the link.",
+            "sourceColumn": "description",
+            "sourceLineageTag": "description",
+            "summarizeBy": "none"
+          }
+        ],
+        "partitions": [
+          {
+            "name": "dim_interconnector",
+            "mode": "directLake",
+            "source": {
+              "type": "entity",
+              "entityName": "dim_interconnector",
               "expressionSource": "DirectLake",
               "schemaName": "mart"
             }
@@ -1472,6 +1552,13 @@
         "fromColumn": "time",
         "toTable": "dim_time",
         "toColumn": "time"
+      },
+      {
+        "name": "fct_interconnector_to_dim_interconnector",
+        "fromTable": "fct_interconnector",
+        "fromColumn": "interconnector",
+        "toTable": "dim_interconnector",
+        "toColumn": "interconnector"
       },
       {
         "name": "fct_summary_daily_to_dim_duid",
