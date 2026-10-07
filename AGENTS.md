@@ -12,6 +12,10 @@
   `on-run-start`): the archive would go to the local `/tmp` and its paths into the shared log.
 - **Schemas:** `mart` (the dimensions and the tables the semantic model reads) / `landing`
   (the raw facts, staging)
+- **Keep the source as raw as possible; transform in the next layer** (the owner's,
+  2026-10-07). A source table holds what the feed published, as published. Combining,
+  interpolating, filling in and reshaping for reporting happen in a derived table built from
+  it, never in the source.
 - **Writes are insert-only merges** (`WHEN MATCHED DO NOTHING`): the OneLake catalog accepts
   one add-snapshot per commit and, for now, rejects a commit mixing delete files + data files
   (BadRequest 400). A `DELETE` in a commit of its own works. Same pattern as the sibling
@@ -635,9 +639,10 @@ they are what these tables are built from.
   (`fct_summary_hourly`, `fct_region_hourly`, with `dim_month` for the days of a month). An
   aggregate row is written once, when its day or month is whole.
 - **What the owner decided about their shape:** MW and price sit on one row at 5 minutes
-  (`fct_summary`), because joining two facts at query time is too slow; rooftop is its own
-  table, never units; a value that is only held, carried forward or interpolated for drawing
-  is the reader's to work out and is never stored; the logic is measures.
+  (`fct_summary`), because joining two facts at query time is too slow; rooftop's source is
+  its own table, kept as published, never units; a value that is held, carried forward or
+  interpolated is never stored in a source table (a derived reporting table may hold it);
+  the logic is measures.
 - `semantic_model/` is the model, a Fabric item (`model.bim`, `definition.pbism`,
   `.platform`; fabric-cicd finds an item by its `.platform`, whatever the folder is called,
   and `deploy_model.py` publishes a copy of that folder): fourteen tables, each one Direct Lake partition on a `mart`
@@ -757,7 +762,7 @@ they are what these tables are built from.
 
 **Rooftop solar is a table of its own, `fct_rooftop`, never units.** AEMO's `MEASUREMENT`
 estimate per region and half hour, as published (it starts 2018-03-06); a blank (`QI = 0`)
-is missing, not zero. Nothing held, carried forward or interpolated is stored: the model's
+is missing, not zero. Nothing held, carried forward or interpolated is stored in it: the model's
 `[Rooftop MW]` draws the straight line between two consecutive half hours (nothing across a
 missing one), and the page carries the newest half hour forward where it draws (the next
 estimate lands 30 to 60 minutes late). On the generation chart the dashed Demand line is
