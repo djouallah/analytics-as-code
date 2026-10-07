@@ -9,11 +9,10 @@
 //     else is its own.
 // No bundler. Two stamps, so a browser never mixes files of two deploys and the Logs tab
 // can tell a fresh deploy from a cached one: __BUILD__ (git sha + time), and ?v=<build> on
-// every relative import (../../scripts/stamp_build.mjs, which the Pages build runs too).
-import { rm, cp, mkdir } from "node:fs/promises";
+// every relative import.
+import { rm, cp, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execSync } from "node:child_process";
-import { stampBuild } from "../../scripts/stamp_build.mjs";
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const project = (p) => fileURLToPath(new URL(p, pathToFileURL(process.cwd() + "/")));
@@ -36,7 +35,13 @@ for (const d of folders) await cp(page + d, dist + d, { recursive: true });
 if (folders.includes("semantic")) await cp(model, dist + "semantic/model.bim");
 await cp(here("./site/storage/auth.js"), dist + "storage/auth.js");
 await cp(project("./site/"), dist, { recursive: true });
-await stampBuild(dist, BUILD);
+for (const f of await readdir(dist, { recursive: true })) {
+  if (!/\.(html|js)$/.test(f)) continue;
+  const s = await readFile(dist + f, "utf8");
+  await writeFile(dist + f, s
+    .replaceAll("__BUILD__", BUILD)
+    .replace(/(\b(?:from|import)\s*["']\.{1,2}\/[\w./-]+\.js)(["'])/g, `$1?v=${BUILD}$2`));
+}
 // After the stamping, which must not touch them.
 await cp(page + "dag", dist + "dag", { recursive: true });
 console.log(`Published ../github-dax (${folders.join(", ")}) + site/ -> ${dist} (build ${BUILD})`);

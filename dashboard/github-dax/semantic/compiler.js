@@ -6,8 +6,7 @@
 //   consumer        index.html                 the BI tool
 //   query language  DAX                        DAX, MDX, VizQL, Malloy, a metrics request
 //   semantic model  model.bim (TMSL)           a Tabular model, LookML, MetricFlow YAML
-//   compiler        this file                  Power BI's query service and formula engine,
-//                                              MetricFlow, Cube
+//   compiler        this file                  Power BI's formula engine, MetricFlow, Cube
 //   engine          DuckDB-WASM                the warehouse, VertiPaq, Hyper
 //   storage         ../storage/data.js         the lakehouse or warehouse connection
 //
@@ -70,18 +69,17 @@
 //                        REGIONID IN (SELECT Region FROM v_dim_duid WHERE ...)
 //   a fact and two of    one more view, <fact>_star: the fact LEFT JOIN each of them
 //
-// Part 2, the queries. The page sends a query of the model's fields (toDax, which lists its
-// words); it becomes DAX, and the DAX one SELECT over those views (toSQL):
+// Part 2, the queries (toSQL). A DAX query becomes one SELECT over those views:
 //   SUMMARIZECOLUMNS, ROW             an aggregate; ROLLUPADDISSUBTOTAL is GROUPING SETS;
 //                                     HAVING drops a group whose measures are all NULL
-//   CALCULATETABLE(t, filters)        WHERE
-//   SELECTCOLUMNS                     a projection
-//   FILTER                            HAVING on an aggregate, WHERE on rows
+//   CALCULATETABLE(t, filters)        WHERE; TREATAS(VALUES(..), col) is col IN (SELECT ..)
+//   SELECTCOLUMNS, VALUES             a projection, DISTINCT
+//   GROUPBY over one of those         the grouping, in the same SELECT when it can be
+//   FILTER                            WHERE on rows, HAVING on an aggregate
 //   TOPN                              QUALIFY RANK() <= n: ties at the cut are kept;
 //                                     descending unless ASC
 //   ORDER BY                          ORDER BY
-//   [Name]                            a column of the table being built, else a measure
-// and in the measures of the model:
+//   UNION, a table VAR                UNION ALL, a CTE; a scalar VAR is a scalar subquery
 //   CALCULATE(measure, filter)        the aggregates of the measure with FILTER (WHERE ..)
 //   CALCULATE(m, ALLSELECTED(table))  m over all the query selects, not grouped by the
 //                                     table's columns: a window over the groups when m is
@@ -90,11 +88,9 @@
 //                                     the days worked out here from the query's own range
 //                                     (MIN and MAX of dim_calendar[date], DATEDIFF in days)
 //   KEEPFILTERS(filter)               the filter: here filters only ever add up
-//   VAR                               written out where it is used
 //   ISFILTERED, ISCROSSFILTERED       true or false, from the columns the query names; an IF
 //                                     on one keeps the side it picks
-// Those are all the cases, and the words of a query and the cases for the measures are the
-// owner's to add to, not a page's or an agent's.
+//   [Name]                            a column of the table being built, else a measure
 // Which view a query reads is decided here, from the tables it names: `fct_summary` alone
 // reads v_fct_summary, with a column of `dim_duid` the relationship's view. So a query that
 // needs nothing about the unit pays for no join, with no rule for the author to remember.
@@ -103,8 +99,8 @@
 // a whole number as INTEGER, a number as DOUBLE.
 //
 // createModel(data) wraps a data source (../storage/data.js: init, attachAgg, ensureHistory,
-// query) and has its members plus `has`, `needs`, `toDax` and `toSQL`; `query` takes the
-// page's query (an object) or SQL, never DAX text. It compiles the model after every attach, reading what is attached
+// query) and has its members plus `has`, `needs` and `toSQL`; `query` takes DAX (it starts
+// with EVALUATE) or SQL. It compiles the model after every attach, reading what is attached
 // from the engine's own catalog: one query for the catalog, one for the statements that
 // changed. A view is created once and bound again every time it is read (DuckDB), so the
 // ones over a rebuilt view follow it.
@@ -178,10 +174,10 @@ function parse(src) {
     throw new Error(`DAX: unexpected ${here()}`);
   }
   const unary = () => eat('-') ? { k: 'neg', e: unary() } : primary();
-  const mul = chain(unary, ['*', '/']), add = chain(mul, ['+', '-']);
+  const mul = chain(unary, ['*', '/']), add = chain(mul, ['+', '-']), cat = chain(add, ['&']);
   function cmp() {
-    const l = add(), o = ['=', '<>', '<=', '>=', '<', '>'].find(x => op(x));
-    if (o) { i++; return { k: 'bin', op: o, l, r: add() }; }
+    const l = cat(), o = ['=', '<>', '<=', '>=', '<', '>'].find(x => op(x));
+    if (o) { i++; return { k: 'bin', op: o, l, r: cat() }; }
     if (eat('IN')) { need('{'); return { k: 'in', e: l, list: args('}') }; }
     return l;
   }
@@ -247,9 +243,11 @@ const RELS = MODEL.relationships.map(r => ({ view: r.name, from: r.fromTable, fr
 // ISCROSSFILTERED). That is answered from the query, as the DAX says: the columns its keys
 // and filters name around the measure (`scope`). So the page picks the side the way a
 // report does: it filters the fact's own date for 5 minutes, dim_calendar's for the days.
+// TREATAS filters the columns it is put on, not the ones its table is made of.
 function colsIn(e, out = []) {
   if (!e || typeof e !== 'object') return out;
   if (e.k === 'col') out.push(e);
+  else if (isCall(e, 'TREATAS')) e.args.slice(1).forEach(x => colsIn(x, out));
   else for (const x of [e.e, e.l, e.r, e.body, ...(e.args ?? []), ...(e.list ?? []), ...(e.items ?? []), ...(e.defs ?? [])]) colsIn(x, out);
   return out;
 }
@@ -384,7 +382,7 @@ function backward(x, fs, r, q) {
 // around it that reach its table, grouped by the keys that do and matched on them. That is
 // what the filter context does in DAX: a filter on dim_calendar reaches every fact, one on
 // dim_duid or on fct_summary only the units. Blank is 0 here, as DAX adds it.
-const elsewhere = (name, cx) => subquery({ k: 'ref', name }, HOME.get(name), cx);
+const elsewhere = (name, cx) => measureSubquery({ k: 'ref', name }, HOME.get(name), cx);
 // ALLSELECTED of a measure of this SELECT's own table that is a sum ([Generation MWh]): the
 // same groups added up again, a window over them, partitioned by the keys it keeps, the
 // subtotal rows left out. One scan instead of the subquery's two (the generation chart of 30
@@ -413,7 +411,7 @@ function overShown(e, tables, cx) {
 // The same for a value of the table this SELECT is about, under other filters than the
 // query's: `drop` says which of its keys it is not grouped by (ALLSELECTED), `swap` which
 // filters are replaced, and by what (DATESBETWEEN).
-function subquery(e, home, cx, { drop = () => false, swap = null } = {}) {
+function measureSubquery(e, home, cx, { drop = () => false, swap = null } = {}) {
   const q = cx.q, to = reach(home), reaches = c => to.has(c.table), fwd = reach(home, true);
   let filters = q.scope.flatMap(s => s.filters ?? []).filter(f => colsIn(f).every(reaches));
   if (swap) filters = [...filters.filter(f => !colsIn(f).some(swap.on)), ...swap.add];
@@ -520,6 +518,10 @@ function scalar(e, cx) {
     }
     case 'bin': {
       const l = go(e.l), r = go(e.r);
+      if (e.op === '&') {
+        const str = x => x.t === 'string' ? par(x, P.cat) : `CAST(${x.s} AS VARCHAR)`;
+        return { s: `${str(l)} || ${str(r)}`, t: 'string', p: P.cat };
+      }
       // In a measure of the model, <> is DAX's: a blank is not "Grid". (The page's own
       // filters keep SQL's, where a NULL is unequal to nothing: queries.js says `blank`
       // on its own where it means it, as fuelsNotIn does.)
@@ -571,13 +573,10 @@ function call(e, cx) {
       const x = arg(0);
       return agg(`${fn}(${x.s})`, x.t);
     }
-    case 'ABS': { const x = arg(0); return atom(`ABS(${x.s})`, x.t); }
-    case 'DATEDIFF': {
-      if (a[2]?.name?.toUpperCase() !== 'DAY') throw new Error('DAX: DATEDIFF is supported in days');
-      return atom(`DATE_DIFF('day', ${arg(0).s}, ${arg(1).s})`, 'int');
-    }
     case 'SUMX': over(a[0]); return agg(`SUM(${arg(1).s})`, 'double');
     case 'AVERAGEX': over(a[0]); return agg(`AVG(${arg(1).s})`, 'double');
+    case 'MINX': case 'MAXX': { over(a[0]); const x = arg(1); return agg(`${fn.slice(0, 3)}(${x.s})`, x.t); }
+    case 'CONCATENATEX': over(a[0]); return agg(`string_agg(${arg(1).s}, ${arg(2).s})`, 'string');
     case 'COUNTROWS': {
       // [Units] off the daily table: its units, and those of the days it lacks (none).
       if (isCall(a[0], 'DISTINCT') && isCall(a[0].args[0], 'UNION')) {
@@ -602,13 +601,33 @@ function call(e, cx) {
       const v = arg(1);
       return atom(`${when([[arg(0).s, v.s]])}${a[2] ? ` ELSE ${arg(2).s}` : ''} END`, v.t);
     }
+    case 'SWITCH': {
+      if (!isCall(a[0], 'TRUE')) throw new Error('DAX: SWITCH is supported as SWITCH(TRUE(), ...)');
+      const rest = a.slice(1).map(x => scalar(x, cx)), pairs = [];
+      while (rest.length > 1) pairs.push([rest.shift().s, rest[0].s, rest.shift().t]);
+      return atom(`${when(pairs)}${rest.length ? ` ELSE ${rest[0].s}` : ''} END`, pairs[0][2]);
+    }
     case 'COALESCE': { const xs = a.map(x => scalar(x, cx)); return atom(`COALESCE(${xs.map(x => x.s).join(', ')})`, xs[0].t); }
     case 'ISBLANK': return { s: `${par(arg(0), P.cat)} IS NULL`, t: 'bool', p: P.cmp };
     case 'RELATED': return arg(0);
+    case 'ABS': { const x = arg(0); return atom(`abs(${x.s})`, x.t); }
+    case 'DATEDIFF': {
+      if (a[2]?.name?.toUpperCase() !== 'DAY') throw new Error('DAX: DATEDIFF is supported in days');
+      return atom(`DATE_DIFF('day', ${arg(0).s}, ${arg(1).s})`, 'int');
+    }
+    case 'SELECTEDVALUE': { const x = arg(0); return agg(`ANY_VALUE(${x.s})`, x.t); }
+    case 'ROUND': return a[1].v === '0' ? atom(`CAST(ROUND(${arg(0).s}) AS INTEGER)`, 'int') : atom(`ROUND(${arg(0).s}, ${arg(1).s})`, 'double');
     case 'CONVERT': {
       const to = a[1].name?.toUpperCase();
       if (to !== 'INTEGER' && to !== 'DOUBLE') throw new Error('DAX: CONVERT is supported to INTEGER and DOUBLE');
       return atom(`CAST(${arg(0).s} AS ${to})`, to === 'INTEGER' ? 'int' : 'double');
+    }
+    case 'QUOTIENT': return { s: `${par(arg(0), P.mul)} // ${par(arg(1), P.mul + 1)}`, t: 'int', p: P.mul };
+    case 'DATE': {
+      // The first of the month, the one date the page builds.
+      const [y, m, d] = a, same = JSON.stringify(y.args?.[0]) === JSON.stringify(m.args?.[0]);
+      if (!isCall(y, 'YEAR') || !isCall(m, 'MONTH') || !same || d.v !== '1') throw new Error('DAX: DATE is supported as DATE(YEAR(x), MONTH(x), 1)');
+      return atom(`CAST(date_trunc('month', ${scalar(y.args[0], cx).s}) AS DATE)`, 'date');
     }
     case 'CALCULATE': {
       if (a.slice(1).some(f => isNone(f, cx))) return atom('0', 'double');
@@ -622,7 +641,7 @@ function call(e, cx) {
         const tables = new Set(all.map(f => f.args[0].name));
         const swap = between.length ? daysBetween(between, cx) : null;
         return (swap ? null : overShown(a[0], tables, cx))
-          ?? subquery(a[0], a[0].k === 'ref' ? HOME.get(a[0].name) : cx.r.home, cx, { drop: c => tables.has(c.table), swap });
+          ?? measureSubquery(a[0], a[0].k === 'ref' ? HOME.get(a[0].name) : cx.r.home, cx, { drop: c => tables.has(c.table), swap });
       }
       // [Capacity MW], CALCULATE(SUM(dim[column]), SUMMARIZE(fact, dim[key])): the column of
       // the keys that have rows, each key once. Off the daily table the keys of the days it
@@ -657,10 +676,10 @@ function call(e, cx) {
 
 // A table expression, as the parts of one SELECT read as `t`. `cols` are its columns in
 // order (`sql` over the rows read, `agg` if aggregated); `tables` are the model tables it
-// names, which pick the view, unless `from` says what it reads (a subquery).
+// names, which pick the view, unless `from` says what it reads (a subquery or a CTE).
 // `group` is null until it aggregates.
 const rel = o => ({ cols: [], tables: new Set(), from: null, where: [], group: null, sets: null, having: [],
-  order: [], qualify: null, aggs: [], unit: null, ...o });
+  distinct: false, order: [], qualify: null, aggs: [], unit: null, ...o });
 const derived = c => ({ name: c.name, sql: `t.${c.name}`, type: c.type, p: P.atom });
 const named = (name, x) => ({ name, sql: x.s, type: x.t, p: x.p, agg: x.agg });
 const wrap = r => rel({ from: `(${select(r, true)})`, cols: r.cols.map(derived) });
@@ -685,9 +704,50 @@ function emit(e, r, q, names = q.names) {
   return { ...x, agg: state.agg };
 }
 
-// A filter argument of CALCULATETABLE, as a condition on the rows read.
-const condition = (f, r, q) => par(emit(f, r, q), P.and);
+// A filter argument of CALCULATETABLE or CALCULATE, as a condition on the rows read.
+// TREATAS(VALUES(table[column]), a dimension's key) is noted as such: put on the table it
+// was taken from, it says nothing (see `says`).
+function condition(f, r, q) {
+  if (!isCall(f, 'TREATAS')) return par(emit(f, r, q), P.and);
+  const [from, to] = f.args;
+  const values = table(from, q);
+  values.distinct = false;   // IN does not need it
+  const own = isCall(from, 'VALUES') && from.args[0].k === 'col' && to.k === 'col' && f.args.length === 2;
+  if (!own) return `${emit(to, r, q).s} IN (${select(values, true)})`;
+  // A table's own values (the days the daily table holds) are read once per query, as a
+  // CTE: a two-fact measure puts the same filter on each of its subqueries.
+  const { table: t, name: c } = from.args[0], cte = `${t}_${c}`;
+  values.distinct = true;
+  const text = `${cte} AS MATERIALIZED (${select(values, true)})`;
+  return { sql: `${emit(to, r, q).s} IN (SELECT ${c} FROM ${cte})`, table: t, column: c, dim: to.table, name: to.name,
+    use: () => { if (!q.ctes.includes(text)) q.ctes.unshift(text); } };
+}
+// A condition as SQL, or nothing when it is a table's own values put back on its own key:
+// the page's `wholeDays` (the days the daily table holds) on a query that reads the daily
+// table. As a semi-join it cost 100 ms a query (2026-10-05) to keep every row.
+const says = (w, r) => {
+  if (typeof w === 'string') return w;
+  if (!r.from && RELS.some(x => x.from === w.table && x.fromColumn === w.column && x.to === w.dim && x.toColumn === w.name && r.tables.has(x.from))) return null;
+  w.use();
+  return w.sql;
+};
 
+// The value of an expression on its own, as a scalar subquery: a VAR that is not a table.
+function scalarSubquery(e, q) {
+  const r = rel({ group: [] });
+  const [inner, ...filters] = isCall(e, 'CALCULATE') ? e.args : [e];
+  q.scope.push(Object.assign(filters.flatMap(f => colsIn(f)), { filters }));
+  const x = emit(inner, r, q);
+  q.scope.pop();
+  for (const f of filters) r.where.push(condition(f, r, q));
+  r.cols = [{ sql: x.s, type: x.t, p: x.p }];
+  return atom(`(${select(r, true)})`, x.t);
+}
+
+const TABLE_FNS = new Set(['SUMMARIZECOLUMNS', 'ROW', 'VALUES', 'DISTINCT', 'CALCULATETABLE', 'FILTER',
+  'SELECTCOLUMNS', 'GROUPBY', 'UNION', 'TOPN']);
+const isTable = (e, q) => e.k === 'call' ? TABLE_FNS.has(e.fn.toUpperCase())
+  : e.k === 'name' && (TABLES.has(e.name) || !!q.names.get(e.name)?.rel);
 const sortKey = (e, r) => {
   const c = e.k === 'ref' ? r.cols.find(c => c.name === e.name)
     : r.cols.find(c => c.sql === `t.${e.name}`) ?? r.cols.find(c => c.name === e.name);
@@ -696,6 +756,23 @@ const sortKey = (e, r) => {
 };
 
 function table(e, q) {
+  if (e.k === 'paren') return table(e.e, q);
+  if (e.k === 'var') {
+    for (const d of e.defs) {
+      if (isTable(d.e, q)) {
+        const r = table(d.e, q);
+        q.ctes.push(`${d.name} AS MATERIALIZED (${select(r, true)})`);
+        q.names.set(d.name, { rel: r });
+      } else q.names.set(d.name, scalarSubquery(d.e, q));
+    }
+    return table(e.body, q);
+  }
+  if (e.k === 'name') {
+    const cte = q.names.get(e.name)?.rel;
+    if (cte) return rel({ from: e.name, cols: cte.cols.map(derived) });
+    if (!TABLES.has(e.name)) throw new Error(`DAX: the model has no table ${e.name}`);
+    return rel({ tables: new Set([e.name]), cols: [...TABLES.get(e.name).values()].map(derived) });
+  }
   if (e.k !== 'call') throw new Error(`DAX: a ${e.k} is not a table`);
   const a = e.args;
   // "name", expression, "name", expression, ... from argument `from` on.
@@ -737,6 +814,11 @@ function table(e, q) {
       r.cols = pairs(0).map(([n, x]) => named(n, emit(x, r, q)));
       return r;
     }
+    case 'VALUES': case 'DISTINCT': {
+      const r = rel({ distinct: true });
+      r.cols = [named(a[0].name, emit(a[0], r, q))];
+      return r;
+    }
     case 'CALCULATETABLE': {
       q.scope.push(Object.assign(a.slice(1).flatMap(f => colsIn(f)), { filters: a.slice(1) }));
       const r = table(a[0], q);
@@ -762,6 +844,24 @@ function table(e, q) {
       const r = table(a[0], q);
       r.cols = pairs(1).map(([n, x]) => named(n, emit(x, r, q)));
       return r;
+    }
+    case 'GROUPBY': {
+      let r = table(a[0], q), i = 1;
+      if (r.group || r.distinct || r.qualify) r = wrap(r);
+      const keys = [];
+      for (; i < a.length && a[i].k === 'ref'; i++) {
+        const c = r.cols.find(c => c.name === a[i].name);
+        if (!c) throw new Error(`DAX: GROUPBY has no column [${a[i].name}] to group by`);
+        keys.push({ ...c, agg: false });
+      }
+      const measures = pairs(i).map(([n, x]) => named(n, emit(x, r, q)));
+      r.group = keys.map(c => c.sql);
+      r.cols = [...keys, ...measures];
+      return r;
+    }
+    case 'UNION': {
+      const parts = a.map(x => table(x, q));
+      return rel({ from: `(${parts.map(p => select(p, true)).join(' UNION ALL ')})`, cols: parts[0].cols.map(derived) });
     }
     case 'TOPN': {
       // As DAX: descending unless ASC (or 1), and the rows tied with the n-th are kept.
@@ -811,10 +911,10 @@ function select(r, raw) {
     return !c.name || s === `t.${c.name}` ? s : `${s} AS ${c.name}`;
   };
   const where = r.where;
-  // A window (overShown) is worked out after HAVING: the conditions on values wait for it.
-  const having = r.windowed ? [] : r.having, qualify = [...(r.windowed ? r.having : []), ...(r.qualify ? [r.qualify] : [])];
+  const having = r.windowed ? [] : r.having;
+  const qualify = [...(r.windowed ? r.having : []), ...(r.qualify ? [r.qualify] : [])];
   const parts = [
-    `SELECT ${r.cols.map(out).join(', ')}`,
+    `SELECT ${r.distinct ? 'DISTINCT ' : ''}${r.cols.map(out).join(', ')}`,
     where.length && `WHERE ${where.join(' AND ')}`,
     r.group?.length && (r.sets ? `GROUP BY GROUPING SETS (${r.sets})` : `GROUP BY ${r.group.join(', ')}`),
     having.length && `HAVING ${having.join(' AND ')}`,
@@ -842,14 +942,14 @@ function select(r, raw) {
 //            ('Generation MW'), or { min: column } / { max: column }, a key's first or last
 //            value (not a figure)
 //   where    conditions on columns: [column, op, ...values] with op = <> < <= > >= between
-//            in notIn blank notBlank, or { any: [condition, ...] }, true if one of them is
+//            in blank notBlank, or { any: [condition, ...] }, true if one of them is
 //   having   [name, op, value] or [name, 'notBlank'] on a value of the select: rows left out
 //   totals   { name: [column, ...] }: those columns of the select also added up over, in one
 //            more set of rows on which `name` is true
 //   orderBy  [name, [name, 'desc'], ...]
 //   top      n: the first n rows by the first orderBy, the rows tied with the n-th kept
-// A value is a literal: a string, a number, true or false, or a date on a date column
-// ('2026-10-07'). A column has a dot and a measure has none (no measure of the model has one).
+// A value is a literal: a string, a number, or a date on a date column ('2026-10-07'). A
+// column has a dot and a measure has none (no measure of the model has one).
 // What the DAX needs that the page does not say is written here: a query of a dimension's
 // columns alone leaves out the blank row DAX adds to a dimension when a fact names a key it
 // lacks (dim_duid, dim_interconnector: the page lists rows, and that row is none of them).
@@ -1092,14 +1192,9 @@ export function createModel(data) {
       const v = _views.get(view);
       return !!v && (!column || !v.cols || v.cols.has(column));
     },
-    // The page's query (an object) becomes DAX, and the DAX SQL; both go to the Logs tab.
-    // SQL (Analyze) goes as it is. DAX text is refused: the page asks in the query's words.
-    query: async q => {
-      if (typeof q !== 'string') { const dax = toDax(q); return data.query(toSQL(dax), dax); }
-      if (isDax(q)) throw new Error('DAX is written by the compiler: send the query as an object');
-      return data.query(q);
-    },
-    toDax,
+    // A DAX query (it starts with EVALUATE) is translated, and goes with its SQL for the
+    // Logs tab; SQL goes as it is.
+    query: async q => isDax(q) ? data.query(toSQL(q), q) : data.query(q),
     toSQL,
     // What a SQL query reads, by the views it names: the 5-minute history of a date range
     // (ensureHistory) and/or the aggregates (attachAgg).
