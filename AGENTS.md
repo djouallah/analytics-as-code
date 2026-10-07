@@ -13,8 +13,9 @@
 - **Schemas:** `mart` (the dimensions and the tables the semantic model reads) / `landing`
   (the raw facts, staging)
 - **Writes are insert-only merges** (`WHEN MATCHED DO NOTHING`): the OneLake catalog accepts
-  one add-snapshot per commit and rejects commits mixing delete files + data files
-  (BadRequest 400). Same pattern as the sibling repo (dbt-fabric). `dim_calendar` is a plain
+  one add-snapshot per commit and, for now, rejects a commit mixing delete files + data files
+  (BadRequest 400). A `DELETE` in a commit of its own works. Same pattern as the sibling
+  repo (dbt-fabric). `dim_calendar` is a plain
   `append` — its NOT-IN filter keeps existing dates out; it runs to `current_date + 2 years`.
 
 ## The sibling repo
@@ -140,11 +141,14 @@ Four deliberate local differences, all of which must survive a port:
    only shows in the job's log. Both scripts read their table list from
    `scripts/iceberg_tables.py`; a new model gets added there once.
 
-## Don't design anything that needs DELETE
-Every write is an append. On OneLake a commit may carry only one add-snapshot, so anything
-that mixes delete files with data files is rejected outright (`BadRequest 400`) — hence the
-insert-only merges. Design the path so it needs no `DELETE`, and never assume one landed —
-re-count and log the delta.
+## DELETE works, in a commit of its own
+On OneLake a commit may carry only one add-snapshot, so, for now, a commit that mixes delete
+files with data files is rejected (`BadRequest 400`): an `UPDATE`, a `MERGE` that updates or
+deletes, a `DELETE` and an `INSERT` in one transaction. That is expected to be fixed soon,
+and it is why the merges are insert-only. A `DELETE` in a commit of its own works (the
+owner's, 2026-10-07), so replacing rows is two commits, the `DELETE` and then the `INSERT`.
+They are not atomic: a reader between the two sees the rows gone, and a run that fails after
+the `DELETE` leaves them gone until the next run writes them.
 
 The catalog capability probe (CREATE/INSERT/DELETE/UPDATE/MERGE/DROP against a freshly
 created table) lives in the user's **separate repo**, not here. Its matrix is the standing
