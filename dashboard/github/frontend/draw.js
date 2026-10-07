@@ -153,6 +153,21 @@ export function calendarLayout(years, W, boxH, fit) {
 export const bandSeries = (lows, highs) => [lows, lows.map((v, i) => v == null || highs[i] == null ? null : highs[i] - v)];
 // A share of a limit (%) as a bar's width, full at 100.
 export const barPercent = pct => Math.min(100, Math.round(pct));
+// A stacked series' height where the model has no row: none. The figure stays blank; the
+// stack only needs a height to put the next series on.
+export const stackValue = v => v ?? 0;
+// The interval under the pointer of an axis tooltip, as an index of the axis' labels (a date,
+// or a date and a time: one each). A sampled line hands its tooltip the point of the bucket
+// nearest the pointer, the mean of several intervals; the page shows the model's row there.
+export const axisAt = (params, labels) => labels.indexOf(params[0]?.axisValue);
+// An axis tooltip of the model's values at that interval: valueOf(param, index) per series.
+export const axisTooltip = (labels, valueOf, format) => params => {
+  const i = axisAt(params, labels);
+  return `<div>${params[0]?.axisValueLabel ?? ''}</div>` + params.map(p => {
+    const v = i < 0 ? null : valueOf(p, i);
+    return `<div>${p.marker} ${p.seriesName}: <b>${v == null ? '-' : format(v)}</b></div>`;
+  }).join('');
+};
 // A generator's bubble, by its output against the output drawn largest.
 export const bubbleSize = (mw, full) => 3 + 20 * Math.sqrt(Math.min(1, Math.abs(mw) / full));
 // A link's arrow, by its flow against the largest flow shown (150 MW at least), and whether

@@ -485,7 +485,10 @@ rather than round them:
 - **One screen per tab on a desktop** (the owner's, 2026-10-06: no scrolling page). At 1100 px
   wide and 600 tall or more the page does not scroll: each tab is a flex/grid that fills the
   window under the header, and a chart takes its cell's height (`--h` is its height only where
-  the page scrolls, below that size). Under 960 tall a compact layout applies (the hero one
+  the page scrolls, below that size). A chart of the Dashboard and Insights is never under
+  150 px (`--chart-min`): a window too short for that under the header, the hero and the
+  KPIs scrolls by the difference (at 1100x600 the generation chart had been 5 px; from about
+  1280x720 up nothing scrolls). Under 960 tall a compact layout applies (the hero one
   band, the Dashboard's three charts side by side). Charts follow their boxes through a
   `ResizeObserver`. Insights is three sub-pages of four charts (`INSIGHTS_PAGES`) and only the
   one shown is drawn; the Flows board holds each link's small chart in its row; the History

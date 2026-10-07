@@ -294,7 +294,7 @@
        of its cell. Smaller than this, the page scrolls as above. --- */
     .chrome { display: contents; }
     @media (min-width: 1100px) and (min-height: 600px) {
-      body { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+      body { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden auto; }
       .chrome { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.2rem; padding: 0.6rem var(--gutter); border-bottom: 1px solid var(--hairline); }
       .topbar { display: contents; }
       .tab-bar { order: 1; }
@@ -317,6 +317,13 @@
       .chart-card .chart-header { flex: none; min-height: 1.75rem; }
       #title-generation { display: block; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .chart-container { flex: 1 1 0; min-height: 0; height: auto; }
+      /* A chart is never squeezed to nothing: on the Dashboard and Insights it keeps
+         --chart-min, and a window too short to hold that under the header, the hero and the
+         KPIs scrolls (at 1100x600 the generation chart was 5 px high). Tall enough, nothing
+         changes: the charts share what is left. */
+      #view-dashboard, #view-insights { --chart-min: 150px; flex: 1 0 auto; min-height: 0; }
+      #view-dashboard .charts, #view-insights .charts { flex: 1 0 auto; min-height: auto; grid-auto-rows: minmax(min-content, 1fr); }
+      #view-dashboard .chart-container, #view-insights .chart-container { min-height: var(--chart-min); }
 
       /* Dashboard: the hero and the KPIs as two bands, then the generation chart beside price over map. */
       .hero { flex: none; padding: 0.9rem 1.3rem; gap: 0.8rem 2rem; }
@@ -691,7 +698,7 @@
     import { largestBy, smallestBy, orderBy, cycle, pick, hashIndex, clampIndex, axisClip, percentiles, daysApart, dayCount,
       shiftDate, formatTime, dayAhead, playStep, playDelay, renderCost, round1, round2, kLabel, mwhAxis, fmtGwh, fmtMwh,
       fmtTonnes, fmtMwAbs, pinSide, easeTo, progress, tipPlace, legendColumns, calendarLayout, bandSeries, barPercent,
-      bubbleSize, arrowWidth, arrowLabelled, dotSize, unitSize, sparkline, nightBands, moreOf, writeCsv } from "./frontend/draw.js";
+      bubbleSize, arrowWidth, arrowLabelled, dotSize, unitSize, sparkline, nightBands, moreOf, writeCsv, stackValue, axisAt, axisTooltip } from "./frontend/draw.js";
 
     // =========================================================================
     // 1. QUERIES: what each chart asks the model is frontend/queries.js (createQueries,
@@ -1206,9 +1213,11 @@
       // On one screen the title is one line, cut short; the whole of it is its tooltip.
       document.getElementById("title-generation").title = document.getElementById("title-generation").textContent;
       const isOther = name => name === OTHER || name === OTHER_CHARGING;
-      const valueAt = (k, name) => name === OTHER ? otherAt.get(k)?.output ?? 0
-        : name === OTHER_CHARGING ? otherAt.get(k)?.charging ?? 0
-        : (lookup.get(`${k}|${name}`) || 0);
+      // A series with no row at an interval is blank there (the model's figure): the hero
+      // shows it as such, and the stack draws it at no height (stackValue).
+      const valueAt = (k, name) => name === OTHER ? otherAt.get(k)?.output ?? null
+        : name === OTHER_CHARGING ? otherAt.get(k)?.charging ?? null
+        : lookup.get(`${k}|${name}`) ?? null;
       const colorOf = (name, i) => isOther(name) ? fuelColor('Other') : drillFuel ? pick(palette(), i) : fuelColor(name);
 
       const largeMode = xKeys.length > 2000;
@@ -1224,12 +1233,13 @@
         emphasis: { focus: 'series' },
         triggerLineEvent: true,
         // Not 'lttb': it keeps different points per series, so a stacked chart misaligns
-        // and draws vertical spikes down to zero. 'average' buckets every series alike.
+        // and draws vertical spikes down to zero. 'average' buckets every series alike. The
+        // tooltip reads the model's rows, not the buckets (atAxis).
         sampling: 'average',
         large: largeMode,
         progressive: largeMode ? 500 : 0,
         itemStyle: { color: colorOf(name, i) },
-        data: xKeys.map(k => valueAt(k, name)),
+        data: xKeys.map(k => stackValue(valueAt(k, name))),
       }));
       // Not stacked: the gap between the stack and the line is the region's net exports (or
       // imports), plus the small non-scheduled generation AEMO's demand leaves out. The line
@@ -1256,8 +1266,13 @@
       chart.on('mouseover', p => { if (p.seriesName) hoveredSeries = p.seriesName; });
       chart.on('mouseout', () => { hoveredSeries = ''; });
       chart.setOption({
-        tooltip: { trigger: 'axis', axisPointer: { type: 'line' }, formatter: params => {
-          const gen = params.filter(p => p.seriesName !== DEMAND);
+        tooltip: { trigger: 'axis', axisPointer: { type: 'line' }, formatter: sampled => {
+          // The model's rows at the interval under the pointer: the lines are sampled, and a
+          // sampled point is the mean of several intervals.
+          const i = axisAt(sampled, xLabels), k = xKeys[i];
+          const params = sampled.map(p => ({ ...p, value: i < 0 ? null
+            : p.seriesName === DEMAND ? demandAt.get(k) ?? null : valueAt(k, p.seriesName) }));
+          const gen = params.filter(p => p.seriesName !== DEMAND && p.value != null);
           const target = hoveredSeries && hoveredSeries !== DEMAND ? gen.find(p => p.seriesName === hoveredSeries) : null;
           const p = target || largestBy(gen.filter(p => p.value !== 0), p => Math.abs(p.value));
           const d = params.find(p => p.seriesName === DEMAND && p.value != null);
@@ -1299,8 +1314,8 @@
       _scrub.gen = drillFuel || crossFilter.duids.length ? null : { unit, layout, at: k => {
         if (!labelAt.has(k)) return null;
         const mix = outputs.map(n => ({ fuel: n, mw: valueAt(k, n), share: shareAt.get(`${k}|${n}`) ?? null }));
-        return { label: labelAt.get(k), mix, total: stackAt.get(k)?.output ?? 0, charging: stackAt.get(k)?.charging ?? 0,
-          other: smallAt.get(k) ?? 0 };
+        return { label: labelAt.get(k), mix, total: stackAt.get(k)?.output ?? null, charging: stackAt.get(k)?.charging ?? null,
+          other: smallAt.get(k) ?? null };
       } };
       scrubFrom(chart, xKeys);
       // The hero takes the chart's fuels and order (paintHero).
@@ -1333,7 +1348,7 @@
       // its largest series; the sparkline is the stack's height per interval.
       const avg = overall[0]?.avg;
       if (avg == null) setKpi('kpiGen', '--'); else setKpiNumber('kpiGen', avg, v => Math.round(v).toLocaleString(), 'Average MW');
-      setSpark('kpiGenSpark', xKeys.map(k => stackAt.get(k)?.output ?? 0));
+      setSpark('kpiGenSpark', xKeys.map(k => stackAt.get(k)?.output ?? null));
       const top = averages.find(r => r.avg > 0);
       if (top) setKpi('kpiTopFuel', named(top.series), `${Math.round(top.avg).toLocaleString()} MW avg`);
     }
@@ -1364,12 +1379,12 @@
       if (seq !== _renderSeq) return;
       const layout = _scrub.gen?.layout;
       const small = mix.filter(r => r.mw > 0 && (layout ? layout.other.has(r.fuel) || !layout.order.includes(r.fuel) : r.share < MIX_MIN_SHARE)).map(r => r.fuel);
-      const other = small.length ? (await runQuery(queries.nowOf(now, region, small)))[0]?.mw ?? 0 : 0;
+      const other = small.length ? (await runQuery(queries.nowOf(now, region, small)))[0]?.mw ?? null : null;
       if (seq !== _renderSeq) return;
       _heroNow = {
         when: 'Right now',
         asOf: now?.date ? `as of ${formatDate(now.date).replace(/ \d{4}$/, '')}, ${formatTime(now.time)} AEST` : '',
-        unit: 'MW', mix, total: all.mw ?? 0, charging: all.charging ?? 0, other, small,
+        unit: 'MW', mix, total: all.mw ?? null, charging: all.charging ?? null, other, small,
         share: share[0]?.share ?? null,
         regions: prices,
       };
@@ -1389,7 +1404,8 @@
       document.getElementById('heroWhen').textContent = state.when;
       document.getElementById('heroAsOf').textContent = state.asOf;
       const where = region ? `in ${regionName(region)}` : 'across the NEM';
-      const mwText = v => `${Math.round(v).toLocaleString()} ${unit}`;
+      const mwText = v => v == null ? '--' : `${Math.round(v).toLocaleString()} ${unit}`;
+      const mwNumber = v => v == null ? '--' : Math.round(v).toLocaleString();
       const figure = (v, format) => {
         if (animate) return setKpiNumber('heroValue', v, format);
         const el = document.getElementById('heroValue');
@@ -1402,7 +1418,7 @@
         figure(renewable, v => v.toFixed(0));
         document.getElementById('heroUnit').textContent = '%';
         document.getElementById('heroCaption').textContent = `renewable ${where}`;
-        document.getElementById('heroSub').textContent = `${mwText(total)} ${unit === 'MW' ? 'generating' : 'generated'}`;
+        document.getElementById('heroSub').textContent = total == null ? '' : `${mwText(total)} ${unit === 'MW' ? 'generating' : 'generated'}`;
       } else {
         if (total) figure(total, v => Math.round(v).toLocaleString()); else setKpi('heroValue', '--');
         document.getElementById('heroUnit').textContent = total ? unit : '';
@@ -1425,9 +1441,9 @@
       const picked = activeFuel();
       const byFuel = new Map(own.map(r => [r.fuel, r]));
       const items = (layout ? layout.order.filter(f => !layout.other.has(f)) : own.map(r => r.fuel))
-        .map(fuel => ({ fuel, name: label(fuel), mw: byFuel.get(fuel)?.mw ?? 0, share: byFuel.get(fuel)?.share ?? null, color: fuelColor(fuel) }));
-      if (rest.length || layout?.other.size) items.push({ name: 'Other', mw: state.other ?? 0, color: fuelColor('Other'),
-        tip: rest.length ? rest.map(r => `${escapeHtml(label(r.fuel))} <i>${mwText(r.mw)}</i>`).join('<br>') : `Other ${mwText(0)}` });
+        .map(fuel => ({ fuel, name: label(fuel), mw: byFuel.get(fuel)?.mw ?? null, share: byFuel.get(fuel)?.share ?? null, color: fuelColor(fuel) }));
+      if (rest.length || layout?.other.size) items.push({ name: 'Other', mw: state.other ?? null, color: fuelColor('Other'),
+        tip: rest.length ? rest.map(r => `${escapeHtml(label(r.fuel))} <i>${mwText(r.mw)}</i>`).join('<br>') : `Other ${mwText(state.other)}` });
       const tipOf = it => it.tip ?? `<b>${escapeHtml(it.name)}</b> ${mwText(it.mw)} <i>${share(it.share)}</i>`;
       const attrs = it => `${it.fuel ? `data-fuel="${escapeHtml(it.fuel)}"` : 'tabindex="-1"'} data-tip="${escapeHtml(tipOf(it))}"`;
       const largest = largestBy(items, it => it.mw);
@@ -1448,11 +1464,11 @@
         bar.innerHTML = items.map(it =>
           `<button type="button" class="mix-seg${it.fuel ? '' : ' static'}" style="flex-grow:${Math.round(it.mw)};background:${it.color}" ${attrs(it)} aria-label="${escapeHtml(it.name)} ${mwText(it.mw)}"></button>`).join('');
       }
-      const charging = Math.abs(state.charging);
+      const charging = state.charging == null ? null : Math.abs(state.charging);
       const chips = items.map(it =>
         `<button type="button" class="mix-chip${it.fuel ? '' : ' static'}${it.fuel && it.fuel === picked ? ' active' : ''}" ${attrs(it)}>
-          <span class="sw" style="background:${it.color}"></span><span class="nm">${escapeHtml(it.name)}</span> <b>${Math.round(it.mw).toLocaleString()}</b> <i>${share(it.share)}</i></button>`).join('');
-      const chargingChip = charging >= 1 || layout?.charging ? `<span class="mix-chip static" data-tip="Batteries and pumped hydro taking power from the grid"><span class="sw ring" style="border-color:${fuelColor('Grid')}"></span><span class="nm">Charging</span> <b>${Math.round(charging).toLocaleString()}</b></span>` : '';
+          <span class="sw" style="background:${it.color}"></span><span class="nm">${escapeHtml(it.name)}</span> <b>${mwNumber(it.mw)}</b> <i>${share(it.share)}</i></button>`).join('');
+      const chargingChip = charging >= 1 || layout?.charging ? `<span class="mix-chip static" data-tip="Batteries and pumped hydro taking power from the grid"><span class="sw ring" style="border-color:${fuelColor('Grid')}"></span><span class="nm">Charging</span> <b>${mwNumber(charging)}</b></span>` : '';
       document.getElementById('mixLegend').innerHTML = `${chips}${chargingChip}`;
 
       fitLegend();
@@ -1572,7 +1588,6 @@
         lineStyle: { width: largeModeP ? 1 : 2 },
         emphasis: { focus: 'series', lineStyle: { width: 3 } },
         triggerLineEvent: true,
-        sampling: 'lttb',
         large: largeModeP,
         progressive: largeModeP ? 500 : 0,
         data: xKeys.map(k => {
@@ -1887,7 +1902,7 @@
         const [base, band] = bandSeries(ser.map(r => r?.import_limit ?? null), ser.map(r => r?.export_limit ?? null));
         chart.setOption({
           tooltip: { trigger: 'axis', confine: true, formatter: ps => {
-            const r = ser[ps[0].dataIndex];
+            const r = ser[axisAt(ps, xLabels)];
             if (!r) return '';
             const ic = INTERCONNECTORS[id], [a, b] = r.mw >= 0 ? [ic.from, ic.to] : [ic.to, ic.from];
             return `<div style="color:${cssVar('--muted')}">${ps[0].axisValueLabel}</div><b>${fmtMwAbs(r.mw)} MW</b> ${short(a)}&rarr;${short(b)}<br>limits ${Math.round(r.import_limit)} / ${Math.round(r.export_limit)} MW`;
@@ -1955,7 +1970,7 @@
       const enriched = orderBy(rows.map(r => {
         const ic = INTERCONNECTORS[r.id];
         const [a, b] = r.mw >= 0 ? [ic.from, ic.to] : [ic.to, ic.from];
-        return { r, ic, a, b, dead: !!r.out, util: r.util ?? 0 };
+        return { r, ic, a, b, dead: !!r.out, util: r.util ?? null };
       }), e => Object.keys(INTERCONNECTORS).indexOf(e.r.id));
       const regions = MARKET_REGIONS.filter(code => REGION_ANCHORS[code]);
       const spikes = regions.filter(code => price(code) >= SPIKE_PRICE);
@@ -1977,8 +1992,8 @@
           <div class="ic-util">${ic.name} &middot; &#10005; No flow</div>` : `
           <div class="ic-name">${desc}<span class="ic-dir">${short(e.a)} &rarr; ${short(e.b)}</span></div>
           <div class="ic-mw">${fmtMwAbs(e.r.mw)} MW</div>
-          <div class="ic-bar"><span style="width:${barPercent(e.util)}%;background:${utilColor(e.util)}"></span></div>
-          <div class="ic-util">${ic.name} &middot; ${Math.round(e.util)}% of its ${short(e.a)}&rarr;${short(e.b)} limit</div>`;
+          <div class="ic-bar">${e.util == null ? '' : `<span style="width:${barPercent(e.util)}%;background:${utilColor(e.util)}"></span>`}</div>
+          <div class="ic-util">${ic.name} &middot; ${e.util == null ? 'no limit in this interval' : `${Math.round(e.util)}% of its ${short(e.a)}&rarr;${short(e.b)} limit`}</div>`;
       }
       document.getElementById('regionBoard').innerHTML = regions.map(code => {
         const p = price(code), n = net(code);
@@ -2051,8 +2066,8 @@
               textBorderColor: halo, textBorderWidth: 3,
               formatter: p => { const pr = price(p.name); return `${short(p.name)}${pr == null ? '' : `  ${fmtPrice(pr)}/MWh`}`; } },
             data: regions.map(code => ({
-              name: code, value: [...REGION_ANCHORS[code], Math.round(net(code) ?? 0)],
-              itemStyle: { color: cssVar((net(code) ?? 0) >= 0 ? '--export' : '--import'), borderColor: halo, borderWidth: 1.5 },
+              name: code, value: [...REGION_ANCHORS[code], net(code)],
+              itemStyle: { color: cssVar(net(code) == null ? '--muted' : net(code) >= 0 ? '--export' : '--import'), borderColor: halo, borderWidth: 1.5 },
               ...(spikes.includes(code) ? { label: { fontSize: 16, color: SPIKE_COLOR } } : {}),
             })) },
         ],
@@ -2098,7 +2113,7 @@
       const lookup = buildLookup(rows, r => intraday ? `${r.date}|${padTime(r.time)}` : r.date,
         r => round1(r.share));
       getChart('chart-re').setOption({
-        tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '-' : `${v}%` },
+        tooltip: { trigger: 'axis', formatter: axisTooltip(xLabels, (p, i) => lookup.get(xKeys[i]), v => `${v}%`) },
         grid: plot({ zoom: intraday }),
         xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true } },
         yAxis: { type: 'value', min: 0, max: 100, axisLabel: { formatter: '{value}%' } },
@@ -2175,7 +2190,7 @@
         yAxis: { type: 'value', axisLabel: { formatter: v => kLabel(v) } },
         series: fuels.map(f => ({ name: f, type: 'line', stack: 'total', symbol: 'none', lineStyle: { width: 1, color: cssVar('--card') },
           areaStyle: { opacity: 0.92 }, itemStyle: { color: fuelColor(f) },
-          data: times.map(t => lookup.get(`${f}|${t}`) || 0) })),
+          data: times.map(t => stackValue(lookup.get(`${f}|${t}`))) })),
       }, true);
     }
     // Generation-weighted price each fuel earned in its own region, against the plain average.
@@ -2232,7 +2247,8 @@
       const lookup = buildLookup(rows, r => `${intraday ? `${r.date}|${padTime(r.time)}` : r.date}|${r.region}`, r => r.mw);
       const regions = [...new Set(rows.map(r => r.region))].sort();
       getChart('chart-net').setOption({
-        tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '-' : `${Math.round(v).toLocaleString()} MW` },
+        tooltip: { trigger: 'axis', formatter: axisTooltip(xLabels, (p, i) => lookup.get(`${xKeys[i]}|${regions[p.seriesIndex]}`),
+          v => `${Math.round(v).toLocaleString()} MW`) },
         legend: { type: 'scroll', top: 0 },
         grid: plot({ legend: true, zoom: intraday }),
         xAxis: { type: 'category', data: xLabels, boundaryGap: false, axisLabel: { hideOverlap: true } },
@@ -2331,7 +2347,7 @@
         titles.curtail.innerHTML = 'Wind and solar curtailment' + note;
         return ids.forEach(id => showEmpty(id, !recent && lastDay && from > lastDay ? `No next-day data yet: it ends ${formatDate(lastDay)}` : undefined));
       }
-      titles.curtail.innerHTML = `Wind and solar curtailment: ${fmtMwh(total.cur ?? 0)}, ${rate(total.rate)} of what the farms could have made` + note;
+      titles.curtail.innerHTML = `Wind and solar curtailment: ${total.cur == null ? '--' : fmtMwh(total.cur)}, ${rate(total.rate)} of what the farms could have made` + note;
 
       const periods = [...new Set(rows.map(r => r.period))];
       const at = new Map(rows.map(r => [`${r.period}|${r.fuel}`, r]));
@@ -2351,7 +2367,7 @@
         yAxis: { type: 'value', axisLabel: { formatter: mwhAxis } },
         series: fuels.map(f => ({ name: f, type: 'bar', stack: 'cur', barMaxWidth: 24,
           itemStyle: { color: fuelColor(f), borderColor: cssVar('--card'), borderWidth: 1 },
-          data: periods.map(p => ({ value: Math.round(at.get(`${p}|${f}`)?.cur ?? 0),
+          data: periods.map(p => ({ value: at.get(`${p}|${f}`)?.cur ?? null,
             itemStyle: !byMonth && lastDay && p > lastDay ? { opacity: 0.55 } : undefined })) })),
       }, true);
 
