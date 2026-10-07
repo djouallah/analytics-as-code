@@ -27,6 +27,7 @@ TABLES = [
     "landing.fct_scada",
     "mart.dim_region",
     "mart.dim_time",
+    "mart.dim_interconnector",
     "mart.fct_region",
     "mart.fct_rooftop",
     "mart.fct_interconnector",

@@ -427,6 +427,50 @@ def model(dbt, session):
         except Exception as e:
             warn(f"{csv_filename} unavailable, keeping the previous copy: {e}")
 
+    # Three tables of AEMO's MMSDM registration data, from the newest monthly archive: they
+    # hold every DUID and genset that ever ran, registered or not. dim_duid takes each
+    # unit's CO2-e factor from GENUNITS through DUALLOC, dim_interconnector reads
+    # INTERCONNECTOR. A month is archived in the weeks after it (2026-08 on 2026-09-25), so
+    # the newest is last month's or one before; a month not out yet answers 404. Saved as
+    # the file's D rows under its own I row: AEMO's column names, without the first four
+    # (record type, report, table, version).
+    mmsdm_reference = [
+        ("duid_genunits", "GENUNITS", "genunits.csv"),
+        ("duid_dualloc", "DUALLOC", "dualloc.csv"),
+        ("duid_interconnector", "INTERCONNECTOR", "interconnector.csv"),
+    ]
+    for source_type, table, csv_filename in mmsdm_reference:
+        if is_fresh(source_type):
+            continue
+        try:
+            now = datetime.now(timezone.utc)
+            with tempfile.TemporaryDirectory() as tmp:
+                for back in (1, 2, 3):
+                    year, month = divmod(now.year * 12 + now.month - 1 - back, 12)
+                    month += 1
+                    url = mmsdm_url(table, year, month)
+                    try:
+                        (_, _, gz_path), = download_and_extract(url, tmp)
+                        break
+                    except urllib.error.HTTPError as e:
+                        if e.code != 404 or back == 3:
+                            raise
+                read = (f"read_csv('{gz_path.replace(chr(92), '/')}', skip = 1, header = true, "
+                        "all_varchar = true, null_padding = true, strict_mode = false)")
+                cols = [row[0] for row in session.sql(f"DESCRIBE SELECT * FROM {read}").fetchall()]
+                local = os.path.join(tmp, csv_filename).replace("\\", "/")
+                session.sql(f"""
+                    COPY (
+                        SELECT {", ".join(f'"{c}"' for c in cols[4:])} FROM {read}
+                        WHERE "{cols[0]}" = 'D'
+                    ) TO '{local}' (FORMAT CSV, HEADER)
+                """)
+                copy_to_onelake(local, f"{duid_dir}/{csv_filename}")
+            log_duid(source_type, f"{table}_{year}{month:02d}", url, csv_filename)
+            print(f"  MMSDM {table}: {year}-{month:02d}")
+        except Exception as e:
+            warn(f"{csv_filename} unavailable, keeping the previous copy: {e}")
+
     # AEMO's NEM Registration and Exemption List, as archived weekly by
     # djouallah/aemo_data (data/duid/registration/<name>_<YYYYMMDD>.xls, really an
     # .xlsx): the newest one's generator sheet is saved as registration.csv, which

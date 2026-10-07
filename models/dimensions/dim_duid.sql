@@ -1,6 +1,7 @@
 {#- The NEM units come from two files, both written by stg_csv_archive_log:
     registration.csv, the generator sheet of AEMO's current NEM Registration and Exemption
-    List, and duid_unregistered.csv, the units in the data that the list doesn't have.
+    List, and duid_unregistered.csv, the units in the data that the list doesn't have. Their
+    CO2-e factors come from genunits.csv and dualloc.csv, AEMO's MMSDM tables.
     Every file read here is declared in models/sources.yml (source duid_reference). -#}
 
 {# Check if there are new DUIDs not in the existing table #}
@@ -144,6 +145,36 @@ WITH
     SELECT * FROM duid_wa
   ),
 
+  -- Each unit's CO2-e emissions factor, t per MWh sent out (added 2026-10-07), from AEMO's
+  -- MMSDM registration tables, which hold every DUID, registered or not: the gensets of its
+  -- newest DUALLOC allocation, their GENUNITS factors averaged by registered capacity (two
+  -- units have gensets with different factors). NULL when none of them has one: loads, and
+  -- the gensets AEMO lists "On Exclusion List" (about 1.4 GW of gas peakers in 2026-08),
+  -- which the emissions measures therefore leave out. The date strings are YYYY/MM/DD
+  -- hh:mm:ss, so they order as text.
+  dualloc AS (
+    SELECT DUID, GENSETID
+    FROM read_csv({{ source('duid_reference', 'dualloc') }}, all_varchar = true)
+    QUALIFY rank() OVER (PARTITION BY DUID
+                         ORDER BY EFFECTIVEDATE DESC, CAST(VERSIONNO AS INT) DESC) = 1
+  ),
+
+  genunits AS (
+    SELECT GENSETID,
+           TRY_CAST(CO2E_EMISSIONS_FACTOR AS DOUBLE) AS factor,
+           TRY_CAST(REGISTEREDCAPACITY AS DOUBLE) AS capacity
+    FROM read_csv({{ source('duid_reference', 'genunits') }}, all_varchar = true)
+  ),
+
+  co2e AS (
+    SELECT dualloc.DUID,
+           round(coalesce(sum(factor * capacity) / nullif(sum(capacity), 0), avg(factor)), 8) AS factor
+    FROM dualloc
+    JOIN genunits ON genunits.GENSETID = dualloc.GENSETID
+    WHERE factor IS NOT NULL
+    GROUP BY dualloc.DUID
+  ),
+
   geo AS (
     SELECT
       duid,
@@ -176,10 +207,13 @@ SELECT
   -- that can be capped, which is what curtailment is measured on. Not the fuel: Hornsdale
   -- Power Reserve, a battery, is registered with the fuel "Wind". NULL for the units that
   -- are not on the registration list and for WA.
-  first(a.Classification) AS Classification
+  first(a.Classification) AS Classification,
+  -- t CO2-e per MWh (added 2026-10-07; see co2e). NULL for WA.
+  first(co2e.factor) AS CO2eFactor
 FROM duid_all a
 JOIN states ON a.Region = states.RegionID
 LEFT JOIN geo ON a.duid = geo.duid
+LEFT JOIN co2e ON co2e.DUID = a.DUID
 LEFT JOIN renewable_fuels ON lower(renewable_fuels.fuel) = lower(trim(a.FuelSourceDescriptor))
 GROUP BY a.DUID
 {% else %}

@@ -74,7 +74,7 @@ sources:
 
   - name: duid_reference
     description: >
-      The unit reference files dim_duid is built from, written to Files/csv/duid/ by
+      The reference files dim_duid and dim_interconnector are built from, written to Files/csv/duid/ by
       stg_csv_archive_log's daily DUID refresh. Each source compiles to the file's path.
       Most come from [djouallah/aemo_data](https://github.com/djouallah/aemo_data).
     config:
@@ -94,6 +94,18 @@ sources:
           MMSDM registration history.
           File: [djouallah/aemo_data/duid_unregistered.csv](https://github.com/djouallah/aemo_data/blob/main/duid_unregistered.csv)
           (its commits say how it was built).
+      - name: genunits
+        description: >
+          AEMO's MMSDM GENUNITS (every genset, with its CO2-e emissions factor), from the
+          newest month of the [MMSDM archive](https://nemweb.com.au/Data_Archive/Wholesale_Electricity/MMSDM/).
+      - name: dualloc
+        description: >
+          AEMO's MMSDM DUALLOC (which gensets make up each DUID, by effective date), from the
+          newest month of the MMSDM archive.
+      - name: interconnector
+        description: >
+          AEMO's MMSDM INTERCONNECTOR (each link's regions and description), from the newest
+          month of the MMSDM archive.
       - name: facilities
         description: >
           WA facilities, from AEMO WA.

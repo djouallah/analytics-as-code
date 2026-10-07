@@ -46,6 +46,8 @@ models:
           - accepted_values:
               arguments:
                 values: ['Scheduled', 'Semi-Scheduled', 'Non-Scheduled']
+      - name: CO2eFactor
+        description: The unit's CO2-e emissions factor, t per MWh sent out, from AEMO's MMSDM GENUNITS through DUALLOC (its gensets' factors averaged by registered capacity), for registered and unregistered units alike; null for loads, for the gensets AEMO lists "On Exclusion List", and for WA
 
   - name: dim_calendar
     description: One row per day from 2018-03-06 (where the history starts) to two years ahead
@@ -70,6 +72,25 @@ models:
           - not_null
       - name: State
         description: The region's name
+
+  - name: dim_interconnector
+    description: For Power BI and the Flows page - one row per link between two regions, from AEMO's MMSDM INTERCONNECTOR
+    columns:
+      - name: interconnector
+        description: AEMO's INTERCONNECTORID, as fct_interconnector carries it
+        tests:
+          - unique
+          - not_null
+      - name: from_region
+        description: The region a positive flow leaves
+        tests:
+          - not_null
+      - name: to_region
+        description: The region a positive flow enters
+        tests:
+          - not_null
+      - name: description
+        description: AEMO's description of the link
 
   - name: dim_time
     description: For Power BI - the 288 five-minute times of a day, the time axis every 5-minute fact is read against, and what a measure reads rooftop solar against between two half hours

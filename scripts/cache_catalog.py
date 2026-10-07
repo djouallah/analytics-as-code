@@ -44,7 +44,7 @@ MAX_FILE_MB = 100
 
 # Table -> the order its rows are written in.
 DIM = {"dim_duid": "DUID", "dim_calendar": "date", "dim_region": "Region", "dim_time": "time",
-       "dim_month": "month"}
+       "dim_month": "month", "dim_interconnector": "interconnector"}
 AGG = {"fct_summary_daily": "DUID, date", "fct_region_daily": "REGIONID, date",
        "fct_summary_hourly": "DUID, month, hour", "fct_region_hourly": "REGIONID, month, hour",
        "fct_curtailment": "DUID, date", "fct_rooftop": "REGIONID, date, time"}
