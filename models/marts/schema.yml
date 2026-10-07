@@ -305,6 +305,12 @@ models:
         description: AEMO interconnector id; the flow is positive from its first region to its second
         tests:
           - not_null
+          # The dashboard reads the link off this column, Power BI through dim_interconnector:
+          # an id the dimension lacks would be a group of its own on one and blank on the other.
+          - relationships:
+              arguments:
+                to: ref('dim_interconnector')
+                field: interconnector
       - name: date
         description: Calendar date of the dispatch interval, NEM time
         tests:
@@ -317,8 +323,13 @@ models:
         description: Dispatch target flow MWFLOW (MW), not the metered flow
       - name: export_limit
         description: Flow limit in the positive direction (MW)
+        tests:
+          # [No flow] compares the limits: a blank is 0 in DAX and NULL in the dashboard.
+          - not_null
       - name: import_limit
         description: Flow limit in the negative direction (MW)
+        tests:
+          - not_null
 
   - name: fct_curtailment
     description: For Power BI - curtailed and available energy per semi-scheduled unit and day, from the next-day files. A day is written once fct_scada holds its 288 intervals. In schema mart
@@ -327,6 +338,12 @@ models:
         description: The unit; Semi-Scheduled in dim_duid when its day was written
         tests:
           - not_null
+          # The dashboard reads the unit off this column, Power BI through dim_duid: a unit
+          # the dimension lacks would be a group of its own on one and blank on the other.
+          - relationships:
+              arguments:
+                to: ref('dim_duid')
+                field: DUID
       - name: date
         description: Calendar date, NEM time
         tests:
