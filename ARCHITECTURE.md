@@ -104,6 +104,21 @@ the same DAX to the deployed model, and Power BI's formula engine and VertiPaq s
   joined, and writes the SQL. Which grain to read is still the page's to say. The Analyze
   tab is the exception: it is SQL, written against the same views.
 
+### How a Power BI report asks
+
+A Power BI report holds no DAX. Each visual is a description: which columns and measures,
+grouped how, filtered by what (the `visual.json` files of `nem.Report`).
+
+- The browser sends that description, a *semantic query*, to the Power BI service.
+- The service turns it into DAX, using the model, and the engine (VertiPaq) runs it.
+- The service shapes the rows for the visual (groups, totals, how many points) and sends
+  them back.
+- A click on one visual adds a filter to the semantic queries of the others: that is
+  cross-filtering, and it runs on the same path.
+
+The page skips the first step: it writes its DAX itself, a query per chart, and a click
+changes the filters of those queries.
+
 ### The Fabric app
 
 Built with [Rayfin](https://www.npmjs.com/package/@microsoft/rayfin-cli). Fabric hosts the
