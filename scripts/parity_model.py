@@ -170,6 +170,11 @@ def main():
             print(f"FAILED {where}: the model: {body}\n  {q['dax']}")
             continue
         took = time.monotonic() - t
+        if took > 20:
+            # The capacity is throttling (20 s added to every query): leave it alone for 5
+            # minutes to work its overage down, rather than add to it.
+            print(f"  {took:.1f} s: the capacity is throttling, waiting 5 minutes", flush=True)
+            time.sleep(300)
         diffs = compare(q, model_rows)
         if diffs:
             bad += 1
