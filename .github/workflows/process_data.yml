@@ -117,4 +117,7 @@ jobs:
         # runs after a green Process Data, so the dashboard keeps the files it has and the
         # red run says why.
         timeout-minutes: ${{ inputs.backfill_rooftop && 85 || 45 }}
-        run: dbt ${{ inputs.debug && '--debug' || '' }} run --target prod --profiles-dir . --select tag:powerbi ${{ inputs.backfill_rooftop && '--vars "{backfill_rooftop: true}"' || '' }}
+        # A block scalar: the --vars value holds ": ", which a plain YAML scalar cannot.
+        run: >-
+          dbt ${{ inputs.debug && '--debug' || '' }} run --target prod --profiles-dir . --select tag:powerbi
+          ${{ inputs.backfill_rooftop && '--vars "{backfill_rooftop: true}"' || '' }}
