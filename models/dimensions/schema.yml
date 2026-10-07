@@ -48,6 +48,16 @@ models:
                 values: ['Scheduled', 'Semi-Scheduled', 'Non-Scheduled']
       - name: CO2eFactor
         description: The unit's CO2-e emissions factor, t per MWh sent out, from AEMO's MMSDM GENUNITS through DUALLOC (its gensets' factors averaged by registered capacity), for registered and unregistered units alike; null for loads, for the gensets AEMO lists "On Exclusion List", and for WA
+      - name: Storage
+        description: True when the unit is storage, a battery (the fuel "Grid"); false otherwise, units with no fuel included. The one place the rule lives
+        tests:
+          - not_null
+      - name: Plant
+        description: What the dashboard groups units by when it groups them by plant - the station, or the unit itself when it has no station
+        tests:
+          - not_null
+      - name: Owner
+        description: Who the unit's output is counted to - the participant, or for rooftop solar's five units the estimate they are; null where AEMO names no participant
 
   - name: dim_calendar
     description: One row per day from 2018-03-06 (where the history starts) to two years ahead

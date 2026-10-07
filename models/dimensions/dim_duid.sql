@@ -209,8 +209,9 @@ WITH
     FROM read_csv({{ source('duid_reference', 'geo_data') }})
     WHERE latitude IS NOT NULL
     GROUP BY duid
-  )
+  ),
 
+  units AS (
 SELECT
   a.DUID,
   first(a.Region) AS Region,
@@ -235,13 +236,38 @@ SELECT
   -- are not on the registration list and for WA.
   first(a.Classification) AS Classification,
   -- t CO2-e per MWh (added 2026-10-07; see co2e). NULL for WA.
-  first(co2e.factor) AS CO2eFactor
+  first(co2e.factor) AS CO2eFactor,
+  -- Whether the unit is storage (added 2026-10-07): a battery, the fuel "Grid". The one place
+  -- the rule lives: the semantic model's measures and the dashboard read the column. A unit
+  -- with no fuel is not storage. Hornsdale Power Reserve's HPR1 is registered with the fuel
+  -- "Wind", so it is not storage here, and is renewable.
+  first(coalesce(lower(trim(a.FuelSourceDescriptor)) = 'grid', false)) AS Storage
 FROM duid_all a
 JOIN states ON a.Region = states.RegionID
 LEFT JOIN geo ON a.duid = geo.duid
 LEFT JOIN co2e ON co2e.DUID = a.DUID
 LEFT JOIN renewable_fuels ON lower(renewable_fuels.fuel) = lower(trim(a.FuelSourceDescriptor))
 GROUP BY a.DUID
+  )
+
+-- One spelling per name (added 2026-10-07): AEMO's list spells some names differently for
+-- different units of them (WEST KIEWA POWER STATION and West Kiewa Power Station), and
+-- VertiPaq stores text case-insensitively, so Power BI showed one of them for both while
+-- DuckDB grouped them apart. The spelling kept is the greatest, which is the one with lower
+-- case in it. The rows already in the table keep the spelling they were written with until
+-- a rebuild=dim_duid.
+SELECT * REPLACE (
+  max(StationName) OVER (PARTITION BY lower(StationName)) AS StationName,
+  max(Participant) OVER (PARTITION BY lower(Participant)) AS Participant,
+  max(TechnologyType) OVER (PARTITION BY lower(TechnologyType)) AS TechnologyType),
+  -- What the dashboard groups units by when it groups them by plant (added 2026-10-07): the
+  -- station, or the unit itself when it has none (about 180 units, most of them loads).
+  coalesce(max(StationName) OVER (PARTITION BY lower(StationName)), DUID) AS Plant,
+  -- Who the unit's output is counted to (added 2026-10-07): the participant, and for rooftop
+  -- solar's five units, which have none, the estimate they are. NULL where AEMO names none.
+  coalesce(max(Participant) OVER (PARTITION BY lower(Participant)),
+           CASE WHEN starts_with(DUID, 'ROOFTOP_') THEN 'Rooftop solar (AEMO estimate)' END) AS Owner
+FROM units
 {% else %}
 -- No new DUIDs found, return empty result to keep existing data
 SELECT * FROM {{ this }} WHERE FALSE
