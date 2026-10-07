@@ -396,8 +396,10 @@ export function createQueries(page) {
     flowUnits: { select: { DUID: 'dim_duid.DUID', fuel: FUEL, storage: 'dim_duid.Storage',
       lat: 'dim_duid.latitude', lon: 'dim_duid.longitude' } },
     // A day of the units' output in the region filter, one row per unit and interval, the
-    // units at 1 MW or more either way: the bubbles, the rows as stored.
-    flowGens: date => ({ select: { time: 'fct_summary.time', DUID: 'fct_summary.DUID', mw: 'fct_summary.mw' },
+    // units at 1 MW or more either way: the bubbles. The MW is a measure, not the column: a
+    // query of a fact's columns alone is not filtered by a dimension in DAX (no measure to
+    // be blank), so the region would not reach it.
+    flowGens: date => ({ select: { time: 'fct_summary.time', DUID: 'fct_summary.DUID', mw: 'Average MW' },
       where: [['fct_summary.date', '=', date], { any: [['fct_summary.mw', '>=', 1], ['fct_summary.mw', '<=', -1]] },
         ...(page.region() ? [['dim_duid.Region', '=', page.region()]] : [])] }),
     // A day of what the generators made and their renewable share, per interval, in the

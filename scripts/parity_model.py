@@ -19,7 +19,8 @@ model), else over REST executeQueries with POWERBI_TOKEN (a user's token, from a
 Both need WS_ID, the workspace of the model.
 
 A query the compiler could not translate, or whose SQL failed, is a failure. A query whose
-result was too big to keep is compared on its row count. Exits 1 on any difference.
+result was too big to keep is compared on its row count, which the model is asked for
+(COUNTROWS of the query's table), not the rows. Exits 1 on any difference.
 """
 
 import json
@@ -72,6 +73,12 @@ def asker():
                     raise
                 time.sleep(5)
     return ask
+
+
+def counted(dax):
+    """The query as one row, its number of rows: EVALUATE t [ORDER BY ...] -> COUNTROWS(t)."""
+    table = dax.split("EVALUATE", 1)[1].rsplit(" ORDER BY ", 1)[0].strip()
+    return f'EVALUATE ROW("n", COUNTROWS({table}))'
 
 
 def value(v):
@@ -145,7 +152,7 @@ def main():
             continue
         t = time.monotonic()
         try:
-            model_rows = ask(q["dax"])
+            model_rows = ask(counted(q["dax"]) if "rowCount" in q else q["dax"])
         except Exception as e:  # noqa: BLE001  (the model's answer is the evidence)
             bad += 1
             body = e.read().decode(errors="replace")[:600] if isinstance(e, urllib.error.HTTPError) else str(e)[:600]
@@ -153,7 +160,8 @@ def main():
             continue
         took = time.monotonic() - t
         if "rowCount" in q:
-            diffs = [] if len(model_rows) == q["rowCount"] else [f"{q['rowCount']} rows in the files, {len(model_rows)} in the model"]
+            n = int(value(next(iter(model_rows[0].values()))) or 0)
+            diffs = [] if n == q["rowCount"] else [f"{q['rowCount']} rows in the files, {n} in the model"]
         else:
             diffs = compare(q, model_rows)
         if diffs:
@@ -163,7 +171,7 @@ def main():
                 print(f"  {d}")
             print(f"  {q['dax']}")
         else:
-            print(f"same    {where}, {len(model_rows)} rows, {took:.1f} s", flush=True)
+            print(f"same    {where}, {q.get('rowCount', len(model_rows))} rows, {took:.1f} s", flush=True)
     print(f"{len(data['queries'])} queries, {bad} failed or differ, {time.monotonic() - started:.0f} s; "
           f"files to {data['newest']}, states end {data['to']}")
     return 1 if bad else 0

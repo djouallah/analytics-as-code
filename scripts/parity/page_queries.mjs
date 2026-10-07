@@ -152,8 +152,10 @@ const add = async (stateName, name, q) => {
   try {
     entry.sql = model.toSQL(dax);
     const found = await run(entry.sql);
-    // The model answers at most 100,000 rows to a query (Power BI's limit for executeQueries,
-    // and plenty to hold over XMLA): a bigger result is counted, not compared.
+    // A bigger result is counted, not compared: parity_model.py asks the model for its
+    // COUNTROWS. Fetching it would not do: the REST call answers at most 100,000 rows, and
+    // over XMLA a few results of 2 million rows throttled the capacity (every query after
+    // them took 20 s, and the job ran out of time, deploy run 37599068734).
     if (found.length > MAX_ROWS) entry.rowCount = found.length; else entry.rows = found;
   } catch (e) { entry.error = String(e.message ?? e); }
   seen.set(dax, entry);

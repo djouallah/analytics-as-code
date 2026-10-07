@@ -286,7 +286,13 @@ is in it once `asked()` there calls it. From a laptop it runs over REST with a u
 curtailment by month with units picked did not compile (no view joined a fact to two
 dimensions: now `<fact>_star`), a count of no rows was 0 where DAX gives blank, and AEMO
 spelling a station two ways, which VertiPaq folds (text is case-insensitive there) and
-DuckDB did not (now one spelling per name in `dim_duid`).
+DuckDB did not (now one spelling per name in `dim_duid`). Its first run in CI found that DAX does
+not filter a query of a fact's own columns by a dimension unless a measure of it is blank
+there: the Flows units and links of one region came back for every region. So such a query
+selects a measure (`[Average MW]` for a unit's MW), and a measure it selects is blank where
+there are no rows (`[No flow]` is 1 or 0, not a boolean: a boolean measure is never blank).
+A result above 20,000 rows is compared on its count, asked of the model as `COUNTROWS`:
+fetching a few results of 2 million rows throttled the capacity (20 s a query after them).
 
 `index.html` is the one file at the top of `dashboard/github/`: it is the site's URL, and `data.js`
 finds `data/` from the page's URL. The deployed tree is the repo tree, so a relative import
