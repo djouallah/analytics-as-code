@@ -11,6 +11,11 @@ name: Deploy Semantic Model
 
 on:
   workflow_dispatch:
+    inputs:
+      since:
+        description: "Parity: ask the model only the queries whose DAX, SQL or measures changed since this commit (empty: all)"
+        required: false
+        default: ""
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -26,12 +31,14 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 75
     env:
       WS_ID: ${{ vars.WS_ID }}
       LH_ID: ${{ vars.LH_ID }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ inputs.since && '0' || '1' }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -76,6 +83,7 @@ jobs:
         # just deployed (XMLA); the rows have to be the same. The model is the reference.
         env:
           PYTHONNET_RUNTIME: coreclr
+          SINCE: ${{ inputs.since }}
         run: |
           set -euo pipefail
           data="$RUNNER_TEMP/data" && mkdir -p "$data"
@@ -85,4 +93,12 @@ jobs:
             curl -fsS -o "$data/$f.duckdb" "$site/$f.duckdb"
           done
           (cd scripts/parity && npm ci --no-audit --no-fund && node page_queries.mjs "$data" "$RUNNER_TEMP/parity.json")
-          python scripts/parity_model.py "$RUNNER_TEMP/parity.json"
+          # since: the same queries built from that commit's compiler, queries and model;
+          # a query whose key is the same there is not asked again.
+          since=()
+          if [ -n "$SINCE" ]; then
+            git worktree add -q "$RUNNER_TEMP/since" "$SINCE"
+            (cd scripts/parity && node page_queries.mjs "$data" "$RUNNER_TEMP/since.json" "$RUNNER_TEMP/since")
+            since=("$RUNNER_TEMP/since.json")
+          fi
+          python scripts/parity_model.py "$RUNNER_TEMP/parity.json" "${since[@]}"

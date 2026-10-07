@@ -23,9 +23,11 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DuckDBInstance } from '@duckdb/node-api';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const [dataDir, out] = process.argv.slice(2);
-if (!dataDir || !out) { console.error('usage: node page_queries.mjs <data dir> <out.json>'); process.exit(2); }
+// [root]: another checkout to take the compiler, the queries and the model from (the commit a
+// check is compared with: parity_model.py --since); its rows are not run, only its keys kept.
+const [dataDir, out, other] = process.argv.slice(2);
+if (!dataDir || !out) { console.error('usage: node page_queries.mjs <data dir> <out.json> [root]'); process.exit(2); }
+const ROOT = other ? path.resolve(other) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 // compiler.js fetches model.bim from next to itself, where the builds copy it.
 const bim = JSON.parse(readFileSync(path.join(ROOT, 'semantic_model/model.bim'), 'utf8'));
@@ -143,6 +145,20 @@ function asked() {
 const keysOf = q => [...Object.entries(q.select).filter(([, f]) => typeof f === 'string' && f.includes('.')).map(([n]) => n),
   ...Object.keys(q.totals ?? {})];
 
+// What a query's check depends on, without its literals (the dates move every day): its DAX,
+// its SQL, and the DAX of every measure it reaches. A query whose key was checked at the
+// commit compared with need not be asked again (parity_model.py --since).
+const MEASURES = new Map(bim.model.tables.flatMap(t => (t.measures ?? []).map(m =>
+  [m.name, Array.isArray(m.expression) ? m.expression.join('\n') : m.expression])));
+const reached = (text, out = new Set()) => {
+  for (const [, n] of text.matchAll(/\[([^\]]+)\]/g))
+    if (MEASURES.has(n) && !out.has(n)) { out.add(n); reached(MEASURES.get(n), out); }
+  return out;
+};
+const shape = s => (s ?? '').replace(/dt"[^"]*"|DATE '[^']*'/g, 'D').replace(/"(?:[^"]|"")*"|'(?:[^']|'')*'/g, 'S')
+  .replace(/\b\d+(\.\d+)?\b/g, 'N');
+const keyOf = e => JSON.stringify([shape(e.dax), shape(e.sql), [...reached(e.dax)].sort().map(n => [n, MEASURES.get(n)])]);
+
 const MAX_ROWS = 20000;
 const results = [], seen = new Map();
 const add = async (stateName, name, q) => {
@@ -151,6 +167,8 @@ const add = async (stateName, name, q) => {
   const entry = { name, states: [stateName], keys: keysOf(q), dax };
   try {
     entry.sql = model.toSQL(dax);
+    entry.key = keyOf(entry);
+    if (other) { seen.set(dax, entry); results.push(entry); return; }
     const found = await run(entry.sql);
     // A bigger result is not asked of the model: parity_model.py lists it with its row
     // count. The REST call answers at most 100,000 rows, and over XMLA a few results of 2

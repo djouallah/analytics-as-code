@@ -1,6 +1,6 @@
 """The page's queries on the deployed model, against the same queries on the deployed files.
 
-    python parity_model.py <parity.json>
+    python parity_model.py <parity.json> [<since.json>]
 
 <parity.json> is what scripts/parity/page_queries.mjs wrote: every query the page sends,
 as the compiler wrote its DAX, with the rows the compiler's SQL returned on the deployed
@@ -22,6 +22,12 @@ A query the compiler could not translate, or whose SQL failed, is a failure. A q
 result was too big to keep is not asked of the model, only listed with its row count:
 computing it, even under COUNTROWS, throttled the capacity (20 s on every query after it).
 Exits 1 on any difference.
+
+<since.json> is what page_queries.mjs wrote for another commit (deploy_model.yml's `since`):
+a query whose key is in it is not asked again. The key is the query's DAX and SQL without
+their literals and the DAX of every measure it reaches, so a query is asked when its
+translation or a measure under it changed since that commit, and not when only its dates
+moved.
 """
 
 import json
@@ -136,14 +142,20 @@ def compare(q, model_rows):
 
 def main():
     data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    since = set()
+    if len(sys.argv) > 2:
+        since = {q["key"] for q in json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))["queries"] if q.get("key")}
     ask = asker()
-    bad = skipped = 0
+    bad = skipped = unchanged = 0
     started = time.monotonic()
     for n, q in enumerate(data["queries"]):
         where = f"[{n}] {q['name']} ({'; '.join(q['states'][:3])}{', ...' if len(q['states']) > 3 else ''})"
         if q.get("error"):
             bad += 1
             print(f"FAILED {where}: the compiler or DuckDB: {q['error']}\n  {q['dax']}")
+            continue
+        if q.get("key") in since:
+            unchanged += 1
             continue
         if "rowCount" in q:
             skipped += 1
@@ -167,7 +179,7 @@ def main():
             print(f"  {q['dax']}")
         else:
             print(f"same    {where}, {len(model_rows)} rows, {took:.1f} s", flush=True)
-    print(f"{len(data['queries'])} queries, {bad} failed or differ, {skipped} not asked, {time.monotonic() - started:.0f} s; "
+    print(f"{len(data['queries'])} queries, {bad} failed or differ, {skipped} not asked, {unchanged} unchanged since the commit compared with, {time.monotonic() - started:.0f} s; "
           f"files to {data['newest']}, states end {data['to']}")
     return 1 if bad else 0
 
