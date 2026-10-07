@@ -309,8 +309,4 @@ browser, is the natural place.
   estimate.
 
 **Ideas**
-- `rebuild=dim_duid` once the corrected `duid_unregistered.csv` (TORRB1, ADPBA1L) is
-  downloaded.
-- `dim_interconnector` from MMSDM `INTERCONNECTOR`, instead of the names typed in
-  `index.html`.
-- Emissions: CO2 factor per unit from `GENUNITS`/`DUALLOC`; a unit without one stays out.
+- Emissions on the page: `[Emissions t]` and `[Emissions intensity]` are in the model.

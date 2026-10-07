@@ -242,8 +242,9 @@
     .ic-item:last-child { border-bottom: none; }
     .ic-row { display: grid; grid-template-columns: 1fr auto; gap: 0.1rem 0.6rem; }
     .ic-mini { height: 58px; min-width: 0; }
-    .ic-name { font-size: 0.86rem; font-weight: 600; }
-    .ic-name span { font-weight: 500; color: var(--muted); margin-left: 0.3rem; }
+    .ic-name { font-size: 0.86rem; font-weight: 600; display: flex; min-width: 0; }
+    .ic-name .ic-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .ic-name .ic-dir { flex: none; font-weight: 500; color: var(--muted); margin-left: 0.3rem; }
     .ic-mw { font-size: 0.92rem; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
     .ic-bar { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: var(--row-line); overflow: hidden; }
     .ic-bar span { display: block; height: 100%; border-radius: 3px; transition: width 0.15s linear; }
@@ -1290,6 +1291,10 @@
           EVALUATE SELECTCOLUMNS(
             ${dax.rooftop(['dim_time[time]', 'dim_region[Region]'], '[Rooftop MW]', [`dim_calendar[date] = ${daxDate(date)}`], null)},
             "time", [time], "region", [Region], "mw", [v])`,
+      // The links between regions.
+      interconnectors: `EVALUATE SELECTCOLUMNS(dim_interconnector, "id", dim_interconnector[interconnector],
+        "from_region", dim_interconnector[from_region], "to_region", dim_interconnector[to_region],
+        "description", dim_interconnector[description])`,
       // The interconnectors' flows and limits, and each region's price, per interval.
       flows: (from, to) => `
           EVALUATE CALCULATETABLE(
@@ -2493,16 +2498,22 @@
     // 7c. FLOWS PAGE (interconnectors + regional prices, with playback)
     // =========================================================================
 
-    // AEMO's sign convention: MWFLOW is positive from the first region in the id to the second.
-    const INTERCONNECTORS = {
-      'NSW1-QLD1': { from: 'NSW1', to: 'QLD1', name: 'QNI', curve: 0.18 },
-      'N-Q-MNSP1': { from: 'NSW1', to: 'QLD1', name: 'Terranora', curve: -0.3 },
-      'VIC1-NSW1': { from: 'VIC1', to: 'NSW1', name: 'VNI', curve: 0.12 },
-      'V-SA':      { from: 'VIC1', to: 'SA1',  name: 'Heywood', curve: 0.2 },
-      'V-S-MNSP1': { from: 'VIC1', to: 'SA1',  name: 'Murraylink', curve: -0.3 },
-      'T-V-MNSP1': { from: 'TAS1', to: 'VIC1', name: 'Basslink', curve: 0.12 },
-      'NSW1-SA1':  { from: 'NSW1', to: 'SA1',  name: 'EnergyConnect', curve: 0.15 },
-    };
+    // What a link is (its two regions, AEMO's description of it) is dim_interconnector's: MWFLOW
+    // is positive from its from_region to its to_region. It is named by its id, which fits on the
+    // map; the board shows the description. How it is drawn is the page's: the bend
+    // of its arc, so that two links between the same regions don't overlap, and the board's
+    // order. A link AEMO adds is drawn with the default bend, after these.
+    const LINK_CURVES = { 'NSW1-QLD1': 0.18, 'N-Q-MNSP1': -0.3, 'VIC1-NSW1': 0.12, 'V-SA': 0.2,
+      'V-S-MNSP1': -0.3, 'T-V-MNSP1': 0.12, 'NSW1-SA1': 0.15 };
+    const linkOrder = id => { const i = Object.keys(LINK_CURVES).indexOf(id); return i < 0 ? Infinity : i; };
+    let INTERCONNECTORS = null;
+    async function interconnectors() {
+      INTERCONNECTORS ??= Object.fromEntries((await runQuery(dax.interconnectors))
+        .sort((a, b) => linkOrder(a.id) - linkOrder(b.id) || a.id.localeCompare(b.id))
+        .map(l => [l.id, { from: l.from_region, to: l.to_region, name: l.id, description: l.description,
+          curve: LINK_CURVES[l.id] ?? 0.15 }]));
+      return INTERCONNECTORS;
+    }
     // Rough load centres, where the arrows start and end.
     const REGION_ANCHORS = { QLD1: [151.6, -26.6], NSW1: [149.6, -32.9], VIC1: [144.6, -37.4], SA1: [138.7, -33.6], TAS1: [146.8, -42.0] };
     // GeoJSON states coloured by their region's price (ACT is in NSW1; WA and NT aren't in the NEM).
@@ -2608,9 +2619,11 @@
       };
       // Always 5-minute frames, so only the ranges whose half-year files renderAll loads.
       if (!isIntradayMode()) return empty('Choose 30 days or less to play the flows');
+      if (!data.has('v_dim_interconnector')) return empty('Interconnectors not deployed yet');
       const [flows, prices] = await Promise.all([
         runQuery(dax.flows(from, to)).catch(() => []),
         runQuery(dax.flowPrices(from, to)),
+        interconnectors(),
       ]);
       const mapReady = await registerAustraliaMap();
       if (seq !== _renderSeq) return;
@@ -2841,21 +2854,21 @@
       for (const id of icState.ids) {
         const el = document.getElementById(`icrow-${id}`), e = enriched.find(x => x.r.id === id);
         if (!el) continue;
-        const ic = INTERCONNECTORS[id];
+        const ic = INTERCONNECTORS[id], desc = `<span class="ic-desc" title="${escapeHtml(ic.description)}">${escapeHtml(ic.description)}</span>`;
         el.classList.toggle('ic-dead', !!e?.dead);
         el.innerHTML = !e ? `
-          <div class="ic-name">${ic.name}<span>${short(ic.from)} &ndash; ${short(ic.to)}</span></div>
+          <div class="ic-name">${desc}<span class="ic-dir">${short(ic.from)} &ndash; ${short(ic.to)}</span></div>
           <div class="ic-mw">--</div>
           <div class="ic-bar"></div>
-          <div class="ic-util">no data in this interval</div>` : e.dead ? `
-          <div class="ic-name">${ic.name}<span>${short(ic.from)} &ndash; ${short(ic.to)}</span></div>
+          <div class="ic-util">${ic.name} &middot; no data in this interval</div>` : e.dead ? `
+          <div class="ic-name">${desc}<span class="ic-dir">${short(ic.from)} &ndash; ${short(ic.to)}</span></div>
           <div class="ic-mw">0 MW</div>
           <div class="ic-bar"><span style="width:100%"></span></div>
-          <div class="ic-util">&#10005; No flow for ${e.since}</div>` : `
-          <div class="ic-name">${ic.name}<span>${short(e.a)} &rarr; ${short(e.b)}</span></div>
+          <div class="ic-util">${ic.name} &middot; &#10005; No flow for ${e.since}</div>` : `
+          <div class="ic-name">${desc}<span class="ic-dir">${short(e.a)} &rarr; ${short(e.b)}</span></div>
           <div class="ic-mw">${Math.round(Math.abs(e.r.mw)).toLocaleString()} MW</div>
           <div class="ic-bar"><span style="width:${Math.min(100, Math.round(100 * e.util))}%;background:${utilColor(e.util)}"></span></div>
-          <div class="ic-util">${Math.round(100 * e.util)}% of its ${short(e.a)}&rarr;${short(e.b)} limit</div>`;
+          <div class="ic-util">${ic.name} &middot; ${Math.round(100 * e.util)}% of its ${short(e.a)}&rarr;${short(e.b)} limit</div>`;
       }
       document.getElementById('regionBoard').innerHTML = Object.keys(REGION_ANCHORS).map(code => {
         const p = price(code), n = Math.round(net[code] || 0);

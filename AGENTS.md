@@ -77,6 +77,11 @@ Four deliberate local differences, all of which must survive a port:
    leaves the list later stays in `dim_duid` (insert-only), but a `rebuild=dim_duid` loses it
    until the file is regenerated. **Missing or wrong units are fixed in that file, never in
    dbt** — `dim_duid` has no fallback.
+   The same refresh keeps three tables of the newest MMSDM month (`genunits.csv`,
+   `dualloc.csv`, `interconnector.csv`; last month's archive, or the one before while it is
+   not out). They hold every DUID and genset that ever ran, registered or not:
+   `dim_duid.CO2eFactor` comes from them for every unit, and `dim_interconnector` from the
+   last.
 3. Work is discovered from the **log table**, not a filesystem glob: each fact model's pre-hook
    (`macros/pending_archive_files.sql`) builds its path list from
    `SELECT DISTINCT stg_csv_archive_log.archive_path` filtered by `NOT EXISTS` against
@@ -720,13 +725,13 @@ they are what these tables are built from.
   recreated Iceberg table to Direct Lake: a refresh 2.5 and 5 minutes after a
   `rebuild=fct_summary_daily` answered `DirectLake_TableNotFound`, at 7 minutes it passed.
 
-## Models (23)
+## Models (24)
 | Model | Schema | Materialization |
 |-------|--------|-----------------|
 | stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
 | processed_files | landing | incremental append — the files each landing fact has loaded (`model, csv_filename, processed_at`), appended by the facts' post-hooks; the pending check is the log minus this table. A `rebuild=<fact>` appends a reset row (`csv_filename` NULL); the first build seeds it from the facts' `file` columns |
 | dim_calendar | mart | incremental append (the NOT-IN filter keeps existing dates out; runs 2 years ahead) |
-| dim_duid | mart | incremental insert-only merge on DUID; NEM units from the registration list, then `duid_unregistered.csv`; registered capacity (RegCapMW etc.); `Renewable` — **the list of renewable fuels lives in this model** (an inline CTE next to `states`), nowhere else; `Classification` from the list (Scheduled / Semi-Scheduled / Non-Scheduled, stars stripped; NULL off the list): curtailment is measured on Semi-Scheduled, not on a fuel, because HPR1 (a battery) is registered with fuel "Wind". A new column or a changed rule reaches the existing rows with a `rebuild=dim_duid` |
+| dim_duid | mart | incremental insert-only merge on DUID; NEM units from the registration list, then `duid_unregistered.csv`; registered capacity (RegCapMW etc.); `Renewable` — **the list of renewable fuels lives in this model** (an inline CTE next to `states`), nowhere else; `Classification` from the list (Scheduled / Semi-Scheduled / Non-Scheduled, stars stripped; NULL off the list): curtailment is measured on Semi-Scheduled, not on a fuel, because HPR1 (a battery) is registered with fuel "Wind"; `CO2eFactor` (t CO2-e/MWh) from MMSDM `GENUNITS` through `DUALLOC`, for registered and unregistered units alike, NULL for loads, AEMO's dummy units and the gensets "On Exclusion List" (Colongra, Jeeralang, Braemar 3 and 6), which `[Emissions t]` therefore leaves out. A new column or a changed rule reaches the existing rows with a `rebuild=dim_duid` |
 | fct_scada, fct_price | landing | incremental insert-only merge (by file) |
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
 | fct_interconnector_today | landing | incremental insert-only merge (by file) — the INTERCONNECTORRES rows of the same archived DispatchIS files as fct_price_today **and, despite the name, the whole history**: AEMO's monthly MMSDM archive of the same record, 2018-01 → 2026-08 (source_type `interconnector_monthly`, a finite backfill; read with `strict_mode = false`, which the files from 2024-08 need). August 2026 is in both sources, so `fct_interconnector` takes one row per interval (`MAX … GROUP BY`); the Flows page plays any range ≤ 30 days |
@@ -737,6 +742,7 @@ they are what these tables are built from.
 | fct_interconnector | mart | incremental insert-only merge on (interconnector, date, time) — for Power BI: `MWFLOW` and the two limits, the pricing run, one row per interval |
 | fct_curtailment | mart | incremental insert-only merge on (DUID, date) — for Power BI: curtailed and available MWh per semi-scheduled unit and day. A day is written once `fct_scada` holds its 288 intervals: the days after the newest one here, and in a refill `process_limit` days below the oldest, newest first (`macros/whole_days.sql`) |
 | dim_region | mart | incremental insert-only merge on Region — for Power BI: the regions of `dim_duid`, the one filter that reaches units, regional data and rooftop |
+| dim_interconnector | mart | incremental insert-only merge on interconnector — the links between regions of `dim_region` (from MMSDM `INTERCONNECTOR`): `from_region`/`to_region` (a positive `mw` flows from the first to the second) and AEMO's `description`. The Flows page names a link by its id on the map and by the description on its board; only the bend of each arc is typed there (`LINK_CURVES`) |
 | dim_time | mart | incremental insert-only merge on time — the 288 5-minute times of a day (`time` HHMM, `minute`, `hour`): the time axis of the 5-minute facts, and what the measures look at to choose a table |
 | fct_region_daily | mart | incremental insert-only merge on (REGIONID, date) — the plain average of a day's 288 intervals of `fct_region` (price, demand, net interchange); a day is written once it has all 288 |
 | fct_summary_daily | mart | incremental insert-only merge on (DUID, date) — `fct_summary` per unit and day, written once `fct_scada` holds the day whole (`macros/whole_days.sql`: the days after the newest one here; in a refill `process_limit` days below the oldest, newest first, never below `fct_summary`'s oldest): `output_mwh`, `charging_mwh`, `revenue` (the sums the measures switch to) and `mwh` net with the region's daily `price` (no measure reads those two; Analyze lists them). Inner join to `fct_region_daily` |
