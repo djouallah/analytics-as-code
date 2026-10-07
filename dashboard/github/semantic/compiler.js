@@ -622,11 +622,12 @@ function select(r, raw) {
 // The page's query -> DAX
 // =============================================================================
 
-// The page writes no DAX. It asks as a report visual does: columns to group by, measures,
-// filters on columns, and no expression of its own, so a figure is always a measure of the
-// model. What a query can say, and nothing else:
-//   select   { name: field }: a column 'table[column]' (grouped by), a measure '[Name]', or
-//            { min: column } / { max: column }, a key's first or last value (not a figure)
+// The page writes no DAX: it does not know the query language at all. It asks as a report
+// visual does: columns to group by, measures, filters on columns, and no expression of its
+// own, so a figure is always a measure of the model. What a query can say, and nothing else:
+//   select   { name: field }: a column 'table.column' (grouped by), a measure by its name
+//            ('Generation MW'), or { min: column } / { max: column }, a key's first or last
+//            value (not a figure)
 //   where    conditions on columns: [column, op, ...values] with op = <> < <= > >= between
 //            in blank notBlank, or { any: [condition, ...] }, true if one of them is
 //   having   [name, op, value] or [name, 'notBlank'] on a value of the select: rows left out
@@ -634,14 +635,18 @@ function select(r, raw) {
 //            more set of rows on which `name` is true
 //   orderBy  [name, [name, 'desc'], ...]
 //   top      n: the first n rows by the first orderBy, the rows tied with the n-th kept
-// A value is a literal: a string, a number, or a date on a date column ('2026-10-07').
+// A value is a literal: a string, a number, or a date on a date column ('2026-10-07'). A
+// column has a dot and a measure has none (no measure of the model has one).
+// What the DAX needs that the page does not say is written here: a query of a dimension's
+// columns alone leaves out the blank row DAX adds to a dimension when a fact names a key it
+// lacks (dim_duid, dim_interconnector: the page lists rows, and that row is none of them).
 // A new word here is the owner's to add, never a page's or an agent's.
-const FIELD = /^(\w+)\[([^\]]+)\]$/, MEASURE_REF = /^\[([^\]]+)\]$/;
+const COLUMN = /^(\w+)\.([^.[\]]+)$/;
 function field(f) {
-  const m = typeof f === 'string' && FIELD.exec(f);
+  const m = typeof f === 'string' && COLUMN.exec(f);
   if (!m) throw new Error(`query: ${JSON.stringify(f)} is not a column`);
   column(m[1], m[2]);
-  return { table: m[1], name: m[2] };
+  return { table: m[1], name: m[2], dax: `${m[1]}[${m[2]}]` };
 }
 function daxValue(v, col) {
   if (typeof v === 'number' && Number.isFinite(v)) return String(v);
@@ -655,15 +660,15 @@ function daxFilters(c) {
     if (!Array.isArray(c?.any) || !c.any.length) throw new Error(`query: ${JSON.stringify(c)} is not a condition`);
     return [`(${c.any.map(x => daxFilters(x).join(' && ')).join(' || ')})`];
   }
-  const [f, op, ...v] = c, col = field(f), val = x => daxValue(x, col);
+  const [f, op, ...v] = c, col = field(f), val = x => daxValue(x, col), d = col.dax;
   switch (op) {
-    case '=': case '<>': case '<': case '<=': case '>': case '>=': return [`${f} ${op} ${val(v[0])}`];
-    case 'between': return [`${f} >= ${val(v[0])}`, `${f} <= ${val(v[1])}`];
+    case '=': case '<>': case '<': case '<=': case '>': case '>=': return [`${d} ${op} ${val(v[0])}`];
+    case 'between': return [`${d} >= ${val(v[0])}`, `${d} <= ${val(v[1])}`];
     case 'in':
       if (!Array.isArray(v[0]) || !v[0].length) throw new Error(`query: ${f} in needs a list of values`);
-      return [`${f} IN {${v[0].map(val).join(', ')}}`];
-    case 'blank': return [`ISBLANK(${f})`];
-    case 'notBlank': return [`NOT ISBLANK(${f})`];
+      return [`${d} IN {${v[0].map(val).join(', ')}}`];
+    case 'blank': return [`ISBLANK(${d})`];
+    case 'notBlank': return [`NOT ISBLANK(${d})`];
   }
   throw new Error(`query: ${op} is not a condition`);
 }
@@ -673,39 +678,40 @@ export function toDax(q) {
   if (!entries.length) throw new Error('query: select names nothing');
   const known = new Set(['select', 'where', 'having', 'totals', 'orderBy', 'top']);
   for (const k of Object.keys(q)) if (!known.has(k)) throw new Error(`query: ${k} is not a word of a query`);
-  const isCol = f => typeof f === 'string' && FIELD.test(f);
+  const isCol = f => typeof f === 'string' && COLUMN.test(f);
   const value = f => {
-    if (typeof f === 'string' && MEASURE_REF.test(f)) {
-      if (!MEASURE_DAX.has(MEASURE_REF.exec(f)[1])) throw new Error(`query: the model has no measure ${f}`);
-      return f;
+    if (typeof f === 'string') {
+      if (!MEASURE_DAX.has(f)) throw new Error(`query: the model has no measure ${f}`);
+      return `[${f}]`;
     }
     const [fn, c] = Object.entries(f ?? {})[0] ?? [];
     if ((fn !== 'min' && fn !== 'max') || Object.keys(f).length !== 1) throw new Error(`query: ${JSON.stringify(f)} is not a field`);
-    field(c);
-    return `${fn.toUpperCase()}(${c})`;
+    return `${fn.toUpperCase()}(${field(c).dax})`;
   };
-  const cols = entries.filter(([, f]) => isCol(f)), values = entries.filter(([, f]) => !isCol(f));
-  cols.forEach(([, f]) => field(f));
-  const totals = Object.entries(q.totals ?? {});
-  const rolled = new Set(totals.flatMap(([, cs]) => cs));
-  for (const c of rolled) if (!cols.some(([, f]) => f === c)) throw new Error(`query: a total over ${c}, which is not selected`);
+  const cols = entries.filter(([, f]) => isCol(f)).map(([n, f]) => [n, field(f)]);
+  const values = entries.filter(([, f]) => !isCol(f));
+  const totals = Object.entries(q.totals ?? {}).map(([n, cs]) => [n, cs.map(field)]);
+  const rolled = new Set(totals.flatMap(([, cs]) => cs.map(c => c.dax)));
+  for (const c of rolled) if (!cols.some(([, f]) => f.dax === c)) throw new Error(`query: a total over ${c}, which is not selected`);
   const pairs = values.map(([n, f]) => `"${n}", ${value(f)}`);
   let t;
   if (cols.length) {
-    const keys = [...cols.map(([, f]) => f).filter(f => !rolled.has(f)),
-      ...totals.map(([n, cs]) => `ROLLUPADDISSUBTOTAL(${cs.length > 1 ? `ROLLUPGROUP(${cs.join(', ')})` : cs[0]}, "${n}")`)];
+    const keys = [...cols.map(([, f]) => f.dax).filter(d => !rolled.has(d)),
+      ...totals.map(([n, cs]) => `ROLLUPADDISSUBTOTAL(${cs.length > 1 ? `ROLLUPGROUP(${cs.map(c => c.dax).join(', ')})` : cs[0].dax}, "${n}")`)];
     t = `SUMMARIZECOLUMNS(${[...keys, ...pairs].join(', ')})`;
   } else {
     if (totals.length) throw new Error('query: totals need a column to group by');
     t = `ROW(${pairs.join(', ')})`;
   }
-  const where = (q.where ?? []).flatMap(daxFilters);
+  // A dimension's columns alone: not its blank row.
+  const blankRows = values.length ? [] : [...new Set(cols.map(([, f]) => f.table))]
+    .map(table => RELS.find(r => r.to === table)).filter(Boolean).map(r => `NOT ISBLANK(${r.to}[${r.toColumn}])`);
+  const where = [...new Set([...(q.where ?? []).flatMap(daxFilters), ...blankRows])];
   if (where.length) t = `CALCULATETABLE(${t}, ${where.join(', ')})`;
   // A column comes out under its own name: SELECTCOLUMNS gives it the select's.
-  const own = f => FIELD.exec(f)[2];
-  if (new Set(cols.map(([, f]) => own(f))).size < cols.length) throw new Error('query: two columns of the same name');
-  if (cols.some(([n, f]) => n !== own(f)))
-    t = `SELECTCOLUMNS(${t}, ${[...entries.map(([n, f]) => `"${n}", [${isCol(f) ? own(f) : n}]`),
+  if (new Set(cols.map(([, f]) => f.name)).size < cols.length) throw new Error('query: two columns of the same name');
+  if (cols.some(([n, f]) => n !== f.name))
+    t = `SELECTCOLUMNS(${t}, ${[...entries.map(([n, f]) => `"${n}", [${isCol(f) ? field(f).name : n}]`),
       ...totals.map(([n]) => `"${n}", [${n}]`)].join(', ')})`;
   const names = new Set([...entries.map(([n]) => n), ...totals.map(([n]) => n)]);
   const name = n => { if (!names.has(n)) throw new Error(`query: ${n} is not a name of the select`); return `[${n}]`; };

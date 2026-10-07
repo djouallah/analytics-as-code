@@ -65,8 +65,9 @@ jobs:
           cp dashboard/github/index.html deploy/
           cp -r dashboard/github/frontend dashboard/github/semantic dashboard/github/storage deploy/
           cp semantic_model/model.bim deploy/semantic/
-          # perflog.js carries the build stamp the Logs panel shows.
-          sed -i "s/__BUILD__/${GITHUB_SHA::7}/" deploy/frontend/perflog.js
+          # The build stamp (the Logs panel shows it) and ?v=<build> on every relative
+          # import, so a browser's cached modules never run with a new page.
+          node scripts/stamp_build.mjs deploy "${GITHUB_SHA::7}"
           cp -r dashboard/github/dag deploy/
       - name: Deploy to nemtracker
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
