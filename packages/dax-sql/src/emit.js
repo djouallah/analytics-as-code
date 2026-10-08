@@ -832,19 +832,34 @@ class Fusion {
     }
     const state = em.model.state(S.ctx.mods);
     const exp = em.model.expand(S.table, state);
-    const keys = new Set(), rest = [], guards = [];
+    const keys = new Set(), rest = [], guards = [], via = [];
     for (const f of S.ctx.filters) {
       if (f.kind === 'bind' && f.val.k === 'col' && f.val.row === this.keyRow) {
         const c = f.cols[0];
-        if (exp.has(c.table.name)) {
-          keys.add(f.val.ref);
-          // A guarded key (a value of the group, when a condition on the group holds): the
-          // condition is the group's, read where the group is.
-          if (f.guard && !guards.includes(f.guard)) guards.push(f.guard);
-        } else if (em.model.reaches(c.table, S.table, state)) return null;
+        if (exp.has(c.table.name)) keys.add(f.val.ref);
+        // A key on a table whose filter reaches the scan over a relationship that filters
+        // back (both ways, many-to-many): kept for the mapping below.
+        else if (em.model.reaches(c.table, S.table, state)) via.push({ ref: f.val.ref, col: c });
+        else continue;
+        // A guarded key (a value of the group, when a condition on the group holds): the
+        // condition is the group's, read where the group is.
+        if (f.guard && !guards.includes(f.guard)) guards.push(f.guard);
         continue;
       }
       rest.push(f);
+    }
+    // Keys that reach the scan over a relationship that filters back: the scan is joined to
+    // the pairs (key, value of the relationship's column) that the filter context keeps on the
+    // keys' table, and grouped by the key. A row of the scan is in a key's group when its
+    // column is one of that key's values, as the filter's IN says, once per key.
+    let edge = null;
+    if (via.length) {
+      const X = via[0].col.table;
+      if (via.some(v => v.col.table !== X)) return null;
+      for (const name of exp.keys()) {
+        for (const e of em.model.inbound(em.model.table(name), state)) if (e.there.table === X) edge ??= e;
+      }
+      if (!edge) return null;
     }
     // The other filters read no row, or only keys the scan is filtered to: those are its own
     // columns, row by row.
@@ -857,9 +872,19 @@ class Fusion {
         readsKeys = true;
       }
     }
-    const keyList = [...keys].sort((a, b) => a - b);
     const block = em.isolated(() => em.scanBlock(S.table, new Ctx(rest, S.ctx.mods), new Map(), null, readsKeys ? [this.keyRow, this.keyCols] : null));
-    const sig = `${S.table.name}|${state.key}|${keyList.join(',')}|${canonical(`${block.from} ${block.where.join(' AND ')}`)}`;
+    const keyExpr = new Map();
+    if (edge) {
+      const m = em.isolated(() => em.scanBlock(edge.there.table, new Ctx(rest, S.ctx.mods), new Map(), new Set(exp.keys())));
+      m.setOut([...via.map((_, j) => ({ name: `g${j}` })), { name: 'y' }], [...via.map(v => m.res.meta(v.col)), m.res.meta(edge.there)]);
+      m._names = [...via.map((_, j) => `g${j}`), 'y'];
+      m.distinct = true;
+      const ma = em.alias('m');
+      block.joins.push(`JOIN (${m.render()}) AS ${ma} ON ${block.res.meta(edge.here)} = ${ma}.y`);
+      via.forEach((v, j) => { keys.add(v.ref); keyExpr.set(v.ref, `${ma}.g${j}`); });
+    }
+    const keyList = [...keys].sort((a, b) => a - b);
+    const sig = `${S.table.name}|${state.key}|${keyList.join(',')}|${canonical(`${block.from} ${block.joins.join(' ')} ${block.where.join(' AND ')}`)}`;
     let g = this.groups.find(x => x.sig === sig), rename = s => s, conds = null, parts = null;
     if (!g && !keyList.length && !readsKeys && em.d.aggFilter) {
       // An aggregate over the whole of another scan of the same tables (no keys: one row
@@ -884,7 +909,7 @@ class Fusion {
     }
     if (!g) {
       g = { sig, alias: em.alias('f'), block, keys: keyList, aggs: [], merge: !keyList.length && !readsKeys ? `${S.table.name}|${state.key}` : null };
-      g.keyExprs = keyList.map(i => block.res.meta(this.keyCols[i]));
+      g.keyExprs = keyList.map(i => keyExpr.get(i) ?? block.res.meta(this.keyCols[i]));
       g.on = (k, keyNames) => keyList.length
         ? keyList.map((ki, j) => em.d.isNotDistinct(`${g.alias}.g${j}`, `${k}.${em.ident(keyNames[ki])}`)).join(' AND ')
         : 'TRUE';
