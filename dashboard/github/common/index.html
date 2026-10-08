@@ -330,7 +330,10 @@
       .hero-figure { font-size: clamp(2.6rem, 3.4vw, 3.6rem); }
       .mix-bar { height: 34px; }
       .mix-legend { margin-top: 0.6rem; }
-      .hero { grid-template-columns: auto minmax(0, 1fr) minmax(250px, 0.42fr); }
+      /* The regions' column is sized off the window, not shared with the figure's (auto): a
+         wider figure or caption, as a region filter brings, must not slide the tiles under the
+         pointer that is hovering them. */
+      .hero { grid-template-columns: auto minmax(0, 1fr) minmax(250px, 21vw); }
       .hero-regions { grid-column: auto; grid-template-columns: 1fr; gap: 3px; }
       .region-tile { display: flex; align-items: center; gap: 0.6rem; padding: 0.2rem 0.6rem; border-radius: 8px; }
       .region-tile:hover { transform: none; }
@@ -821,9 +824,11 @@
       document.getElementById("status").className = type;
     }
 
-    const crossFilter = { fuel: null, region: null, duids: [] };
+    // `hover` is the region tile under the pointer: it filters the page like a click, for as
+    // long as the pointer stays, and leaves no tag (the click's `region` is what is kept).
+    const crossFilter = { fuel: null, region: null, hover: null, duids: [] };
     // The header dropdowns win over a chart click-filter (updateFilterTags says so).
-    const activeRegion = () => document.getElementById("regionFilter").value || crossFilter.region;
+    const activeRegion = () => document.getElementById("regionFilter").value || crossFilter.hover || crossFilter.region;
     // Display names for the AEMO region codes (#1), read from dim_region at startup
     // (populateFilters); a code without one shows as the code. Display only: filters, SQL and
     // joins keep using the codes, and every UI element maps back to them.
@@ -1471,7 +1476,7 @@
       // --- the regions ---
       document.getElementById('heroRegions').innerHTML = state.regions.map(p => {
         const net = p.net == null ? '' : `<span class="rt-net ${p.net >= 0 ? 'export' : 'import'}">${p.net >= 0 ? '&#9650; exports' : '&#9660; imports'} ${mwText(Math.abs(p.net))}</span>`;
-        return `<button type="button" class="region-tile${p.region === region ? ' active' : ''}" data-region="${escapeHtml(p.region)}" title="${p.region === crossFilter.region ? 'Show all regions' : `Show ${escapeHtml(regionName(p.region))} only`}">
+        return `<button type="button" class="region-tile${p.region === region ? ' active' : ''}" data-region="${escapeHtml(p.region)}" title="${p.region === crossFilter.region ? 'Click to show all regions' : `Hover to preview, click to keep ${escapeHtml(regionName(p.region))}`}">
           <div class="rt-row"><span class="rt-code">${escapeHtml(short(p.region))}</span><span class="rt-price">${fmtPrice(p.price)}<small>/MWh</small></span></div>
           <div class="rt-band" style="background:${p.price == null ? 'var(--row-line)' : priceColor(p.price)}"></div>
           <div class="rt-row">${p.demand == null ? '' : `<span class="rt-meta">${mwText(p.demand)} demand</span>`}${net}${p.demand == null && p.net == null ? '<span class="rt-meta">&nbsp;</span>' : ''}</div>
@@ -1535,9 +1540,39 @@
       const fuel = e.target.closest('[data-fuel]')?.dataset.fuel, region = e.target.closest('[data-region]')?.dataset.region;
       if (!fuel && !region) return;
       if (fuel) crossFilter.fuel = crossFilter.fuel === fuel ? null : fuel;
-      if (region) crossFilter.region = crossFilter.region === region ? null : region;
+      if (region) {
+        crossFilter.region = crossFilter.region === region ? null : region;
+        // The click wins over the hover; the tile hovers again once the pointer has left it.
+        crossFilter.hover = null;
+        clearTimeout(_hoverTimer);
+        _hoverNext = region;
+      }
       renderAll();
     });
+    // Hovering a region tile filters the page to it, as a click does, until the pointer leaves
+    // the tiles. A tile has to hold the pointer HOVER_MS first, so sweeping across the row draws
+    // once, at the end; a render still running is dropped by _renderSeq. Mouse only: a tap is
+    // the click. Listened on the row, as paintHero rewrites the tiles.
+    const HOVER_MS = 200;
+    let _hoverTimer = 0, _hoverNext = null;
+    function hoverRegion(code) {
+      if (code === _hoverNext) return;
+      _hoverNext = code;
+      clearTimeout(_hoverTimer);
+      _hoverTimer = setTimeout(() => {
+        if (document.getElementById('regionFilter').value) return;
+        const before = activeRegion();
+        crossFilter.hover = code;
+        if (activeRegion() !== before) renderAll();
+      }, HOVER_MS);
+    }
+    const tiles = document.getElementById('heroRegions');
+    tiles.addEventListener('pointermove', e => {
+      if (e.pointerType !== 'mouse') return;
+      const code = e.target.closest('[data-region]')?.dataset.region;
+      if (code) hoverRegion(code);
+    });
+    tiles.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') hoverRegion(null); });
     // The hover card of the mix: what the element under the pointer says in data-tip.
     const _tip = document.body.appendChild(Object.assign(document.createElement('div'), { className: 'tip' }));
     document.getElementById('hero').addEventListener('pointermove', e => {
@@ -2963,6 +2998,7 @@
       document.getElementById(id).addEventListener("change", () => {
         crossFilter.fuel = null;
         crossFilter.region = null;
+        crossFilter.hover = null;
         crossFilter.duids = [];
         updateDuidTrigger();
         clearQueryCache();
@@ -2976,6 +3012,7 @@
       document.getElementById(id).addEventListener("change", () => {
         crossFilter.fuel = null;
         crossFilter.region = null;
+        crossFilter.hover = null;
         crossFilter.duids = [];
         updateDuidTrigger();
         clearAnalyzePreview();
