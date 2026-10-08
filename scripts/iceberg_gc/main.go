@@ -163,6 +163,12 @@ func expire(ctx context.Context, cat *rest.Catalog, name string, opts ...table.E
 	if err != nil {
 		return fmt.Errorf("after: %w", err)
 	}
+	// Also the files a retained manifest names as DELETED: no snapshot reads them, but
+	// iceberg-go leaves them until the snapshot that names them expires too.
+	afterAll, err := referenced(tbl, fsys, false)
+	if err != nil {
+		return fmt.Errorf("after: %w", err)
+	}
 	fmt.Printf("  snapshots  %d -> %d\n", nBefore, len(tbl.Metadata().Snapshots()))
 
 	exists := func(p string) bool {
@@ -173,23 +179,29 @@ func expire(ctx context.Context, cat *rest.Catalog, name string, opts ...table.E
 		f.Close()
 		return true
 	}
-	bad := 0
+	// Deleting a file a retained snapshot reads breaks the table: that fails the run. A
+	// file no retained manifest names that was kept is a leak, left as an orphan: reported.
+	broken, leaked := 0, 0
 	for p := range before {
 		gone := !exists(p)
-		want := !after[p]
-		state := "kept   "
-		if gone {
+		state, mark := "kept   ", ""
+		switch {
+		case gone && after[p]:
+			state, mark = "deleted", "   <-- STILL READ: BROKEN"
+			broken++
+		case gone:
 			state = "deleted"
-		}
-		mark := ""
-		if gone != want {
-			mark = "   <-- WRONG"
-			bad++
+		case !afterAll[p]:
+			mark = "   <-- leaked (no manifest names it)"
+			leaked++
+		case !after[p]:
+			mark = "   (named DELETED by a retained manifest)"
 		}
 		fmt.Printf("  %s %s%s\n", state, strings.TrimPrefix(p, tbl.Location()+"/"), mark)
 	}
-	if bad > 0 {
-		return fmt.Errorf("%d file(s) in the wrong state", bad)
+	fmt.Printf("  %d leaked\n", leaked)
+	if broken > 0 {
+		return fmt.Errorf("%d file(s) still read were deleted", broken)
 	}
 	return nil
 }
