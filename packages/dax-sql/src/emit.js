@@ -649,12 +649,26 @@ export class Emitter {
     if (x.src.k === 'currentgroup') return this.aggExpr(x, scope);
     // A subquery: what it holds is not fused (SQL would read an aggregate of a column of the
     // outer query as the outer query's aggregate).
-    return this.isolated(() => {
+    const sql = this.isolated(() => {
       const b = this.open(this.table(x.src, scope));
       const s2 = withRow(scope, x.row, b.res);
       b.setOut([{ name: 'v', lineage: null }], [x.fn === 'single' ? this.scalar(x.arg, s2) : this.aggExpr(x, s2)]);
-      return `(${b.render()})`;
+      return b.render();
     });
+    return ir.freeRows(x).size ? `(${sql})` : this.once(sql);
+  }
+
+  // A subquery that reads nothing of the query around it, written once: the same SQL (up to
+  // its aliases) anywhere in the query is one CTE.
+  once(sql) {
+    const key = `once|${canonical(sql)}`;
+    let name = this.memo.get(key);
+    if (!name) {
+      name = this.alias('o');
+      this.ctes.push(`${name} AS ${this.d.materialized}(${sql})`);
+      this.memo.set(key, name);
+    }
+    return `(SELECT v FROM ${name})`;
   }
 
   aggExpr(x, scope) {
