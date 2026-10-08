@@ -9,9 +9,7 @@
      filters and prune data files. Until 2026-10-06 this grouped all of fct_scada by date
      every run (300M rows over OneLake, 75-100 s per model) and anti-joined the table's own
      dates. Two kinds of range, [from, to) with to exclusive:
-       * every run: the days after the newest one the table holds, up to the day before
-         fct_scada's newest: the newest is never whole (the last next-day file stops at 04:00
-         on it), so with no new daily file the range is empty and no query is sent;
+       * every run: the days after the newest one the table holds, up to fct_scada's newest;
        * refill (a first build, or after rebuild=<table>): process_limit days below the
          oldest one the table holds, newest first, until it reaches the oldest the source
          has. The refill is contiguous downward, so MIN(date) is the frontier.
@@ -29,12 +27,12 @@
   {%- if scada_max -%}
     {%- set oldest = scada_min if floor is none or floor < scada_min else floor -%}
     {%- if this_max -%}
-      {%- do ranges.append((this_max + day, scada_max)) -%}
+      {%- do ranges.append((this_max + day, scada_max + day)) -%}
       {%- if this_min and this_min > oldest -%}
         {%- do ranges.append((this_min - process_limit * day, this_min)) -%}
       {%- endif -%}
     {%- else -%}
-      {%- do ranges.append((scada_max - process_limit * day, scada_max)) -%}
+      {%- do ranges.append((scada_max - (process_limit - 1) * day, scada_max + day)) -%}
     {%- endif -%}
     {#- Nothing below the floor; a range that ends up empty is dropped. #}
     {%- set kept = [] -%}

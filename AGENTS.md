@@ -35,8 +35,8 @@ downloading lives outside dbt and the log is read straight from parquet, not fro
 table.
 Four deliberate local differences, all of which must survive a port:
 - `fct_summary` decides its dates at compile time from the Iceberg manifests and writes
-  them as literals (Architecture point 3): the days of the files its sources loaded since it
-  last committed, the intraday feed after the newest daily interval, and in a refill `process_limit` dates
+  them as literals (Architecture point 3): the newest daily date minus six days on, the
+  intraday feed after the newest daily interval, and in a refill `process_limit` dates
   below the oldest it holds (uncapped, a refill runs the runner out of memory). The
   reference asks the data (`MAX(DATE)`, `DISTINCT DATE ... NOT IN`, the partial-dates
   `COUNT(DISTINCT time) < 280`): full scans of the biggest tables on every run. The
@@ -61,10 +61,9 @@ Four deliberate local differences, all of which must survive a port:
 2. **No daily/intraday split.** Every hourly pass does every feed (the daily files,
    intraday SCADA, intraday DispatchIS, the monthly interconnector archive, rooftop current /
    weekly / monthly) plus the DUID reference, self-gated on data rather than on a schedule:
-   each DUID reference file is downloaded when its log row is 24h old; the Daily_Reports folder
-   is only listed while the log lacks yesterday's (Brisbane) next-day file; and the backfills
-   (the GitHub historical listing, the monthly archives, the weekly rooftop archives) only run
-   when that listing ran and returned fewer than `download_limit` new daily files. `download_limit` is per feed.
+   each DUID reference file is downloaded when its log row is 24h old, and the backfills (the
+   GitHub historical listing, the monthly archives, the weekly rooftop archives) only run when
+   AEMO returned fewer than `download_limit` new daily files. `download_limit` is per feed.
    **A source that fails skips itself, not the run**: a nemweb folder that can't be listed,
    or a reference file that can't be fetched, prints a `::warning::` and that feed downloads
    nothing this pass; the previous reference file and its log row stay. The model must not
@@ -113,17 +112,6 @@ Four deliberate local differences, all of which must survive a port:
    `DATE IN (SELECT ...)`) does not prune. Each model logs the bounds it read and the ranges
    it chose, so a run's log says what it decided. The `ci` target (no Iceberg) reads plain
    `MIN`/`MAX`.
-   **A mart that reads the landing facts recomputes only the days of their new files**
-   (`pending_file_ranges`, `macros/pending_archive_files.sql`): fct_region, fct_summary,
-   fct_interconnector, fct_rooftop and fct_curtailment_region. Its post-hook appends a
-   watermark row to `processed_files` (the mart's name, `csv_filename` NULL, the newest
-   `processed_at` of its facts' rows) once its MERGE committed; its pending files are the
-   facts' rows processed after it, and their names give the days (a next-day file D and D+1,
-   an intraday file its day, a weekly or monthly archive its week or month). No new file:
-   the mart sends nothing. A failed run leaves the files pending; a `rebuild=<fact>` refill
-   makes them pending again. A value the files did not bring (a DUID added to `dim_duid`
-   after its rows were written) is not picked up: `rebuild=<mart>` is the lever, as for
-   revised values.
    The staging model appends only the rows the Iceberg table is missing (anti-join on
    source_type/source_filename/csv_filename against `dbt.this`). Appending the whole log every
    run would grow the table by its own size 48 times a day, until the OneLake catalog answers
@@ -777,17 +765,17 @@ in `landing` are what these tables are built from.
 |-------|--------|-----------------|
 | stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
 | processed_files | landing | incremental append — the files each landing fact has loaded (`model, csv_filename, processed_at`), appended by the facts' post-hooks; the pending check is the log minus this table. A `rebuild=<fact>` appends a reset row (`csv_filename` NULL); the first build seeds it from the facts' `file` columns |
-| dim_calendar | mart | incremental append (the NOT-IN filter keeps existing dates out; runs 2 years ahead; a run sends nothing once it reaches that far) |
+| dim_calendar | mart | incremental append (the NOT-IN filter keeps existing dates out; runs 2 years ahead) |
 | dim_duid | mart | incremental insert-only merge on DUID; NEM units from the registration list, then `duid_unregistered.csv`; registered capacity (RegCapMW etc.); `Renewable` — **the list of renewable fuels lives in this model** (an inline CTE next to `states`), nowhere else; `Classification` from the list (Scheduled / Semi-Scheduled / Non-Scheduled, stars stripped; NULL off the list): curtailment is measured on Semi-Scheduled, not on a fuel, because HPR1 (a battery) is registered with fuel "Wind"; `CO2eFactor` (t CO2-e/MWh) from MMSDM `GENUNITS` through `DUALLOC`, for registered and unregistered units alike, NULL for loads, AEMO's dummy units and the gensets "On Exclusion List" (Colongra, Jeeralang, Braemar 3 and 6), which `[Emissions t]` therefore leaves out; `Storage` (a battery, the fuel "Grid": the one place that rule lives), `Plant` (the station, or the unit when it has none: what the page groups units by) and `Owner` (the participant, rooftop's five units "Rooftop solar (AEMO estimate)"); one spelling per name, case-insensitively, for StationName, Participant and TechnologyType (VertiPaq stores text case-insensitively). A new column or a changed rule reaches the existing rows with a `rebuild=dim_duid` |
 | fct_scada, fct_price | landing | incremental insert-only merge (by file) |
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
 | fct_interconnector_today | landing | incremental insert-only merge (by file) — the INTERCONNECTORRES rows of the same archived DispatchIS files as fct_price_today **and, despite the name, the whole history**: AEMO's monthly MMSDM archive of the same record, 2018-01 → 2026-08 (source_type `interconnector_monthly`, a finite backfill; read with `strict_mode = false`, which the files from 2024-08 need). August 2026 is in both sources, so `fct_interconnector` takes one row per interval (`MAX … GROUP BY`); the Flows page plays any range ≤ 30 days |
 | fct_regionsum_today | landing | incremental insert-only merge (by file) — the REGIONSUM rows (v9) of the same files: demand, net interchange (positive = export), regional semi-scheduled UIGF/availability/cleared MW. History's demand/net interchange come from fct_price's DREGION rows |
-| fct_summary | mart | incremental insert-only merge on (date, time, DUID) — the Power BI fact: `fct_scada` joined to `dim_duid` and `fct_price` (inner joins), then the intraday feed after the newest daily interval, for the units the daily files know (`dispatch_duids`), and rooftop solar as five units, `ROOFTOP_<region>`: `fct_rooftop` on the straight line between two half hours, with `fct_region`'s price. An interval is written once both sources have it (every branch stops at the newest half hour all five regions' rooftop has), so the units run 30-60 minutes late. `backfill_rooftop` (a dispatch input of `process_data.yml`) adds rooftop's history. Every run recomputes the days of the files its sources loaded since it last committed (and the day before each); missing keys are added, a stored value is never revised. The dates come from the Iceberg manifests and are written as literals (no scan to find them); a refill takes `process_limit` dates below the oldest it holds, newest first. `rebuild=fct_summary` resets it |
-| fct_region | mart | incremental insert-only merge on (REGIONID, date, time) — for Power BI: price, demand, net interchange and the regional semi-scheduled wind and solar. The intraday record where `fct_price_today` and `fct_regionsum_today` both have the interval, else `fct_price`'s. Every run recomputes the days of the files its three sources loaded since it last committed (a literal on all three); the merge adds what is missing. A first build reads them whole |
+| fct_summary | mart | incremental insert-only merge on (date, time, DUID) — the Power BI fact: `fct_scada` joined to `dim_duid` and `fct_price` (inner joins), then the intraday feed after the newest daily interval, for the units the daily files know (`dispatch_duids`), and rooftop solar as five units, `ROOFTOP_<region>`: `fct_rooftop` on the straight line between two half hours, with `fct_region`'s price. An interval is written once both sources have it (every branch stops at the newest half hour all five regions' rooftop has), so the units run 30-60 minutes late. `backfill_rooftop` (a dispatch input of `process_data.yml`) adds rooftop's history. Every run recomputes the newest daily date minus six days on; missing keys are added, a stored value is never revised. The dates come from the Iceberg manifests and are written as literals (no scan to find them); a refill takes `process_limit` dates below the oldest it holds, newest first. `rebuild=fct_summary` resets it |
+| fct_region | mart | incremental insert-only merge on (REGIONID, date, time) — for Power BI: price, demand, net interchange and the regional semi-scheduled wind and solar. The intraday record where `fct_price_today` and `fct_regionsum_today` both have the interval, else `fct_price`'s. Every run recomputes from six days before `fct_price`'s newest date on (from the manifests, a literal on all three sources); the merge adds what is missing. A first build reads them whole |
 | fct_rooftop | mart | incremental insert-only merge on (REGIONID, date, time) — the source `fct_summary`'s rooftop units are built from (not a table of the semantic model): the `MEASUREMENT` estimate per region and half hour as published (zeros kept, blanks out), with the half hour's average price from `fct_region`; written once its six prices exist |
 | fct_interconnector | mart | incremental insert-only merge on (interconnector, date, time) — for Power BI: `MWFLOW` and the two limits, the pricing run, one row per interval |
-| fct_curtailment_region | mart | incremental insert-only merge on (REGIONID, date, fuel) — for Power BI and the curtailment chart: curtailed and available MWh per region, day and fuel (Wind, Solar), `source` `farms` (`fct_curtailment` added up by the unit's region and fuel) or `aemo` (`fct_region`'s regional semi-scheduled figures, the days after the farms' newest). Each run, for the days of its new files, a pre-hook DELETEs the `aemo` rows in a commit of its own, then the merge adds the missing farm days and the current `aemo` days |
+| fct_curtailment_region | mart | incremental insert-only merge on (REGIONID, date, fuel) — for Power BI and the curtailment chart: curtailed and available MWh per region, day and fuel (Wind, Solar), `source` `farms` (`fct_curtailment` added up by the unit's region and fuel) or `aemo` (`fct_region`'s regional semi-scheduled figures, the days after the farms' newest). Each run a pre-hook DELETEs the `aemo` rows in a commit of its own, then the merge adds the missing farm days and the current `aemo` days |
 | fct_curtailment | mart | incremental insert-only merge on (DUID, date) — for Power BI: curtailed and available MWh per semi-scheduled unit and day. A day is written once `fct_scada` holds its 288 intervals: the days after the newest one here, and in a refill `process_limit` days below the oldest, newest first (`macros/whole_days.sql`) |
 | dim_region | mart | incremental insert-only merge on Region — for Power BI: the regions of `dim_duid`, the one filter that reaches the units and the regional data |
 | dim_interconnector | mart | incremental insert-only merge on interconnector — the links between regions of `dim_region` (from MMSDM `INTERCONNECTOR`): `from_region`/`to_region` (a positive `mw` flows from the first to the second) and AEMO's `description`. The Flows page names a link by its id on the map and by the description on its board; only the bend of each arc is typed there (`LINK_CURVES`) |

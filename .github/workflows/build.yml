@@ -55,23 +55,8 @@ jobs:
           dbt docs generate --target ci --profiles-dir . --empty-catalog
           mkdir -p dashboard/github/common/dag
           cp target/index.html dashboard/github/common/dag/
-          # A docs file is copied only when it says something new: dbt stamps each run into
-          # the metadata and every node's created_at, so a plain copy changed both files on
-          # every push (192 "Update dbt docs" commits in the week to 2026-10-08).
-          for f in manifest.json catalog.json; do
-            if python - "target/$f" "dashboard/github/common/dag/$f" <<'PY'
-          import json, os, sys
-          STAMPS = {"created_at", "generated_at", "invocation_id", "invocation_started_at", "user_id"}
-          def strip(x):
-              if isinstance(x, dict):
-                  return {k: strip(v) for k, v in x.items() if k not in STAMPS}
-              return [strip(v) for v in x] if isinstance(x, list) else x
-          new, old = sys.argv[1:]
-          same = os.path.exists(old) and strip(json.load(open(new))) == strip(json.load(open(old)))
-          sys.exit(1 if same else 0)
-          PY
-            then cp "target/$f" dashboard/github/common/dag/; fi
-          done
+          cp target/manifest.json dashboard/github/common/dag/
+          cp target/catalog.json dashboard/github/common/dag/
       - name: Commit dbt docs
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |

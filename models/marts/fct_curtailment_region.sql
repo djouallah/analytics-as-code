@@ -7,33 +7,26 @@
 --   * source 'aemo': AEMO's regional semi-scheduled figures (fct_region: available MW, and
 --     available less cleared), for the days after the farms' newest. The farms add up to them
 --     (checked 2026-10-03). The newest day is still filling.
--- Which days: those of the files loaded since it last committed into fct_scada and into
--- fct_region's sources (pending_file_ranges, macros/pending_archive_files.sql); no new file,
--- nothing sent. A day moves from 'aemo' to 'farms' once its next-day file lands, and that
--- file's days are then pending: a replacement, so each run first DELETEs the 'aemo' rows of
--- its days in a commit of its own (the pre-hook: OneLake refuses a commit that mixes delete
--- files and data files, a DELETE alone works), then the insert-only merge adds the farm days
--- it lacks and the 'aemo' days as they are now. The two commits are not atomic: between them
--- those days are missing, and a run that fails after the DELETE leaves them missing until
--- the next run, which reads the same files again (the watermark is the post-hook).
+-- A day moves from 'aemo' to 'farms' once its next-day file lands, which is a replacement, so
+-- each run first DELETEs the 'aemo' rows in a commit of its own (the pre-hook: OneLake refuses
+-- a commit that mixes delete files and data files, a DELETE alone works), then the
+-- insert-only merge adds the farm days it lacks and the 'aemo' days as they are now. The two
+-- commits are not atomic: between them the newest days are missing, and a run that fails
+-- after the DELETE leaves them missing until the next run. Small (a row per region, day and
+-- fuel), so every run recomputes all of it.
 {{ config(
     materialized='incremental',
     incremental_strategy='merge',
     unique_key=['REGIONID', 'date', 'fuel'],
     merge_clauses={'when_matched': [{'action': 'do_nothing'}]},
-    pre_hook={"sql": "{% if is_incremental() %}DELETE FROM {{ this }} WHERE source = 'aemo' AND {{ date_ranges_sql(pending_file_ranges(['fct_scada', 'fct_price', 'fct_price_today', 'fct_regionsum_today']), 'date') }}{% else %}SELECT 1{% endif %}", "transaction": false},
-    post_hook={"sql": "{{ record_mart_watermark(['fct_scada', 'fct_price', 'fct_price_today', 'fct_regionsum_today']) }}", "transaction": false},
+    pre_hook={"sql": "{% if is_incremental() %}DELETE FROM {{ this }} WHERE source = 'aemo'{% else %}SELECT 1{% endif %}", "transaction": false},
     schema='mart',
     tags=['powerbi']
 ) }}
 
 {#- The farms' newest day, from the manifests: a literal, so the scans of fct_region prune. #}
-{%- set ranges = pending_file_ranges(['fct_scada', 'fct_price', 'fct_price_today', 'fct_regionsum_today']) if is_incremental() else [(none, none)] %}
-{%- set farms_min, farms_max = date_bounds(ref('fct_curtailment'), 'date') if ranges else (none, none) %}
+{%- set farms_min, farms_max = date_bounds(ref('fct_curtailment'), 'date') %}
 
-{% if not ranges %}
-{{ nothing_to_do() }}
-{% else %}
 WITH
 farms AS (
   SELECT d.Region AS REGIONID, c.date, d.FuelSourceDescriptor AS fuel,
@@ -41,7 +34,6 @@ farms AS (
   FROM {{ ref('fct_curtailment') }} c
   JOIN {{ ref('dim_duid') }} d ON d.DUID = c.DUID
   WHERE d.FuelSourceDescriptor IN ('Wind', 'Solar')
-    AND {{ date_ranges_sql(ranges, 'c.date') }}
   GROUP BY ALL
 ),
 
@@ -51,11 +43,11 @@ aemo AS (
   FROM (
     SELECT REGIONID, date, 'Wind' AS fuel, wind_curtailed AS curtailed, wind_available AS available
     FROM {{ ref('fct_region') }}
-    WHERE {{ date_ranges_sql(ranges, 'date') }}{% if farms_max %} AND date > DATE '{{ farms_max }}'{% endif %}
+    {%- if farms_max %} WHERE date > DATE '{{ farms_max }}'{% endif %}
     UNION ALL
     SELECT REGIONID, date, 'Solar', solar_curtailed, solar_available
     FROM {{ ref('fct_region') }}
-    WHERE {{ date_ranges_sql(ranges, 'date') }}{% if farms_max %} AND date > DATE '{{ farms_max }}'{% endif %}
+    {%- if farms_max %} WHERE date > DATE '{{ farms_max }}'{% endif %}
   )
   WHERE available IS NOT NULL
   GROUP BY ALL
@@ -67,4 +59,3 @@ FROM farms
 UNION ALL
 SELECT REGIONID, date, fuel, CAST(curtailed_mwh AS DECIMAL(18, 4)), CAST(available_mwh AS DECIMAL(18, 4)), 'aemo'
 FROM aemo
-{% endif %}

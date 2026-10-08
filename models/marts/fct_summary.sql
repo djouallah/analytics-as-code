@@ -26,12 +26,10 @@
 -- the data (MAX(DATE), DISTINCT DATE ... NOT IN, COUNT(DISTINCT time) per date): five full
 -- scans of fct_scada and two of this table, 450-700 s a run over OneLake, to recompute a
 -- week. The bounds come from the Iceberg manifests (macros/date_bounds.sql), not from scans.
---   * Every run: the days of the files its sources loaded since it last committed
---     (pending_file_ranges, macros/pending_archive_files.sql; 2026-10-08, until then six
---     days every run), and the day before each (a half hour of rooftop at 00:00 completes
---     the five times after 23:30), and the intraday feed's intervals after the newest daily
---     interval. A date first written from the intraday feed is completed when its daily
---     file lands: that file's days are pending then. No new file: nothing is sent.
+--   * Every run: from six days before the newest daily date on -- a date first written
+--     from the intraday feed is incomplete until its daily file lands, which is several
+--     days later if the pipeline missed a run, so a window, not just the newest date -- and
+--     the intraday feed's intervals after the newest daily interval.
 --   * Refill (a first build, or after rebuild=fct_summary): process_limit dates below the
 --     oldest date this table holds, newest first, until it reaches fct_scada's oldest. The
 --     refill is contiguous downward, so MIN(date) is the frontier; nothing is asked of
@@ -47,7 +45,7 @@
 -- No merge path DELETES a row the recomputation stops producing, which is why dispatch_duids
 -- gates the intraday branch to units the daily branch can reproduce: some non-scheduled
 -- units publish SCADA telemetry and never appear in the next-day files. It is the units of
--- the next-day rows from the day before fct_scada's newest date: fct_scada keeps 0 MW rows, so every unit the next-day files
+-- the window's next-day rows: fct_scada keeps 0 MW rows, so every unit the next-day files
 -- know is in them every day, and a unit they stopped carrying can no longer be reproduced
 -- by the daily branch -- the reference's DISTINCT over all history let such a unit through,
 -- at the price of a full scan. A unit new to the next-day files is gated in from the day
@@ -77,7 +75,6 @@
     unique_key=['date', 'time', 'DUID'],
     merge_clauses={'when_matched': [{'action': 'do_nothing'}]},
     schema='mart',
-    post_hook={"sql": "{{ record_mart_watermark(['fct_scada', 'fct_price', 'fct_scada_today', 'fct_price_today', 'fct_regionsum_today', 'fct_rooftop_pv']) }}", "transaction": false},
     tags=['powerbi']
 ) }}
 
@@ -99,8 +96,7 @@
 {%- if scada_max %}
   {%- set window_from = scada_max - 6 * day %}
   {%- if scoped %}
-    {%- set ranges = pending_file_ranges(['fct_scada', 'fct_price', 'fct_scada_today', 'fct_price_today', 'fct_regionsum_today', 'fct_rooftop_pv'],
-                                         before=1, otherwise=[(window_from, none)]) %}
+    {%- do ranges.append((window_from, none)) %}
     {%- set frontier = window_from if summary_min is none or summary_min > window_from else summary_min %}
     {%- if scada_min and frontier > scada_min %}
       {%- do ranges.append((frontier - process_limit * day, frontier)) %}
@@ -108,7 +104,7 @@
   {%- else %}
     {%- do ranges.append((scada_max - (process_limit - 1) * day, none)) %}
   {%- endif %}
-  {%- if execute and ranges %}
+  {%- if execute %}
     {%- set scada_max_ts = run_query("SELECT CAST(MAX(SETTLEMENTDATE) AS VARCHAR) FROM " ~ ref('fct_scada')
                                      ~ " WHERE DATE >= DATE '" ~ scada_max ~ "'").rows[0][0] %}
   {%- endif %}
@@ -116,9 +112,8 @@
 {#- The newest interval both sources have: the newest half hour that every region's rooftop
     has. fct_rooftop is small (a row per region and half hour); read whole. #}
 {%- set backfill_rooftop = var('backfill_rooftop', false) %}
-{%- set to_write = ranges or backfill_rooftop or not scoped %}
 {%- set both_until = none %}
-{%- if execute and flags.WHICH in ('run', 'build', 'retry') and to_write %}
+{%- if execute and flags.WHICH in ('run', 'build', 'retry') %}
   {%- set both_until = run_query("SELECT CAST(MIN(newest) AS VARCHAR) FROM (SELECT REGIONID, MAX(CAST(date AS TIMESTAMP)"
                                   ~ " + to_minutes((time // 100) * 60 + time % 100)) AS newest FROM " ~ ref('fct_rooftop')
                                   ~ " GROUP BY REGIONID)").rows[0][0] %}
@@ -129,13 +124,10 @@
              ~ "), this " ~ summary_min ~ " .. " ~ summary_max ~ "; recomputing " ~ ranges_text(ranges), info=True) %}
 {%- endif %}
 
-{% if not to_write %}
-{{ nothing_to_do() }}
-{% else %}
 WITH
 dispatch_duids AS (
   SELECT DISTINCT DUID FROM {{ ref('fct_scada') }}
-  WHERE {{ date_ranges_sql([(scada_max - day if scada_max else none, none)], 'DATE') }}
+  WHERE {{ date_ranges_sql(ranges, 'DATE') }}
 ),
 
 daily_summary AS (
@@ -249,4 +241,3 @@ WHERE CAST(date AS TIMESTAMP) + to_minutes((time // 100) * 60 + time % 100) <= T
 -- As in the sibling's copies. It makes no claim about physical layout: this SQL is a merge
 -- SOURCE, so nothing about the ordering reaches the stored table.
 ORDER BY date, time
-{% endif %}
