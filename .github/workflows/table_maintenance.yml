@@ -93,7 +93,7 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: requirements.txt
-      - run: pip install "duckdb==2.0.0.dev2609250715"
+      - run: pip install "duckdb==2.0.0.dev2610011535"
       - name: Cache DuckDB extensions
         # Extension binaries are keyed to the duckdb build, which requirements.txt pins.
         uses: actions/cache@v4

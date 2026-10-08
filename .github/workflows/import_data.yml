@@ -108,7 +108,7 @@ jobs:
           #
           # Parquet is the handoff between them, so the dashboard format is untouched.
           python -m venv .venv-read
-          .venv-read/bin/pip install -q "duckdb==2.0.0.dev2609250715"
+          .venv-read/bin/pip install -q "duckdb==2.0.0.dev2610011535"
           python -m venv .venv-write
           .venv-write/bin/pip install -q "duckdb==1.5.6"
 

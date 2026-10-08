@@ -4,4 +4,4 @@
 # process_data run (2026-10-01). duckdb policy: see AGENTS.md "DuckDB version policy".
 dbt-core==1.12.5
 dbt-duckdb==1.11.0
-duckdb==2.0.0.dev2609250715
+duckdb==2.0.0.dev2610011535

@@ -65,7 +65,7 @@ jobs:
           # the build that writes it, write the .duckdb files in the format the page's
           # DuckDB-WASM opens. Parquet is the handoff between them.
           python -m venv .venv-read
-          .venv-read/bin/pip install -q "duckdb==2.0.0.dev2609250715"
+          .venv-read/bin/pip install -q "duckdb==2.0.0.dev2610011535"
           python -m venv .venv-write
           .venv-write/bin/pip install -q "duckdb==1.5.6"
           pip install -q "azure-identity==1.26.0" "azure-storage-file-datalake==12.26.0"

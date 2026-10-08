@@ -865,7 +865,7 @@ Every duckdb, dbt, pyiceberg and duckdb-wasm version is pinned exactly — none 
 those pins pull in. `import_onelake.yml` has the same two venvs as `import_data.yml`, with
 the same pins, and pins the two Azure SDK packages its upload uses.
 - **`process_data.yml`, `build.yml`, `table_maintenance.yml` and `import_data.yml`'s read venv
-  pin `duckdb==2.0.0.dev2609250715`** (dbt via `requirements.txt`, which also pins
+  pin `duckdb==2.0.0.dev2610011535`** (dbt via `requirements.txt`, which also pins
   `dbt-core`/`dbt-duckdb` exactly — the insert-only merges lean on adapter internals, and
   `macros/nothing_to_do.sql` is a copy of dbt-duckdb's incremental materialization). The
   1.6 line became **DuckDB 2.0.0** (stable due 2026-10-21); its pre-releases are published as

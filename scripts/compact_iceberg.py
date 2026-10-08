@@ -7,7 +7,7 @@ iceberg_rewrite_data_files() over each table, consolidating files below the targ
 
 iceberg_rewrite_data_files landed in duckdb/duckdb-iceberg#1035 and is not in a stable
 duckdb release yet; it first ships stable with duckdb 2.0.0. The workflow pins the
-pre-release duckdb==2.0.0.dev2609250715, and the iceberg extension binary is keyed to the duckdb
+pre-release duckdb==2.0.0.dev2610011535, and the iceberg extension binary is keyed to the duckdb
 build, so pinning duckdb pins the extension too.
 
 This is the OneLake edition of the R2 original (both live in this repo's git history; the
