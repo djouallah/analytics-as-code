@@ -6,6 +6,7 @@ name: Deploy Fabric
 # whose connector names the model next to it. scripts/deploy_fabric.py does all but the app.
 # What runs from GitHub (process_data.yml and the rest, into the workspace of the repository
 # variables) is not touched: this installs a second, independent copy.
+# One app failing does not stop the other (!cancelled()).
 # The workspace has to exist, on a capacity in a region that has Fabric apps (preview).
 # On dispatch only: it creates Fabric items, and it runs the pipeline once.
 on:
@@ -141,14 +142,14 @@ jobs:
       # on an item a service principal owns, so this item deploys but does not work until
       # that is fixed; the app people use is the laptop's `wasm`.
       - name: "WASM app: install"
-        if: inputs.fabric_app_wasm
+        if: ${{ !cancelled() && inputs.fabric_app_wasm }}
         working-directory: dashboard/fabric_app/wasm
         run: |
           npm ci
           npm ci --prefix rayfin/functions
 
       - name: "WASM app: deploy"
-        if: inputs.fabric_app_wasm
+        if: ${{ !cancelled() && inputs.fabric_app_wasm }}
         working-directory: dashboard/fabric_app/wasm
         run: npx rayfin up --item-name nemtracker --workspace-id "$WS_ID" --yes --output json
 
@@ -156,7 +157,7 @@ jobs:
         # Where getDataSas signs: the Files folder of the lakehouse import_onelake.yml fills.
         # Only an item that lacks it gets it, followed by the function once more: the first
         # deploy went out before the secret existed.
-        if: inputs.fabric_app_wasm
+        if: ${{ !cancelled() && inputs.fabric_app_wasm }}
         working-directory: dashboard/fabric_app/wasm
         env:
           ONELAKE_FILES_URL: ${{ vars.ONELAKE_FILES_URL }}
