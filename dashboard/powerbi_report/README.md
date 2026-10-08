@@ -1,7 +1,7 @@
 # Power BI
 
-A client of the semantic model (`semantic_model/`), next to `github/`, `fabric_app_wasm/` and
-`fabric_app_vertipaq/`:
+A client of the semantic model (`semantic_model/`), next to `github/`, `fabric_app/wasm/` and
+`fabric_app/vertipaq/`:
 a Power BI report, reading the Iceberg tables through the model in Direct Lake.
 
 `nem.Report/` is the report, in PBIR: a JSON file per page and per visual, so a chart is a

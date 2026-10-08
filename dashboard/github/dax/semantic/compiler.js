@@ -107,6 +107,8 @@
 // v_<table>) and has its members, with the views of the model's relationships added
 // (../storage/views.js), `toDax` and `toSQL`; `query` takes the page's query (an object)
 // or SQL, never DAX text. ../frontend/queries.js hands it to the page (`connect`).
+// A data source whose engine speaks DAX (`engine: 'dax'`: the deployed semantic model, in
+// dashboard/fabric_app/vertipaq) gets the query's DAX as it is: no views, no SQL.
 //
 // Host-independent: it only knows the attached databases by name (dim, today, agg,
 // p<YYYY>_h<N>), so a host that ships its own data.js keeps this file and model.bim.
@@ -978,6 +980,14 @@ const RELATIONSHIPS = RELS.filter(r => r.view).map(r => ({ name: r.view, from: `
 const STAR_VIEWS = STARS.map(s => ({ name: s.view, from: `v_${s.fact}`, joins: s.rels.map(r => ({ to: `v_${r.to}`, on: [r.fromColumn, r.toColumn] })) }));
 
 export function createModel(data) {
+  if (data.engine === 'dax') return {
+    ...data,
+    query: async q => {
+      if (typeof q === 'string') throw new Error("this engine runs the page's queries only");
+      return data.query(toDax(q));
+    },
+    toDax,
+  };
   return {
     ...withViews(data, [...RELATIONSHIPS, ...STAR_VIEWS]),
     // The page's query (an object) becomes DAX, and the DAX SQL; both go to the Logs tab.

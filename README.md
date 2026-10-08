@@ -12,13 +12,14 @@ market (AEMO).
 - **Its clients** ([`dashboard/`](dashboard/)):
   - **GitHub Pages** ([live](https://nemtracker.github.io/), public,
     [`dashboard/github/`](dashboard/github/)) and a **Microsoft Fabric app** (Fabric
-    sign-in, [`dashboard/fabric_app_wasm/`](dashboard/fabric_app_wasm/)): the same page. No
+    sign-in, [`dashboard/fabric_app/wasm/`](dashboard/fabric_app/wasm/)): the same page. No
     server: the browser runs the queries itself (DuckDB-WASM) on a cached copy of the tables.
   - a **Power BI report** ([`dashboard/powerbi_report/`](dashboard/powerbi_report/)), on
     the same model, run by VertiPaq over the Iceberg tables (Direct Lake).
-  - a second Fabric app, the page with VertiPaq as its engine and no copy of the data, is
-    not built: Fabric apps (preview) are not available in Australia Southeast, the region
-    of the model's capacity ([`dashboard/fabric_app_vertipaq/`](dashboard/fabric_app_vertipaq/)).
+  - a second backend of the Fabric app, the page with VertiPaq as its engine and no copy of
+    the data, is built but not deployed: Fabric apps (preview) are not available in
+    Australia Southeast, the region of the model's capacity, and the app's tenant cannot
+    see the model ([`dashboard/fabric_app/vertipaq/`](dashboard/fabric_app/vertipaq/)).
 - **One page, two ways of asking** ([`dashboard/github/`](dashboard/github/)): `common/` is
   the page (the charts, the data files, the Logs tab), and only what it asks with differs.
   - [`dax/`](dashboard/github/dax/) asks the semantic model: a chart names the model's

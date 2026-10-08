@@ -3,9 +3,9 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "The dashboard as a Microsoft Fabric app: the DAX page of ../github, with OneLake as its data host",
+  "description": "The dashboard as a Microsoft Fabric app: the DAX page of ../../github, with OneLake as its data host",
   "scripts": {
-    "build:fabric": "node build.mjs",
+    "build:fabric": "node ../common/build.mjs",
     "rayfin:up": "rayfin up"
   },
   "devDependencies": {

@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "ESNext.Decorators"],
+    "outDir": ".temp/compiled",
+    "rootDir": ".",
+    "declaration": true,
+    "composite": true,
+    "noEmit": false,
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "strictNullChecks": true,
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": [
+    "**/*"
+  ],
+  "exclude": [
+    ".temp/**/*"
+  ]
+}

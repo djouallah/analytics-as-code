@@ -184,10 +184,12 @@ transport fails the OneLake TLS handshake).
 ## Dashboard
 **The layout says who reads the model:** `semantic_model/` at the top of the repo is the one
 semantic model, and `dashboard/` holds its clients: `github/` (the page, on GitHub Pages),
-`fabric_app_wasm/` (the same page as a Fabric app, on DuckDB-WASM), `powerbi_report/`
-(`nem.Report`, a report over the deployed model) and `fabric_app_vertipaq/` (a README: the
-page as a Fabric app on the deployed model, not built; see "The Fabric app on VertiPaq").
-The Fabric apps are named by their engine.
+`fabric_app/` (the same page as a Fabric app) and `powerbi_report/` (`nem.Report`, a report
+over the deployed model). **`dashboard/fabric_app/` is one app and two backends**, as
+`github/` is one page and two ways of asking: `common/` (`build.mjs` and the Fabric sign-in,
+`site/storage/auth.js`), `wasm/` (DuckDB-WASM over a copy of the tables, deployed) and
+`vertipaq/` (the deployed model as the engine, not deployable yet; see "The Fabric app on
+VertiPaq"). Each backend is a Rayfin project of its own, named by its engine.
 **`dashboard/github/` is one page and two ways of asking:**
 `common/` (`index.html`, `frontend/` draw.js, logs.js, perflog.js, `storage/`, `dag/`), `dax/`
 (`frontend/queries.js` and `semantic/compiler.js`: the page through the semantic model) and
@@ -453,7 +455,7 @@ is `common/`'s).
   - `dashboard/github/common/storage/data.js`, GitHub Pages: the files sit in `data/`
     (`mart_dim`, `mart_today`, `mart_agg`, `mart_<YYYY>_h<N>`), with `mart_manifest.json`
     listing the half-years.
-  - `dashboard/fabric_app_wasm/site/storage/data.js`, the Fabric app: the files are in a
+  - `dashboard/fabric_app/wasm/site/storage/data.js`, the Fabric app: the files are in a
     lakehouse behind a Fabric sign-in, read with a short-lived read-only SAS, and downloaded
     as 2 MB Range requests, 6 at a time. Its own, and unknown to the page: the sign-in gate
     (`auth.js`, next to it) and the SAS (`sas.js`).
@@ -490,7 +492,7 @@ rather than round them:
   `[data-theme="light"]`, set by the `<head>` script before first paint: the stored choice,
   else the system's). Colour is for the data and for status, and status comes with an arrow
   or a label. The CSS stays inline: a separate file next to `index.html` would need both
-  deploy copy lists (`build.yml`, `dashboard/fabric_app_wasm/build.mjs`).
+  deploy copy lists (`build.yml`, `dashboard/fabric_app/common/build.mjs`).
 - `chartTheme()` builds one ECharts theme per scheme from those tokens (font, label size,
   tooltip, legend, zoom slider, colour scale) and `plot()` is every chart's plot area, with
   measured axis labels. A chart sets no margin, font or tooltip style of its own.
@@ -533,7 +535,7 @@ depth-1 clone, the published paths added with `-f` (so the deploy repo's `.gitig
 skip a file), push retried on a race. It only adds and replaces: a file leaves the site by
 hand, in the deploy repo.
 **Every build stamps its files** (`scripts/stamp_build.mjs`, run by `build.yml` and by
-`dashboard/fabric_app_wasm/build.mjs`): `__BUILD__` becomes the build, and every relative
+`dashboard/fabric_app/common/build.mjs`): `__BUILD__` becomes the build, and every relative
 import gets `?v=<build>`. Pages serves the files with `max-age=600`, so without it a browser
 would run the new page with its cached old modules for up to 10 minutes after a deploy. A
 harness that imports a module itself from a stamped copy has to add the same `?v=`, or it
@@ -568,26 +570,27 @@ of two imports are kept so that an open page keeps reading the one it attached. 
 OPFS cache keeps one import, so each daily import downloads a half-year again the first time
 it is viewed.
 
-**The Fabric app is `dashboard/fabric_app_wasm/`**, a Rayfin project: static hosting, Fabric
-sign-in, and one function, `getDataSas` (`dashboard/fabric_app_wasm/rayfin/functions`), which
+**The Fabric app is `dashboard/fabric_app/wasm/`**, a Rayfin project: static hosting, Fabric
+sign-in, and one function, `getDataSas` (`dashboard/fabric_app/wasm/rayfin/functions`), which
 signs a read-only SAS on the data folder so that the browser never holds a storage token.
-`dashboard/fabric_app_wasm/build.mjs` assembles `dashboard/fabric_app_wasm/dist`: the DAX
-page staged (`stagePage('dax')`: `common/`, `dax/` and `semantic_model/model.bim`) and the
-dbt docs, with `dashboard/fabric_app_wasm/site/` copied over them (`storage/data.js`, its
-own, `storage/auth.js` and `storage/sas.js`), and `?v=<build>` added to every relative
-import; `compiler.js` passes its own on to `model.bim`. The project is the working
-directory of `build.mjs`.
+`dashboard/fabric_app/common/build.mjs` assembles a project's `dist/` (here
+`dashboard/fabric_app/wasm/dist`): the DAX page staged (`stagePage('dax')`: `common/`,
+`dax/` and `semantic_model/model.bim`) and the dbt docs, with `fabric_app/common/site/`
+(`storage/auth.js`) and then the project's own `site/` copied over them (here
+`storage/data.js` and `storage/sas.js`), and `?v=<build>` added to every relative import;
+`compiler.js` passes its own on to `model.bim`. The project is the working directory of
+`build.mjs` (`npm run build:fabric` in it).
 
 **It is deployed from the owner's laptop**, under their own login:
 ```
-cd dashboard/fabric_app_wasm
+cd dashboard/fabric_app/wasm
 npm ci && npm ci --prefix rayfin/functions
 export RAYFIN_TOKEN=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv)
 npx rayfin up --yes --output json
 ```
 The item is `wasm` in workspace `app`;
-`dashboard/fabric_app_wasm/rayfin/.deployments.json` (untracked) records it, and its URL is in
-`dashboard/fabric_app_wasm/rayfin/rayfin.yml` (`allowedRedirectUris`; the deploy adds it). On
+`dashboard/fabric_app/wasm/rayfin/.deployments.json` (untracked) records it, and its URL is in
+`dashboard/fabric_app/wasm/rayfin/rayfin.yml` (`allowedRedirectUris`; the deploy adds it). On
 a machine without that record, add `--workspace-id <app>`. A new item needs its secret once,
 then one more deploy: `echo <Files URL> | npx rayfin secret set ONELAKE_FILES_URL --stdin`.
 
@@ -607,7 +610,7 @@ checks it). The page-only deploy into the owner's item (`rayfin up staticapp dep
 way round it: owner-only too, the same 403. When #89 is fixed: dispatch the workflow, open
 `nemtracker`, read its Logs tab. Keep that item until then: the comment on #89 says it is
 there for re-testing. What the workflow needs:
-- `dashboard/fabric_app_wasm/rayfin/functions/host.json` is committed: the deploy refuses
+- `dashboard/fabric_app/wasm/rayfin/functions/host.json` is committed: the deploy refuses
   without it, and the Rayfin scaffold's `.gitignore` leaves it out.
 - The lock files resolve from `registry.npmjs.org`: generated on a laptop they name a
   private feed the runner cannot read.
@@ -622,17 +625,20 @@ Rules of the Fabric host that are easy to break:
 To check a deploy, open the Logs tab: the build stamp, each fetch, attach and query.
 
 ### The Fabric app on VertiPaq
-`dashboard/fabric_app_vertipaq/` holds a README only: the app is not built. It would be the
-page with the deployed semantic model as its engine (Power BI running its queries in Direct
-Lake over the `mart` tables, no DuckDB, no copy of the data), deployed from CI into
-workspace `power` next to the model, as the model is. It is to be built the way Rayfin
-recommends, not by carrying the compiler over: the page sends query objects, not DAX.
+`dashboard/fabric_app/vertipaq/` is the page with the deployed semantic model as its engine
+(Power BI running its queries in Direct Lake over the `mart` tables, no DuckDB, no copy of
+the data). Built, not deployable yet. Its `site/storage/data.js` sets `engine: 'dax'`, and
+the compiler's `createModel` then sends each query's DAX (`toDax`) to it as it is, with no
+views and no SQL; with no `needs`, the page leaves out Analyze.
 - **Blocked by the region:** Fabric refuses to create an app item in `power`
   (`403 The feature is not available`). The workspace's capacity is in Australia Southeast,
   where Fabric apps (preview) are not available (Australia East has them; microsoft/rayfin#8).
   The app needs a workspace on a capacity in a region that has Fabric apps, in the model's
   tenant (a connector can name the model's workspace, so the app's can be another one), or
   the region to get the feature.
+- **Not from the app's tenant:** the connector is delegated (on-behalf-of, in the app's
+  tenant), and fabriccat cannot see `power`: the Fabric API answers `404 EntityNotFound` and
+  `rayfin connector add` "Item not found" (2026-10-08).
 - **The route to the model:** a Rayfin connector of type `fabric-semanticmodel`
   (`executeQuery`, delegated): the browser calls the app's backend, which runs the query on
   the model as the signed-in user, so the browser holds no Power BI token and a reader sees
@@ -640,8 +646,8 @@ recommends, not by carrying the compiler over: the page sends query objects, not
   and run as the item's owner. A service principal can call the model on that route (Power
   BI's `executeDaxQueries`, with a token for `https://analysis.windows.net/powerbi/api`);
   the delegated path in a browser is untested.
-- `deploy_fabric.yml` still offers `app=vertipaq`; there is no project in the folder for it
-  to deploy.
+- `deploy_fabric.yml` offers `app=vertipaq` into `power` as the catalog's identity; it stops
+  at the 403 above.
 
 A table or a column the page asks for and a deployed file lacks reads as "no data" where
 the page checks (`data.has`), so a new page can go out before its data; a new table goes

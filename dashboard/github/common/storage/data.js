@@ -13,7 +13,7 @@
 // The page knows none of this: it reads a view per table, v_<table>, which views.js builds
 // over the attached databases after every attach (they are found in the engine's catalog).
 // A host that stores the files differently (the Fabric app,
-// ../../../fabric_app_wasm/site/storage/data.js: a lakehouse behind a Fabric sign-in) has its own data.js with
+// ../../../fabric_app/wasm/site/storage/data.js: a lakehouse behind a Fabric sign-in) has its own data.js with
 // the same members, over the same history.js and views.js.
 //
 // DOM-free: progress is reported through the injected `onStatus` callback, and what is

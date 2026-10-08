@@ -1,0 +1,14 @@
+# Dependencies and build output
+node_modules
+dist
+*.tsbuildinfo
+
+# Rayfin: generated or secret-bearing files. `rayfin/.env*` covers .env and .env.bak;
+# .deployments.json is this machine's record of the deployed item.
+rayfin/.env*
+rayfin/.deployments.json
+rayfin/.temp/
+
+# Rayfin's generated agent context: local only
+.agents/
+.mcp.json

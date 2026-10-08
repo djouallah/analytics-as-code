@@ -56,14 +56,16 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 
 One semantic model (`semantic_model/model.bim`), its clients under `dashboard/`:
 
-- `github/` and `fabric_app_wasm/` are one page (`dashboard/github/common/index.html`) on two hosts. A
+- `github/` and `fabric_app/wasm/` are one page (`dashboard/github/common/index.html`) on two hosts. A
   host only decides where the data files live and how the browser gets them
   (`storage/data.js`), so a chart is written once and reaches both.
 - `powerbi_report/` is a Power BI report (`nem.Report`, as JSON) on the model as deployed to Fabric,
   which reads the Iceberg tables in Direct Lake. `deploy_model.yml` publishes the two together.
-- `fabric_app_vertipaq/` is a placeholder (a README): the page as a Fabric app next to the
-  deployed model, its queries run by Power BI. It is not built: the model's workspace is on a
-  capacity in Australia Southeast, where Fabric apps (preview) are not available.
+- `fabric_app/vertipaq/` is the page as a Fabric app with the deployed model as its engine,
+  its queries run by Power BI. It is built but not deployed: the model's workspace is on a
+  capacity in Australia Southeast, where Fabric apps (preview) are not available, and the
+  app's tenant cannot see the model. The two Fabric apps share `fabric_app/common/` (the
+  build and the sign-in), as the GitHub page's two ways of asking share `github/common/`.
 
 A measure is written once, in the model, and reaches every client.
 
@@ -74,8 +76,8 @@ A measure is written once, in the model, and reaches every client.
 | Engine | DuckDB-WASM, in the browser | DuckDB-WASM, in the browser | VertiPaq, in Fabric |
 | Data | `.duckdb` files next to the page | the same files in a lakehouse, under `Files/data` | the `mart` Iceberg tables, Direct Lake, no copy |
 | 5-minute history | one file per half-year, downloaded | the same files, downloaded as parallel range requests | — |
-| Host code | `dashboard/github/common/storage/data.js` | `dashboard/fabric_app_wasm/site/storage/` | — |
-| Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `dashboard/fabric_app_wasm/` (page), `import_onelake.yml` (data) | `deploy_model.yml` |
+| Host code | `dashboard/github/common/storage/data.js` | `dashboard/fabric_app/wasm/site/storage/` | — |
+| Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `dashboard/fabric_app/wasm/` (page), `import_onelake.yml` (data) | `deploy_model.yml` |
 
 ### The layers of the dashboard
 
@@ -147,9 +149,9 @@ Built with [Rayfin](https://www.npmjs.com/package/@microsoft/rayfin-cli). Fabric
 page and signs you in, and the page reads its data directly from OneLake: no backend to run,
 no query service.
 
-![The dashboard as a Fabric app](../dashboard/fabric_app_wasm/screenshots.png)
+![The dashboard as a Fabric app](../dashboard/fabric_app/wasm/screenshots.png)
 
-![Architecture of the Fabric app](../dashboard/fabric_app_wasm/architecture.svg)
+![Architecture of the Fabric app](../dashboard/fabric_app/wasm/architecture.svg)
 
 - **Hosting:** `rayfin up` deploys the page to Fabric static hosting.
 - **Sign-in:** Fabric single sign-on. Inside the Fabric portal there is no extra login; in
@@ -175,8 +177,10 @@ no query service.
 │   │   ├── common/       # index.html, frontend/ (draws, Logs tab), storage/ (the host, the tables as views), dag/ (dbt docs)
 │   │   ├── dax/          # through the semantic model: frontend/queries.js, semantic/ (the compiler); served at /
 │   │   └── sql/          # in plain SQL, no semantic layer: frontend/queries.js; served at sql/
-│   ├── fabric_app_wasm/     # The same page as a Fabric app on DuckDB-WASM: its host code, sign-in, and the Rayfin project
-│   ├── fabric_app_vertipaq/ # The page as a Fabric app on the deployed model: not built (a README)
+│   ├── fabric_app/       # The same page as a Fabric app, and its two backends
+│   │   ├── common/       # build.mjs and the Fabric sign-in (site/storage/auth.js)
+│   │   ├── wasm/         # DuckDB-WASM over a copy of the tables: its host code and the Rayfin project (deployed)
+│   │   └── vertipaq/     # the deployed model as the engine: its host code and the Rayfin project (not deployable yet)
 │   └── powerbi_report/   # A report over the deployed model
 ├── doc/                  # This file and the architecture diagram
 ├── tests/                # dbt data tests
@@ -347,7 +351,7 @@ Everything else is Rayfin — see the
 [Rayfin documentation](https://learn.microsoft.com/fabric/embedded/rayfin/overview):
 
 ```bash
-cd dashboard/fabric_app_wasm
+cd dashboard/fabric_app/wasm
 npm ci && npm ci --prefix rayfin/functions
 npx rayfin login      # sign in to Fabric
 npx rayfin up         # build + deploy to Fabric static hosting; prints the hosting URL

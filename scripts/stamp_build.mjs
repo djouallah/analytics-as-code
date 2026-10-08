@@ -1,5 +1,5 @@
 // Stamps a build of the page, for every host that serves it (build.yml for GitHub Pages,
-// dashboard/fabric_app_wasm/build.mjs for the Fabric apps): __BUILD__ becomes the build, and
+// dashboard/fabric_app/common/build.mjs for the Fabric apps): __BUILD__ becomes the build, and
 // every relative import gets ?v=<build>. A browser keeps a module it cached (Pages sends
 // max-age=600), so without it a new index.html could run with an old compiler.js: on
 // 2026-10-07 that broke the page ("s.replace is not a function") until the cache expired.

@@ -2,14 +2,14 @@ name: Deploy Fabric
 
 # The dashboard as a Fabric app, either of the two (Rayfin: static hosting, Fabric sign-in).
 # build.yml publishes the page to GitHub Pages; this deploys the same page with a Fabric
-# host's own files over it (dashboard/fabric_app_wasm/build.mjs puts both into dist/).
-#   vertipaq   dashboard/fabric_app_vertipaq/: the page's DAX is run by the deployed semantic
+# host's own files over it (dashboard/fabric_app/common/build.mjs puts both into dist/).
+#   vertipaq   dashboard/fabric_app/vertipaq/: the page's DAX is run by the deployed semantic
 #              model. Deployed next to the model, into the catalog's workspace, as the
 #              catalog's identity (the login of deploy_model.yml): item `vertipaq`.
 #              Refused so far: 403 "The feature is not available", because that workspace's
 #              capacity is in Australia Southeast, where Fabric apps (preview) are not
 #              offered (microsoft/rayfin#8). The steps before the deploy pass.
-#   wasm       dashboard/fabric_app_wasm/: DuckDB-WASM over files in a lakehouse, with the
+#   wasm       dashboard/fabric_app/wasm/: DuckDB-WASM over files in a lakehouse, with the
 #              function that signs their read-only SAS. Into the app's tenant: item
 #              `nemtracker`. The deploy works; the app it makes does not yet: Fabric answers
 #              500 to every function call on an item owned by a service principal
@@ -47,7 +47,7 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: dashboard/fabric_app_${{ inputs.app }}
+        working-directory: dashboard/fabric_app/${{ inputs.app }}
     env:
       # The item is CI's own: Rayfin lets only the owner of an app item deploy to it, and the
       # owner is whoever created it. An item made from a laptop (`rayfin up` under a user
@@ -62,8 +62,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            dashboard/fabric_app_${{ inputs.app }}/package-lock.json
-            dashboard/fabric_app_wasm/rayfin/functions/package-lock.json
+            dashboard/fabric_app/${{ inputs.app }}/package-lock.json
+            dashboard/fabric_app/wasm/rayfin/functions/package-lock.json
 
       # wasm: the app's tenant, not the catalog's: the Entra app that import_onelake.yml
       # uploads the data with (LAKE_*), a member of the app's workspace.

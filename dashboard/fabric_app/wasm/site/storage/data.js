@@ -1,7 +1,7 @@
 // =============================================================================
 // data.js — DataSource: bring up DuckDB-WASM with the OneLake data attached
 // =============================================================================
-// The Fabric version: the counterpart of ../../../github/common/storage/data.js (GitHub Pages),
+// The Fabric version: the counterpart of ../../../../github/common/storage/data.js (GitHub Pages),
 // with the same members (init, attachAgg, ensureHistory, query) over the same history.js, so
 // index.html and the semantic model are the same files on both hosts. The data files are the
 // same too; what differs is where they are: in a lakehouse, behind a Fabric sign-in (auth.js)

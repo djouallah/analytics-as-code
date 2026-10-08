@@ -1,7 +1,7 @@
 name: Import OneLake
 
 # The same .duckdb files import_data.yml builds for GitHub Pages, published to the lakehouse
-# the Fabric app (dashboard/fabric_app_wasm/) reads. Every run copies all of the history (ALL_PERIODS): there is
+# the Fabric app (dashboard/fabric_app/wasm/) reads. Every run copies all of the history (ALL_PERIODS): there is
 # no deployed copy on OneLake to add the newer half-years to.
 on:
   schedule:

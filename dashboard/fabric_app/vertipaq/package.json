@@ -1,0 +1,14 @@
+{
+  "name": "nemtracker-fabric-vertipaq",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "The dashboard as a Microsoft Fabric app on the deployed semantic model: the page of ../../github, its DAX run by Power BI (VertiPaq)",
+  "scripts": {
+    "build:fabric": "node ../common/build.mjs",
+    "rayfin:up": "rayfin up"
+  },
+  "devDependencies": {
+    "@microsoft/rayfin-cli": "^1.36.1"
+  }
+}
