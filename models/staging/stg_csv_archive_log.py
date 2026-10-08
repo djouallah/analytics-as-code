@@ -9,7 +9,7 @@ def model(dbt, session):
     import tempfile
     import urllib.error
     import urllib.request
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     root_path = os.environ.get("FILES_PATH", "/tmp")
@@ -57,6 +57,8 @@ def model(dbt, session):
                 csv_filename VARCHAR
             )
         """)
+    # What the log held when loaded: the end of the run saves it only if this has changed.
+    log_state = session.sql("SELECT count(*), max(archived_at) FROM _csv_archive_log").fetchone()
 
     # =========================================================================
     # Helper: download ZIP, extract CSVs to temp dir
@@ -223,16 +225,29 @@ def model(dbt, session):
     # DAILY REPORTS (SCADA + PRICE)
     # =========================================================================
 
-    # Fetch file listing from AEMO
-    daily_listed = list_nemweb('daily_files_web', 'https://nemweb.com.au/Reports/Current/Daily_Reports/',
-                               '%PUBLIC_DAILY%.zip%')
+    # AEMO publishes one next-day file a day, for the trading day before (about 04:05
+    # Brisbane). Once the log has yesterday's, there is nothing to list until tomorrow's:
+    # the folder is not asked, and the backfills below, which wait for the daily feed's
+    # listing, wait with it: they run on the runs between midnight and the new file.
+    newest_daily = session.sql("""
+        SELECT max(substr(source_filename, 14, 8)) FROM _csv_archive_log
+        WHERE source_type = 'daily' AND source_filename LIKE 'PUBLIC_DAILY_%'
+    """).fetchone()[0]
+    yesterday = (datetime.now(timezone(timedelta(hours=10))) - timedelta(days=1)).strftime("%Y%m%d")
+    if newest_daily and newest_daily >= yesterday:
+        print(f"  daily: the log has the file of {newest_daily}, nothing new before the next one; not listed")
+        session.sql("CREATE OR REPLACE TEMP TABLE daily_files_web (full_url VARCHAR, filename VARCHAR)")
+        daily_listed = False
+    else:
+        daily_listed = list_nemweb('daily_files_web', 'https://nemweb.com.au/Reports/Current/Daily_Reports/',
+                                   '%PUBLIC_DAILY%.zip%')
 
     # Check if AEMO has enough new files before hitting GitHub
     aemo_new = session.sql(f"""
         SELECT count(*) FROM daily_files_web w WHERE {not_archived('daily')}
     """).fetchone()[0]
-    # The backfills below wait for the daily feed to have caught up; a listing that failed
-    # says nothing about that, so they wait for the next run too.
+    # The backfills below wait for the daily feed to have caught up; a listing that failed,
+    # or that was not needed, says nothing about that, so they wait for the next run too.
     caught_up = daily_listed and aemo_new < download_limit
 
     if caught_up:
@@ -509,7 +524,10 @@ def model(dbt, session):
     # =========================================================================
     # Save log to parquet and return
     # =========================================================================
-    save_log()
+    # Only when this run changed it: process_downloads saves after each batch already, and
+    # a run that fetched nothing has nothing to write over the durable log.
+    if session.sql("SELECT count(*), max(archived_at) FROM _csv_archive_log").fetchone() != log_state:
+        save_log()
 
     # The parquet above is the durable log; the Iceberg table is a materialization of it
     # that the fact pre-hooks read. Append only the rows the table is missing. Returning
