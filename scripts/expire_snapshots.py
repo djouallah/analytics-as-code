@@ -219,7 +219,15 @@ def remove_orphans(catalog, table):
         print(f"    referenced: {snapshot.manifest_list}")
 
     start = time.monotonic()
-    action = tbl.maintenance.remove_orphan_files().older_than(timedelta(days=ORPHAN_DAYS))
+    # adlfs lists `abfss://<workspace>/...` where the metadata says
+    # `abfss://<workspace>@onelake.dfs.fabric.microsoft.com/...`: same container, the host
+    # dropped (run 37855756983). Declare the two the same authority, from the table's own
+    # location, so nothing else is.
+    authority = urlparse(location).netloc
+    container = authority.split("@")[0]
+    action = (tbl.maintenance.remove_orphan_files()
+              .older_than(timedelta(days=ORPHAN_DAYS))
+              .equal_authorities({container: authority}))
     if ORPHAN_DRY_RUN:
         action = action.dry_run()
     try:
