@@ -1187,9 +1187,14 @@ function renameAliases(sql, map) {
     : part.replace(/\b[a-z]\d+\b/g, m => map.get(m) ?? m)).join('');
 }
 
+// SQL with the aliases it declares (AS t3) numbered in order of appearance, so that two
+// writings of the same SQL compare equal. A name it only refers to (a CTE) is kept: two
+// subqueries over different CTEs are different.
 function canonical(sql) {
+  const declared = new Set([...sql.matchAll(/\bAS ([a-z]\d+)\b/g)].map(m => m[1]));
   const map = new Map();
   return sql.replace(/\b([a-z])(\d+)\b/g, (m) => {
+    if (!declared.has(m)) return m;
     if (!map.has(m)) map.set(m, `@${map.size}`);
     return map.get(m);
   });
