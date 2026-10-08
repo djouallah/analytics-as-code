@@ -840,6 +840,13 @@ never been probed either.
   energy is `SUM(mw) / 12`; `date` is the calendar date of the interval's end and `time` its
   HHMM; daily price and demand are plain averages of the intervals.
 - Pre-hooks set DuckDB VARIABLEs with the file paths to process, read from the log table
+- **Nothing to write, nothing sent.** A model that knows at compile time it has nothing to
+  do (a landing fact with no new file, `dim_duid` with no new unit, `processed_files` on
+  every incremental run) renders `{{ nothing_to_do() }}`, and the incremental
+  materialization (`macros/nothing_to_do.sql`) returns before any statement: no pre-hook,
+  BEGIN, temp table, MERGE, post-hook or COMMIT. The materialization is dbt-duckdb 1.11.0's,
+  copied with one block added (a wrapper cannot run the Python model: dbt checks the macro
+  stack), so it is re-copied when the dbt-duckdb pin moves.
 - **Every file a model reads is a dbt source** (`models/sources.yml`, dbt-duckdb
   `external_location`), so the lineage graph shows it. `aemo.*` compiles to the fact model's
   `getvariable('…_paths')`, `duid_reference.*` to the file's path under `Files/csv/duid/`.
@@ -859,7 +866,8 @@ those pins pull in. `import_onelake.yml` has the same two venvs as `import_data.
 the same pins, and pins the two Azure SDK packages its upload uses.
 - **`process_data.yml`, `build.yml`, `table_maintenance.yml` and `import_data.yml`'s read venv
   pin `duckdb==2.0.0.dev2609250715`** (dbt via `requirements.txt`, which also pins
-  `dbt-core`/`dbt-duckdb` exactly — the insert-only merges lean on adapter internals). The
+  `dbt-core`/`dbt-duckdb` exactly — the insert-only merges lean on adapter internals, and
+  `macros/nothing_to_do.sql` is a copy of dbt-duckdb's incremental materialization). The
   1.6 line became **DuckDB 2.0.0** (stable due 2026-10-21); its pre-releases are published as
   `2.0.0.devYYMMDDHHMM`. The pre-release is required, not incidental:
   `iceberg_rewrite_data_files()` (duckdb-iceberg#1035) isn't in a stable release yet, and the

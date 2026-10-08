@@ -270,5 +270,5 @@ SELECT * REPLACE (
 FROM units
 {% else %}
 -- No new DUIDs found, return empty result to keep existing data
-SELECT * FROM {{ this }} WHERE FALSE
+{{ nothing_to_do() }}
 {% endif %}

@@ -83,5 +83,5 @@ JOIN layout l ON l.filename = r.filename
 WHERE r.I = 'D'
 {% else %}
 -- No unprocessed files: empty result keeps existing data untouched
-SELECT * FROM {{ this }} WHERE FALSE
+{{ nothing_to_do() }}
 {% endif %}

@@ -1,0 +1,156 @@
+{#-- A model with nothing to write sends no statement at all.
+
+     A model that knows at compile time it has nothing to do (a fact with no new file, dim_duid
+     with no new unit, processed_files, which only its facts' post-hooks append to) renders
+     {{ nothing_to_do() }}. The incremental materialization below sees it in the compiled SQL
+     and returns before anything reaches the catalog: no pre-hook, no BEGIN, no temp table,
+     no MERGE, no post-hook, no COMMIT. Each of those is a round trip to OneLake, and the
+     MERGE of an empty batch alone took 3.3 s on fct_scada.
+
+     The materialization is dbt-duckdb 1.11.0's (dbt/include/duckdb/macros/materializations/
+     incremental.sql, the version requirements.txt pins), copied whole with one block added
+     at the top, marked below. It is a copy, not a wrapper that calls the adapter's: dbt runs
+     a Python model (stg_csv_archive_log) only from a materialization called directly
+     (submit_python_job checks the macro stack). When the dbt-duckdb pin moves, copy the new
+     version and add the block again. The skip only applies when the table exists and it is
+     not a full refresh: the first build always runs. dbt wants a `main` result from every
+     model, so the skip records one without a query (store_raw_result). --#}
+
+{% macro nothing_to_do_marker() -%}
+  {{ return('/* nothing to do: no statement is sent */') }}
+{%- endmacro %}
+
+{% macro nothing_to_do() -%}
+SELECT * FROM {{ this }} WHERE FALSE {{ nothing_to_do_marker() }}
+{%- endmacro %}
+
+{% materialization incremental, adapter="duckdb", supported_languages=['sql', 'python'] -%}
+
+  {%- set language = model['language'] -%}
+  -- relations
+  {%- set existing_relation = load_cached_relation(this) -%}
+
+  {#-- Added (macros/nothing_to_do.sql): nothing to write, nothing sent. --#}
+  {%- if existing_relation is not none and not should_full_refresh()
+        and nothing_to_do_marker() in (compiled_code or '') -%}
+    {%- do log(this.identifier ~ ": nothing to do, no statement sent", info=True) -%}
+    {%- do store_raw_result('main', message='nothing to do', code='SKIP', rows_affected=0) -%}
+    {{ return({'relations': [this.incorporate(type='table')]}) }}
+  {%- endif -%}
+  {#-- End of the added block; the rest is dbt-duckdb 1.11.0's. --#}
+  {%- set target_relation = this.incorporate(type='table') -%}
+  {%- set intermediate_relation = make_intermediate_relation(target_relation)-%}
+  {%- set backup_relation_type = 'table' if existing_relation is none else existing_relation.type -%}
+  {%- set backup_relation = make_backup_relation(target_relation, backup_relation_type) -%}
+
+  -- configs
+  {%- set unique_key = config.get('unique_key') -%}
+  {%- set full_refresh_mode = (should_full_refresh()  or existing_relation.is_view) -%}
+  {%- set on_schema_change = incremental_validate_on_schema_change(config.get('on_schema_change'), default='ignore') -%}
+  {%- set partitioned_by = none -%}
+  {%- set sorted_by = none -%}
+  {%- if existing_relation is none or full_refresh_mode -%}
+    {%- set partitioned_by = duckdb__get_partitioned_by(target_relation, false) -%}
+    {%- set sorted_by = duckdb__get_sorted_by(target_relation, false) -%}
+  {%- endif -%}
+  {%- set skip_auto_begin = (partitioned_by or sorted_by) and adapter.is_ducklake(target_relation) -%}
+
+  -- the temp_ and backup_ relations should not already exist in the database; get_relation
+  -- will return None in that case. Otherwise, we get a relation that we can drop
+  -- later, before we try to use this name for the current operation. This has to happen before
+  -- BEGIN, in a separate transaction
+  {%- set preexisting_intermediate_relation = load_cached_relation(intermediate_relation)-%}
+  {%- set preexisting_backup_relation = load_cached_relation(backup_relation) -%}
+   -- grab current tables grants config for comparision later on
+  {% set grant_config = config.get('grants') %}
+  {{ drop_relation_if_exists(preexisting_intermediate_relation) }}
+  {{ drop_relation_if_exists(preexisting_backup_relation) }}
+
+  {% set to_drop = [] %}
+   -- if not using a temporary table we will update the temp relation to use a different temp schema ("dbt_temp" by default)
+   -- for microbatch with concurrent batches, include batch timestamps in the identifier to avoid collisions
+  {%- set batch_id = adapter.batch_id_for_model(model) -%}
+  {% set temporary_relation = duckdb__dispatch_temporary_relation(target_relation, batch_id) %}
+  {% set temp_relation = temporary_relation.relation %}
+  {% set temporary = temporary_relation.temporary %}
+  {% if not temporary %}
+    {% do to_drop.append(temp_relation) %}
+  {% endif %}
+
+  {{ run_hooks(pre_hooks, inside_transaction=False) }}
+  -- `BEGIN` happens here:
+  {{ run_hooks(pre_hooks, inside_transaction=True) }}
+
+  {% if existing_relation is none %}
+    {% set build_sql = create_table_as(False, target_relation, compiled_code, language, partitioned_by=partitioned_by, sorted_by=sorted_by) %}
+  {% elif full_refresh_mode %}
+    {% set build_sql = create_table_as(False, intermediate_relation, compiled_code, language, partitioned_by=partitioned_by, sorted_by=sorted_by) %}
+    {% set need_swap = true %}
+  {% else %}
+    {% if language == 'python' %}
+      {% set build_python = create_table_as(temporary, temp_relation, compiled_code, language, partitioned_by=none, sorted_by=none) %}
+      {% call statement("pre", language=language) %}
+        {{- build_python }}
+      {% endcall %}
+    {% else %} {# SQL #}
+      {% do run_query(create_table_as(temporary, temp_relation, compiled_code, language, partitioned_by=none, sorted_by=none)) %}
+    {% endif %}
+    {% do adapter.expand_target_column_types(
+             from_relation=temp_relation,
+             to_relation=target_relation) %}
+    {#-- Process schema changes. Returns dict of changes if successful. Use source columns for upserting/merging --#}
+    {% set dest_columns = process_schema_changes(on_schema_change, temp_relation, existing_relation) %}
+    {% if not dest_columns %}
+      {% set dest_columns = adapter.get_columns_in_relation(existing_relation) %}
+    {% endif %}
+
+    {#-- Get the incremental_strategy, the macro to use for the strategy, and build the sql --#}
+    {% set incremental_strategy = config.get('incremental_strategy') or 'default' %}
+    {% set incremental_predicates = config.get('predicates', none) or config.get('incremental_predicates', none) %}
+    {% set strategy_sql_macro_func = adapter.get_incremental_strategy_macro(context, incremental_strategy) %}
+    {% set strategy_arg_dict = ({'target_relation': target_relation, 'temp_relation': temp_relation, 'unique_key': unique_key, 'dest_columns': dest_columns, 'incremental_predicates': incremental_predicates }) %}
+    {% set build_sql = strategy_sql_macro_func(strategy_arg_dict) %}
+    {% set language = "sql" %}
+
+  {% endif %}
+
+  {% call statement("main", language=language, auto_begin=not skip_auto_begin) %}
+      {{- build_sql }}
+  {% endcall %}
+
+  {% if need_swap %}
+      {#-- Drop indexes on target relation before renaming to backup to avoid dependency errors --#}
+      {% do drop_indexes_on_relation(target_relation) %}
+      {% do adapter.rename_relation(target_relation, backup_relation) %}
+      {% do adapter.rename_relation(intermediate_relation, target_relation) %}
+      {% do to_drop.append(backup_relation) %}
+  {% endif %}
+
+  {% set should_revoke = should_revoke(existing_relation, full_refresh_mode) %}
+  {% do apply_grants(target_relation, grant_config, should_revoke=should_revoke) %}
+
+  {# Align order with table materialization to avoid MotherDuck alter conflicts #}
+  {% if existing_relation is none or existing_relation.is_view or should_full_refresh() %}
+    {% do create_indexes(target_relation) %}
+  {% endif %}
+
+  {% do persist_docs(target_relation, model) %}
+
+  {{ run_hooks(post_hooks, inside_transaction=True) }}
+
+  -- `COMMIT` happens here
+  {% do adapter.commit() %}
+
+  {% for rel in to_drop %}
+      {# On MotherDuck the temp relation is a real table; dropping it cascades indexes. Avoid extra ALTERs. #}
+      {% if not adapter.is_motherduck() %}
+        {% do drop_indexes_on_relation(rel) %}
+      {% endif %}
+      {% do adapter.drop_relation(rel) %}
+  {% endfor %}
+
+  {{ run_hooks(post_hooks, inside_transaction=False) }}
+
+  {{ return({'relations': [target_relation]}) }}
+
+{%- endmaterialization %}

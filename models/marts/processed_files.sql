@@ -13,8 +13,9 @@
 -- The first build seeds it from the facts' `file` columns, once: a table missing (the ci
 -- target, a fresh catalog) contributes nothing, and its files are pending, as they should
 -- be. No ref() to the facts: their hooks ref this table, and a ref back would be a cycle;
--- the facts run after it because of those hooks. Incremental runs append nothing here: the
--- hooks write the rows. rebuild=processed_files drops it and the next run reseeds it.
+-- the facts run after it because of those hooks. Incremental runs send nothing here
+-- (macros/nothing_to_do.sql): the hooks write the rows. rebuild=processed_files drops it and
+-- the next run reseeds it.
 {{ config(
     materialized='incremental',
     incremental_strategy='append',
@@ -24,12 +25,15 @@
 {%- set facts = ['fct_scada', 'fct_price', 'fct_scada_today', 'fct_price_today',
                  'fct_regionsum_today', 'fct_interconnector_today', 'fct_rooftop_pv'] %}
 
+{% if is_incremental() %}
+{{ nothing_to_do() }}
+{% else %}
 SELECT
   CAST(NULL AS VARCHAR) AS model,
   CAST(NULL AS VARCHAR) AS csv_filename,
   CAST(NULL AS TIMESTAMPTZ) AS processed_at
 WHERE FALSE
-{%- if execute and not is_incremental() %}
+{%- if execute %}
 {%- for name in facts %}
 {%- set rel = adapter.get_relation(database=this.database, schema=this.schema, identifier=name) %}
 {%- if rel %}
@@ -39,3 +43,4 @@ FROM (SELECT DISTINCT file FROM {{ rel }})
 {%- endif %}
 {%- endfor %}
 {%- endif %}
+{% endif %}

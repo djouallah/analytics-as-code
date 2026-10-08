@@ -79,5 +79,5 @@ SELECT
   CAST(YEAR(CAST(SETTLEMENTDATE AS TIMESTAMP)) AS INT) AS YEAR
 FROM scada_staging
 {% else %}
-SELECT * FROM {{ this }} WHERE FALSE
+{{ nothing_to_do() }}
 {% endif %}

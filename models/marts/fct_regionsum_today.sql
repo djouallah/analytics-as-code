@@ -107,5 +107,5 @@ SELECT
 FROM regionsum_staging
 {% else %}
 -- No unprocessed files: empty result keeps existing data untouched
-SELECT * FROM {{ this }} WHERE FALSE
+{{ nothing_to_do() }}
 {% endif %}

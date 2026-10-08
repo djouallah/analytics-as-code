@@ -206,8 +206,8 @@ no query service.
 - **A stored value is never revised.** Until merges may update, a correction from AEMO does
   not land, `dim_duid` changes only through a rebuild, and `fct_summary` keeps the intraday
   value of an interval where the next-day files have another.
-- **`fct_region` is recomputed whole every run** (4.5M rows). Cheap now; it grows with history.
-- **The intraday tables are not trimmed.** Their scans are bounded, but they keep growing.
+- **`fct_region` is recomputed whole every run** (4.5M rows, 28 s): it reads `fct_price`,
+  `fct_price_today` and `fct_regionsum_today` with no date filter.
 - **Maintenance failures show only in the job's log.** There is no alert.
 - **No CI sees a chart of the Power BI report draw**; a visual is checked by opening it.
 
@@ -241,7 +241,6 @@ The Fabric app has limits of its own:
 **Possible improvements**
 - Dynamic filter pushdown into Iceberg manifests would make the literal-dates macros
   unnecessary.
-- Skipping the empty MERGE of a fact with no new file needs a custom incremental strategy.
 - Correct instants at the writer would remove the "every reader in UTC" rule; it means
   rebuilding the seven facts.
 
