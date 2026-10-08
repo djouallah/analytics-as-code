@@ -5,15 +5,20 @@ name: Iceberg GC Trial
 # - dry_run: every table, what each would delete, per folder. Commits and deletes nothing.
 # - dummy_expire: a real expiry on a throwaway table, landing.zz_gc_trial (created,
 #   compacted, expired, read back, dropped), checking file by file what was deleted.
-# Neither touches a table of the pipeline, so neither takes the process-data group.
+# - table_expire: a real expiry of one table of the pipeline (`table`), older than a day as
+#   the daily job does, its rows counted before and after. It commits to that table, so it
+#   takes the process-data group; the other two touch no table of the pipeline.
 
 on:
   workflow_dispatch:
     inputs:
       mode:
         type: choice
-        options: [dry_run, dummy_expire]
+        options: [dry_run, dummy_expire, table_expire]
         default: dry_run
+      table:
+        description: "table_expire: the table (namespace.table)"
+        default: mart.dim_calendar
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -30,6 +35,9 @@ jobs:
   trial:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    concurrency:
+      group: ${{ inputs.mode == 'table_expire' && 'process-data' || github.run_id }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -40,10 +48,10 @@ jobs:
         working-directory: scripts/iceberg_gc
         run: go build -o iceberg_gc .
       - uses: actions/setup-python@v5
-        if: inputs.mode == 'dummy_expire'
+        if: inputs.mode != 'dry_run'
         with:
           python-version: "3.11"
-      - if: inputs.mode == 'dummy_expire'
+      - if: inputs.mode != 'dry_run'
         run: pip install "duckdb==2.0.0.dev2610011535"
       - name: Azure federated login
         uses: azure/login@v2
@@ -73,3 +81,18 @@ jobs:
       - name: Drop it
         if: always() && inputs.mode == 'dummy_expire'
         run: python scripts/iceberg_gc/dummy_table.py drop
+      - name: Check the table is one of the pipeline's
+        if: inputs.mode == 'table_expire'
+        run: cd scripts && python -c "import sys; from iceberg_tables import TABLES; sys.exit(0 if '${{ inputs.table }}' in TABLES else 'not in iceberg_tables.py')"
+      - name: Count rows before
+        if: inputs.mode == 'table_expire'
+        run: echo "ROWS_BEFORE=$(python scripts/iceberg_gc/dummy_table.py count ${{ inputs.table }} | tail -1)" >> "$GITHUB_ENV"
+      - name: Expire the table (iceberg-go, deleting files)
+        if: inputs.mode == 'table_expire'
+        run: scripts/iceberg_gc/iceberg_gc expire-table ${{ inputs.table }}
+      - name: Count rows after
+        if: inputs.mode == 'table_expire'
+        run: |
+          AFTER=$(python scripts/iceberg_gc/dummy_table.py count ${{ inputs.table }} | tail -1)
+          echo "rows before $ROWS_BEFORE, after $AFTER"
+          test "$ROWS_BEFORE" = "$AFTER"

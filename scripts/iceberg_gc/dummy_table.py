@@ -4,6 +4,7 @@
                                   original data files are left to the older snapshots only
     python dummy_table.py check   the table still reads its three rows
     python dummy_table.py drop
+    python dummy_table.py count <namespace.table>   its row count (a table of the pipeline)
 
 Same connection as the compaction job (compact_iceberg.connect).
 """
@@ -18,7 +19,7 @@ from compact_iceberg import ENDPOINT, TOKEN, WAREHOUSE, connect  # noqa: E402
 TABLE = "catalog.landing.zz_gc_trial"
 
 
-def main(step):
+def main(step, table=None):
     con = connect()
     # Attached again with profiles.yml's create options: without them this catalog
     # answers BadRequest 400 to a CREATE TABLE, CTAS included.
@@ -45,7 +46,10 @@ def main(step):
     elif step == "drop":
         con.execute(f"DROP TABLE IF EXISTS {TABLE}")
         print(f"dropped {TABLE}")
+    elif step == "count":
+        # A table of the pipeline, read before and after its real expiry.
+        print(con.execute(f"SELECT count(*) FROM catalog.{table}").fetchone()[0])
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1], *sys.argv[2:])

@@ -11,7 +11,8 @@
 // Delta view of the table) would show up as "orphans" and must never be deleted.
 //
 // Usage: go run . dry-run <namespace.table>...
-//        go run . expire <namespace.table>    a real expiry, for the throwaway table only
+//        go run . expire <namespace.table>          the throwaway table: all but the newest
+//        go run . expire-table <namespace.table>    a real table: older than a day
 // (env: ONELAKE_ENDPOINT, ONELAKE_TOKEN, WAREHOUSE_PATH; storage goes through the Azure
 // CLI login of the job.)
 package main
@@ -128,10 +129,9 @@ func referenced(tbl *table.Table, fsys iceio.IO, liveOnly bool) (map[string]bool
 	return files, nil
 }
 
-// expire commits a real expiry, with iceberg-go's file deletion, of every snapshot but the
-// newest, then checks that the files only the expired snapshots reached are gone and the
+// expire commits a real expiry, with iceberg-go's file deletion, then checks that the files only the expired snapshots reached are gone and the
 // ones the newest reaches are not.
-func expire(ctx context.Context, cat *rest.Catalog, name string) error {
+func expire(ctx context.Context, cat *rest.Catalog, name string, opts ...table.ExpireSnapshotsOpt) error {
 	ident := catalog.ToIdentifier(strings.Split(name, ".")...)
 	tbl, err := cat.LoadTable(ctx, ident)
 	if err != nil {
@@ -148,7 +148,7 @@ func expire(ctx context.Context, cat *rest.Catalog, name string) error {
 	nBefore := len(tbl.Metadata().Snapshots())
 
 	tx := tbl.NewTransaction()
-	if err := tx.ExpireSnapshots(table.WithOlderThan(0), table.WithRetainLast(1)); err != nil {
+	if err := tx.ExpireSnapshots(opts...); err != nil {
 		return fmt.Errorf("expire: %w", err)
 	}
 	if _, err := tx.Commit(ctx); err != nil {
@@ -209,8 +209,15 @@ func main() {
 	}
 
 	run := dryRun
-	if len(os.Args) > 1 && os.Args[1] == "expire" {
-		run = expire
+	switch os.Args[1] {
+	case "expire": // the throwaway table: every snapshot but the newest
+		run = func(ctx context.Context, cat *rest.Catalog, name string) error {
+			return expire(ctx, cat, name, table.WithOlderThan(0), table.WithRetainLast(1))
+		}
+	case "expire-table": // a table of the pipeline: as the daily job does, older than a day
+		run = func(ctx context.Context, cat *rest.Catalog, name string) error {
+			return expire(ctx, cat, name, table.WithOlderThan(expireOlderThan))
+		}
 	}
 	names := os.Args[2:]
 	failed := 0
