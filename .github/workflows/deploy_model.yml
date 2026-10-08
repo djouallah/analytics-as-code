@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: "Publish and refresh the model first (off: only the checks, on the model as deployed)"
+        description: "Publish and refresh the model first (off: only the checks, on the model as deployed; a missing one is published)"
         type: boolean
         default: true
       parity:
@@ -76,8 +76,22 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
+      - name: Is the model there?
+        # Without `publish`, the checks ask the model as deployed: one the workspace does not
+        # have is published and refreshed first.
+        if: ${{ !inputs.publish }}
+        run: |
+          set -euo pipefail
+          token=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv)
+          name=$(jq -r .metadata.displayName semantic_model/.platform)
+          found=$(curl -fsS -H "Authorization: Bearer $token" "https://api.fabric.microsoft.com/v1/workspaces/$WS_ID/semanticModels" \
+            | jq --arg n "$name" '[.value[] | select(.displayName == $n)] | length')
+          if [ "$found" = 0 ]; then
+            echo "::notice::no semantic model $name in the workspace: publishing it"
+            echo "PUBLISH=true" >> "$GITHUB_ENV"
+          fi
       - name: Publish the model and the report
-        if: inputs.publish
+        if: inputs.publish || env.PUBLISH == 'true'
         run: python scripts/deploy_model.py
       - name: Mint Power BI token
         run: |
@@ -85,7 +99,7 @@ jobs:
           echo "::add-mask::$TOKEN"
           echo "POWERBI_TOKEN=$TOKEN" >> "$GITHUB_ENV"
       - name: Refresh it and query it
-        if: inputs.publish
+        if: inputs.publish || env.PUBLISH == 'true'
         env:
           PYTHONNET_RUNTIME: coreclr
         run: python scripts/check_model.py
