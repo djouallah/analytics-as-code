@@ -35,5 +35,8 @@ market (AEMO).
   **It is not a general-purpose DAX compiler.** It was written for this repository only: it
   knows this model and the constructs this page uses, and fails on anything else. It is
   here to show where that layer sits.
+- **[`packages/dax-sql`](packages/dax-sql/)** is the general-purpose one: any Tabular model,
+  DAX's filter context, context transition and relationships, compiled to SQL (tested on
+  DuckDB). The page does not use it; its queries are part of its tests.
 
 Details: [doc/ARCHITECTURE.md](doc/ARCHITECTURE.md)
