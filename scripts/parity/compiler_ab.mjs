@@ -53,7 +53,7 @@ const to = shiftDate(newest, -2);
 const page = pageOf(now.createQueries, newest);
 await page.queries.readWholeDays(now.rows);
 
-const differs = [], slower = [];
+const differs = [], slower = [], byName = new Map();
 let compared = 0, msOld = 0, msNew = 0;
 async function timed(s, q) {
   const t = performance.now();
@@ -86,6 +86,8 @@ async function check(stateName, name, q) {
     return;
   }
   msOld += a.ms; msNew += b.ms;
+  const t = byName.get(name) ?? { before: 0, now: 0 };
+  byName.set(name, { before: t.before + a.ms, now: t.now + b.ms });
   const why = compare(a.rows, b.rows) ?? order(b.rows, a.rows, q.orderBy);
   if (why) differs.push(`${stateName} / ${name}: ${why}`);
   if (b.ms > 2 * a.ms && b.ms - a.ms > 100) {
@@ -100,6 +102,8 @@ for (const [name, state] of states(to)) {
 }
 for (const d of differs) console.log(d);
 if (slower.length) console.log(`clearly slower here:\n  ${slower.join('\n  ')}`);
+const most = [...byName].sort(([, x], [, y]) => (y.now - y.before) - (x.now - x.before)).slice(0, 10);
+console.log(`the most time added, over every state:\n  ${most.map(([n, t]) => `${n}: ${Math.round(t.before)} ms before, ${Math.round(t.now)} ms now`).join('\n  ')}`);
 console.log(`${compared} queries in ${states(to).length} states, ${differs.length} differ; `
   + `${(msOld / 1000).toFixed(1)} s before, ${(msNew / 1000).toFixed(1)} s now (one thread); newest day ${newest}`);
 process.exit(differs.length ? 1 : 0);
