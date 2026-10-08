@@ -3,7 +3,7 @@
 //   dax/     frontend/queries.js and semantic/compiler.js: the page through the semantic model
 //   sql/     frontend/queries.js: the page in plain SQL
 // A page is common/ with one of the two copied over it (dax also gets semantic_model/model.bim
-// next to its compiler). The repo tree is not the served tree: everything that serves or
+// and packages/dax-sql/src, as semantic/dax-sql/, next to its compiler). The repo tree is not the served tree: everything that serves or
 // imports the page stages it first, with stagePage (the site, the Fabric app's build, the
 // parity scripts).
 //   node scripts/stage_pages.mjs <dir> <build>
@@ -11,6 +11,7 @@
 // site's data/, one folder up); then the build stamp and ?v=<build> on every relative
 // import (stamp_build.mjs), and the dbt docs, which are not stamped.
 import { cp, mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { join } from "node:path";
 import { stampBuild } from "./stamp_build.mjs";
@@ -24,7 +25,12 @@ export async function stagePage(variant, dir, root = REPO) {
   await mkdir(dir, { recursive: true });
   await cp(join(page, "common"), dir, { recursive: true, filter: src => !src.startsWith(join(page, "common", "dag")) });
   await cp(join(page, variant), dir, { recursive: true });
-  if (variant === "dax") await cp(join(root, "semantic_model", "model.bim"), join(dir, "semantic", "model.bim"));
+  if (variant === "dax") {
+    await cp(join(root, "semantic_model", "model.bim"), join(dir, "semantic", "model.bim"));
+    // A checkout from before 2026-10-08 (the parity's `since`) has its compiler whole.
+    const daxSql = join(root, "packages", "dax-sql", "src");
+    if (existsSync(daxSql)) await cp(daxSql, join(dir, "semantic", "dax-sql"), { recursive: true });
+  }
 }
 
 export const DAG = join(REPO, "dashboard", "github", "common", "dag");

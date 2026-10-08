@@ -44,7 +44,7 @@ No runtime dependencies; ES modules for the browser and Node 18+.
 | `tableSource` | `(table) => SQL` naming a model table's rows. Default: its partition's entity, `"schema"."entity"`. |
 | `dialect` | `'duckdb'` (default), or an instance of a `Dialect` subclass. |
 | `columnNames` | `'short'` (default): the column's or the expression's name. `'dax'`: `Table[Column]`, `[Measure]`. |
-| `castOutput` | `true` (default): whole numbers as `BIGINT`, other numbers as `DOUBLE`. |
+| `castOutput` | `true` (default): whole numbers as `BIGINT`, other numbers as `DOUBLE`. Or an object, by the column's type (`int`, `double`, `decimal`, `datetime`, `string`, `bool`), of a function of its SQL: `{ int: s => \`CAST(${s} AS INTEGER)\` }`; a type it leaves out is not cast. |
 | `assumeIntegrity` | `true`: every relationship relies on referential integrity, so a dimension key is read off the fact's foreign key without a join. By default only relationships whose `relyOnReferentialIntegrity` is set are treated this way. |
 | `blankRows` | `false`: no blank row for dimensions (see below), which saves a check per dimension. |
 | `user` | The value of `USERNAME()` and `USERPRINCIPALNAME()`. |

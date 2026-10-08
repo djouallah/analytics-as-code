@@ -93,16 +93,10 @@ jobs:
         with:
           node-version: "24"
       - name: The dashboard's files
-        # What the dashboard has deployed: the dimensions, the newest days, the aggregates and
-        # the latest two half-years. Both checks below run over them.
+        # What the dashboard has deployed (scripts/parity/fetch_data.sh). Both checks below
+        # run over them.
         run: |
-          set -euo pipefail
-          data="$RUNNER_TEMP/data" && mkdir -p "$data"
-          site=https://nemtracker.github.io/data
-          curl -fsS -o "$data/mart_manifest.json" "$site/mart_manifest.json"
-          for f in mart_dim mart_today mart_agg $(python -c "import json,sys; print(' '.join('mart_' + p for p in json.load(open(sys.argv[1]))['periods'][-2:]))" "$data/mart_manifest.json"); do
-            curl -fsS -o "$data/$f.duckdb" "$site/$f.duckdb"
-          done
+          bash scripts/parity/fetch_data.sh "$RUNNER_TEMP/data"
           cd scripts/parity && npm ci --no-audit --no-fund
       - name: Power BI parity, the page's queries on the model and on the dashboard's files
         # scripts/parity: every query the page sends, as the compiler writes its DAX and its

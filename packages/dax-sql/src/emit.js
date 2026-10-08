@@ -41,10 +41,11 @@ export class Emitter {
     const r = this.alias('q');
     const style = this.options.columnNames ?? 'short';
     const outNames = outputNames(table.cols, style);
-    const cast = this.options.castOutput !== false;
+    const cast = this.options.castOutput !== false, by = typeof this.options.castOutput === 'object' ? this.options.castOutput : null;
     const sel = table.cols.map((c, i) => {
       let s = `${r}.${this.ident(names[i])}`;
-      if (cast && (c.t === 'int' || c.t === 'double' || c.t === 'decimal')) s = this.d.cast(s, c.t === 'int' ? 'int' : 'double');
+      if (by) { if (by[c.t]) s = by[c.t](s); }
+      else if (cast && (c.t === 'int' || c.t === 'double' || c.t === 'decimal')) s = this.d.cast(s, c.t === 'int' ? 'int' : 'double');
       return `${s} AS ${this.ident(outNames[i])}`;
     });
     let sql = `SELECT ${sel.join(', ')} FROM (${inner}) AS ${r}`;

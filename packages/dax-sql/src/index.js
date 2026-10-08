@@ -10,7 +10,8 @@
 //                  entity ("schema"."entity"), else its name
 //   columnNames    'short' (the default: the column or the expression's name) or 'dax'
 //                  ('Table'[Column], [Measure]) for the result's columns
-//   castOutput     true (the default): whole numbers as BIGINT, numbers as DOUBLE
+//   castOutput     true (the default): whole numbers as BIGINT, numbers as DOUBLE; or, by
+//                  the column's type, a function of its SQL ({ int: s => `CAST(${s} AS INTEGER)` })
 //   assumeIntegrity  true: every relationship relies on referential integrity, so a
 //                  dimension's key is read off the fact's foreign key with no join (by
 //                  default only those whose relyOnReferentialIntegrity says so)

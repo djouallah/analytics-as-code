@@ -22,8 +22,7 @@ permissions:
 jobs:
   dax-sql:
     # packages/dax-sql: its own tests, on made-up data in an in-memory DuckDB (no catalog, no
-    # capacity). repo.test.js runs every query of the page through it and through
-    # dashboard/github/dax/semantic/compiler.js, and compares the rows.
+    # capacity). repo.test.js runs every query of the page through the page's compiler.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,7 +33,44 @@ jobs:
           cache-dependency-path: packages/dax-sql/package-lock.json
       - run: cd packages/dax-sql && npm ci --no-audit --no-fund && npm test
 
+  page:
+    # The page's queries over the files the dashboard has deployed (GitHub Pages; no catalog,
+    # no capacity): the SQL page against the DAX page (sql_page.mjs), which the page's deploy
+    # waits for; and the DAX page's compiler against the one of the commit before
+    # (compiler_ab.mjs: the rows, and the time each takes), a report: a measure changed on
+    # purpose changes its rows too.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: scripts/parity/package-lock.json
+      - name: The dashboard's files
+        run: |
+          bash scripts/parity/fetch_data.sh "$RUNNER_TEMP/data"
+          cd scripts/parity && npm ci --no-audit --no-fund
+      - name: The SQL page against the DAX page
+        run: cd scripts/parity && node sql_page.mjs "$RUNNER_TEMP/data"
+      - name: The compiler against the commit before
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          BEFORE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          # A dispatch, or a push of a new branch (all zeros), has no commit before: the parent.
+          if [ -z "${BEFORE//0/}" ]; then
+            git fetch -q --deepen=1 origin && BEFORE=$(git rev-parse HEAD~1)
+          else
+            git fetch -q --depth=1 origin "$BEFORE"
+          fi
+          git worktree add -q --detach "$RUNNER_TEMP/before" "$BEFORE"
+          cd scripts/parity && node compiler_ab.mjs "$RUNNER_TEMP/data" "$RUNNER_TEMP/before"
+
   test:
+    needs: [dax-sql, page]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
