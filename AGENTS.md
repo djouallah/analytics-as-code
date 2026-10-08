@@ -61,9 +61,10 @@ Four deliberate local differences, all of which must survive a port:
 2. **No daily/intraday split.** Every hourly pass does every feed (the daily files,
    intraday SCADA, intraday DispatchIS, the monthly interconnector archive, rooftop current /
    weekly / monthly) plus the DUID reference, self-gated on data rather than on a schedule:
-   each DUID reference file is downloaded when its log row is 24h old, and the backfills (the
-   GitHub historical listing, the monthly archives, the weekly rooftop archives) only run when
-   AEMO returned fewer than `download_limit` new daily files. `download_limit` is per feed.
+   each DUID reference file is downloaded when its log row is 24h old; the Daily_Reports folder
+   is only listed while the log lacks yesterday's (Brisbane) next-day file; and the backfills
+   (the GitHub historical listing, the monthly archives, the weekly rooftop archives) only run
+   when that listing ran and returned fewer than `download_limit` new daily files. `download_limit` is per feed.
    **A source that fails skips itself, not the run**: a nemweb folder that can't be listed,
    or a reference file that can't be fetched, prints a `::warning::` and that feed downloads
    nothing this pass; the previous reference file and its log row stay. The model must not
@@ -773,7 +774,7 @@ in `landing` are what these tables are built from.
 |-------|--------|-----------------|
 | stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
 | processed_files | landing | incremental append — the files each landing fact has loaded (`model, csv_filename, processed_at`), appended by the facts' post-hooks; the pending check is the log minus this table. A `rebuild=<fact>` appends a reset row (`csv_filename` NULL); the first build seeds it from the facts' `file` columns |
-| dim_calendar | mart | incremental append (the NOT-IN filter keeps existing dates out; runs 2 years ahead) |
+| dim_calendar | mart | incremental append (the NOT-IN filter keeps existing dates out; runs 2 years ahead; a run sends nothing once it reaches that far) |
 | dim_duid | mart | incremental insert-only merge on DUID; NEM units from the registration list, then `duid_unregistered.csv`; registered capacity (RegCapMW etc.); `Renewable` — **the list of renewable fuels lives in this model** (an inline CTE next to `states`), nowhere else; `Classification` from the list (Scheduled / Semi-Scheduled / Non-Scheduled, stars stripped; NULL off the list): curtailment is measured on Semi-Scheduled, not on a fuel, because HPR1 (a battery) is registered with fuel "Wind"; `CO2eFactor` (t CO2-e/MWh) from MMSDM `GENUNITS` through `DUALLOC`, for registered and unregistered units alike, NULL for loads, AEMO's dummy units and the gensets "On Exclusion List" (Colongra, Jeeralang, Braemar 3 and 6), which `[Emissions t]` therefore leaves out; `Storage` (a battery, the fuel "Grid": the one place that rule lives), `Plant` (the station, or the unit when it has none: what the page groups units by) and `Owner` (the participant, rooftop's five units "Rooftop solar (AEMO estimate)"); one spelling per name, case-insensitively, for StationName, Participant and TechnologyType (VertiPaq stores text case-insensitively). A new column or a changed rule reaches the existing rows with a `rebuild=dim_duid` |
 | fct_scada, fct_price | landing | incremental insert-only merge (by file) |
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
