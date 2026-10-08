@@ -1,0 +1,20 @@
+{
+  "name": "dax-sql",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A DAX to SQL compiler for Tabular (TMSL) semantic models, with DAX semantics; tested on DuckDB",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "@duckdb/node-api": "^1.5.6-r.1"
+  }
+}

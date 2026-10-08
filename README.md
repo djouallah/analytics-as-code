@@ -17,8 +17,9 @@ market (AEMO).
   - a **Power BI report** ([`dashboard/powerbi_report/`](dashboard/powerbi_report/)), on
     the same model, run by VertiPaq over the Iceberg tables (Direct Lake).
   - a second Fabric app, the page with VertiPaq as its engine and no copy of the data, is
-    not built: Fabric apps (preview) are not available in Australia Southeast, the region
-    of the model's capacity ([`dashboard/fabric_app_vertipaq/`](dashboard/fabric_app_vertipaq/)).
+    not deployed or tested in a browser: Fabric apps (preview) are not available in
+    Australia Southeast, the region of the model's capacity
+    ([`dashboard/fabric_app_vertipaq/`](dashboard/fabric_app_vertipaq/)).
 - **One page, two ways of asking** ([`dashboard/github/`](dashboard/github/)): `common/` is
   the page (the charts, the data files, the Logs tab), and only what it asks with differs.
   - [`dax/`](dashboard/github/dax/) asks the semantic model: a chart names the model's
@@ -29,10 +30,13 @@ market (AEMO).
     figure is written out where a chart uses it, as a team would build the page in
     practice. Served at [nemtracker.github.io/sql](https://nemtracker.github.io/sql/). Its
     rows are checked against the DAX page's, question by question.
-- **The compiler** is what lets the page read a Power BI model without Power BI: it turns
-  the model's relationships into DuckDB views and the page's queries into DAX, then SQL.
-  **It is not a general-purpose DAX compiler.** It was written for this repository only: it
-  knows this model and the constructs this page uses, and fails on anything else. It is
-  here to show where that layer sits.
+- **[`compiler.js`](dashboard/github/dax/semantic/compiler.js)** is what lets the page read a
+  Power BI model without Power BI: it turns the model into DuckDB views and the page's DAX
+  queries into SQL. **It is not a general-purpose DAX compiler.** It was written for this
+  repository only: it knows this model and the constructs this page uses, and fails on
+  anything else. It is here to show where that layer sits.
+- **[`packages/dax-sql`](packages/dax-sql/)** is the general-purpose one: any Tabular model,
+  DAX's filter context, context transition and relationships, compiled to SQL (tested on
+  DuckDB). The page does not use it; its queries are part of its tests.
 
 Details: [doc/ARCHITECTURE.md](doc/ARCHITECTURE.md)
