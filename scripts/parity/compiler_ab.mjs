@@ -15,7 +15,7 @@
 // deployed model: no capacity.
 // =============================================================================
 
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -26,8 +26,9 @@ const [dataDir, other, outDir] = process.argv.slice(2);
 if (!dataDir || !other) { console.error('usage: node compiler_ab.mjs <data dir> <other checkout>'); process.exit(2); }
 const HERE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-// A side: its page staged from its checkout, its compiler over its own engine. compiler.js
-// fetches model.bim next to itself: each side gets its own checkout's.
+// A side: its page staged from its checkout, its compiler over its own engine. The page's
+// semantic/query.js (compiler.js before 2026-10-08) fetches model.bim next to itself: each
+// side gets its own checkout's.
 async function side(root) {
   const bim = JSON.parse(readFileSync(path.join(root, 'semantic_model/model.bim'), 'utf8'));
   globalThis.fetch = async url => {
@@ -38,7 +39,7 @@ async function side(root) {
   await stagePage('dax', dir, root);
   const load = p => import(pathToFileURL(path.join(dir, p)));
   const [{ withViews }, { createModel }, { createQueries }] = await Promise.all(
-    [load('storage/views.js'), load('semantic/compiler.js'), load('frontend/queries.js')]);
+    [load('storage/views.js'), load(['semantic/query.js', 'semantic/compiler.js'].find(p => existsSync(path.join(dir, p)))), load('frontend/queries.js')]);
   const { run, source } = await engine(dataDir);
   await run('SET threads = 1');
   const model = createModel(withViews(source));

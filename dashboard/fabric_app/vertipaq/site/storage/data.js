@@ -3,7 +3,7 @@
 // =============================================================================
 // The VertiPaq backend of the Fabric app. The page's queries go to the semantic model `nem`
 // (semantic_model/, deployed by deploy_model.yml) as the DAX the compiler writes for them
-// (`engine: 'dax'`: ../semantic/compiler.js stops at toDax), and Power BI runs it: the engine
+// (`engine: 'dax'`: ../semantic/query.js stops at toDax), and Power BI runs it: the engine
 // is VertiPaq, in Direct Lake over the `mart` tables. Nothing is downloaded or attached, and
 // there is no SQL on this host: no DuckDB, no data files.
 //

@@ -3,9 +3,9 @@
 // questions are built from
 // =============================================================================
 // A query names the model's fields (semantic_model/model.bim): a column as 'table.column',
-// a measure by its name, and says how to group, filter and order them, in the words the
-// compiler knows (semantic/compiler.js lists them). The compiler turns it into what the
-// engine runs. A query holds no expression of its own, and the page works no figure out of
+// a measure by its name, and says how to group, filter and order them, in the words
+// semantic/query.js knows (it lists them). It writes the query as DAX, and the compiler
+// (packages/dax-sql) the DAX as what the engine runs. A query holds no expression of its own, and the page works no figure out of
 // what comes back: a figure is a measure of the model, a total is a `totals` row, a group is
 // a column of the model, an order is an `orderBy`. The page draws the rows. A word a query
 // does not have is the owner's to add, not the page's.
@@ -33,10 +33,10 @@
 // intraday(), region(), fuel(), picked() (the units picked), newestDate(), shiftDate(date, n),
 // and the names UNKNOWN and ROOFTOP.
 // connect(data) is what runs these queries: the data source (../storage/data.js) wrapped by
-// the compiler, which turns a query into DAX and the DAX into SQL over the data's views.
+// semantic/query.js, which turns a query into DAX and the DAX into SQL over the data's views.
 // =============================================================================
 
-export { createModel as connect } from '../semantic/compiler.js';
+export { createModel as connect } from '../semantic/query.js';
 
 export function createQueries(page) {
   const { UNKNOWN, ROOFTOP, shiftDate } = page;

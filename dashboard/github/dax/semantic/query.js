@@ -1,12 +1,13 @@
 // =============================================================================
-// compiler.js — the page's queries as DAX over the semantic model (model.bim), and the DAX
-// as SQL over the data source's views
+// query.js — the page's queries as DAX over the semantic model (model.bim), and the DAX
+// as SQL over the data source's views (packages/dax-sql, the compiler)
 // =============================================================================
 // The layers of the dashboard, and what stands in each place in a real product:
 //   consumer        index.html                 the BI tool
 //   query language  DAX                        DAX, MDX, VizQL, Malloy, a metrics request
 //   semantic model  model.bim (TMSL)           a Tabular model, LookML, MetricFlow YAML
-//   compiler        this file and dax-sql      Power BI's query service and formula engine,
+//   query           this file                  a report visual writing its query
+//   compiler        packages/dax-sql           Power BI's query service and formula engine,
 //                                              MetricFlow, Cube
 //   engine          DuckDB-WASM                the warehouse, VertiPaq, Hyper
 //   storage         ../storage/data.js         the lakehouse or warehouse connection

@@ -31,7 +31,8 @@ const [dataDir, out, other] = process.argv.slice(2);
 if (!dataDir || !out) { console.error('usage: node page_queries.mjs <data dir> <out.json> [root]'); process.exit(2); }
 const ROOT = other ? path.resolve(other) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-// compiler.js fetches model.bim from next to itself, where the builds copy it.
+// semantic/query.js (compiler.js before 2026-10-08) fetches model.bim from next to itself,
+// where the builds copy it.
 const bim = JSON.parse(readFileSync(path.join(ROOT, 'semantic_model/model.bim'), 'utf8'));
 globalThis.fetch = async url => {
   if (!String(url).includes('model.bim')) throw new Error(`no fetch here: ${url}`);
@@ -43,7 +44,7 @@ globalThis.fetch = async url => {
 const PAGE = existsSync(path.join(ROOT, 'dashboard/github/dax'))
   ? await (async dir => { await stagePage('dax', dir, ROOT); return dir; })(mkdtempSync(path.join(tmpdir(), 'page-')))
   : ['dashboard/github-dax', 'dashboard/github'].map(d => path.join(ROOT, d)).find(d => existsSync(d));
-const { createModel } = await import(pathToFileURL(path.join(PAGE, 'semantic/compiler.js')));
+const { createModel } = await import(pathToFileURL(path.join(PAGE, ['semantic/query.js', 'semantic/compiler.js'].find(p => existsSync(path.join(PAGE, p))))));
 const { createQueries } = await import(pathToFileURL(path.join(PAGE, 'frontend/queries.js')));
 // The tables' views are the data source's since 2026-10-08 (storage/views.js, which data.js
 // wraps itself in); before, the compiler built them.

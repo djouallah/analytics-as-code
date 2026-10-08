@@ -197,7 +197,7 @@ whole stack in one workspace"). Each backend is a Rayfin project of its own, nam
 engine.
 **`dashboard/github/` is one page and two ways of asking:**
 `common/` (`index.html`, `frontend/` draw.js, logs.js, perflog.js, `storage/`, `dag/`), `dax/`
-(`frontend/queries.js` and `semantic/compiler.js`: the page through the semantic model) and
+(`frontend/queries.js` and `semantic/query.js`: the page through the semantic model) and
 `sql/` (`frontend/queries.js`: the page in plain SQL, with no semantic layer, each member one
 SELECT over the views, its figures written in SQL: how a team would build the page in
 practice). A page is `common/` with one of the two copied over it
@@ -218,8 +218,8 @@ on both except `storage/data.js`.
 - query language: the page's queries, objects of the model's fields (`select`, `where`, ...),
   which the compiler writes as DAX
 - semantic model: `semantic_model/model.bim` (at the top of the repo), a Tabular model in TMSL
-- compiler: `semantic/compiler.js`, the model's relationships to views, the page's queries to
-  DAX and the DAX to SQL
+- query: `semantic/query.js`, the page's queries to DAX (`toDax`)
+- compiler: `packages/dax-sql` (staged as `semantic/dax-sql/`), the DAX to SQL
 - engine: DuckDB-WASM
 - storage: `storage/data.js`, `storage/history.js`, `storage/views.js` (a view per table)
 - and the Logs tab, `frontend/`
@@ -230,7 +230,7 @@ on both except `storage/data.js`.
 
 **It is a proof of concept; the point is that the layers are there, in the formats of a
 real product.** The compiler is two steps, as in Power BI: the page's query becomes DAX
-(`toDax`, in `compiler.js`, which knows the page's words and nothing of SQL), and the DAX
+(`toDax`, in `semantic/query.js`, which knows the page's words and nothing of SQL), and the DAX
 becomes SQL in `packages/dax-sql`, a general DAX compiler: any Tabular model, DAX's filter
 context, context transition, relationships and blanks (see its README and DESIGN.md). Its
 rows are DAX's: `SUMMARIZECOLUMNS` leaves out a group whose measures are all blank, `TOPN`
@@ -249,7 +249,7 @@ the model's fields, and these words only:
 `{ min | max: column }`, a key's first or last value), `where` (conditions on columns:
 `= <> < <= > >= between in notIn blank notBlank`, and `{ any: [...] }`; a value is a string,
 a number, true or false, or a date), `having` (on a value of the select), `totals` (a
-subtotal over some of the select's columns), `orderBy` and `top`. `toDax` in `compiler.js`
+subtotal over some of the select's columns), `orderBy` and `top`. `toDax` in `query.js`
 writes its DAX, checking each column and measure against `model.bim`, and `query()` refuses
 DAX text. What DAX needs that a query does not say is the compiler's to add: a query of a
 dimension's columns alone leaves out the blank row DAX gives a dimension whose key a fact
@@ -336,8 +336,8 @@ finds `data/` from the page's URL. **The repo tree is not the served tree**: a p
 or imports the page stages it first: the site (`build.yml`, `import_data.yml`), the Fabric
 app's build, the parity scripts. To serve it from a laptop, stage the site into a folder
 (`node scripts/stage_pages.mjs <dir> <build>`) and put a copy of `data/` next to it. A relative
-import is of the staged tree (`dax/semantic/compiler.js` imports `../storage/views.js`, which
-is `common/`'s).
+import is of the staged tree (`dax/semantic/query.js` imports `./dax-sql/index.js`, which
+`stagePage` copies there from `packages/dax-sql/src`).
 - `dashboard/github/common/index.html` is the page: the charts, which draw what
   `dashboard/github/dax/frontend/queries.js` asks: every query the charts send, by tab and chart
   (`createQueries(page)`, over the page's state passed in as functions; the renderers only
@@ -373,18 +373,17 @@ is `common/`'s).
   otherwise. `.platform` and `definition.pbism` next to it make the folder a Fabric item.
   It is JSON, so a browser reads it with no library: there are no comments, so the why goes
   in a `description`, and a long expression is an array of lines.
-- `dashboard/github/common/storage/views.js` (`withViews(data, items)`, which every `data.js`
+- `dashboard/github/common/storage/views.js` (`withViews(data)`, which every `data.js`
   returns itself wrapped in) is the tables as views: a view `v_<table>` per table attached,
   over the files (the table whole in `dim` or `agg`, or split by date over `today` and the
   half-years: `today` has the days it holds, cut at a literal date; the files are stacked by
   column name, so one built before a column was added reads as NULL in it). It creates them
   after every attach: one query reads what is attached from the engine's catalog
   (`information_schema`), and one runs the statements that are new or changed. It adds
-  `views`, `has`, `needs` and `requires` to the data source: `needs(sql)` says what a SQL
+  `views`, `has` and `needs` to the data source: `needs(sql)` says what a SQL
   query reads; `ensureHistory` attaches nothing for a range that starts inside the days
-  `today` holds, so the default view fetches no history. A layer above wraps it again with
-  views of its own over these (`items`: relationships, a fact with its dimensions).
-- `dashboard/github/dax/semantic/compiler.js` (`createModel(dataSource)`: the data source's
+  `today` holds, so the default view fetches no history.
+- `dashboard/github/dax/semantic/query.js` (`createModel(dataSource)`: the data source's
   members, `toDax` and `toSQL`): `toDax(query)` writes the page's query as DAX, checking each
   column and measure against `model.bim`; `toSQL(dax)` is `packages/dax-sql`'s compile of it
   over the data source's `v_<table>` views (staged next to the compiler as `semantic/dax-sql/`
@@ -468,7 +467,7 @@ rather than round them:
   link's small chart in its row; the History calendar lays its years out to fill the card; a
   tab's notes are an (i) popover. A new chart goes into a cell of that grid, not under it.
 
-**Checking a change to `model.bim`, `compiler.js`, a `data.js` or the page:** in headless
+**Checking a change to `model.bim`, `packages/dax-sql`, `query.js`, a `data.js` or the page:** in headless
 Chrome, the page before against the page after on one copy of the deployed files, through
 the same page states; compare what each chart draws (its ECharts series) and the SQL that
 ran (the Logs tab has it, translated), read `EXPLAIN` for a join that was not there, and
@@ -529,7 +528,7 @@ signs a read-only SAS on the data folder so that the browser never holds a stora
 `dax/` and `semantic_model/model.bim`) and the dbt docs, with `fabric_app/common/site/`
 (`storage/auth.js`) and then the project's own `site/` copied over them (here
 `storage/data.js` and `storage/sas.js`), and `?v=<build>` added to every relative import;
-`compiler.js` passes its own on to `model.bim`. The project is the working directory of
+`query.js` passes its own on to `model.bim`. The project is the working directory of
 `build.mjs` (`npm run build:fabric` in it).
 
 **It is deployed from the owner's laptop**, under their own login:

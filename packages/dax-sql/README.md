@@ -5,7 +5,7 @@ and Analysis Services use) and turns DAX queries over it into one SQL query each
 semantics: filter context, context transition, relationships, blanks. Tested on DuckDB, with a
 dialect layer for other engines.
 
-It is the general-purpose counterpart of `dashboard/github/dax/semantic/compiler.js`, which knows
+It replaced the fixed cases of the page's former `dashboard/github/dax/semantic/compiler.js`, which knew
 this repository's model and page only. That one stays as it is; the page does not use this
 package. The page's queries are part of this package's tests.
 

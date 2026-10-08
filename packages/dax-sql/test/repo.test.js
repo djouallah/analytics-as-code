@@ -2,7 +2,7 @@
 //   - every measure of model.bim, compiled and run in five filter contexts;
 //   - some of them checked against SQL written by hand;
 //   - every query the page sends, in six page states, through the page's compiler
-//     (dashboard/github/dax/semantic/compiler.js: its DAX, and this package's SQL with the
+//     (dashboard/github/dax/semantic/query.js: its DAX, and this package's SQL with the
 //     page's options), runs.
 // All on made-up data in the model's shape (fixtures/nem.js). The page's rows are checked on
 // the deployed files, against the SQL page and the compiler before (scripts/parity, build.yml).
@@ -21,7 +21,7 @@ import { stagePage } from '../../../scripts/stage_pages.mjs';
 
 const root = process.env.DAX_SQL_REPO ? new URL(`file://${process.env.DAX_SQL_REPO.replace(/\/?$/, '/')}`) : new URL('../../../', import.meta.url);
 const path = p => new URL(p, root);
-const present = ['semantic_model/model.bim', 'dashboard/github/common/index.html', 'dashboard/github/dax/semantic/compiler.js'].every(p => fs.existsSync(path(p)));
+const present = ['semantic_model/model.bim', 'dashboard/github/common/index.html', 'dashboard/github/dax/semantic/query.js'].every(p => fs.existsSync(path(p)));
 const skip = present ? false : 'the repository files are not here';
 
 let con, dax, page, bim, staged, createQueries;
@@ -32,12 +32,12 @@ before(async () => {
   staged = fs.mkdtempSync(join(tmpdir(), 'dax-sql-page-'));
   await stagePage('dax', staged, fileURLToPath(root));
   fs.writeFileSync(join(staged, 'package.json'), '{"type":"module"}\n');
-  // compiler.js fetches model.bim next to itself when it loads.
+  // query.js fetches model.bim next to itself when it loads.
   const fetch = globalThis.fetch;
   globalThis.fetch = async () => ({ json: async () => JSON.parse(bimText) });
   try {
     ({ createQueries } = await import(pathToFileURL(join(staged, 'frontend/queries.js')).href));
-    page = await import(pathToFileURL(join(staged, 'semantic/compiler.js')).href);
+    page = await import(pathToFileURL(join(staged, 'semantic/query.js')).href);
   } finally { globalThis.fetch = fetch; }
   const db = await DuckDBInstance.create(':memory:');
   con = await db.connect();

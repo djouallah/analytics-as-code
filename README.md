@@ -23,7 +23,7 @@ market (AEMO).
 - **One page, two ways of asking** ([`dashboard/github/`](dashboard/github/)): `common/` is
   the page (the charts, the data files, the Logs tab), and only what it asks with differs.
   - [`dax/`](dashboard/github/dax/) asks the semantic model: a chart names the model's
-    columns and measures, and [`compiler.js`](dashboard/github/dax/semantic/compiler.js)
+    columns and measures, and [`query.js`](dashboard/github/dax/semantic/query.js)
     writes that as DAX, and the DAX as SQL. Served at
     [nemtracker.github.io](https://nemtracker.github.io/).
   - [`sql/`](dashboard/github/sql/) asks DuckDB in plain SQL, with no semantic model: each
@@ -31,7 +31,7 @@ market (AEMO).
     practice. Served at [nemtracker.github.io/sql](https://nemtracker.github.io/sql/). Its
     rows are checked against the DAX page's, question by question.
 - **The compiler** is what lets the page read a Power BI model without Power BI: the page's
-  queries become DAX ([`compiler.js`](dashboard/github/dax/semantic/compiler.js)), and the
+  queries become DAX ([`query.js`](dashboard/github/dax/semantic/query.js)), and the
   DAX becomes SQL in [`packages/dax-sql`](packages/dax-sql/), a general-purpose DAX
   compiler (by N.S. Devaraj): any Tabular model, DAX's filter context, context transition
   and relationships, with nothing written for this model or this page. Its SQL is checked

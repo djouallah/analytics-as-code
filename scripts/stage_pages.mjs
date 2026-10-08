@@ -1,9 +1,9 @@
 // Stages the page. dashboard/github/ holds it as one page and two ways of asking:
 //   common/  index.html, frontend/ (draw, logs, perflog), storage/ (data, history, views), dag/
-//   dax/     frontend/queries.js and semantic/compiler.js: the page through the semantic model
+//   dax/     frontend/queries.js and semantic/query.js: the page through the semantic model
 //   sql/     frontend/queries.js: the page in plain SQL
 // A page is common/ with one of the two copied over it (dax also gets semantic_model/model.bim
-// and packages/dax-sql/src, as semantic/dax-sql/, next to its compiler). The repo tree is not the served tree: everything that serves or
+// and packages/dax-sql/src, as semantic/dax-sql/, next to semantic/query.js). The repo tree is not the served tree: everything that serves or
 // imports the page stages it first, with stagePage (the site, the Fabric app's build, the
 // parity scripts).
 //   node scripts/stage_pages.mjs <dir> <build>

@@ -89,7 +89,7 @@ on purpose: the point is the layers, not their maturity.
 | Consumer | `dashboard/github/common/index.html` | the BI tool |
 | Query language | a query of the model's fields (`frontend/queries.js`), which the compiler writes as DAX | DAX, MDX, VizQL, Malloy, a metrics request |
 | Semantic model | `semantic_model/model.bim`, a Tabular model in TMSL | a Tabular model (TMSL, TMDL), LookML, MetricFlow YAML |
-| Compiler | `dashboard/github/dax/semantic/compiler.js` | MetricFlow, Cube's schema compiler, Malloy's compiler, Looker's SQL generator, Power BI's formula engine, Tableau's VizQL |
+| Compiler | `packages/dax-sql` | MetricFlow, Cube's schema compiler, Malloy's compiler, Looker's SQL generator, Power BI's formula engine, Tableau's VizQL |
 | Engine | DuckDB-WASM | the warehouse, VertiPaq, Hyper |
 | Storage | `dashboard/github/common/storage/` | the lakehouse or warehouse connection |
 
@@ -250,7 +250,7 @@ The Fabric app has limits of its own:
 No open-source language and runtime has DAX's semantics, so SQL with WHERE parameters is
 always the shortest path for an AI writing a client: each chart is correct on its own, and
 what is lost is one definition across clients. Five additions would make the right path the
-easy one, each replacing a part of `compiler.js`:
+easy one, each replacing work the compiler does:
 
 1. **Measures in the catalog:** `CREATE MEASURE fct_summary.capacity_factor AS ...`,
    called by name, evaluated in the query's context. *Replaces:* inlining.
