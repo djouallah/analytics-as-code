@@ -13,19 +13,26 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from compact_iceberg import connect  # noqa: E402
+from compact_iceberg import ENDPOINT, TOKEN, WAREHOUSE, connect  # noqa: E402
 
 TABLE = "catalog.landing.zz_gc_trial"
 
 
 def main(step):
     con = connect()
+    # Attached again with profiles.yml's create options: without them this catalog
+    # answers BadRequest 400 to a CREATE TABLE, CTAS included.
+    con.execute("DETACH catalog")
+    con.execute(
+        f"ATTACH '{WAREHOUSE}' AS catalog "
+        f"(TYPE iceberg, ENDPOINT '{ENDPOINT}', TOKEN '{TOKEN}', "
+        f"ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES 0, "
+        f"SKIP_CREATE_TABLE_METADATA_UPDATES 1)"
+    )
     if step == "setup":
         con.execute(f"DROP TABLE IF EXISTS {TABLE}")
-        # A CTAS, as dbt creates the pipeline's tables: an empty CREATE TABLE is answered
-        # BadRequest 400 by this catalog.
-        con.execute(f"CREATE TABLE {TABLE} AS SELECT 0 AS id, 'row 0' AS v")
-        for i in range(1, 3):
+        con.execute(f"CREATE TABLE {TABLE} (id INTEGER, v VARCHAR)")
+        for i in range(3):
             con.execute(f"INSERT INTO {TABLE} VALUES ({i}, 'row {i}')")
         print(con.execute(
             f"SELECT rewritten_data_files, added_data_files FROM "
