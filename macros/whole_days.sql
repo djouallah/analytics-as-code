@@ -16,9 +16,7 @@
          oldest one the table holds, newest first, until it reaches the oldest the source
          has. The refill is contiguous downward, so MIN(date) is the frontier.
      A day that never reaches 288 intervals in fct_scada is passed over once a later day is
-     written; before, it was retried every run and never written either. fct_scada's oldest
-     date (2018-03-06) is one: the refill stops at the day after it, so a table that reached
-     it sends no query (until 2026-10-08 that day was asked for every hour, 15 s each).
+     written; before, it was retried every run and never written either.
      `floor` is a date below which no day is taken (fct_summary_daily: the oldest day
      fct_summary holds, which it fills newest first). --#}
 
@@ -29,8 +27,7 @@
   {%- set this_min, this_max = date_bounds(this, 'date') if is_incremental() else (none, none) -%}
   {%- set ranges = [] -%}
   {%- if scada_max -%}
-    {#- fct_scada's oldest date is never whole either: its first next-day file starts at 04:05. #}
-    {%- set oldest = scada_min + day if floor is none or floor < scada_min + day else floor -%}
+    {%- set oldest = scada_min if floor is none or floor < scada_min else floor -%}
     {%- if this_max -%}
       {%- do ranges.append((this_max + day, scada_max)) -%}
       {%- if this_min and this_min > oldest -%}
