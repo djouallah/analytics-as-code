@@ -555,9 +555,22 @@ export class Emitter {
       this.fusions.push(fusion);
       let sql;
       try { sql = this.scalar({ ...x, shared: false }, new Map()); } finally { this.fusions.pop(); this.inCte = false; }
+      const mark = this.ctes.length;
       const groups = fusion.finish();
       const from = groups.length ? ` FROM ${groups.map(g => g.alias).join(' CROSS JOIN ')}` : '';
-      this.ctes.push(`${name} AS ${this.d.materialized}(SELECT ${sql} AS v${from})`);
+      const body = `(SELECT ${sql} AS v${from})`;
+      // The same value (its CTEs and its SELECT, up to their names) named again elsewhere in
+      // the query, through another measure: the CTE already written.
+      const own = new Map(groups.map((g, i) => [g.alias, `g${i}`]));
+      const key = `shared|${canonical(renameAliases([...this.ctes.slice(mark), body].join('; '), own))}`;
+      const same = this.memo.get(key);
+      if (same) {
+        this.ctes.length = mark;
+        name = same;
+      } else {
+        this.ctes.push(`${name} AS ${this.d.materialized}${body}`);
+        this.memo.set(key, name);
+      }
       this.memo.set(x, name);
     }
     return `(SELECT v FROM ${name})`;
