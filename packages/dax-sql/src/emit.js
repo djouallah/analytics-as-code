@@ -849,17 +849,23 @@ class Fusion {
     let g = this.groups.find(x => x.sig === sig), rename = s => s, conds = null, parts = null;
     if (!g && !keyList.length && !readsKeys && em.d.aggFilter) {
       // An aggregate over the whole of another scan of the same tables (no keys: one row
-      // each) is that scan's, over the rows its own conditions keep: one scan for both. Its
+      // each) is that scan's, over the rows its own conditions on the joined tables keep:
+      // one scan for both. Its
       // SQL is written first, on its own scan, since that can join a table to it.
       parts = em.isolated(() => em.aggParts(x, withRow(new Map(), x.row, block.res)));
       const into = `${S.table.name}|${state.key}`;
       const from = b => [b.from, ...b.joins].join(' ');
       const same = this.groups.find(x => x.merge === into && canonical(from(x.block)) === canonical(from(block)));
       const map = same && aliasMap(from(block), from(same.block));
-      if (map) {
+      // Only conditions on joined tables may differ: a condition on the scanned table's own
+      // columns is what lets the engine skip its rows, so the scans must agree on those.
+      const base = same && / AS (\w+)$/.exec(same.block.from)?.[1];
+      const own = cs => cs.filter(c => c.split(/('(?:[^']|'')*')/).some((part, i) => i % 2 === 0 && part.includes(`${base}.`))).sort().join(' AND ');
+      const mapped = map && block.where.map(s => renameAliases(s, map));
+      if (map && base && own(mapped) === own(same.aggs[0].conds)) {
         g = same;
         rename = s => renameAliases(s, map);
-        conds = block.where.map(rename);
+        conds = mapped;
       }
     }
     if (!g) {
