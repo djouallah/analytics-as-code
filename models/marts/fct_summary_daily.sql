@@ -33,6 +33,9 @@
 {%- set backfill_rooftop = var('backfill_rooftop', false) and is_incremental() %}
 {%- set this_min, this_max = date_bounds(this, 'date') if backfill_rooftop else (none, none) %}
 
+{% if is_incremental() and not backfill_rooftop and not has_whole_days(ranges) %}
+{{ nothing_to_do() }}
+{% else %}
 WITH
 days AS (
   {{ whole_days(ranges) }}
@@ -55,3 +58,4 @@ WHERE ({{ date_ranges_sql(ranges, 's.date') }}
   OR (starts_with(s.DUID, 'ROOFTOP_') AND s.date <= DATE '{{ this_max }}')
   {%- endif %}
 GROUP BY s.DUID, s.date
+{% endif %}

@@ -19,6 +19,10 @@
     tags=['powerbi']
 ) }}
 
+{%- set to_write, held_min, held_max = pending_months() %}
+{% if not to_write and not var('backfill_rooftop', false) %}
+{{ nothing_to_do() }}
+{% else %}
 WITH
 months AS (
   SELECT month, month + INTERVAL 1 MONTH AS next_month
@@ -61,3 +65,4 @@ WHERE s.mw > 0
   AND starts_with(s.DUID, 'ROOFTOP_')
 GROUP BY s.DUID, m.month, CAST(s.time // 100 AS INT)
 {%- endif %}
+{% endif %}

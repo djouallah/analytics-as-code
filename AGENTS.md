@@ -842,7 +842,10 @@ never been probed either.
 - Pre-hooks set DuckDB VARIABLEs with the file paths to process, read from the log table
 - **Nothing to write, nothing sent.** A model that knows at compile time it has nothing to
   do (a landing fact with no new file, `dim_duid` with no new unit, `processed_files` on
-  every incremental run) renders `{{ nothing_to_do() }}`, and the incremental
+  every incremental run, `fct_summary_daily`/`fct_curtailment` with no whole day in their
+  range (`has_whole_days`), `fct_region_daily` with no whole day missing in its week,
+  `dim_month` and the two hourly tables with no month missing (`pending_months`, from the
+  manifests)) renders `{{ nothing_to_do() }}`, and the incremental
   materialization (`macros/nothing_to_do.sql`) returns before any statement: no pre-hook,
   BEGIN, temp table, MERGE, post-hook or COMMIT. The materialization is dbt-duckdb 1.11.0's,
   copied with one block added (a wrapper cannot run the Python model: dbt checks the macro

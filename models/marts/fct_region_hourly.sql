@@ -4,7 +4,9 @@
 -- its months weighted by it. hour is time // 100.
 --
 -- The same months as fct_summary_hourly: the whole ones (dim_month). Insert-only merge on
--- the grain; rebuild=fct_region_hourly resets it. Small, so every run recomputes all of it.
+-- the grain; rebuild=fct_region_hourly resets it. An incremental run reads only the months
+-- dim_month has and this table does not (macros/date_bounds.sql pending_months, from the
+-- manifests), as literals, so the scan of fct_region prunes; none missing, nothing is sent.
 {{ config(
     materialized='incremental',
     incremental_strategy='merge',
@@ -14,6 +16,11 @@
     tags=['powerbi']
 ) }}
 
+{%- set to_write, held_min, held_max = pending_months() %}
+{%- set held_next = (held_max + modules.datetime.timedelta(days=32)).replace(day=1) if held_max else none %}
+{% if not to_write %}
+{{ nothing_to_do() }}
+{% else %}
 SELECT
   r.REGIONID,
   m.month,
@@ -22,4 +29,9 @@ SELECT
   CAST(COUNT(*) AS INT) AS intervals
 FROM {{ ref('fct_region') }} r
 JOIN {{ ref('dim_month') }} m ON r.date >= m.month AND r.date < m.month + INTERVAL 1 MONTH
+{%- if held_max %}
+WHERE (m.month > DATE '{{ held_max }}' OR m.month < DATE '{{ held_min }}')
+  AND (r.date >= DATE '{{ held_next }}' OR r.date < DATE '{{ held_min }}')
+{%- endif %}
 GROUP BY r.REGIONID, m.month, CAST(r.time // 100 AS INT)
+{% endif %}

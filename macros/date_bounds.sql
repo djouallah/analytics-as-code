@@ -70,3 +70,24 @@
   {%- endfor -%}
   {{ return(parts | join(', ') if parts else 'nothing') }}
 {%- endmacro %}
+
+{#-- The months of dim_month an hour-of-day table (fct_summary_hourly, fct_region_hourly)
+     does not hold yet, from the manifests: (to_write, this_min, this_max). Both hold a
+     contiguous run of dim_month's months (dim_month is the whole months, contiguous, and the
+     tables are filled from it), so a month is missing exactly when dim_month reaches above
+     this_max or below this_min. Nothing missing: the model renders nothing_to_do(). A first
+     build, or outside a run: (true, none, none). --#}
+{% macro pending_months() -%}
+  {%- if not is_incremental() -%}
+    {{ return((true, none, none)) }}
+  {%- endif -%}
+  {%- set dim_min, dim_max = date_bounds(ref('dim_month'), 'month') -%}
+  {%- set this_min, this_max = date_bounds(this, 'month') -%}
+  {%- if not (dim_min and dim_max and this_min and this_max) -%}
+    {{ return((true, none, none)) }}
+  {%- endif -%}
+  {%- set to_write = dim_max > this_max or dim_min < this_min -%}
+  {%- do log(this.identifier ~ ": dim_month " ~ dim_min ~ " .. " ~ dim_max ~ ", this " ~ this_min ~ " .. " ~ this_max
+             ~ "; " ~ ("months to write" if to_write else "nothing to write"), info=True) -%}
+  {{ return((to_write, this_min, this_max)) }}
+{%- endmacro %}

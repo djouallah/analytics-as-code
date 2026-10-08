@@ -57,3 +57,20 @@
   GROUP BY DATE
   HAVING COUNT(DISTINCT SETTLEMENTDATE) = 288
 {%- endmacro %}
+
+{#-- Whether the ranges hold a whole day yet: false when there are none, or none of their days
+     has its 288 intervals in fct_scada yet. A model with no whole day has nothing to write
+     and renders nothing_to_do() (macros/nothing_to_do.sql). The query is whole_days()
+     itself, on literal ranges, so it prunes like the model's own scan. True outside a run
+     (compile, docs), so the model's SQL is shown whole. --#}
+{% macro has_whole_days(ranges) -%}
+  {%- if not execute or flags.WHICH not in ('run', 'build', 'retry') -%}
+    {{ return(true) }}
+  {%- endif -%}
+  {%- if ranges | length == 0 -%}
+    {{ return(false) }}
+  {%- endif -%}
+  {%- set n = run_query("SELECT COUNT(*) FROM (" ~ whole_days(ranges) ~ ")").rows[0][0] -%}
+  {%- do log(this.identifier ~ ": " ~ n ~ " whole day(s) to write", info=True) -%}
+  {{ return(n > 0) }}
+{%- endmacro %}

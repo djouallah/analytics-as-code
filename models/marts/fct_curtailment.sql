@@ -28,6 +28,9 @@
 
 {%- set ranges = pending_day_ranges() %}
 
+{% if is_incremental() and not has_whole_days(ranges) %}
+{{ nothing_to_do() }}
+{% else %}
 WITH
 days AS (
   {{ whole_days(ranges) }}
@@ -50,3 +53,4 @@ SELECT
 FROM intervals
 GROUP BY DUID, date
 HAVING SUM(available) > 0
+{% endif %}
