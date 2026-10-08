@@ -229,16 +229,18 @@ on both except `storage/data.js`.
 `frontend/queries.js`, not `index.html`.
 
 **It is a proof of concept; the point is that the layers are there, in the formats of a
-real product.** The compiler is not a DAX engine. It knows the constructs the
-page uses and throws on anything else (`DAX: X is not supported`), and where DAX and SQL
-differ the result is SQL's: a blank is a NULL, and there is no filter context (a filter is a
-boolean argument of `CALCULATETABLE` or `CALCULATE`). Its rows are DAX's:
-`SUMMARIZECOLUMNS` leaves out a group whose measures are all blank (a `HAVING`), and `TOPN`
-is descending unless `ASC` and keeps the rows tied with the n-th (`QUALIFY RANK()`). Don't
-grow it into a general engine. Of the rules a query compiler applies on its own, it
-applies one, when a join is needed (below). Which table a measure reads is the model's rule,
-which the compiler answers from the query; which grain a date range gets, and MW to MWh, are
-the page's.
+real product.** The compiler is two steps, as in Power BI: the page's query becomes DAX
+(`toDax`, in `compiler.js`, which knows the page's words and nothing of SQL), and the DAX
+becomes SQL in `packages/dax-sql`, a general DAX compiler: any Tabular model, DAX's filter
+context, context transition, relationships and blanks (see its README and DESIGN.md). Its
+rows are DAX's: `SUMMARIZECOLUMNS` leaves out a group whose measures are all blank, `TOPN`
+keeps the rows tied with the n-th, an ascending `ORDER BY` puts blanks first. **dax-sql
+knows nothing of this model, this page or this data**: no case for a measure, a table or a
+query, and nothing it assumes of the data that the model does not declare
+(`relyOnReferentialIntegrity`, or the page's `assumeIntegrity`). A change there is a
+general rewrite, checked by its own tests and by the page's (below), never a case for a
+query. Which table a measure reads is the model's rule, which DAX answers from the query;
+which grain a date range gets, and MW to MWh, are the page's.
 **The page knows no DAX.** An agent must not be able to write arbitrary DAX, inline
 calculations and the like into the page; a query asks the way a report visual does, and
 `grep -i dax` finds nothing in `index.html` or `frontend/queries.js`. A query is an object of
@@ -305,7 +307,6 @@ its `orderBy` asks. A measure changed in the model that the SQL page does not fo
 there. With an output file it writes the shape `parity_model.py` reads, the DAX next to the
 SQL page's rows, to ask the model directly.
 Rules these checks hold the page and the model to:
-- A query of a fact and two of its dimensions reads `<fact>_star`.
 - A count of no rows is blank, as in DAX, not 0.
 - `dim_duid` has one spelling per name (VertiPaq compares text case-insensitively, DuckDB
   does not).
@@ -383,75 +384,20 @@ is `common/`'s).
   query reads; `ensureHistory` attaches nothing for a range that starts inside the days
   `today` holds, so the default view fetches no history. A layer above wraps it again with
   views of its own over these (`items`: relationships, a fact with its dimensions).
-- `dashboard/github/dax/semantic/compiler.js` has two parts (`createModel(dataSource)`: the
-  data source's members, its views plus the model's, `toDax` and `toSQL`). **It is a toy on
-  purpose**: an example of where that layer of the stack sits, not a DAX engine. It
-  translates what this page asks, by fixed cases; it does not plan, and a construct it cannot
-  translate gets its equivalent SQL written here, never a general mechanism.
-  The model: the data source's `v_<table>` (a table of the model is the lakehouse table of
-  its own name), and a view per relationship under its name (`fct_summary_to_dim_duid`: the
-  fact LEFT JOIN the dimension) and per fact with two of its dimensions, created by
-  `withViews` over them.
-  The queries: `toDax(query)` writes the page's query as DAX, and `toSQL(dax)` turns that
-  into one SELECT over those views, the same text once (a Map). The header of the file lists
-  what each DAX construct becomes. To know:
-  - It picks the view from the tables a query names: `fct_summary` alone reads
-    `v_fct_summary`, with a column of `dim_duid` the relationship's view.
-  - The key of a dimension (`dim_calendar[date]`, `dim_time[time]`, `dim_region[Region]`,
-    `dim_duid[DUID]`) is read off the fact's own column: no join for it.
-  - The result is cast by the column's `dataType` for the browser: a date as VARCHAR, a
-    whole number as INTEGER, a number as DOUBLE. A subquery or a CTE is left as it is.
-  - A `[Name]` that is not a column of the table being built is a measure, and its
-    expression is written out in its place: there are no macros. Under `CALCULATE` its
-    aggregates take the `FILTER (WHERE ...)`.
-  - A measure that picks its table, `IF([Reads 5 minutes], a, b)`, picks it here as in
-    Power BI: `ISFILTERED` and `ISCROSSFILTERED` are answered from the columns the query's
-    keys and filters name around the measure, and an `IF` on one keeps the side it picks;
-    the other is never translated.
-  - **A measure of another table is a subquery of its own.** A SELECT is about
-    one table, the one its first measure is defined on. A measure defined on another
-    (`[Hours]`, the regions', inside `[Capacity factor]`; `[Month days]` inside
-    `[Average MW at hour]`) is written as a
-    subquery: that measure under the filters around it that reach its table along the
-    relationships, grouped by the keys that do and matched on them. It is what the filter
-    context does: a filter on `dim_calendar` reaches every fact, one on `dim_duid` or on
-    `fct_summary[date]` only the units. For the same reason a filter on another fact is
-    left out of the SELECT it does not reach. So a query that calls a two-fact measure
-    filters each fact (`queries.whereAll`): up to 30 days `fct_summary[date]`,
-    `fct_region[date]` and `dim_calendar[date]`, beyond `dim_calendar[date]` with
-    `wholeDays`; and the region on `dim_region[Region]`, which reaches all three.
-    The subquery is a CTE, read once per query and looked up per row of the result
-    (inline, a measure named twice would be read twice).
-    A blank from such a subquery is 0, as DAX adds it. Not supported: under a subtotal of
-    a key that reaches it. In a measure of the model `<>` is DAX's (`IS DISTINCT FROM`: a
-    blank fuel is not "Grid"); in the page's own filters it stays SQL's.
-  - A relationship that filters both ways (`crossFilteringBehavior: bothDirections`, read
-    from the bim: `dim_duid_to_dim_region`) lets a filter on its `from` table reach the
-    tables of its `to` side as the keys its rows have: a unit filter on `fct_region` is
-    `REGIONID IN (SELECT Region FROM v_dim_duid WHERE ...)`. A subquery is still grouped
-    only by the keys that reach its table forwards.
-  - `CALCULATE(m, ALLSELECTED(table))` (`[Generation share]`) is m over everything the query
-    selects, not grouped by that table's columns: a window over the groups when m is a sum of
-    the SELECT's own table (then the SELECT's conditions on values go to QUALIFY, so the share
-    is of every group), else a subquery. `CALCULATE(m, DATESBETWEEN(dim_calendar[date], a,
-    b))` (the `[... change]` measures) is m over those days instead of the query's, a and b
-    worked out here from the query's literal range (`MIN`/`MAX` of `dim_calendar[date]`,
-    `DATEDIFF` in days). A CALCULATE of a measure of another table takes its filters into
-    that measure's subquery (`[Demand with rooftop MW]`). A count of no rows is blank, as in
-    DAX. A query of a fact and two of its dimensions reads `<fact>_star`.
-    The header of `compiler.js` lists every place its SQL is knowingly not DAX.
-  - Its fixed cases for this model: the days the daily table lacks, which a measure adds
-    from the 5-minute table (`dim_calendar[date] > [Newest whole day]`), are none: the page
-    restricts a long range to the days the daily table holds (`queries.wholeDays`), which
-    makes that set empty in DAX too. So a long range ends on the newest whole day on the
-    page, and on the newest interval in Power BI. `[Units]` off the daily table is
-    `COUNT(DISTINCT DUID)`. `MAX(column, 0)` and `MIN(column, 0)` read the column as
-    DOUBLE: a sum of fixed decimals is 128-bit and slow. `[Capacity MW]`, the capacity of
-    the units that have rows
-    (`CALCULATE(SUM(dim_duid[RegCapMW]), SUMMARIZE(fact, dim_duid[DUID]))`), makes its
-    SELECT two levels: the rows per unit first (its sums, its capacity once), then the
-    groups asked for (`perUnit`); in one level, as `list(DISTINCT {DUID, RegCapMW})`, it is
-    several times slower in the browser.
+- `dashboard/github/dax/semantic/compiler.js` (`createModel(dataSource)`: the data source's
+  members, `toDax` and `toSQL`): `toDax(query)` writes the page's query as DAX, checking each
+  column and measure against `model.bim`; `toSQL(dax)` is `packages/dax-sql`'s compile of it
+  over the data source's `v_<table>` views (staged next to the compiler as `semantic/dax-sql/`
+  by `stagePage`), the same text once (a Map). The page's options: `assumeIntegrity` (a
+  dimension's key is read off the fact: the dbt tests keep the data so) and its casts for the
+  browser (a date as VARCHAR, a whole number as INTEGER, a number as DOUBLE: a BIGINT reaches
+  the page as a BigInt). How dax-sql writes its SQL (fused scans, a subquery read once,
+  decorrelation across a relationship that filters both ways) is in its DESIGN.md.
+  Checked, offline, on every push (`build.yml`): dax-sql's own tests on made-up data;
+  `sql_page.mjs`, the SQL page against the DAX page on the deployed files (the deploy waits
+  for it); `compiler_ab.mjs`, the compiler against the commit before, rows and time (a report,
+  with the slower queries' SQL and plans as an artifact). Against the model: the parity
+  (`deploy_model.yml`).
 - `storage/data.js` is the host: how the `.duckdb` files are fetched, cached and attached
   (`createDataSource`: `init`, `attachAgg`, `ensureHistory`, `query`, wrapped by
   `views.js`). It attaches `dim`, `today`, `agg` and the 5-minute history. On both the files

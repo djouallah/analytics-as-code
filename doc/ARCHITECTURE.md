@@ -96,10 +96,9 @@ on purpose: the point is the layers, not their maturity.
 - **The semantic model** describes the tables, their relationships and the measures, each
   with a description. It is a real Power BI model (`model.bim`), the same file that is
   deployed to Fabric: it holds DAX only, and nothing in it is written for the page.
-- **The compiler** turns its relationships into DuckDB views, over the views of the
-  tables that storage has, writes the page's queries as DAX, and turns the DAX into SQL
-  over them. It is a toy, on purpose: it knows the constructs this page uses, by fixed
-  cases, and throws on anything else.
+- **The compiler** writes the page's queries as DAX, and turns the DAX into SQL over the
+  views of the tables that storage has: `packages/dax-sql`, a general DAX compiler that
+  knows nothing of this model or this page.
 - **The query language** is where the layers show. SQL asks for tables, while a semantic
   model offers tables that know how they relate; the page asks for `Generation MW` by
   `dim_duid.FuelSourceDescriptor` and the compiler works out that the two have to be
@@ -206,8 +205,10 @@ no query service.
   three round trips each, which is far slower than one download.
 - **Limited by the browser.** A tab gets about 4 GB of memory; a query that needs more fails.
   Phones and old laptops will struggle.
-- **The compiler covers this page only.** It is not a DAX engine; where DAX and SQL differ,
-  its result is SQL's, and its header lists every such place.
+- **The compiler is slower than hand-written SQL.** It computes what DAX says without
+  knowing the data (the hours of each plant's regions, not of all of them), and writes
+  larger queries than a person would: about 1.6 times the hand-written compiler's time
+  over the page's queries, one thread.
 - **A stored value is never revised.** Until merges may update, a correction from AEMO does
   not land, `dim_duid` changes only through a rebuild, and `fct_summary` keeps the intraday
   value of an interval where the next-day files have another.

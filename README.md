@@ -30,13 +30,11 @@ market (AEMO).
     figure is written out where a chart uses it, as a team would build the page in
     practice. Served at [nemtracker.github.io/sql](https://nemtracker.github.io/sql/). Its
     rows are checked against the DAX page's, question by question.
-- **The compiler** is what lets the page read a Power BI model without Power BI: it turns
-  the model's relationships into DuckDB views and the page's queries into DAX, then SQL.
-  **It is not a general-purpose DAX compiler.** It was written for this repository only: it
-  knows this model and the constructs this page uses, and fails on anything else. It is
-  here to show where that layer sits.
-- **[`packages/dax-sql`](packages/dax-sql/)** is the general-purpose one: any Tabular model,
-  DAX's filter context, context transition and relationships, compiled to SQL (tested on
-  DuckDB). The page does not use it; its queries are part of its tests.
+- **The compiler** is what lets the page read a Power BI model without Power BI: the page's
+  queries become DAX ([`compiler.js`](dashboard/github/dax/semantic/compiler.js)), and the
+  DAX becomes SQL in [`packages/dax-sql`](packages/dax-sql/), a general-purpose DAX
+  compiler (by N.S. Devaraj): any Tabular model, DAX's filter context, context transition
+  and relationships, with nothing written for this model or this page. Its SQL is checked
+  against the SQL page and against the deployed model.
 
 Details: [doc/ARCHITECTURE.md](doc/ARCHITECTURE.md)
