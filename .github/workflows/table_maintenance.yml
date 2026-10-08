@@ -138,7 +138,8 @@ jobs:
         # removal, unreleased), pinned to its commit; the fork's tag orphan-files-4adf237
         # keeps that commit reachable if the PR is force-pushed. Back to a release pin once
         # the PR ships in one.
-        run: pip install "pyiceberg[adlfs] @ git+https://github.com/djouallah/iceberg-python@4adf237c188a4ae8a77e4f0aa319fbbeb7d8bc79"
+        # pyarrow: remove_orphan_files reads the manifests through table.inspect.
+        run: pip install "pyiceberg[adlfs,pyarrow] @ git+https://github.com/djouallah/iceberg-python@4adf237c188a4ae8a77e4f0aa319fbbeb7d8bc79"
       - name: Expire old snapshots, then orphan files
         # duckdb-iceberg has no snapshot expiry yet, so pyiceberg does it. Must run after
         # compaction — that is what makes the previous snapshots redundant, and expiry is
