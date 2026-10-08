@@ -31,7 +31,8 @@ ITEM = REPO / "semantic_model"
 REPORT = REPO / "dashboard" / "powerbi_report" / "nem.Report"
 
 
-def main():
+def main(items=("SemanticModel", "Report")):
+    """items: what to publish, both by default (deploy_fabric.py can ask for one)."""
     from azure.identity import AzureCliCredential
     from fabric_cicd import FabricWorkspace, publish_all_items
 
@@ -46,7 +47,7 @@ def main():
         publish_all_items(FabricWorkspace(
             workspace_id=workspace,
             repository_directory=str(tmp),
-            item_type_in_scope=["SemanticModel", "Report"],
+            item_type_in_scope=list(items),
             token_credential=AzureCliCredential(),
         ))
 

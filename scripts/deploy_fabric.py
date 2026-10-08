@@ -1,11 +1,12 @@
 """Install the whole project into one Fabric workspace: the lakehouse, the hourly dbt run, the
 semantic model and the report.
 
-    WS_ID=<workspace id> python scripts/deploy_fabric.py [data] [model]
+    WS_ID=<workspace id> python scripts/deploy_fabric.py [data] [model] [report]
 
-The arguments are the parts to deploy (both when none is named), deploy_fabric.yml's ticks:
+The arguments are the parts to deploy (all when none is named), deploy_fabric.yml's ticks:
   data    steps 1-3 and 5: the lakehouse, the notebook, the pipeline, its run and schedule
-  model   step 4: the semantic model and the report, on the lakehouse already there
+  model   step 4: the semantic model, on the lakehouse already there
+  report  step 4: the Power BI report, on the model already there
 
 deploy_fabric.yml runs it, then deploys the front end (the VertiPaq Fabric app) into the same
 workspace. The mechanism is the sibling repo's (fabric-medallion-dbt, .github/scripts/deploy.py):
@@ -138,20 +139,21 @@ def schedule(pipeline):
 
 
 def main():
-    parts = set(sys.argv[1:]) or {"data", "model"}
-    if parts - {"data", "model"}:
-        raise SystemExit(f"usage: deploy_fabric.py [data] [model], not {' '.join(sys.argv[1:])}")
+    parts = set(sys.argv[1:]) or {"data", "model", "report"}
+    if parts - {"data", "model", "report"}:
+        raise SystemExit(f"usage: deploy_fabric.py [data] [model] [report], not {' '.join(sys.argv[1:])}")
     if "data" in parts:
         publish()
         pipeline = item("items?type=DataPipeline", PIPELINE)
         upload(item("lakehouses", LAKEHOUSE))
         run_and_wait(pipeline)
-    if "model" in parts:
+    published = [t for p, t in (("model", "SemanticModel"), ("report", "Report")) if p in parts]
+    if published:
         os.environ["LH_ID"] = item("lakehouses", LAKEHOUSE)
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import deploy_model
-        deploy_model.main()
-        print("published the semantic model and the report")
+        deploy_model.main(published)
+        print(f"published {', '.join(published)}")
     if "data" in parts:
         schedule(pipeline)
 

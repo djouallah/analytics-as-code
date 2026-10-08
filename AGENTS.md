@@ -604,11 +604,10 @@ it; the owner is also the identity `getDataSas` reads the lakehouse as. That is 
 laptop and CI cannot share an item: a deploy to someone else's fails with
 `403 Only AppBackend artifact owner can perform this operation`.
 
-**The wasm app is not deployed from CI**: Fabric answers 500 ("An internal error
-occurred.") to every function call on an item owned by a service principal, before the
-function runs (microsoft/rayfin#89, open, with this repo's case in its comments; the item
-`nemtracker` in workspace `app`, CI's from an earlier workflow, is kept for its re-test).
-For a CI deploy once it is fixed:
+**The wasm app from CI deploys but does not work yet** (`deploy_fabric.yml`'s
+`fabric_app_wasm`, item `nemtracker`): Fabric answers 500 ("An internal error occurred.") to
+every function call on an item owned by a service principal, before the function runs
+(microsoft/rayfin#89, open, with this repo's case in its comments). The CI deploy needs:
 - `dashboard/fabric_app/wasm/rayfin/functions/host.json` is committed: the deploy refuses
   without it, and the Rayfin scaffold's `.gitignore` leaves it out.
 - The lock files resolve from `registry.npmjs.org`: generated on a laptop they name a
@@ -624,8 +623,9 @@ Rules of the Fabric host that are easy to break:
 To check a deploy, open the Logs tab: the build stamp, each fetch, attach and query.
 
 ### The whole stack in one workspace
-`deploy_fabric.yml` (dispatch: `tenant_id`, `workspace_id`, and a tick per part: `data`,
-`semantic_model`, `front_end`, all on by default) installs the project into one
+`deploy_fabric.yml` (dispatch: `tenant_id`, `workspace_id`, and a tick per part, all on by
+default: `data`, `semantic_model`, `powerbi_report`, `fabric_app_vertipaq`,
+`fabric_app_wasm`) installs the project into one
 Fabric workspace, independent of everything GitHub runs: the mechanism of the sibling
 `fabric-medallion-dbt` (`.github/scripts/deploy.py`), ported. `scripts/deploy_fabric.py`:
 - publishes `fabric_items/` with fabric-cicd: the lakehouse `nem` (schema-enabled), the
@@ -635,7 +635,9 @@ Fabric workspace, independent of everything GitHub runs: the mechanism of the si
 - publishes the model and the report with `deploy_model.main()`, on that lakehouse;
 - schedules the pipeline hourly, if it has no schedule.
 Then the workflow deploys `dashboard/fabric_app/vertipaq/` (item `vertipaq`), its connector
-naming the model `nem` of the same workspace. The workspace must exist, on a capacity in a
+naming the model `nem` of the same workspace, and `dashboard/fabric_app/wasm/` (item
+`nemtracker`, CI's own: the laptop's `wasm` refuses another owner), which reads the
+`.duckdb` files of `import_onelake.yml` and fails until microsoft/rayfin#89 is fixed. The workspace must exist, on a capacity in a
 region with Fabric apps (preview); the login is the repo's Entra app of that tenant
 (`AZURE_*` or `LAKE_*`), any other tenant fails at the first step.
 The notebook does what `process_data.yml` does: the same env contract (from `notebookutils`:
