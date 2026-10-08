@@ -853,8 +853,9 @@ class Fusion {
       // SQL is written first, on its own scan, since that can join a table to it.
       parts = em.isolated(() => em.aggParts(x, withRow(new Map(), x.row, block.res)));
       const into = `${S.table.name}|${state.key}`;
-      const same = this.groups.find(x => x.merge === into && canonical(x.block.from) === canonical(block.from));
-      const map = same && aliasMap(block.from, same.block.from);
+      const from = b => [b.from, ...b.joins].join(' ');
+      const same = this.groups.find(x => x.merge === into && canonical(from(x.block)) === canonical(from(block)));
+      const map = same && aliasMap(from(block), from(same.block));
       if (map) {
         g = same;
         rename = s => renameAliases(s, map);
@@ -1148,7 +1149,8 @@ function outputNames(cols, style) {
 
 // SQL with its generated aliases numbered by first appearance: the same filters give the
 // same text.
-// The aliases of one FROM as those of another written the same way (canonical), or null.
+// The aliases of one FROM (with its joins) as those of another written the same way
+// (canonical), or null.
 function aliasMap(from, to) {
   const re = /\b[a-z]\d+\b/g, a = from.match(re) ?? [], b = to.match(re) ?? [];
   if (a.length !== b.length) return null;
