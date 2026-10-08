@@ -73,4 +73,6 @@ export class Dialect {
 
   fn(name) { throw new Error(`${this.name}: function ${name} is not implemented`); }
   agg(name) { throw new Error(`${this.name}: aggregate ${name} is not implemented`); }
+  // Whether agg() takes extra.filter: the aggregate over the rows a condition keeps.
+  get aggFilter() { return false; }
 }

@@ -141,29 +141,32 @@ export class DuckDBDialect extends Dialect {
     return super.fn(name, a);
   }
 
+  // extra.filter: the aggregate over the rows that condition keeps (FILTER on each call).
+  get aggFilter() { return true; }
   agg(fn, x, extra = {}) {
+    const f = extra.filter ? ` FILTER (WHERE ${extra.filter})` : '';
     switch (fn) {
-      case 'sum': return `SUM(${x})`;
-      case 'avg': return `AVG(${x})`;
-      case 'min': return `MIN(${x})`;
-      case 'max': return `MAX(${x})`;
-      case 'count': return `NULLIF(COUNT(${x}), 0)`;
-      case 'count0': return `COUNT(${x})`;
-      case 'countrows': return 'NULLIF(COUNT(*), 0)';
+      case 'sum': return `SUM(${x})${f}`;
+      case 'avg': return `AVG(${x})${f}`;
+      case 'min': return `MIN(${x})${f}`;
+      case 'max': return `MAX(${x})${f}`;
+      case 'count': return `NULLIF(COUNT(${x})${f}, 0)`;
+      case 'count0': return `COUNT(${x})${f}`;
+      case 'countrows': return `NULLIF(COUNT(*)${f}, 0)`;
       // DAX counts a blank as a value.
-      case 'dcount': return `(COUNT(DISTINCT ${x}) + MAX(CASE WHEN ${x} IS NULL THEN 1 ELSE 0 END))`;
-      case 'dcount0': return `COUNT(DISTINCT ${x})`;
-      case 'dcountnb': return `NULLIF(COUNT(DISTINCT ${x}), 0)`;
-      case 'countblank': return `NULLIF(COUNT(*) FILTER (WHERE ${x} IS NULL), 0)`;
-      case 'hasone': return `COALESCE(COUNT(DISTINCT ${x}) + MAX(CASE WHEN ${x} IS NULL THEN 1 ELSE 0 END) = 1, FALSE)`;
-      case 'product': return `product(${x})`;
-      case 'median': return `median(${x})`;
-      case 'pct_inc': return `quantile_cont(${x}, ${extra.k})`;
-      case 'stdev_s': return `stddev_samp(${x})`;
-      case 'stdev_p': return `stddev_pop(${x})`;
-      case 'var_s': return `var_samp(${x})`;
-      case 'var_p': return `var_pop(${x})`;
-      case 'concat': return `string_agg(COALESCE(${x}, ''), ${extra.delim}${extra.order?.length ? ` ORDER BY ${extra.order.join(', ')}` : ''})`;
+      case 'dcount': return `(COUNT(DISTINCT ${x})${f} + MAX(CASE WHEN ${x} IS NULL THEN 1 ELSE 0 END)${f})`;
+      case 'dcount0': return `COUNT(DISTINCT ${x})${f}`;
+      case 'dcountnb': return `NULLIF(COUNT(DISTINCT ${x})${f}, 0)`;
+      case 'countblank': return `NULLIF(COUNT(*) FILTER (WHERE ${x} IS NULL${extra.filter ? ` AND ${extra.filter}` : ''}), 0)`;
+      case 'hasone': return `COALESCE(COUNT(DISTINCT ${x})${f} + MAX(CASE WHEN ${x} IS NULL THEN 1 ELSE 0 END)${f} = 1, FALSE)`;
+      case 'product': return `product(${x})${f}`;
+      case 'median': return `median(${x})${f}`;
+      case 'pct_inc': return `quantile_cont(${x}, ${extra.k})${f}`;
+      case 'stdev_s': return `stddev_samp(${x})${f}`;
+      case 'stdev_p': return `stddev_pop(${x})${f}`;
+      case 'var_s': return `var_samp(${x})${f}`;
+      case 'var_p': return `var_pop(${x})${f}`;
+      case 'concat': return `string_agg(COALESCE(${x}, ''), ${extra.delim}${extra.order?.length ? ` ORDER BY ${extra.order.join(', ')}` : ''})${f}`;
       case 'pct_exc': throw unsupported('PERCENTILE.EXC on DuckDB');
     }
     return super.agg(fn, x);
