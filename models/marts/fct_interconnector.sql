@@ -5,17 +5,24 @@
 -- it in the same sign.
 --
 -- Insert-only merge on the grain: a missing interval is added, a stored value is not
--- revised; rebuild=fct_interconnector resets it. Small (7 links), so every run recomputes
--- all of it and the merge adds what is missing.
+-- revised; rebuild=fct_interconnector resets it. An incremental run recomputes the days of
+-- the files fct_interconnector_today loaded since it last committed (pending_file_ranges,
+-- macros/pending_archive_files.sql); no new file, nothing sent.
 {{ config(
     materialized='incremental',
     incremental_strategy='merge',
     unique_key=['interconnector', 'date', 'time'],
     merge_clauses={'when_matched': [{'action': 'do_nothing'}]},
     schema='mart',
+    post_hook={"sql": "{{ record_mart_watermark(['fct_interconnector_today']) }}", "transaction": false},
     tags=['powerbi']
 ) }}
 
+{%- set ranges = pending_file_ranges(['fct_interconnector_today']) if is_incremental() else [(none, none)] %}
+
+{% if not ranges %}
+{{ nothing_to_do() }}
+{% else %}
 SELECT
   INTERCONNECTORID AS interconnector,
   MAX(DATE) AS date,
@@ -25,4 +32,6 @@ SELECT
   CAST(MAX(IMPORTLIMIT) AS DECIMAL(18, 4)) AS import_limit
 FROM {{ ref('fct_interconnector_today') }}
 WHERE INTERVENTION = 0
+  AND {{ date_ranges_sql(ranges, 'DATE') }}
 GROUP BY INTERCONNECTORID, SETTLEMENTDATE
+{% endif %}

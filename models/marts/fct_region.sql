@@ -16,28 +16,26 @@
 -- UPDATE): a missing interval is added, a stored value is not revised; rebuild=fct_region
 -- resets it.
 --
--- Which dates: an incremental run recomputes from six days before fct_price's newest date
--- on, as fct_summary does (a date's next-day file lands days later if the pipeline missed
--- a run), and every intraday interval after it. The date comes from the Iceberg manifests
--- (macros/date_bounds.sql) and is written as a literal on all three sources, so their scans
--- prune data files. A first build, or one after rebuild=fct_region, reads them whole.
+-- Which dates: an incremental run recomputes the days of the files its three sources loaded
+-- since it last committed (pending_file_ranges, macros/pending_archive_files.sql), written
+-- as literals on all three sources, so their scans prune data files. No new file: nothing
+-- is sent. A first build, or one after rebuild=fct_region, reads them whole.
 {{ config(
     materialized='incremental',
     incremental_strategy='merge',
     unique_key=['REGIONID', 'date', 'time'],
     merge_clauses={'when_matched': [{'action': 'do_nothing'}]},
     schema='mart',
+    post_hook={"sql": "{{ record_mart_watermark(['fct_price', 'fct_price_today', 'fct_regionsum_today']) }}", "transaction": false},
     tags=['powerbi']
 ) }}
 
-{%- set price_min, price_max = date_bounds(ref('fct_price'), 'DATE') %}
-{%- set window_from = price_max - modules.datetime.timedelta(days=6) if is_incremental() and price_max else none %}
-{%- if execute %}
-  {%- do log("fct_region: fct_price " ~ price_min ~ " .. " ~ price_max ~ "; recomputing "
-             ~ (window_from | string ~ " .. open" if window_from else "everything"), info=True) %}
-{%- endif %}
-{%- set in_window = "AND DATE >= DATE '" ~ window_from ~ "'" if window_from else "" %}
+{%- set ranges = pending_file_ranges(['fct_price', 'fct_price_today', 'fct_regionsum_today']) if is_incremental() else [(none, none)] %}
+{%- set in_window = "AND " ~ date_ranges_sql(ranges, 'DATE') %}
 
+{% if not ranges %}
+{{ nothing_to_do() }}
+{% else %}
 WITH
 price_today AS (
   SELECT REGIONID, SETTLEMENTDATE, MAX(DATE) AS date, MAX(RRP) AS price
@@ -96,3 +94,4 @@ SELECT
   CAST(solar_available AS DECIMAL(18, 4)) AS solar_available,
   CAST(solar_curtailed AS DECIMAL(18, 4)) AS solar_curtailed
 FROM intervals
+{% endif %}
