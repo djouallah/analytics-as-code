@@ -171,7 +171,7 @@ The ids live in repository **variables** (public identifiers, not secrets):
 - `LAKE_TENANT_ID`, `LAKE_CLIENT_ID` — the Fabric app's tenant and an Entra app there
   (`fabric-github-deploy`), a member of the app's workspace: it uploads the data
   (`scripts/deploy_onelake.py`) and is the identity of `deploy_fabric.yml` into a fabriccat
-  workspace (the catalog's tenant gets `AZURE_CLIENT_ID`).
+  workspace (the catalog's tenant gets `AZURE_CLIENT_ID`) and of `deploy_model.yml`.
   It is a second tenant: `deploy_onelake.py` exchanges the job's GitHub OIDC token itself,
   next to the workflow's catalog login. The app's
   federated credential for this repo has the subject
@@ -756,8 +756,11 @@ in `landing` are what these tables are built from.
   `deploy_model.py` copies the two to the same places relative to each other. No `.pbip`:
   the model's lakehouse ids are placeholders here, so Desktop could not open it. Nothing in
   CI sees a chart draw: a change to a visual is checked by opening the report.
-- `deploy_model.yml` (dispatch only) publishes the model and the report into the catalog's
-  workspace with `scripts/deploy_model.py` (fabric-cicd, not duckrun) and runs
+- `deploy_model.yml` (dispatch only) publishes the model and the report into the Fabric
+  app's workspace (`app`, `FABRIC_APP_WORKSPACE_ID`, logged in as `LAKE_*`), on its `nem`
+  lakehouse (the stack `deploy_fabric.yml` installs there, with its own hourly dbt run), so
+  the checks cost that tenant's capacity and not the catalog's; with
+  `scripts/deploy_model.py` (fabric-cicd, not duckrun) it runs
   `scripts/check_model.py`: a refresh, then a row count per table and each measure per day
   for the newest week (the measures of the tables by month per month: a date does not
   filter those tables), then that the report is there and reads the model; with
