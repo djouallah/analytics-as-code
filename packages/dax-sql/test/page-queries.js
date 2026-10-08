@@ -1,12 +1,10 @@
-import { createQueries } from '../../../dashboard/github/dax/frontend/queries.js';
-
 const shiftDate = (date, n) => {
   const d = new Date(`${date}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 };
 
-export const pageQueries = (state, run) => {
+export const pageQueries = (createQueries, state, run) => {
   const queries = createQueries({
     range: () => state.range,
     intraday: () => state.intraday,

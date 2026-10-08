@@ -6,13 +6,17 @@
 // All on made-up data in the model's shape (fixtures/nem.js). Where the two compilers differ,
 // this one follows DAX, and the differences are listed below with the reason. Skipped when
 // the repository's files are not there (DAX_SQL_REPO can point at a checkout).
-import { test, before } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DuckDBInstance } from '@duckdb/node-api';
 import { createCompiler } from '../src/index.js';
 import { setup } from './fixtures/nem.js';
 import { pageQueries, STATES } from './page-queries.js';
+import { stagePage } from '../../../scripts/stage_pages.mjs';
 
 const root = process.env.DAX_SQL_REPO ? new URL(`file://${process.env.DAX_SQL_REPO.replace(/\/?$/, '/')}`) : new URL('../../../', import.meta.url);
 const path = p => new URL(p, root);
@@ -25,15 +29,22 @@ const DIFFERENT = {
   batteryFleet: 'no unit left by the filters: COUNTROWS of nothing is blank in DAX; compiler.js returns 0',
 };
 
-let con, dax, toy, bim;
+let con, dax, toy, bim, staged, createQueries;
 before(async () => {
   if (skip) return;
   const bimText = fs.readFileSync(path('semantic_model/model.bim'), 'utf8');
   bim = JSON.parse(bimText);
+  staged = fs.mkdtempSync(join(tmpdir(), 'dax-sql-page-'));
+  await stagePage('dax', staged, fileURLToPath(root));
+  fs.writeFileSync(join(staged, 'package.json'), '{"type":"module"}\n');
   // compiler.js fetches model.bim next to itself when it loads.
   const fetch = globalThis.fetch;
   globalThis.fetch = async () => ({ json: async () => JSON.parse(bimText) });
-  try { toy = await import(path('dashboard/github/dax/semantic/compiler.js').href); } finally { globalThis.fetch = fetch; }
+  try {
+    const page = await import(pathToFileURL(join(staged, 'frontend/queries.js')).href);
+    toy = await import(pathToFileURL(join(staged, 'semantic/compiler.js')).href);
+    createQueries = page.createQueries;
+  } finally { globalThis.fetch = fetch; }
   const db = await DuckDBInstance.create(':memory:');
   con = await db.connect();
   await con.run(setup);
@@ -45,6 +56,9 @@ before(async () => {
     await con.run(`CREATE VIEW ${r.name} AS SELECT f.*${extra.map(c => `, d."${c}"`).join('')} FROM v_${r.fromTable} f LEFT JOIN v_${r.toTable} d ON f."${r.fromColumn}" = d."${r.toColumn}"`);
   }
   dax = createCompiler(bim, { tableSource: t => `v_${t.name}` });
+});
+after(() => {
+  if (staged) fs.rmSync(staged, { recursive: true, force: true });
 });
 
 const value = v => (typeof v === 'bigint' ? Number(v) : v instanceof Date ? v.toISOString().slice(0, 10)
@@ -95,7 +109,7 @@ test('measures against SQL written by hand', { skip }, async () => {
 test("the page's queries give the rows compiler.js gives", { skip }, async () => {
   let compared = 0;
   for (const [state, s] of Object.entries(STATES)) {
-    const asked = await pageQueries(s, async q => rows(dax.compile(toy.toDax(q)).sql));
+    const asked = await pageQueries(createQueries, s, async q => rows(dax.compile(toy.toDax(q)).sql));
     for (const { name, query } of asked) {
       const text = toy.toDax(query);
       const mine = await run(text).catch(e => { throw new Error(`${state}.${name}: ${e.message}`); });
