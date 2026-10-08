@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      before:
+        description: "The commit the page's compiler is compared with (empty: the parent)"
+        default: ""
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -57,7 +61,7 @@ jobs:
         if: ${{ !cancelled() }}
         continue-on-error: true
         env:
-          BEFORE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BEFORE: ${{ inputs.before || github.event.pull_request.base.sha || github.event.before }}
         run: |
           set -euo pipefail
           # A dispatch, or a push of a new branch (all zeros), has no commit before: the parent.
@@ -67,7 +71,14 @@ jobs:
             git fetch -q --depth=1 origin "$BEFORE"
           fi
           git worktree add -q --detach "$RUNNER_TEMP/before" "$BEFORE"
-          cd scripts/parity && node compiler_ab.mjs "$RUNNER_TEMP/data" "$RUNNER_TEMP/before"
+          cd scripts/parity && node compiler_ab.mjs "$RUNNER_TEMP/data" "$RUNNER_TEMP/before" "$RUNNER_TEMP/slower"
+      - name: The slower queries' SQL and plans
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: slower-queries
+          path: ${{ runner.temp }}/slower
+          if-no-files-found: ignore
 
   test:
     needs: [dax-sql, page]

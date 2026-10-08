@@ -2,7 +2,7 @@
 // compiler_ab.mjs — the DAX page's compiler of another commit against this one: the same
 // queries, the same rows, and the time each takes
 // =============================================================================
-//   cd scripts/parity && npm ci && node compiler_ab.mjs <data dir> <other checkout>
+//   cd scripts/parity && npm ci && node compiler_ab.mjs <data dir> <other checkout> [out dir]
 //
 // <data dir> holds the files the page attaches, as deployed (page_queries.mjs says which).
 // Every query of page_states.mjs's states is built once, by this commit's queries.js; each
@@ -10,17 +10,19 @@
 // on one thread each as in the browser, in turn (which goes first alternates). Rows are
 // compared as sql_page.mjs compares them; a query that differs fails the run. Time is
 // reported, not judged: the totals, and the queries clearly slower here (twice the time and
-// 100 ms more), for a review to read. Nothing here asks the deployed model: no capacity.
+// 100 ms more), for a review to read. [out dir]: for each of those, in the first state it is
+// slower in, its DAX, both SQLs and both EXPLAIN ANALYZE plans. Nothing here asks the
+// deployed model: no capacity.
 // =============================================================================
 
-import { readFileSync, mkdtempSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { engine, pageOf, states, lists, asked, shiftDate, compare, order } from './page_states.mjs';
 import { stagePage } from '../stage_pages.mjs';
 
-const [dataDir, other] = process.argv.slice(2);
+const [dataDir, other, outDir] = process.argv.slice(2);
 if (!dataDir || !other) { console.error('usage: node compiler_ab.mjs <data dir> <other checkout>'); process.exit(2); }
 const HERE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -42,7 +44,7 @@ async function side(root) {
   const model = createModel(withViews(source));
   await model.init();
   await model.attachAgg();
-  return { model, createQueries, rows: q => run(model.toSQL(model.toDax(q))) };
+  return { model, createQueries, run, rows: q => run(model.toSQL(model.toDax(q))) };
 }
 const old = await side(path.resolve(other)), now = await side(HERE);
 
@@ -56,6 +58,21 @@ let compared = 0, msOld = 0, msNew = 0;
 async function timed(s, q) {
   const t = performance.now();
   try { return { rows: await s.rows(q), ms: performance.now() - t }; } catch (e) { return { error: e.message, ms: 0 }; }
+}
+// The first slower state of a query: its DAX, each side's SQL and its plan.
+const dumped = new Set();
+async function dump(stateName, name, q) {
+  dumped.add(name);
+  const dir = path.join(outDir, name.replace(/\W+/g, '_'));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, 'state.txt'), `${stateName}\n${JSON.stringify(q, null, 1)}\n`);
+  for (const [label, s] of [['before', old], ['now', now]]) {
+    const dax = s.model.toDax(q), sql = s.model.toSQL(dax);
+    writeFileSync(path.join(dir, `${label}.dax`), `${dax}\n`);
+    writeFileSync(path.join(dir, `${label}.sql`), `${sql}\n`);
+    const plan = await s.run(`EXPLAIN ANALYZE ${sql}`);
+    writeFileSync(path.join(dir, `${label}.plan.txt`), plan.map(r => r.explain_value).join('\n'));
+  }
 }
 async function check(stateName, name, q) {
   const first = compared++ % 2 ? [now, old] : [old, now];
@@ -71,7 +88,10 @@ async function check(stateName, name, q) {
   msOld += a.ms; msNew += b.ms;
   const why = compare(a.rows, b.rows) ?? order(b.rows, a.rows, q.orderBy);
   if (why) differs.push(`${stateName} / ${name}: ${why}`);
-  if (b.ms > 2 * a.ms && b.ms - a.ms > 100) slower.push(`${stateName} / ${name}: ${Math.round(a.ms)} ms before, ${Math.round(b.ms)} ms now`);
+  if (b.ms > 2 * a.ms && b.ms - a.ms > 100) {
+    slower.push(`${stateName} / ${name}: ${Math.round(a.ms)} ms before, ${Math.round(b.ms)} ms now`);
+    if (outDir && !dumped.has(name)) await dump(stateName, name, q);
+  }
 }
 for (const [n, q] of Object.entries(lists(page.queries))) await check('lists', n, q);
 for (const [name, state] of states(to)) {
