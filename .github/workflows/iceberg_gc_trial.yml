@@ -1,23 +1,33 @@
 name: Iceberg GC Trial
 
-# Dry run of iceberg-go's file-deleting snapshot expiry and orphan cleanup on every table
-# (scripts/iceberg_gc): what it would delete, per folder. Commits and deletes nothing, so
-# it takes no concurrency group. If it shows the deletes are safe, it can replace pyiceberg.
+# Trial of iceberg-go's file-deleting snapshot expiry and orphan cleanup (scripts/iceberg_gc),
+# to replace pyiceberg's metadata-only expiry if it holds.
+# - dry_run: every table, what each would delete, per folder. Commits and deletes nothing.
+# - dummy_expire: a real expiry on a throwaway table, landing.zz_gc_trial (created,
+#   compacted, expired, read back, dropped), checking file by file what was deleted.
+# Neither touches a table of the pipeline, so neither takes the process-data group.
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [dry_run, dummy_expire]
+        default: dry_run
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   ONELAKE_ENDPOINT: https://onelake.table.fabric.microsoft.com/iceberg
   WAREHOUSE_PATH: ${{ vars.WS_ID }}/${{ vars.LH_ID }}
+  AZURE_TRANSPORT_OPTION_TYPE: curl
+  CURL_CA_INFO: /etc/ssl/certs/ca-certificates.crt
 
 permissions:
   contents: read
   id-token: write
 
 jobs:
-  dry_run:
+  trial:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -29,6 +39,12 @@ jobs:
       - name: Build
         working-directory: scripts/iceberg_gc
         run: go build -o iceberg_gc .
+      - uses: actions/setup-python@v5
+        if: inputs.mode == 'dummy_expire'
+        with:
+          python-version: "3.11"
+      - if: inputs.mode == 'dummy_expire'
+        run: pip install "duckdb==2.0.0.dev2610011535"
       - name: Azure federated login
         uses: azure/login@v2
         with:
@@ -41,7 +57,19 @@ jobs:
           echo "::add-mask::$TOKEN"
           echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
       - name: Dry run
-        # The storage reads go through the Azure CLI login above (DefaultAzureCredential).
+        if: inputs.mode == 'dry_run'
         run: |
           TABLES=$(cd scripts && python -c "from iceberg_tables import TABLES; print(' '.join(TABLES))")
-          scripts/iceberg_gc/iceberg_gc $TABLES
+          scripts/iceberg_gc/iceberg_gc dry-run $TABLES
+      - name: Create the throwaway table
+        if: inputs.mode == 'dummy_expire'
+        run: python scripts/iceberg_gc/dummy_table.py setup
+      - name: Expire it (iceberg-go, deleting files)
+        if: inputs.mode == 'dummy_expire'
+        run: scripts/iceberg_gc/iceberg_gc expire landing.zz_gc_trial
+      - name: Read it back
+        if: inputs.mode == 'dummy_expire'
+        run: python scripts/iceberg_gc/dummy_table.py check
+      - name: Drop it
+        if: always() && inputs.mode == 'dummy_expire'
+        run: python scripts/iceberg_gc/dummy_table.py drop
