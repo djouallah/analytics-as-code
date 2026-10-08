@@ -824,11 +824,12 @@
       document.getElementById("status").className = type;
     }
 
-    // `hover` is the region tile under the pointer: it filters the page like a click, for as
-    // long as the pointer stays, and leaves no tag (the click's `region` is what is kept).
-    const crossFilter = { fuel: null, region: null, hover: null, duids: [] };
+    // `hover` is the region tile or the fuel of the mix under the pointer: it filters the page
+    // like a click, for as long as the pointer stays, and leaves no tag (the click's `region`
+    // and `fuel` are what is kept).
+    const crossFilter = { fuel: null, region: null, hover: { region: null, fuel: null }, duids: [] };
     // The header dropdowns win over a chart click-filter (updateFilterTags says so).
-    const activeRegion = () => document.getElementById("regionFilter").value || crossFilter.hover || crossFilter.region;
+    const activeRegion = () => document.getElementById("regionFilter").value || crossFilter.hover.region || crossFilter.region;
     // Display names for the AEMO region codes (#1), read from dim_region at startup
     // (populateFilters); a code without one shows as the code. Display only: filters, SQL and
     // joins keep using the codes, and every UI element maps back to them.
@@ -837,7 +838,7 @@
     const MARKET_REGIONS = [];
     const regionName = code => REGION_NAMES[code] ?? code;
     const regionCode = name => Object.keys(REGION_NAMES).find(c => REGION_NAMES[c] === name) ?? name;
-    const activeFuel = () => document.getElementById("fuelFilter").value || crossFilter.fuel;
+    const activeFuel = () => document.getElementById("fuelFilter").value || crossFilter.hover.fuel || crossFilter.fuel;
     let aggLoaded = false;
     let _renderSeq = 0;
     // Nothing is drawn until init has filled the filters: a click before that would query a
@@ -1311,6 +1312,7 @@
         smallAt = new Map(rowsOf.map(r => [keyOf(r), r.output]));
       }
       const labelAt = new Map(xKeys.map((k, i) => [k, intraday ? `${xLabels[i]} AEST` : xLabels[i]]));
+      if (!drillFuel && !crossFilter.duids.length) _fuelLayout = layout;
       _scrub.gen = drillFuel || crossFilter.duids.length ? null : { unit, layout, at: k => {
         if (!labelAt.has(k)) return null;
         const mix = outputs.map(n => ({ fuel: n, mw: valueAt(k, n), share: shareAt.get(`${k}|${n}`) ?? null }));
@@ -1377,7 +1379,7 @@
       // the ones under MIX_MIN_SHARE % of this interval's output.
       await layoutReady;
       if (seq !== _renderSeq) return;
-      const layout = _scrub.gen?.layout;
+      const layout = heroLayout();
       const small = mix.filter(r => r.mw > 0 && (layout ? layout.other.has(r.fuel) || !layout.order.includes(r.fuel) : r.share < MIX_MIN_SHARE)).map(r => r.fuel);
       const other = small.length ? (await runQuery(queries.nowOf(now, region, small)))[0]?.mw ?? null : null;
       if (seq !== _renderSeq) return;
@@ -1397,6 +1399,11 @@
     // the small fuels' output together (`other`), the renewable share, and the regions as
     // { region, price, demand, net } (an interval under the pointer has no demand or net).
     let _heroNow = null;
+    // The fuels of the mix and their order: the generation chart's while it is by fuel. While a
+    // fuel filters the page the chart is that fuel's units, and the mix keeps the order it had
+    // (the last fuel view's), so the chips do not move under a pointer hovering them.
+    let _fuelLayout = null;
+    const heroLayout = () => _scrub.gen?.layout ?? (activeFuel() ? _fuelLayout : null);
     function paintHero(state, animate) {
       const region = activeRegion(), { unit } = state;
       const { total, share: renewable } = state;
@@ -1431,7 +1438,7 @@
       // order (by output over the range), the small ones of the range together as "Other":
       // the same items at every interval, so hovering changes the figures and the segments'
       // sizes and nothing moves. Otherwise, this interval's fuels by size.
-      const layout = _scrub.gen?.layout;
+      const layout = heroLayout();
       const fuels = orderBy(state.mix.filter(r => r.mw > 0), r => r.mw, 'desc');
       const small = new Set(state.small ?? (layout ? [...layout.other] : []));
       const own = fuels.filter(r => !small.has(r.fuel));
@@ -1534,45 +1541,48 @@
       chart.off('globalout');
       chart.on('globalout', () => scrubHero(null));
     }
+    // Hovering a region tile or a fuel of the mix filters the page to it, as a click does,
+    // until the pointer leaves the tiles or the mix. The pointer has to rest HOVER_MS first, so
+    // sweeping across draws once, at the end; a render still running is dropped by _renderSeq.
+    // Mouse only: a tap is the click. Listened on the row and the mix, as paintHero rewrites
+    // what is in them. "Other" and "Charging" are no fuel: on them the hover stays as it is.
+    const HOVER_MS = 200;
+    const _hover = { region: { timer: 0, next: null }, fuel: { timer: 0, next: null } };
+    function hoverOn(kind, value) {
+      const h = _hover[kind];
+      if (value === h.next) return;
+      h.next = value;
+      clearTimeout(h.timer);
+      h.timer = setTimeout(() => {
+        if (document.getElementById(`${kind}Filter`).value) return;
+        const active = kind === 'region' ? activeRegion : activeFuel, before = active();
+        crossFilter.hover[kind] = value;
+        if (active() !== before) renderAll();
+      }, HOVER_MS);
+    }
+    for (const [kind, el] of [['region', document.getElementById('heroRegions')], ['fuel', document.querySelector('#hero .mix-col')]]) {
+      el.addEventListener('pointermove', e => {
+        if (e.pointerType !== 'mouse') return;
+        const value = e.target.closest(`[data-${kind}]`)?.dataset[kind];
+        if (value) hoverOn(kind, value);
+      });
+      el.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') hoverOn(kind, null); });
+    }
     // A click on the mix filters the page to that fuel, like a click on the generation chart;
     // a click on a region does what a click on its price line does. A second click undoes it.
+    // The click wins over the hover; what it was on hovers again once the pointer has left it.
     document.getElementById('hero').addEventListener('click', e => {
       const fuel = e.target.closest('[data-fuel]')?.dataset.fuel, region = e.target.closest('[data-region]')?.dataset.region;
       if (!fuel && !region) return;
-      if (fuel) crossFilter.fuel = crossFilter.fuel === fuel ? null : fuel;
-      if (region) {
-        crossFilter.region = crossFilter.region === region ? null : region;
-        // The click wins over the hover; the tile hovers again once the pointer has left it.
-        crossFilter.hover = null;
-        clearTimeout(_hoverTimer);
-        _hoverNext = region;
+      for (const [kind, value] of [['fuel', fuel], ['region', region]]) {
+        if (!value) continue;
+        crossFilter[kind] = crossFilter[kind] === value ? null : value;
+        crossFilter.hover[kind] = null;
+        clearTimeout(_hover[kind].timer);
+        _hover[kind].next = value;
       }
       renderAll();
     });
-    // Hovering a region tile filters the page to it, as a click does, until the pointer leaves
-    // the tiles. A tile has to hold the pointer HOVER_MS first, so sweeping across the row draws
-    // once, at the end; a render still running is dropped by _renderSeq. Mouse only: a tap is
-    // the click. Listened on the row, as paintHero rewrites the tiles.
-    const HOVER_MS = 200;
-    let _hoverTimer = 0, _hoverNext = null;
-    function hoverRegion(code) {
-      if (code === _hoverNext) return;
-      _hoverNext = code;
-      clearTimeout(_hoverTimer);
-      _hoverTimer = setTimeout(() => {
-        if (document.getElementById('regionFilter').value) return;
-        const before = activeRegion();
-        crossFilter.hover = code;
-        if (activeRegion() !== before) renderAll();
-      }, HOVER_MS);
-    }
-    const tiles = document.getElementById('heroRegions');
-    tiles.addEventListener('pointermove', e => {
-      if (e.pointerType !== 'mouse') return;
-      const code = e.target.closest('[data-region]')?.dataset.region;
-      if (code) hoverRegion(code);
-    });
-    tiles.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') hoverRegion(null); });
     // The hover card of the mix: what the element under the pointer says in data-tip.
     const _tip = document.body.appendChild(Object.assign(document.createElement('div'), { className: 'tip' }));
     document.getElementById('hero').addEventListener('pointermove', e => {
@@ -2998,7 +3008,7 @@
       document.getElementById(id).addEventListener("change", () => {
         crossFilter.fuel = null;
         crossFilter.region = null;
-        crossFilter.hover = null;
+        crossFilter.hover = { region: null, fuel: null };
         crossFilter.duids = [];
         updateDuidTrigger();
         clearQueryCache();
@@ -3012,7 +3022,7 @@
       document.getElementById(id).addEventListener("change", () => {
         crossFilter.fuel = null;
         crossFilter.region = null;
-        crossFilter.hover = null;
+        crossFilter.hover = { region: null, fuel: null };
         crossFilter.duids = [];
         updateDuidTrigger();
         clearAnalyzePreview();
