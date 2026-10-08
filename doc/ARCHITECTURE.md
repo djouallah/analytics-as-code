@@ -62,10 +62,10 @@ One semantic model (`semantic_model/model.bim`), its clients under `dashboard/`:
 - `powerbi_report/` is a Power BI report (`nem.Report`, as JSON) on the model as deployed to Fabric,
   which reads the Iceberg tables in Direct Lake. `deploy_model.yml` publishes the two together.
 - `fabric_app/vertipaq/` is the page as a Fabric app with the deployed model as its engine,
-  its queries run by Power BI. It is built but not deployed: the model's workspace is on a
-  capacity in Australia Southeast, where Fabric apps (preview) are not available, and the
-  app's tenant cannot see the model. The two Fabric apps share `fabric_app/common/` (the
-  build and the sign-in), as the GitHub page's two ways of asking share `github/common/`.
+  its queries run by Power BI. `deploy_fabric.yml` installs it with the rest of the project
+  (lakehouse, `fabric_items/` notebook and pipeline, model, report) into one workspace. The
+  two Fabric apps share `fabric_app/common/` (the build and the sign-in), as the GitHub
+  page's two ways of asking share `github/common/`.
 
 A measure is written once, in the model, and reaches every client.
 
@@ -180,8 +180,9 @@ no query service.
 │   ├── fabric_app/       # The same page as a Fabric app, and its two backends
 │   │   ├── common/       # build.mjs and the Fabric sign-in (site/storage/auth.js)
 │   │   ├── wasm/         # DuckDB-WASM over a copy of the tables: its host code and the Rayfin project (deployed)
-│   │   └── vertipaq/     # the deployed model as the engine: its host code and the Rayfin project (not deployable yet)
+│   │   └── vertipaq/     # the deployed model as the engine: its host code and the Rayfin project (deploy_fabric.yml)
 │   └── powerbi_report/   # A report over the deployed model
+├── fabric_items/         # The lakehouse, notebook and pipeline deploy_fabric.yml installs into a workspace
 ├── doc/                  # This file and the architecture diagram
 ├── tests/                # dbt data tests
 ├── .github/workflows/    # CI/CD pipelines
@@ -219,9 +220,9 @@ The Fabric app has limits of its own:
   sign in and read the data. For them there is no row-level or column-level security.
 - **No public access.** Every visitor signs in with a Fabric account the app is shared with.
 - **Only the item's owner can deploy to it.** An app deployed from a laptop cannot then be
-  deployed from CI, or the reverse: each identity deploys the item it created. CI deploys
-  are blocked by microsoft/rayfin#89 (functions fail on an item owned by a service
-  principal), so the app is deployed from the owner's laptop.
+  deployed from CI, or the reverse: each identity deploys the item it created. The
+  DuckDB-WASM app is deployed from the owner's laptop: its function fails on an item owned
+  by a service principal (microsoft/rayfin#89).
 
 ## Open items
 
@@ -233,10 +234,7 @@ The Fabric app has limits of its own:
   together, for one DuckDB version end to end.
 - DuckDB-WASM with Iceberg on Azure (below).
 - duckdb-iceberg#1341 (`expire_snapshots`): replace pyiceberg.
-- microsoft/rayfin#89: deploy the DuckDB-WASM Fabric app from CI (`deploy_fabric.yml`,
-  `app=wasm`).
-- Fabric apps in Australia Southeast, or a workspace in a region that has them: build the
-  VertiPaq app.
+- microsoft/rayfin#89: deploy the DuckDB-WASM Fabric app from CI.
 - AEMO publishing `ROOFTOP_PV_ACTUAL_PRED`/`_RUN`: move `fct_rooftop_pv` to the 5-minute
   estimate when `ROOFTOP_PV_ACTUAL` stops.
 

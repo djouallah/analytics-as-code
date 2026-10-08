@@ -162,18 +162,21 @@ The ids live in repository **variables** (public identifiers, not secrets):
   `dbt_fabric_python_iceberg`, no client secret; shared with the sibling repo)
 - `WS_ID`, `LH_ID` — the Fabric workspace (`power`) and lakehouse (`nem`). The workflows build
   `WAREHOUSE_PATH = {WS_ID}/{LH_ID}` and `FILES_PATH = abfss://{WS_ID}@onelake.dfs.fabric.microsoft.com/{LH_ID}/Files`
-  directly from them. **No workflow creates or looks up a lakehouse** — that is infrastructure,
-  created once by hand (schema-enabled, since the models write to `landing`/`mart`). If it is
-  ever recreated, update `LH_ID`; CI is deliberately not in the provisioning business.
+  directly from them. **No workflow creates or looks up this lakehouse** — that is
+  infrastructure, created once by hand (schema-enabled, since the models write to
+  `landing`/`mart`). If it is ever recreated, update `LH_ID`. (`deploy_fabric.yml` creates a
+  lakehouse, but its own, in the workspace it installs into: see "The whole stack in one
+  workspace".)
 - `LAKE_TENANT_ID`, `LAKE_CLIENT_ID` — the Fabric app's tenant and an Entra app there
   (`fabric-github-deploy`), a member of the app's workspace: it uploads the data
-  (`scripts/deploy_onelake.py`) and is the identity of the parked `deploy_fabric.yml`.
+  (`scripts/deploy_onelake.py`) and is the identity of `deploy_fabric.yml` into a fabriccat
+  workspace (the catalog's tenant gets `AZURE_CLIENT_ID`).
   It is a second tenant: `deploy_onelake.py` exchanges the job's GitHub OIDC token itself,
   next to the workflow's catalog login. The app's
   federated credential for this repo has the subject
   `repo:djouallah/analytics-as-code:ref:refs/heads/main`.
 - `FABRIC_APP_WORKSPACE_ID` (workspace `app`), `ONELAKE_FILES_URL` (the lakehouse's Files
-  folder, where the app's function signs its SAS) — `deploy_fabric.yml`.
+  folder, where the wasm app's function signs its SAS).
 Env contract consumed by profiles.yml, the models and the scripts: `ONELAKE_ENDPOINT`,
 `ONELAKE_TOKEN`, `WAREHOUSE_PATH`, `FILES_PATH`, `download_limit`, `process_limit`,
 `ALL_PERIODS` (the two import workflows), plus
@@ -188,8 +191,9 @@ semantic model, and `dashboard/` holds its clients: `github/` (the page, on GitH
 over the deployed model). **`dashboard/fabric_app/` is one app and two backends**, as
 `github/` is one page and two ways of asking: `common/` (`build.mjs` and the Fabric sign-in,
 `site/storage/auth.js`), `wasm/` (DuckDB-WASM over a copy of the tables, deployed) and
-`vertipaq/` (the deployed model as the engine, not deployable yet; see "The Fabric app on
-VertiPaq"). Each backend is a Rayfin project of its own, named by its engine.
+`vertipaq/` (the deployed model as the engine, installed by `deploy_fabric.yml`; see "The
+whole stack in one workspace"). Each backend is a Rayfin project of its own, named by its
+engine.
 **`dashboard/github/` is one page and two ways of asking:**
 `common/` (`index.html`, `frontend/` draw.js, logs.js, perflog.js, `storage/`, `dag/`), `dax/`
 (`frontend/queries.js` and `semantic/compiler.js`: the page through the semantic model) and
@@ -599,17 +603,11 @@ it; the owner is also the identity `getDataSas` reads the lakehouse as. That is 
 laptop and CI cannot share an item: a deploy to someone else's fails with
 `403 Only AppBackend artifact owner can perform this operation`.
 
-**`deploy_fabric.yml` with `app=wasm` is parked** (dispatch only), waiting for a fix
-upstream. It runs the same `rayfin up` with a Fabric API token from the OIDC login, no
-secret, into an item of its own (`nemtracker`), and the deploy works. The app it makes does
-not: Fabric answers 500 ("An internal error occurred.") to every function call on an item
-owned by a service principal, before the function runs. That is microsoft/rayfin#89, open,
-with this repo's case in its comments. It is not the federated login, which works, and not
-permissions: OneLake issues the CI identity a delegation key (the workflow's last step
-checks it). The page-only deploy into the owner's item (`rayfin up staticapp deploy`) is no
-way round it: owner-only too, the same 403. When #89 is fixed: dispatch the workflow, open
-`nemtracker`, read its Logs tab. Keep that item until then: the comment on #89 says it is
-there for re-testing. What the workflow needs:
+**The wasm app is not deployed from CI**: Fabric answers 500 ("An internal error
+occurred.") to every function call on an item owned by a service principal, before the
+function runs (microsoft/rayfin#89, open, with this repo's case in its comments; the item
+`nemtracker` in workspace `app`, CI's from an earlier workflow, is kept for its re-test).
+For a CI deploy once it is fixed:
 - `dashboard/fabric_app/wasm/rayfin/functions/host.json` is committed: the deploy refuses
   without it, and the Rayfin scaffold's `.gitignore` leaves it out.
 - The lock files resolve from `registry.npmjs.org`: generated on a laptop they name a
@@ -624,30 +622,34 @@ Rules of the Fabric host that are easy to break:
   Fabric sign-in popup.
 To check a deploy, open the Logs tab: the build stamp, each fetch, attach and query.
 
-### The Fabric app on VertiPaq
-`dashboard/fabric_app/vertipaq/` is the page with the deployed semantic model as its engine
-(Power BI running its queries in Direct Lake over the `mart` tables, no DuckDB, no copy of
-the data). Built, not deployable yet. Its `site/storage/data.js` sets `engine: 'dax'`, and
-the compiler's `createModel` then sends each query's DAX (`toDax`) to it as it is, with no
-views and no SQL; with no `needs`, the page leaves out Analyze.
-- **Blocked by the region:** Fabric refuses to create an app item in `power`
-  (`403 The feature is not available`). The workspace's capacity is in Australia Southeast,
-  where Fabric apps (preview) are not available (Australia East has them; microsoft/rayfin#8).
-  The app needs a workspace on a capacity in a region that has Fabric apps, in the model's
-  tenant (a connector can name the model's workspace, so the app's can be another one), or
-  the region to get the feature.
-- **Not from the app's tenant:** the connector is delegated (on-behalf-of, in the app's
-  tenant), and fabriccat cannot see `power`: the Fabric API answers `404 EntityNotFound` and
-  `rayfin connector add` "Item not found" (2026-10-08).
-- **The route to the model:** a Rayfin connector of type `fabric-semanticmodel`
-  (`executeQuery`, delegated): the browser calls the app's backend, which runs the query on
-  the model as the signed-in user, so the browser holds no Power BI token and a reader sees
-  what their own access allows. A function cannot do it: functions have no Power BI audience
-  and run as the item's owner. A service principal can call the model on that route (Power
-  BI's `executeDaxQueries`, with a token for `https://analysis.windows.net/powerbi/api`);
-  the delegated path in a browser is untested.
-- `deploy_fabric.yml` offers `app=vertipaq` into `power` as the catalog's identity; it stops
-  at the 403 above.
+### The whole stack in one workspace
+`deploy_fabric.yml` (dispatch: `tenant_id`, `workspace_id`) installs the project into one
+Fabric workspace, independent of everything GitHub runs: the mechanism of the sibling
+`fabric-medallion-dbt` (`.github/scripts/deploy.py`), ported. `scripts/deploy_fabric.py`:
+- publishes `fabric_items/` with fabric-cicd: the lakehouse `nem` (schema-enabled), the
+  Python notebook `run` and the pipeline `run_pipeline` that calls it;
+- uploads the dbt project (`git archive HEAD`) to `nem/Files/project`, with a `COMMIT` file;
+- runs the pipeline once and waits: the model names tables a first run creates;
+- publishes the model and the report with `deploy_model.main()`, on that lakehouse;
+- schedules the pipeline hourly, if it has no schedule.
+Then the workflow deploys `dashboard/fabric_app/vertipaq/` (item `vertipaq`), its connector
+naming the model `nem` of the same workspace. The workspace must exist, on a capacity in a
+region with Fabric apps (preview); the login is the repo's Entra app of that tenant
+(`AZURE_*` or `LAKE_*`), any other tenant fails at the first step.
+The notebook does what `process_data.yml` does: the same env contract (from `notebookutils`:
+the workspace, the lakehouse's id, a storage token), `pip install -r requirements.txt`, and
+the same two `dbt run --target prod`. No `rebuild`, maintenance, tests or `.duckdb` import
+there: those stay on GitHub, for the `power` catalog.
+
+**The VertiPaq app** is the page with the deployed semantic model as its engine (Power BI in
+Direct Lake over the `mart` tables, no DuckDB, no copy of the data). Its
+`site/storage/data.js` sets `engine: 'dax'`, and the compiler's `createModel` then sends each
+query's DAX (`toDax`) to it as it is, with no views and no SQL; with no `needs`, the page
+leaves out Analyze. The route to the model is a Rayfin connector of type
+`fabric-semanticmodel` (`executeQuery`, delegated): the app's backend runs the query on the
+model as the signed-in user, so the browser holds no Power BI token. Not in `power`: its
+capacity is in Australia Southeast, where Fabric refuses an app item
+(`403 The feature is not available`, microsoft/rayfin#8).
 
 A table or a column the page asks for and a deployed file lacks reads as "no data" where
 the page checks (`data.has`), so a new page can go out before its data; a new table goes

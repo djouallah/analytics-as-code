@@ -17,9 +17,9 @@ market (AEMO).
   - a **Power BI report** ([`dashboard/powerbi_report/`](dashboard/powerbi_report/)), on
     the same model, run by VertiPaq over the Iceberg tables (Direct Lake).
   - a second backend of the Fabric app, the page with VertiPaq as its engine and no copy of
-    the data, is built but not deployed: Fabric apps (preview) are not available in
-    Australia Southeast, the region of the model's capacity, and the app's tenant cannot
-    see the model ([`dashboard/fabric_app/vertipaq/`](dashboard/fabric_app/vertipaq/)).
+    the data ([`dashboard/fabric_app/vertipaq/`](dashboard/fabric_app/vertipaq/)),
+    installed with the whole stack (lakehouse, dbt notebook and pipeline, model, report)
+    into one Fabric workspace by `deploy_fabric.yml`.
 - **One page, two ways of asking** ([`dashboard/github/`](dashboard/github/)): `common/` is
   the page (the charts, the data files, the Logs tab), and only what it asks with differs.
   - [`dax/`](dashboard/github/dax/) asks the semantic model: a chart names the model's
