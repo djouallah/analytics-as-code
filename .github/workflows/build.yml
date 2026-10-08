@@ -20,6 +20,20 @@ permissions:
   contents: write
 
 jobs:
+  dax-sql:
+    # packages/dax-sql: its own tests, on made-up data in an in-memory DuckDB (no catalog, no
+    # capacity). repo.test.js runs every query of the page through it and through
+    # dashboard/github/dax/semantic/compiler.js, and compares the rows.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: packages/dax-sql/package-lock.json
+      - run: cd packages/dax-sql && npm ci --no-audit --no-fund && npm test
+
   test:
     runs-on: ubuntu-latest
     steps:
