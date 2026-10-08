@@ -129,6 +129,30 @@ func referenced(tbl *table.Table, fsys iceio.IO, liveOnly bool) (map[string]bool
 	return files, nil
 }
 
+// expireTable commits a real expiry, with iceberg-go's file deletion, of a table of the
+// pipeline, and says how many snapshots it removed. The file-by-file check is expire's,
+// on the throwaway table: on a big table it opens every file the table ever had.
+func expireTable(ctx context.Context, cat *rest.Catalog, name string) error {
+	ident := catalog.ToIdentifier(strings.Split(name, ".")...)
+	tbl, err := cat.LoadTable(ctx, ident)
+	if err != nil {
+		return fmt.Errorf("load: %w", err)
+	}
+	nBefore := len(tbl.Metadata().Snapshots())
+	tx := tbl.NewTransaction()
+	if err := tx.ExpireSnapshots(table.WithOlderThan(expireOlderThan)); err != nil {
+		return fmt.Errorf("expire: %w", err)
+	}
+	if _, err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	if tbl, err = cat.LoadTable(ctx, ident); err != nil {
+		return fmt.Errorf("reload: %w", err)
+	}
+	fmt.Printf("  snapshots  %d -> %d\n", nBefore, len(tbl.Metadata().Snapshots()))
+	return nil
+}
+
 // expire commits a real expiry, with iceberg-go's file deletion, then checks that the files only the expired snapshots reached are gone and the
 // ones the newest reaches are not.
 func expire(ctx context.Context, cat *rest.Catalog, name string, opts ...table.ExpireSnapshotsOpt) error {
@@ -227,9 +251,7 @@ func main() {
 			return expire(ctx, cat, name, table.WithOlderThan(0), table.WithRetainLast(1))
 		}
 	case "expire-table": // a table of the pipeline: as the daily job does, older than a day
-		run = func(ctx context.Context, cat *rest.Catalog, name string) error {
-			return expire(ctx, cat, name, table.WithOlderThan(expireOlderThan))
-		}
+		run = expireTable
 	}
 	names := os.Args[2:]
 	failed := 0
