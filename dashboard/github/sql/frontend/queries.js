@@ -243,7 +243,7 @@ export function createQueries(page) {
       const shares = by === 'fuel' ? `, (${share(g.output, series, k.group)})::DOUBLE AS share` : '';
       return `SELECT ${k.select}, ${series} AS series, ${g.output}::DOUBLE AS output, ${g.charging}::DOUBLE AS charging${shares},
         GROUPING(${series}) = 1 AS all FROM ${units(g.units, series, ...conds)} ${where(conds)}
-        GROUP BY GROUPING SETS ((${k.group}, ${series}), (${k.group})) ORDER BY ${k.order}, series`;
+        GROUP BY GROUPING SETS ((${k.group}, ${series}), (${k.group})) ORDER BY ${k.order}, series NULLS FIRST`;
     },
     // The series the chart does not draw one by one, added up per interval.
     generationOf(by, intraday, shown) {
@@ -302,7 +302,7 @@ export function createQueries(page) {
       const g = grain(), k = at('s', intraday), conds = whereGen();
       return `SELECT ${k.select}, (${g.emissions})::DOUBLE AS t, (${g.emissions} / NULLIF(${g.mwh('d.CO2eFactor IS NOT NULL')}, 0))::DOUBLE AS i,
         GROUPING(s.date) = 1 AS all FROM ${units(g.units, 'd.')} ${where(conds)}
-        GROUP BY GROUPING SETS ((${k.group}), ()) HAVING t IS NOT NULL OR i IS NOT NULL ORDER BY ${k.order}`;
+        GROUP BY GROUPING SETS ((${k.group}), ()) HAVING t IS NOT NULL OR i IS NOT NULL ORDER BY ${k.order.replaceAll(',', ' NULLS FIRST,')} NULLS FIRST`;
     },
     // Renewable share per interval (day) and over the range. The fuel filter is ignored on purpose.
     renewableShareByPeriod: intraday => {
@@ -343,12 +343,12 @@ export function createQueries(page) {
       if (intraday) {
         const conds = [...whereGen(), 'd.Storage = FALSE'];
         return `SELECT ${FUEL} AS fuel, CAST(s.time AS INTEGER) AS time, (${FIVE.output} / NULLIF(COUNT(DISTINCT s.date), 0))::DOUBLE AS mw
-          FROM ${units('v_fct_summary', 'd.')} ${where(conds)} GROUP BY ALL ORDER BY time, fuel`;
+          FROM ${units('v_fct_summary', 'd.')} ${where(conds)} GROUP BY ALL ORDER BY time, fuel NULLS FIRST`;
       }
       const conds = [months('s.month'), ...unitFilters('s'), 'd.Storage = FALSE'];
       return `SELECT ${FUEL} AS fuel, CAST(s.hour AS INTEGER) AS hour,
         (SUM(s.mwh) / NULLIF((SELECT SUM(days) FROM v_dim_month WHERE ${months('month')}), 0))::DOUBLE AS mw
-        FROM ${units('v_fct_summary_hourly', 'd.')} ${where(conds)} GROUP BY ALL ORDER BY hour, fuel`;
+        FROM ${units('v_fct_summary_hourly', 'd.')} ${where(conds)} GROUP BY ALL ORDER BY hour, fuel NULLS FIRST`;
     },
 
     // --- Insights, renewables: curtailment ---

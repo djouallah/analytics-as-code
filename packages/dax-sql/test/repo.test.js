@@ -1,11 +1,12 @@
 // This repository's semantic model and dashboard page (the package sits at packages/dax-sql):
 //   - every measure of model.bim, compiled and run in five filter contexts;
 //   - some of them checked against SQL written by hand;
-//   - every query the page sends, in six page states, compared row for row with what the
-//     page's own compiler (dashboard/github/dax/semantic/compiler.js) returns for it.
-// All on made-up data in the model's shape (fixtures/nem.js). Where the two compilers differ,
-// this one follows DAX, and the differences are listed below with the reason. Skipped when
-// the repository's files are not there (DAX_SQL_REPO can point at a checkout).
+//   - every query the page sends, in six page states, through the page's compiler
+//     (dashboard/github/dax/semantic/compiler.js: its DAX, and this package's SQL with the
+//     page's options), runs.
+// All on made-up data in the model's shape (fixtures/nem.js). The page's rows are checked on
+// the deployed files, against the SQL page and the compiler before (scripts/parity, build.yml).
+// Skipped when the repository's files are not there (DAX_SQL_REPO can point at a checkout).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -23,13 +24,7 @@ const path = p => new URL(p, root);
 const present = ['semantic_model/model.bim', 'dashboard/github/common/index.html', 'dashboard/github/dax/semantic/compiler.js'].every(p => fs.existsSync(path(p)));
 const skip = present ? false : 'the repository files are not here';
 
-// Where the page's compiler is not DAX: the query, and why the rows differ.
-const DIFFERENT = {
-  capacityFactor: 'subtotal rows: SELECTEDVALUE over two stations is blank in DAX; compiler.js takes ANY_VALUE',
-  batteryFleet: 'no unit left by the filters: COUNTROWS of nothing is blank in DAX; compiler.js returns 0',
-};
-
-let con, dax, toy, bim, staged, createQueries;
+let con, dax, page, bim, staged, createQueries;
 before(async () => {
   if (skip) return;
   const bimText = fs.readFileSync(path('semantic_model/model.bim'), 'utf8');
@@ -41,20 +36,12 @@ before(async () => {
   const fetch = globalThis.fetch;
   globalThis.fetch = async () => ({ json: async () => JSON.parse(bimText) });
   try {
-    const page = await import(pathToFileURL(join(staged, 'frontend/queries.js')).href);
-    toy = await import(pathToFileURL(join(staged, 'semantic/compiler.js')).href);
-    createQueries = page.createQueries;
+    ({ createQueries } = await import(pathToFileURL(join(staged, 'frontend/queries.js')).href));
+    page = await import(pathToFileURL(join(staged, 'semantic/compiler.js')).href);
   } finally { globalThis.fetch = fetch; }
   const db = await DuckDBInstance.create(':memory:');
   con = await db.connect();
   await con.run(setup);
-  // The views compiler.js reads for a relationship: the fact LEFT JOIN the dimension.
-  for (const r of bim.model.relationships) {
-    const from = bim.model.tables.find(t => t.name === r.fromTable), to = bim.model.tables.find(t => t.name === r.toTable);
-    const have = new Set(from.columns.map(c => c.name));
-    const extra = to.columns.map(c => c.name).filter(c => c !== r.toColumn && !have.has(c));
-    await con.run(`CREATE VIEW ${r.name} AS SELECT f.*${extra.map(c => `, d."${c}"`).join('')} FROM v_${r.fromTable} f LEFT JOIN v_${r.toTable} d ON f."${r.fromColumn}" = d."${r.toColumn}"`);
-  }
   dax = createCompiler(bim, { tableSource: t => `v_${t.name}` });
 });
 after(() => {
@@ -106,22 +93,14 @@ test('measures against SQL written by hand', { skip }, async () => {
     `SELECT COUNT(DISTINCT "DUID")::BIGINT v FROM v_fct_summary JOIN v_dim_duid d USING ("DUID") WHERE date = '2026-10-06' AND d."FuelSourceDescriptor" IS DISTINCT FROM 'Rooftop solar'`);
 });
 
-test("the page's queries give the rows compiler.js gives", { skip }, async () => {
-  let compared = 0;
+test("the page's queries run through the page's compiler", { skip }, async () => {
+  let ran = 0;
   for (const [state, s] of Object.entries(STATES)) {
-    const asked = await pageQueries(createQueries, s, async q => rows(dax.compile(toy.toDax(q)).sql));
-    for (const { name, query } of asked) {
-      const text = toy.toDax(query);
-      const mine = await run(text).catch(e => { throw new Error(`${state}.${name}: ${e.message}`); });
-      let theirs;
-      try { theirs = await rows(toy.toSQL(text)); } catch (e) {
-        if (!compared) throw new Error(`${state}.${name}: ${e.message}\n${text}`);
-        continue;
-      }
-      if (DIFFERENT[name]) continue;
-      assert.deepEqual(bag(mine), bag(theirs), `${state}.${name}`);
-      compared++;
+    const run = async q => rows(page.toSQL(page.toDax(q)));
+    for (const { name, query } of await pageQueries(createQueries, s, run)) {
+      await run(query).catch(e => { throw new Error(`${state}.${name}: ${e.message}\n${page.toDax(query)}`); });
+      ran++;
     }
   }
-  assert.ok(compared > 250, `${compared} queries compared`);
+  assert.ok(ran > 250, `${ran} queries ran`);
 });

@@ -41,10 +41,11 @@ export class Emitter {
     const r = this.alias('q');
     const style = this.options.columnNames ?? 'short';
     const outNames = outputNames(table.cols, style);
-    const cast = this.options.castOutput !== false;
+    const cast = this.options.castOutput !== false, by = typeof this.options.castOutput === 'object' ? this.options.castOutput : null;
     const sel = table.cols.map((c, i) => {
       let s = `${r}.${this.ident(names[i])}`;
-      if (cast && (c.t === 'int' || c.t === 'double' || c.t === 'decimal')) s = this.d.cast(s, c.t === 'int' ? 'int' : 'double');
+      if (by) { if (by[c.t]) s = by[c.t](s); }
+      else if (cast && (c.t === 'int' || c.t === 'double' || c.t === 'decimal')) s = this.d.cast(s, c.t === 'int' ? 'int' : 'double');
       return `${s} AS ${this.ident(outNames[i])}`;
     });
     let sql = `SELECT ${sel.join(', ')} FROM (${inner}) AS ${r}`;
@@ -543,15 +544,20 @@ export class Emitter {
     return v.k === 'lit' && v.t === 'int' ? this.d.bigint(v.v) : this.scalar(v, scope);
   }
 
-  // A variable that reads nothing outside itself: one CTE, read where it is named.
+  // A variable that reads nothing outside itself: one CTE, read where it is named. It is a
+  // ROW of one value, so its aggregates are fused as ROW's are.
   sharedScalar(x) {
     let name = this.memo.get(x);
     if (!name) {
       name = this.alias('v');
       this.inCte = true;
+      const fusion = new Fusion(this, null, [], []);
+      this.fusions.push(fusion);
       let sql;
-      try { sql = this.isolated(() => this.scalar({ ...x, shared: false }, new Map())); } finally { this.inCte = false; }
-      this.ctes.push(`${name} AS ${this.d.materialized}(SELECT ${sql} AS v)`);
+      try { sql = this.scalar({ ...x, shared: false }, new Map()); } finally { this.fusions.pop(); this.inCte = false; }
+      const groups = fusion.finish();
+      const from = groups.length ? ` FROM ${groups.map(g => g.alias).join(' CROSS JOIN ')}` : '';
+      this.ctes.push(`${name} AS ${this.d.materialized}(SELECT ${sql} AS v${from})`);
       this.memo.set(x, name);
     }
     return `(SELECT v FROM ${name})`;
@@ -643,24 +649,44 @@ export class Emitter {
     if (x.src.k === 'currentgroup') return this.aggExpr(x, scope);
     // A subquery: what it holds is not fused (SQL would read an aggregate of a column of the
     // outer query as the outer query's aggregate).
-    return this.isolated(() => {
+    const sql = this.isolated(() => {
       const b = this.open(this.table(x.src, scope));
       const s2 = withRow(scope, x.row, b.res);
       b.setOut([{ name: 'v', lineage: null }], [x.fn === 'single' ? this.scalar(x.arg, s2) : this.aggExpr(x, s2)]);
-      return `(${b.render()})`;
+      return b.render();
     });
+    return ir.freeRows(x).size ? `(${sql})` : this.once(sql);
+  }
+
+  // A subquery that reads nothing of the query around it, written once: the same SQL (up to
+  // its aliases) anywhere in the query is one CTE.
+  once(sql) {
+    const key = `once|${canonical(sql)}`;
+    let name = this.memo.get(key);
+    if (!name) {
+      name = this.alias('o');
+      this.ctes.push(`${name} AS ${this.d.materialized}(${sql})`);
+      this.memo.set(key, name);
+    }
+    return `(SELECT v FROM ${name})`;
   }
 
   aggExpr(x, scope) {
+    const p = this.aggParts(x, scope);
+    return this.d.agg(p.fn, p.arg, p.extra);
+  }
+
+  // What an aggregate is written from: its function, its argument and the rest, as SQL.
+  aggParts(x, scope) {
     const arg = x.arg ? this.scalar(x.arg, scope) : null;
     const extra = {};
     if (x.fn === 'concat') {
       extra.delim = this.scalar(x.a[0], scope);
       extra.order = (x.order ?? []).map(o => `${this.scalar(o.expr, scope)}${o.desc ? ' DESC NULLS LAST' : ' ASC NULLS FIRST'}`);
-      return this.d.agg('concat', this.d.text(arg, x.arg.t), extra);
+      return { fn: 'concat', arg: this.d.text(arg, x.arg.t), extra };
     }
     if (x.fn === 'pct_inc' || x.fn === 'pct_exc') extra.k = this.scalar(x.a[0], scope);
-    return this.d.agg(x.fn, arg, extra);
+    return { fn: x.fn, arg, extra };
   }
 
   // --- SUMMARIZECOLUMNS ----------------------------------------------------------------
@@ -806,19 +832,34 @@ class Fusion {
     }
     const state = em.model.state(S.ctx.mods);
     const exp = em.model.expand(S.table, state);
-    const keys = new Set(), rest = [], guards = [];
+    const keys = new Set(), rest = [], guards = [], via = [];
     for (const f of S.ctx.filters) {
       if (f.kind === 'bind' && f.val.k === 'col' && f.val.row === this.keyRow) {
         const c = f.cols[0];
-        if (exp.has(c.table.name)) {
-          keys.add(f.val.ref);
-          // A guarded key (a value of the group, when a condition on the group holds): the
-          // condition is the group's, read where the group is.
-          if (f.guard && !guards.includes(f.guard)) guards.push(f.guard);
-        } else if (em.model.reaches(c.table, S.table, state)) return null;
+        if (exp.has(c.table.name)) keys.add(f.val.ref);
+        // A key on a table whose filter reaches the scan over a relationship that filters
+        // back (both ways, many-to-many): kept for the mapping below.
+        else if (em.model.reaches(c.table, S.table, state)) via.push({ ref: f.val.ref, col: c });
+        else continue;
+        // A guarded key (a value of the group, when a condition on the group holds): the
+        // condition is the group's, read where the group is.
+        if (f.guard && !guards.includes(f.guard)) guards.push(f.guard);
         continue;
       }
       rest.push(f);
+    }
+    // Keys that reach the scan over a relationship that filters back: the scan is joined to
+    // the pairs (key, value of the relationship's column) that the filter context keeps on the
+    // keys' table, and grouped by the key. A row of the scan is in a key's group when its
+    // column is one of that key's values, as the filter's IN says, once per key.
+    let edge = null;
+    if (via.length) {
+      const X = via[0].col.table;
+      if (via.some(v => v.col.table !== X)) return null;
+      for (const name of exp.keys()) {
+        for (const e of em.model.inbound(em.model.table(name), state)) if (e.there.table === X) edge ??= e;
+      }
+      if (!edge) return null;
     }
     // The other filters read no row, or only keys the scan is filtered to: those are its own
     // columns, row by row.
@@ -831,21 +872,61 @@ class Fusion {
         readsKeys = true;
       }
     }
-    const keyList = [...keys].sort((a, b) => a - b);
     const block = em.isolated(() => em.scanBlock(S.table, new Ctx(rest, S.ctx.mods), new Map(), null, readsKeys ? [this.keyRow, this.keyCols] : null));
-    const sig = `${S.table.name}|${state.key}|${keyList.join(',')}|${canonical(`${block.from} ${block.where.join(' AND ')}`)}`;
-    let g = this.groups.find(x => x.sig === sig);
+    const keyExpr = new Map();
+    if (edge) {
+      const m = em.isolated(() => em.scanBlock(edge.there.table, new Ctx(rest, S.ctx.mods), new Map(), new Set(exp.keys())));
+      m.setOut([...via.map((_, j) => ({ name: `g${j}` })), { name: 'y' }], [...via.map(v => m.res.meta(v.col)), m.res.meta(edge.there)]);
+      m._names = [...via.map((_, j) => `g${j}`), 'y'];
+      m.distinct = true;
+      const ma = em.alias('m');
+      block.joins.push(`JOIN (${m.render()}) AS ${ma} ON ${block.res.meta(edge.here)} = ${ma}.y`);
+      via.forEach((v, j) => { keys.add(v.ref); keyExpr.set(v.ref, `${ma}.g${j}`); });
+    }
+    const keyList = [...keys].sort((a, b) => a - b);
+    const sig = `${S.table.name}|${state.key}|${keyList.join(',')}|${canonical(`${block.from} ${block.joins.join(' ')} ${block.where.join(' AND ')}`)}`;
+    let g = this.groups.find(x => x.sig === sig), rename = s => s, conds = null, parts = null;
+    if (!g && !keyList.length && !readsKeys && em.d.aggFilter) {
+      // An aggregate over the whole of another scan of the same tables (no keys: one row
+      // each) is that scan's, over the rows its own conditions on the joined tables keep:
+      // one scan for both. Its
+      // SQL is written first, on its own scan, since that can join a table to it.
+      parts = em.isolated(() => em.aggParts(x, withRow(new Map(), x.row, block.res)));
+      const into = `${S.table.name}|${state.key}`;
+      const from = b => [b.from, ...b.joins].join(' ');
+      const same = this.groups.find(x => x.merge === into && canonical(from(x.block)) === canonical(from(block)));
+      const map = same && aliasMap(from(block), from(same.block));
+      // Only conditions on joined tables may differ: a condition on the scanned table's own
+      // columns is what lets the engine skip its rows, so the scans must agree on those.
+      const base = same && / AS (\w+)$/.exec(same.block.from)?.[1];
+      const own = cs => cs.filter(c => c.split(/('(?:[^']|'')*')/).some((part, i) => i % 2 === 0 && part.includes(`${base}.`))).sort().join(' AND ');
+      const mapped = map && block.where.map(s => renameAliases(s, map));
+      if (map && base && own(mapped) === own(same.aggs[0].conds)) {
+        g = same;
+        rename = s => renameAliases(s, map);
+        conds = mapped;
+      }
+    }
     if (!g) {
-      g = { sig, alias: em.alias('f'), block, keys: keyList, aggs: [] };
-      g.keyExprs = keyList.map(i => block.res.meta(this.keyCols[i]));
+      g = { sig, alias: em.alias('f'), block, keys: keyList, aggs: [], merge: !keyList.length && !readsKeys ? `${S.table.name}|${state.key}` : null };
+      g.keyExprs = keyList.map(i => keyExpr.get(i) ?? block.res.meta(this.keyCols[i]));
       g.on = (k, keyNames) => keyList.length
         ? keyList.map((ki, j) => em.d.isNotDistinct(`${g.alias}.g${j}`, `${k}.${em.ident(keyNames[ki])}`)).join(' AND ')
         : 'TRUE';
       this.groups.push(g);
     }
-    const sql = em.isolated(() => em.aggExpr(x, withRow(new Map(), x.row, g.block.res)));
-    let i = g.aggs.indexOf(sql);
-    if (i < 0) { g.aggs.push(sql); i = g.aggs.length - 1; }
+    // Each aggregate keeps the conditions of its own scan; finish() writes the ones the
+    // others of its group lack as its FILTER.
+    if (!conds) {
+      parts = g.block === block && parts ? parts : em.isolated(() => em.aggParts(x, withRow(new Map(), x.row, g.block.res)));
+      conds = [...g.block.where];
+    }
+    const p = { ...parts, arg: parts.arg && rename(parts.arg), extra: Object.fromEntries(Object.entries(parts.extra)
+      .map(([k, v]) => [k, Array.isArray(v) ? v.map(rename) : rename(v)])) };
+    const make = filter => em.d.agg(p.fn, p.arg, filter ? { ...p.extra, filter } : p.extra);
+    const key = `${make(null)}|${[...conds].sort().join(' AND ')}`;
+    let i = g.aggs.findIndex(a => a.key === key);
+    if (i < 0) { g.aggs.push({ key, conds, make }); i = g.aggs.length - 1; }
     em.fusedIn.set(x, g);
     if (!guards.length) return `${g.alias}.a${i}`;
     const when = em.isolated(() => guards.map(c => paren(em.scalar(c, scope, true))).join(' AND '));
@@ -856,8 +937,15 @@ class Fusion {
   finish() {
     for (const g of this.groups) {
       const b = g.block;
-      b.setOut([...g.keyExprs.map((_, j) => ({ name: `g${j}` })), ...g.aggs.map((_, i) => ({ name: `a${i}` }))], [...g.keyExprs, ...g.aggs]);
-      b._names = [...g.keyExprs.map((_, j) => `g${j}`), ...g.aggs.map((_, i) => `a${i}`)];
+      // The scan keeps the conditions every aggregate has; an aggregate's others are its FILTER.
+      const common = b.where.filter(c => g.aggs.every(a => a.conds.includes(c)));
+      b.where = common;
+      const aggs = g.aggs.map(a => {
+        const own = a.conds.filter(c => !common.includes(c));
+        return a.make(own.length ? own.map(paren).join(' AND ') : null);
+      });
+      b.setOut([...g.keyExprs.map((_, j) => ({ name: `g${j}` })), ...aggs.map((_, i) => ({ name: `a${i}` }))], [...g.keyExprs, ...aggs]);
+      b._names = [...g.keyExprs.map((_, j) => `g${j}`), ...aggs.map((_, i) => `a${i}`)];
       if (g.keyExprs.length) b.group = g.keyExprs;
       this.em.ctes.push(`${g.alias} AS (${b.render()})`);
     }
@@ -1106,9 +1194,32 @@ function outputNames(cols, style) {
 
 // SQL with its generated aliases numbered by first appearance: the same filters give the
 // same text.
+// The aliases of one FROM (with its joins) as those of another written the same way
+// (canonical), or null.
+function aliasMap(from, to) {
+  const re = /\b[a-z]\d+\b/g, a = from.match(re) ?? [], b = to.match(re) ?? [];
+  if (a.length !== b.length) return null;
+  const map = new Map();
+  for (let i = 0; i < a.length; i++) {
+    if (map.has(a[i]) && map.get(a[i]) !== b[i]) return null;
+    map.set(a[i], b[i]);
+  }
+  return map;
+}
+// SQL with its aliases renamed, outside its string literals.
+function renameAliases(sql, map) {
+  return sql.split(/('(?:[^']|'')*')/).map((part, i) => i % 2 ? part
+    : part.replace(/\b[a-z]\d+\b/g, m => map.get(m) ?? m)).join('');
+}
+
+// SQL with the aliases it declares (AS t3) numbered in order of appearance, so that two
+// writings of the same SQL compare equal. A name it only refers to (a CTE) is kept: two
+// subqueries over different CTEs are different.
 function canonical(sql) {
+  const declared = new Set([...sql.matchAll(/\bAS ([a-z]\d+)\b/g)].map(m => m[1]));
   const map = new Map();
   return sql.replace(/\b([a-z])(\d+)\b/g, (m) => {
+    if (!declared.has(m)) return m;
     if (!map.has(m)) map.set(m, `@${map.size}`);
     return map.get(m);
   });

@@ -18,7 +18,7 @@ import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { engine, pageOf, states, lists, asked, keysOf, shiftDate } from './page_states.mjs';
+import { engine, pageOf, states, lists, asked, keysOf, shiftDate, compare, order } from './page_states.mjs';
 import { stagePage } from '../stage_pages.mjs';
 
 const [dataDir, out] = process.argv.slice(2);
@@ -50,35 +50,6 @@ const to = shiftDate(newest, -2);
 const pages = { dax: pageOf(dax.createQueries, newest), sql: pageOf(sql.createQueries, newest) };
 await pages.dax.queries.readWholeDays(daxRows);
 await pages.sql.queries.readWholeDays(sqlRows);
-
-// Rows as a set: matched on what is not a figure (text, a flag, a whole number in every
-// row of both), the figures compared. The columns are matched by name: the page reads them so.
-const isFigure = v => typeof v === 'number' && !Number.isInteger(v);
-const close = (a, b) => a === b || (typeof a === 'number' && typeof b === 'number'
-  && Math.abs(a - b) <= Math.max(1e-9, 1e-6 * Math.max(Math.abs(a), Math.abs(b))));
-function compare(a, b) {
-  const ca = Object.keys(a[0] ?? b[0] ?? {}).sort(), cb = Object.keys(b[0] ?? a[0] ?? {}).sort();
-  if (ca.join() !== cb.join()) return `columns ${ca.join(',')} against ${cb.join(',')}`;
-  if (a.length !== b.length) return `${a.length} rows against ${b.length}`;
-  const keys = ca.filter(c => [...a, ...b].every(r => !isFigure(r[c])));
-  const keyOf = r => JSON.stringify(keys.map(c => r[c]));
-  const byKey = new Map();
-  for (const r of b) (byKey.get(keyOf(r)) ?? byKey.set(keyOf(r), []).get(keyOf(r))).push(r);
-  for (const r of a) {
-    const same = byKey.get(keyOf(r)) ?? [];
-    const i = same.findIndex(s => ca.every(c => close(r[c], s[c])));
-    if (i < 0) return `no row like ${JSON.stringify(r)} (${same.length ? `nearest ${JSON.stringify(same[0])}` : 'none with its keys'})`;
-    same.splice(i, 1);
-  }
-  return null;
-}
-// The order the DAX page's query asks for, on the columns it orders by (rows tied on them
-// may come in either order).
-function order(a, b, by) {
-  const cols = (by ?? []).map(o => Array.isArray(o) ? o[0] : o);
-  const i = a.findIndex((r, i) => !cols.every(c => close(r[c], b[i][c])));
-  return i < 0 ? null : `row ${i} out of order on ${cols.join(', ')}: ${JSON.stringify(a[i])} where ${JSON.stringify(b[i])}`;
-}
 
 const differs = [], entries = new Map();
 let compared = 0;

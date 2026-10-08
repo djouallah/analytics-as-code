@@ -2,8 +2,9 @@
 // page_states.mjs — a page run outside the browser: the deployed files attached as data.js
 // attaches them, the page's state as index.html gives it, and what each chart asks in it
 // =============================================================================
-// Shared by page_queries.mjs (the DAX page's queries, through the compiler) and sql_page.mjs
-// (the SQL page's, in SQL, against the DAX page's).
+// Shared by page_queries.mjs (the DAX page's queries, through the compiler), sql_page.mjs
+// (the SQL page's, in SQL, against the DAX page's) and compiler_ab.mjs (the compiler of
+// another commit against this one).
 // =============================================================================
 
 import { readdirSync } from 'node:fs';
@@ -126,6 +127,35 @@ export function asked(queries, state) {
     flowGens: queries.flowGens(state.range.to), flowNow: queries.flowNow(state.range.to),
     flows: queries.flows(state.range.from, state.range.to), flowPrices: queries.flowPrices(state.range.from, state.range.to) });
   return list;
+}
+
+// Rows as a set: matched on what is not a figure (text, a flag, a whole number in every
+// row of both), the figures compared. The columns are matched by name: the page reads them so.
+const isFigure = v => typeof v === 'number' && !Number.isInteger(v);
+const close = (a, b) => a === b || (typeof a === 'number' && typeof b === 'number'
+  && Math.abs(a - b) <= Math.max(1e-9, 1e-6 * Math.max(Math.abs(a), Math.abs(b))));
+export function compare(a, b) {
+  const ca = Object.keys(a[0] ?? b[0] ?? {}).sort(), cb = Object.keys(b[0] ?? a[0] ?? {}).sort();
+  if (ca.join() !== cb.join()) return `columns ${ca.join(',')} against ${cb.join(',')}`;
+  if (a.length !== b.length) return `${a.length} rows against ${b.length}`;
+  const keys = ca.filter(c => [...a, ...b].every(r => !isFigure(r[c])));
+  const keyOf = r => JSON.stringify(keys.map(c => r[c]));
+  const byKey = new Map();
+  for (const r of b) (byKey.get(keyOf(r)) ?? byKey.set(keyOf(r), []).get(keyOf(r))).push(r);
+  for (const r of a) {
+    const same = byKey.get(keyOf(r)) ?? [];
+    const i = same.findIndex(s => ca.every(c => close(r[c], s[c])));
+    if (i < 0) return `no row like ${JSON.stringify(r)} (${same.length ? `nearest ${JSON.stringify(same[0])}` : 'none with its keys'})`;
+    same.splice(i, 1);
+  }
+  return null;
+}
+// The order the query asks for, on the columns it orders by (rows tied on them
+// may come in either order).
+export function order(a, b, by) {
+  const cols = (by ?? []).map(o => Array.isArray(o) ? o[0] : o);
+  const i = a.findIndex((r, i) => !cols.every(c => close(r[c], b[i][c])));
+  return i < 0 ? null : `row ${i} out of order on ${cols.join(', ')}: ${JSON.stringify(a[i])} where ${JSON.stringify(b[i])}`;
 }
 
 // The columns a row of a DAX page's query is matched on: the select's columns and the
