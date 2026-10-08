@@ -1,4 +1,4 @@
-import { createQueries } from '../../../dashboard/github-dax/frontend/queries.js';
+import { createQueries } from '../../../dashboard/github/dax/frontend/queries.js';
 
 const shiftDate = (date, n) => {
   const d = new Date(`${date}T00:00:00Z`);

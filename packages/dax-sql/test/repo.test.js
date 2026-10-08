@@ -2,7 +2,7 @@
 //   - every measure of model.bim, compiled and run in five filter contexts;
 //   - some of them checked against SQL written by hand;
 //   - every query the page sends, in six page states, compared row for row with what the
-//     page's own compiler (dashboard/github-dax/semantic/compiler.js) returns for it.
+//     page's own compiler (dashboard/github/dax/semantic/compiler.js) returns for it.
 // All on made-up data in the model's shape (fixtures/nem.js). Where the two compilers differ,
 // this one follows DAX, and the differences are listed below with the reason. Skipped when
 // the repository's files are not there (DAX_SQL_REPO can point at a checkout).
@@ -16,7 +16,7 @@ import { pageQueries, STATES } from './page-queries.js';
 
 const root = process.env.DAX_SQL_REPO ? new URL(`file://${process.env.DAX_SQL_REPO.replace(/\/?$/, '/')}`) : new URL('../../../', import.meta.url);
 const path = p => new URL(p, root);
-const present = ['semantic_model/model.bim', 'dashboard/github-dax/index.html', 'dashboard/github-dax/semantic/compiler.js'].every(p => fs.existsSync(path(p)));
+const present = ['semantic_model/model.bim', 'dashboard/github/common/index.html', 'dashboard/github/dax/semantic/compiler.js'].every(p => fs.existsSync(path(p)));
 const skip = present ? false : 'the repository files are not here';
 
 // Where the page's compiler is not DAX: the query, and why the rows differ.
@@ -33,7 +33,7 @@ before(async () => {
   // compiler.js fetches model.bim next to itself when it loads.
   const fetch = globalThis.fetch;
   globalThis.fetch = async () => ({ json: async () => JSON.parse(bimText) });
-  try { toy = await import(path('dashboard/github-dax/semantic/compiler.js').href); } finally { globalThis.fetch = fetch; }
+  try { toy = await import(path('dashboard/github/dax/semantic/compiler.js').href); } finally { globalThis.fetch = fetch; }
   const db = await DuckDBInstance.create(':memory:');
   con = await db.connect();
   await con.run(setup);
