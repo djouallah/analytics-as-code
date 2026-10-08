@@ -624,7 +624,8 @@ Rules of the Fabric host that are easy to break:
 To check a deploy, open the Logs tab: the build stamp, each fetch, attach and query.
 
 ### The whole stack in one workspace
-`deploy_fabric.yml` (dispatch: `tenant_id`, `workspace_id`) installs the project into one
+`deploy_fabric.yml` (dispatch: `tenant_id`, `workspace_id`, and a tick per part: `data`,
+`semantic_model`, `front_end`, all on by default) installs the project into one
 Fabric workspace, independent of everything GitHub runs: the mechanism of the sibling
 `fabric-medallion-dbt` (`.github/scripts/deploy.py`), ported. `scripts/deploy_fabric.py`:
 - publishes `fabric_items/` with fabric-cicd: the lakehouse `nem` (schema-enabled), the

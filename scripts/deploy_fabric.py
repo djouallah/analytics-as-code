@@ -1,7 +1,11 @@
 """Install the whole project into one Fabric workspace: the lakehouse, the hourly dbt run, the
 semantic model and the report.
 
-    WS_ID=<workspace id> python scripts/deploy_fabric.py
+    WS_ID=<workspace id> python scripts/deploy_fabric.py [data] [model]
+
+The arguments are the parts to deploy (both when none is named), deploy_fabric.yml's ticks:
+  data    steps 1-3 and 5: the lakehouse, the notebook, the pipeline, its run and schedule
+  model   step 4: the semantic model and the report, on the lakehouse already there
 
 deploy_fabric.yml runs it, then deploys the front end (the VertiPaq Fabric app) into the same
 workspace. The mechanism is the sibling repo's (fabric-medallion-dbt, .github/scripts/deploy.py):
@@ -134,16 +138,22 @@ def schedule(pipeline):
 
 
 def main():
-    publish()
-    lakehouse, pipeline = item("lakehouses", LAKEHOUSE), item("items?type=DataPipeline", PIPELINE)
-    upload(lakehouse)
-    run_and_wait(pipeline)
-    os.environ["LH_ID"] = lakehouse
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import deploy_model
-    deploy_model.main()
-    print("published the semantic model and the report")
-    schedule(pipeline)
+    parts = set(sys.argv[1:]) or {"data", "model"}
+    if parts - {"data", "model"}:
+        raise SystemExit(f"usage: deploy_fabric.py [data] [model], not {' '.join(sys.argv[1:])}")
+    if "data" in parts:
+        publish()
+        pipeline = item("items?type=DataPipeline", PIPELINE)
+        upload(item("lakehouses", LAKEHOUSE))
+        run_and_wait(pipeline)
+    if "model" in parts:
+        os.environ["LH_ID"] = item("lakehouses", LAKEHOUSE)
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import deploy_model
+        deploy_model.main()
+        print("published the semantic model and the report")
+    if "data" in parts:
+        schedule(pipeline)
 
 
 if __name__ == "__main__":
