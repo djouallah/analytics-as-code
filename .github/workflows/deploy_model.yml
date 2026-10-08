@@ -1,13 +1,15 @@
 name: Deploy Semantic Model
 
-# Publishes semantic_model/model.bim (a Direct Lake model over the catalog's
-# Iceberg tables) and the Power BI report on it (dashboard/powerbi_report/nem.Report) to the
-# workspace that holds the lakehouse, then refreshes the model and asks it, in DAX over
-# XMLA, a row count per table and its measures (scripts/check_model.py).
+# Publishes semantic_model/model.bim (a Direct Lake model over the lakehouse `nem`'s
+# tables) and the Power BI report on it (dashboard/powerbi_report/nem.Report) into the Fabric
+# app's workspace (`app`, FABRIC_APP_WORKSPACE_ID), whose `nem` lakehouse deploy_fabric.yml
+# installs with its own hourly dbt run; then refreshes the model and asks it, in DAX over
+# XMLA, a row count per table and its measures (scripts/check_model.py). That tenant's
+# capacity is the one the checks and the parity cost, not the catalog's.
 #
 # Manual only: it creates or updates two Fabric items. It touches no table and no dashboard
-# file. The identity is the catalog's (the same OIDC login as Process Data), so the model
-# is owned by it and reads OneLake as it.
+# file. The identity is the repo's Entra app of that tenant (LAKE_*), so the model is owned
+# by it and reads OneLake as it.
 
 # A run that asks the model the page's queries says so in its name: the last green one is
 # the commit the next parity compares with (`since`).
@@ -46,8 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     env:
-      WS_ID: ${{ vars.WS_ID }}
-      LH_ID: ${{ vars.LH_ID }}
+      WS_ID: ${{ vars.FABRIC_APP_WORKSPACE_ID }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -73,9 +74,18 @@ jobs:
       - name: Azure federated login
         uses: azure/login@v2
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          client-id: ${{ vars.LAKE_CLIENT_ID }}
+          tenant-id: ${{ vars.LAKE_TENANT_ID }}
           allow-no-subscriptions: true
+      - name: The workspace's lakehouse
+        # `nem`, created by deploy_fabric.yml: its id is the workspace's, not a variable.
+        run: |
+          set -euo pipefail
+          token=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv)
+          lh=$(curl -fsS -H "Authorization: Bearer $token" "https://api.fabric.microsoft.com/v1/workspaces/$WS_ID/lakehouses" \
+            | jq -r '.value[] | select(.displayName == "nem") | .id')
+          test -n "$lh" || { echo "::error::no lakehouse nem in workspace $WS_ID: run deploy_fabric.yml there first"; exit 1; }
+          echo "LH_ID=$lh" >> "$GITHUB_ENV"
       - name: Publish the model and the report
         if: inputs.publish
         run: python scripts/deploy_model.py
