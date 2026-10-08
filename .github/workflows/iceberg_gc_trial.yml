@@ -1,0 +1,47 @@
+name: Iceberg GC Trial
+
+# Dry run of iceberg-go's file-deleting snapshot expiry and orphan cleanup on every table
+# (scripts/iceberg_gc): what it would delete, per folder. Commits and deletes nothing, so
+# it takes no concurrency group. If it shows the deletes are safe, it can replace pyiceberg.
+
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ONELAKE_ENDPOINT: https://onelake.table.fabric.microsoft.com/iceberg
+  WAREHOUSE_PATH: ${{ vars.WS_ID }}/${{ vars.LH_ID }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  dry_run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: scripts/iceberg_gc/go.mod
+          cache-dependency-path: scripts/iceberg_gc/go.sum
+      - name: Build
+        working-directory: scripts/iceberg_gc
+        run: go build -o iceberg_gc .
+      - name: Azure federated login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Mint OneLake token
+        run: |
+          TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
+          echo "::add-mask::$TOKEN"
+          echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+      - name: Dry run
+        # The storage reads go through the Azure CLI login above (DefaultAzureCredential).
+        run: |
+          TABLES=$(cd scripts && python -c "from iceberg_tables import TABLES; print(' '.join(TABLES))")
+          scripts/iceberg_gc/iceberg_gc $TABLES
