@@ -16,3 +16,4 @@ venv/
 .idea/
 .DS_Store
 node_modules/
+scripts/parity/node_modules/
