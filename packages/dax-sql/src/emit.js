@@ -724,24 +724,6 @@ export class Emitter {
       keys = this.keyCombinations(x, L, keyNames, scope);
     } else keys = 'SELECT 1 AS one';
 
-    // A subquery the expressions name more than once (a measure named inside another) that
-    // reads nothing of the query around it but the group: computed once per group, as a
-    // column of the groups, and read from there.
-    const repeated = new Map();
-    for (const q of items.flatMap(subqueries)) repeated.set(q, (repeated.get(q) ?? 0) + 1);
-    const hoisted = [...repeated].filter(([q, n]) => n > 1 && outerAliases(q).every(a => a === k))
-      .map(([q]) => q).sort((a, b) => b.length - a.length);
-    if (hoisted.length) {
-      const kk = this.alias('k'), cols = [];
-      for (const q of hoisted) {
-        if (!items.some(it => it.includes(q))) continue;
-        const name = `__s${cols.length}`;
-        cols.push(`${renameAliases(q, new Map([[k, kk]]))} AS ${this.ident(name)}`);
-        items = items.map(it => it.split(q).join(`${k}.${this.ident(name)}`));
-      }
-      if (cols.length) keys = `SELECT ${kk}.*, ${cols.join(', ')} FROM (${keys}) AS ${kk}`;
-    }
-
     const sel = [
       ...x.keyCols.map((_, i) => `${active.includes(i) ? `${k}.${this.ident(keyNames[i])}` : 'NULL'} AS ${this.ident(names[i])}`),
       ...L.flags.map((f, i) => `${f ? 'TRUE' : 'FALSE'} AS ${this.ident(names[x.keyCols.length + i])}`),
@@ -1224,30 +1206,6 @@ function aliasMap(from, to) {
   }
   return map;
 }
-// The scalar subqueries in a SQL expression, nested ones included: each "(SELECT ...)" with
-// its parentheses, outside string literals and quoted names.
-function subqueries(sql) {
-  const out = [], open = [];
-  for (let i = 0; i < sql.length; i++) {
-    const ch = sql[i];
-    if (ch === "'" || ch === '"') {
-      for (i++; i < sql.length; i++) if (sql[i] === ch) { if (sql[i + 1] === ch) i++; else break; }
-    } else if (ch === '(') open.push(sql.startsWith('(SELECT ', i) ? i : -1);
-    else if (ch === ')') {
-      const start = open.pop();
-      if (start >= 0) out.push(sql.slice(start, i + 1));
-    }
-  }
-  return out;
-}
-// The aliases SQL reads a column of (a1.x) without declaring them (AS a1): those of the
-// query around it.
-function outerAliases(sql) {
-  const code = sql.split(/('(?:[^']|'')*')/).filter((_, i) => i % 2 === 0).join(' ');
-  const declared = new Set([...code.matchAll(/\bAS ([a-z]\d+)\b/g)].map(m => m[1]));
-  return [...new Set([...code.matchAll(/\b([a-z]\d+)\./g)].map(m => m[1]))].filter(a => !declared.has(a));
-}
-
 // SQL with its aliases renamed, outside its string literals.
 function renameAliases(sql, map) {
   return sql.split(/('(?:[^']|'')*')/).map((part, i) => i % 2 ? part
