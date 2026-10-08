@@ -127,9 +127,14 @@ Four deliberate local differences, all of which must survive a port:
    `iceberg_rewrite_data_files()`) and then `scripts/expire_snapshots.py`. Order is not
    negotiable: the rewrite adds a snapshot and leaves the previous ones pointing at the files
    it replaced, so expiry is what makes compaction worth anything. Expiry is **pyiceberg**
-   (`pyiceberg==0.11.1`) because duckdb-iceberg has no `expire_snapshots` yet. It is
-   metadata-only: snapshots leave the metadata JSON, the orphaned data files stay, so reads
-   get faster but storage doesn't shrink. Tables hold 16-18 snapshots, none older than a day,
+   because duckdb-iceberg has no `expire_snapshots` yet. Expiry is metadata-only: snapshots
+   leave the metadata JSON and their files stay. The same script then runs pyiceberg's
+   `remove_orphan_files()` per table (apache/iceberg-python PR #3361, unreleased, built from
+   its commit): it lists the table's folder and deletes the files no snapshot or metadata
+   references, older than 3 days, skipping every `_`/`.` path (OneLake's `_delta_log`) and
+   refusing when a listed and a referenced path differ only in scheme or host. It is a dry
+   run (`ORPHAN_DRY_RUN`) until a dry run's report has been read: deletion can't be undone.
+   Tables hold 16-18 snapshots, none older than a day,
    so something on the OneLake side already trims them; treat this step as a bounded safety
    net, and if a table is ever seen above ~48 snapshots that assumption has changed. The job
    takes a job-level `process-data` concurrency group — both operations commit
@@ -837,7 +842,10 @@ the same pins, and pins the two Azure SDK packages its upload uses.
   build, so pinning duckdb pins the extension too. Move every pin to `duckdb==2.0.0` once it
   ships. duckdb-iceberg has no `expire_snapshots` yet (duckdb-iceberg#1341 is open), so
   pyiceberg stays until that merges.
-- **`pyiceberg==0.11.1`** (snapshot expiry, `table_maintenance.yml` only) is pinned on its own
+- **pyiceberg is pinned to a commit**, `4adf237` (snapshot expiry and orphan files,
+  `table_maintenance.yml` only): apache/iceberg-python PR #3361 on main after 0.12.0, built
+  on the runner from `djouallah/iceberg-python` (tag `orphan-files-4adf237` keeps the commit
+  reachable). Back to a release pin once the PR ships in one. It is pinned on its own
   schedule — it never touches the duckdb file format, only the REST catalog, and the script
   reaches into `RestCatalog._supported_endpoints`, which is exactly the kind of internal a
   floating version breaks. That poke is a fallback: pyiceberg refuses to `commit_table` unless

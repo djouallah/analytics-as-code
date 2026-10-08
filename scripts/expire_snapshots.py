@@ -11,11 +11,17 @@ than a day, so this expired nothing. Something on the OneLake side is already tr
 snapshot list — this is a bounded safety net, not a backlog cleaner. If a table is ever seen
 carrying more than ~48 snapshots (a day's commits), that assumption has changed.
 
-What this buys, precisely: pyiceberg's ExpireSnapshots stages a RemoveSnapshotsUpdate and
+What expiry buys, precisely: pyiceberg's ExpireSnapshots stages a RemoveSnapshotsUpdate and
 nothing else. Snapshot entries leave the table metadata — the metadata JSON stops growing
-without bound and planning stays cheap — but no files are deleted. The orphaned data files
-stay in OneLake unless the service itself collects them. This is not a way to reclaim
-storage; don't let the report be read as one.
+without bound and planning stays cheap — but no files are deleted.
+
+The files are the second half: after each table's expiry, remove_orphan_files() (pyiceberg
+PR #3361, unreleased; installed from djouallah/iceberg-python at that PR's commit) lists the
+table's folder and deletes what no snapshot or metadata file references, older than
+ORPHAN_OLDER_THAN_DAYS. It skips every path with a component starting with `_` or `.`
+(OneLake's `_delta_log` among them), and it refuses to delete when a listed path and a
+referenced one differ only in scheme or host. ORPHAN_DRY_RUN (default true) lists without
+deleting: deletion is irreversible, so it is switched on only after a dry run has been read.
 
 The catalog gets the last word on whether a `remove-snapshots` update is accepted at all, so
 every table is best-effort, the metadata is re-read afterwards rather than trusting the
@@ -28,6 +34,7 @@ Usage:
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 from pyiceberg.catalog.rest import RestCatalog
 from pyiceberg.utils.datetime import datetime_to_millis
@@ -42,6 +49,11 @@ WAREHOUSE = os.environ["WAREHOUSE_PATH"]      # "{workspace_id}/{lakehouse_id}"
 # current snapshot. A day of history is a rollback window, not a feature.
 DAYS = float(os.environ.get("EXPIRE_OLDER_THAN_DAYS", "1"))
 
+# A file younger than this may belong to a commit in flight, so it is never a candidate.
+ORPHAN_DAYS = float(os.environ.get("ORPHAN_OLDER_THAN_DAYS", "3"))
+ORPHAN_DRY_RUN = os.environ.get("ORPHAN_DRY_RUN", "true").strip().lower() != "false"
+HIDDEN = ("_", ".")
+
 # The REST update this script issues, as advertised in GET /v1/config's `endpoints` list.
 UPDATE_TABLE_ENDPOINT = "POST /v1/{prefix}/namespaces/{namespace}/tables/{table}"
 
@@ -54,10 +66,8 @@ def oneline(e):
 def connect():
     """A REST catalog on the same endpoint/token duckdb uses.
 
-    No adls credential object: expiring snapshots is a metadata-only round trip through the
-    REST catalog, so pyiceberg's FileIO is never exercised. If that ever changes it fails
-    loudly here rather than silently doing half the job, and the fix is to hand it a
-    static-token credential.
+    Expiry is a metadata-only round trip, but the orphan pass lists and deletes files, so
+    the FileIO gets the same storage token (adlfs, as a static bearer credential).
     """
     return RestCatalog(
         "onelake",
@@ -65,6 +75,8 @@ def connect():
             "uri": ENDPOINT,
             "token": TOKEN,
             "warehouse": WAREHOUSE,
+            "py-io-impl": "pyiceberg.io.fsspec.FsspecFileIO",
+            "adls.token": TOKEN,
             "adls.account-name": "onelake",
             "adls.account-host": "onelake.blob.fabric.microsoft.com",
         },
@@ -163,24 +175,102 @@ def expire(catalog, table, cutoff, cutoff_ms):
     return (table, f"OK ({before} -> {after} snapshots, {len(victims)} expired)")
 
 
+def human(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.0f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+def remove_orphans(catalog, table):
+    """List one table's folder and remove (or, in a dry run, only name) its orphan files.
+
+    Returns the status line for the report. The detail — sample paths on both sides, so a
+    scheme or host mismatch can be seen — goes to the log only.
+    """
+    import time
+
+    try:
+        tbl = catalog.load_table(table)
+    except Exception as e:
+        return f"ERROR loading: {type(e).__name__}: {oneline(e)}"
+
+    if not hasattr(tbl.maintenance, "remove_orphan_files"):
+        return "SKIPPED: this pyiceberg has no remove_orphan_files"
+
+    # Keep what the listing returns on its way through, to report it without listing twice.
+    location = tbl.metadata.location
+    listed = []
+    io = tbl.io
+    list_prefix = io.list_prefix
+
+    def keeping(loc):
+        for entry in list_prefix(loc):
+            listed.append(entry)
+            yield entry
+
+    io.list_prefix = keeping
+
+    print(f"    location:   {location}")
+    print(f"    referenced: {tbl.metadata_location}")
+    snapshot = tbl.current_snapshot()
+    if snapshot is not None and snapshot.manifest_list:
+        print(f"    referenced: {snapshot.manifest_list}")
+
+    start = time.monotonic()
+    action = tbl.maintenance.remove_orphan_files().older_than(timedelta(days=ORPHAN_DAYS))
+    if ORPHAN_DRY_RUN:
+        action = action.dry_run()
+    try:
+        result = action.execute()
+    except Exception as e:
+        print(f"    listed {len(listed)} file(s), then {type(e).__name__}: {e}")
+        for entry in listed[:3]:
+            print(f"    listed:     {entry.location}")
+        return f"ERROR: {type(e).__name__}: {oneline(e)}"
+    seconds = time.monotonic() - start
+
+    # By path, not by string: the listing may spell the host differently from the metadata.
+    root = urlparse(location).path.rstrip("/")
+    hidden = sum(1 for e in listed
+                 if any(c.startswith(HIDDEN)
+                        for c in urlparse(e.location).path[len(root):].split("/") if c))
+    for entry in listed[:3]:
+        print(f"    listed:     {entry.location}")
+    for path in result.orphan_file_locations[:3]:
+        print(f"    orphan:     {path}")
+
+    what = (f"{len(result.orphan_file_locations)} orphan(s), {human(result.total_bytes)}, "
+            f"of {len(listed)} listed ({hidden} hidden, skipped) in {seconds:.0f}s")
+    if ORPHAN_DRY_RUN:
+        return f"DRY RUN: {what}"
+    failed = len(result.failed_to_delete)
+    return (f"deleted {len(result.deleted_files)}" + (f", {failed} FAILED" if failed else "")
+            + f": {what}")
+
+
 def report(lines, pyiceberg_version):
     title = f"Iceberg snapshot expiry (pyiceberg {pyiceberg_version}, older than {DAYS:g}d)"
+    mode = "dry run" if ORPHAN_DRY_RUN else "deleting"
+    orphan_title = f"Orphan files (older than {ORPHAN_DAYS:g}d, {mode})"
     out = ["=" * 100, title, "-" * 100]
-    for table, status in lines:
+    for table, status, _ in lines:
         out.append(f"{table:<32}{status}")
+    out += ["=" * 100, orphan_title, "-" * 100]
+    for table, _, orphans in lines:
+        out.append(f"{table:<32}{orphans}")
     out.append("=" * 100)
-    out.append("Metadata only — expired snapshots free no storage; their data files remain.")
     print("\n".join(out))
 
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as f:
             f.write(f"## {title}\n\n")
-            f.write("| table | result |\n|---|---|\n")
-            for table, status in lines:
-                f.write(f"| `{table}` | {status} |\n")
-            f.write("\nMetadata only — expired snapshots free no storage; their data "
-                    "files remain in OneLake.\n\n")
+            f.write(f"| table | expiry | {orphan_title} |\n|---|---|---|\n")
+            for table, status, orphans in lines:
+                f.write(f"| `{table}` | {status} | {orphans} |\n")
+            f.write("\n")
 
 
 def main():
@@ -189,8 +279,9 @@ def main():
     version = getattr(pyiceberg, "__version__", "unknown")
     cutoff = datetime.now(timezone.utc) - timedelta(days=DAYS)
     cutoff_ms = datetime_to_millis(cutoff)
-    print(f"pyiceberg {version} — expiring snapshots older than {cutoff.isoformat()} "
-          f"across {len(TABLES)} table(s):")
+    print(f"pyiceberg {version} — expiring snapshots older than {cutoff.isoformat()}, then "
+          f"orphan files older than {ORPHAN_DAYS:g}d "
+          f"({'dry run' if ORPHAN_DRY_RUN else 'DELETING'}), across {len(TABLES)} table(s):")
     for t in TABLES:
         print(f"  - {t}")
     print(flush=True)
@@ -205,8 +296,14 @@ def main():
         prefix = f"[{i}/{total}] {table}"
         print(f"{prefix} ... expiring", flush=True)
         _, status = expire(catalog, table, cutoff, cutoff_ms)
-        print(f"{prefix}: {status}\n", flush=True)
-        lines.append((table, status))
+        print(f"{prefix}: {status}", flush=True)
+        print(f"{prefix} ... orphan files", flush=True)
+        try:
+            orphans = remove_orphans(catalog, table)
+        except Exception as e:
+            orphans = f"ERROR: {type(e).__name__}: {oneline(e)}"
+        print(f"{prefix}: {orphans}\n", flush=True)
+        lines.append((table, status, orphans))
 
     report(lines, version)
 
