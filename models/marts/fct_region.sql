@@ -14,8 +14,13 @@
 --
 -- Insert-only merge on the grain, like every model here (the catalog rejects a matched
 -- UPDATE): a missing interval is added, a stored value is not revised; rebuild=fct_region
--- resets it. Small (5 regions), so every run recomputes all of it and the merge adds what
--- is missing.
+-- resets it.
+--
+-- Which dates: an incremental run recomputes from six days before fct_price's newest date
+-- on, as fct_summary does (a date's next-day file lands days later if the pipeline missed
+-- a run), and every intraday interval after it. The date comes from the Iceberg manifests
+-- (macros/date_bounds.sql) and is written as a literal on all three sources, so their scans
+-- prune data files. A first build, or one after rebuild=fct_region, reads them whole.
 {{ config(
     materialized='incremental',
     incremental_strategy='merge',
@@ -25,11 +30,19 @@
     tags=['powerbi']
 ) }}
 
+{%- set price_min, price_max = date_bounds(ref('fct_price'), 'DATE') %}
+{%- set window_from = price_max - modules.datetime.timedelta(days=6) if is_incremental() and price_max else none %}
+{%- if execute %}
+  {%- do log("fct_region: fct_price " ~ price_min ~ " .. " ~ price_max ~ "; recomputing "
+             ~ (window_from | string ~ " .. open" if window_from else "everything"), info=True) %}
+{%- endif %}
+{%- set in_window = "AND DATE >= DATE '" ~ window_from ~ "'" if window_from else "" %}
+
 WITH
 price_today AS (
   SELECT REGIONID, SETTLEMENTDATE, MAX(DATE) AS date, MAX(RRP) AS price
   FROM {{ ref('fct_price_today') }}
-  WHERE INTERVENTION = 0
+  WHERE INTERVENTION = 0 {{ in_window }}
   GROUP BY REGIONID, SETTLEMENTDATE
 ),
 regionsum AS (
@@ -43,7 +56,7 @@ regionsum AS (
     MAX(SS_SOLAR_AVAILABILITY) AS solar_available,
     GREATEST(MAX(SS_SOLAR_AVAILABILITY) - MAX(SS_SOLAR_CLEAREDMW), 0) AS solar_curtailed
   FROM {{ ref('fct_regionsum_today') }}
-  WHERE INTERVENTION = 0
+  WHERE INTERVENTION = 0 {{ in_window }}
   GROUP BY REGIONID, SETTLEMENTDATE
 ),
 intraday AS (
@@ -56,7 +69,7 @@ daily AS (
   SELECT REGIONID, SETTLEMENTDATE, MAX(DATE) AS date, MAX(RRP) AS price,
     MAX(TOTALDEMAND) AS demand, MAX(NETINTERCHANGE) AS net_interchange
   FROM {{ ref('fct_price') }}
-  WHERE INTERVENTION = 0
+  WHERE INTERVENTION = 0 {{ in_window }}
   GROUP BY REGIONID, SETTLEMENTDATE
 ),
 intervals AS (
