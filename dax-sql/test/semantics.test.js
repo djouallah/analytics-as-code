@@ -90,6 +90,22 @@ test('ALL on the fact table removes the filters on its dimensions too', async ()
   await eq('EVALUATE SUMMARIZECOLUMNS(Product[Color], "all", [All Sales])', [row('Red', 6130), row('Black', 6130), row('Blue', 6130)]);
 });
 
+test('a filter of a column\'s values: inline on the fact when its keys are the dimension\'s', async () => {
+  // Sales of 2024 are 4120, those before 6130 - 4120 = 2010. With referential integrity the
+  // date filter is a condition on the sale's own date, with no subquery; the rows are the same.
+  const ri = await harness(bim, setup, { assumeIntegrity: true });
+  const q = `EVALUATE ROW(
+    "from", CALCULATE([Sales Amount], FILTER(ALL('Date'[Date]), 'Date'[Date] >= DATE(2024, 1, 1))),
+    "upto", CALCULATE([Sales Amount], FILTER(ALL('Date'[Date]), 'Date'[Date] <= DATE(2023, 12, 31))),
+    "year", CALCULATE([Sales Amount], FILTER(ALL('Date'[Year]), 'Date'[Year] = 2024)))`;
+  const expected = [{ from: 4120, upto: 2010, year: 4120 }];
+  assert.deepEqual(await h.run(q), expected);
+  assert.deepEqual(await ri.run(q), expected);
+  assert.doesNotMatch(ri.dax.compile(q).sql, /IN \(SELECT/);
+  // A condition that is not on the column alone (a measure) keeps the subquery.
+  assert.match(ri.dax.compile(`EVALUATE ROW("m", CALCULATE([Sales Amount], FILTER(ALL('Date'[Year]), [Orders] > 3)))`).sql, /IN \(SELECT/);
+});
+
 test('ALL on a column keeps the other filters on its table', () => eq(
   'EVALUATE CALCULATETABLE(ROW("s", CALCULATE([Sales Amount], ALL(Product[Color]))), Product[Color] = "Black", Product[Name] = "Jersey")',
   [{ s: 350 }]));

@@ -438,6 +438,8 @@ export class Emitter {
   // A filter that is a table, on the columns D of the scan's expanded table.
   relCond(f, D, table, res, scope, state) {
     if (!f.base) {
+      const inline = this.inlineValues(f, D, table, res, scope, state);
+      if (inline) return inline;
       const b = this.table(f.src, scope), names = b.names(), a = this.alias('r');
       const sel = D.map(c => `${a}.${this.ident(names[f.idx[f.cols.indexOf(c)]])}`);
       const blanks = D.some(c => this.blankSide(table, c, res, state) && mayBeBlank(f.src, f.idx[f.cols.indexOf(c)]));
@@ -465,6 +467,28 @@ export class Emitter {
     // A column read through a relationship is blank for rows that match no row of its table.
     const blanks = cols.some(c => this.blankSide(table, c, res, state) && this.blankSide(f.base, c, null, state));
     return this.member(cols.map(c => res.meta(c)), names.map(n => `${a}.${this.ident(n)}`), `(${b.render()}) AS ${a}`, blanks, ir.freeRows(f.src).size > 0);
+  }
+
+  // Values of a table's columns, unfiltered but for conditions on those columns alone
+  // (FILTER(ALL(T[c]), T[c] >= x)), as a filter on columns every row of the scan holds a
+  // value of (its own, or a table's reached over relationships that rely on referential
+  // integrity): the row's value is one of them when it is not blank and the conditions hold
+  // of it. The conditions are written on the scan's row, with no subquery. Null when the
+  // filter is not of that kind.
+  inlineValues(f, D, table, res, scope, state) {
+    if (this.options.security?.length && !this.insecure) return null;
+    const chain = valuesChain(f.src);
+    if (!chain || chain.scan.ctx.filters.length) return null;
+    const T = chain.scan.table;
+    if (!chain.cols.every(c => c.lineage?.table === T && D.includes(c.lineage))) return null;
+    if (D.some(c => this.blankSide(table, c, res, state))) return null;
+    if (!chain.preds.every(p => plainOf(p.pred, p.row))) return null;
+    const parts = chain.preds.map(p => {
+      const r = { col: ref => res.meta(typeof ref === 'number' ? p.row.cols[ref].lineage : ref), meta: m => res.meta(m) };
+      return paren(this.scalar(p.pred, withRow(scope, p.row, r), true));
+    });
+    for (const c of D) parts.push(`${res.meta(c)} IS NOT NULL`);
+    return parts.join(' AND ');
   }
 
   // Whether a scan of `table` can read a blank in column c: on its blank row, or through a
@@ -1177,6 +1201,30 @@ function filterChain(x) {
     x = x.src;
   }
   return x.k === 'scan' ? { scan: x, preds } : null;
+}
+
+// A filter's table as FILTER(..DISTINCT(SELECTCOLUMNS(scan, its own columns))..): the scan,
+// the predicates on the columns kept, and those columns; or null.
+function valuesChain(x) {
+  const preds = [];
+  for (;;) {
+    if (x.k === 'filter') { preds.push({ pred: x.pred, row: x.row }); x = x.src; } else if (x.k === 'distinct') x = x.src;
+    else break;
+  }
+  if (x.k !== 'project' || x.keep || x.src.k !== 'scan' || !x.items.every(i => i.expr.k === 'col' && i.expr.row === x.row)) return null;
+  return { scan: x.src, preds, cols: x.cols };
+}
+
+// Whether an expression reads nothing but constants and the columns of `row`: no
+// aggregate, no subquery, no other row.
+function plainOf(x, row) {
+  switch (x.k) {
+    case 'lit': return true;
+    case 'col': return x.row === row;
+    case 'op': case 'fn': return x.a.every(y => plainOf(y, row));
+    case 'case': return x.w.every(([c, v]) => plainOf(c, row) && plainOf(v, row)) && plainOf(x.e, row);
+  }
+  return false;
 }
 
 // Names unique without regard to case, as SQL compares them.
