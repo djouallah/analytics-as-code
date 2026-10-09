@@ -77,7 +77,7 @@ A measure is written once, in the model, and reaches every client.
 | Data | `.duckdb` files next to the page | the same files in a lakehouse, under `Files/data` | the `mart` Iceberg tables, Direct Lake, no copy |
 | 5-minute history | one file per half-year, downloaded | the same files, downloaded as parallel range requests | — |
 | Host code | `dashboard/github/common/storage/data.js` | `dashboard/fabric_app/wasm/site/storage/` | — |
-| Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `dashboard/fabric_app/wasm/` (page), `import_onelake.yml` (data) | `deploy_model.yml` |
+| Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `dashboard/fabric_app/wasm/` (page); data not refreshed since 2026-10-09 | `deploy_model.yml` |
 
 ### The layers of the dashboard
 
@@ -158,8 +158,9 @@ no query service.
 - **Data:** the browser reads the files from OneLake itself, with read-only access to that
   one folder for about an hour at a time. A small server function signs that access; the
   storage token never reaches the browser.
-- **Refresh:** `import_onelake.yml` rebuilds the files from the Iceberg catalog daily and
-  uploads them to the lakehouse.
+- **Refresh:** none for now. The daily copy into the app's tenant was removed on 2026-10-09.
+  The app is to be installed with the rest of the stack in one workspace
+  (`deploy_fabric.yml`) once Fabric apps reach Australia Southeast.
 
 ## Project Structure
 
@@ -299,7 +300,7 @@ browser, is the natural place.
 The catalog is the **OneLake Iceberg REST catalog** (a Microsoft Fabric lakehouse). In CI the
 values come from GitHub repository **variables** (`WS_ID`, `LH_ID`, `AZURE_TENANT_ID`,
 `AZURE_CLIENT_ID` — public identifiers, no secrets) plus a per-run token minted after an OIDC
-federated `azure/login`. The Fabric app's deploys and data add `LAKE_TENANT_ID`,
+federated `azure/login`. The Fabric app's deploys add `LAKE_TENANT_ID`,
 `LAKE_CLIENT_ID`, `FABRIC_APP_WORKSPACE_ID` and `ONELAKE_FILES_URL`.
 
 | Variable | Description |
@@ -311,7 +312,7 @@ federated `azure/login`. The Fabric app's deploys and data add `LAKE_TENANT_ID`,
 | `download_limit` | Files fetched per feed per run (default 2; the workflow uses 200) |
 | `process_limit` | Files loaded per fact model per run (default 1000; the workflow uses 300) |
 | `AZURE_TRANSPORT_OPTION_TYPE`, `CURL_CA_INFO` | `curl` and the CA bundle, on GitHub runners only |
-| `ALL_PERIODS` | `true` copies every half-year file into the dashboard's files, not only the latest two (Import Data on dispatch, Import OneLake always) |
+| `ALL_PERIODS` | `true` copies every half-year file into the dashboard's files, not only the latest two (Import Data on dispatch) |
 | `GITHUB_TOKEN` | Authenticated GitHub API calls for the backfill listings and the DUID registration list; the workflows pass it, since anonymous calls from shared runners get rate-limited |
 | `NEMTRACKER_TOKEN` | The one secret: pushes the dashboard to its GitHub Pages repo |
 
@@ -360,6 +361,6 @@ echo https://onelake.dfs.fabric.microsoft.com/<workspace>/<lakehouse>.Lakehouse/
   | npx rayfin secret set ONELAKE_FILES_URL --stdin
 ```
 
-Then run the **Import OneLake** workflow to fill the lakehouse (`LAKE_TENANT_ID`,
-`LAKE_CLIENT_ID`: an Entra app with a federated credential for this repo and write access to
-the workspace), and open the app in the Fabric portal or in its own tab.
+The lakehouse's `Files/data/` must hold the `.duckdb` files and `latest.json` (see
+AGENTS.md). No workflow writes them since the daily copy was removed on 2026-10-09. Then open
+the app in the Fabric portal or in its own tab.

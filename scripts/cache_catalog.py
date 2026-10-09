@@ -80,8 +80,7 @@ def export_cutoff():
     files land in the previous half for a while after a boundary). Everything older is
     already deployed, so the daily run neither reads it from the catalog nor rebuilds or
     redeploys its files. ALL_PERIODS=true copies everything, e.g. after a rebuild=<table>
-    backfill of old data; import_onelake.yml always sets it, as OneLake keeps two whole
-    imports and has no deployed copy to add to."""
+    backfill of old data."""
     if os.environ.get("ALL_PERIODS", "").lower() == "true":
         return None
     today = datetime.now(timezone.utc).date()
@@ -143,7 +142,7 @@ def build(group):
                                  f"takes; the history needs a finer split than half-years.")
         # For a local run only. The deployed manifests are rebuilt from the period files
         # actually published: import_data.yml from the deploy repo, so it can never advertise
-        # a .duckdb that failed to land, deploy_onelake.py from the files it uploaded.
+        # a .duckdb that failed to land.
         with open(os.path.join(OUT, "mart_manifest.json"), "w") as f:
             json.dump({"periods": [f"{y}_h{h}" for y, h in periods]}, f)
     for table in GROUPS[group]:

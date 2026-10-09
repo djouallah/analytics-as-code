@@ -18,8 +18,8 @@
 //                                                   only the half-years a range needs
 //      The history is downloaded, not read in place over HTTP: OneLake answers each Range read
 //      in ~700 ms whatever its size, so whole files in parallel beat a block at a time.
-// The files are built and uploaded by import_onelake.yml (scripts/cache_catalog.py,
-// scripts/deploy_onelake.py). Every read goes to the OneLake data/ folder with a read-only SAS
+// The files are scripts/cache_catalog.py's; nothing uploads them since the daily copy into
+// the app's tenant was removed (2026-10-09, see AGENTS.md). Every read goes to the OneLake data/ folder with a read-only SAS
 // from the getDataSas function; sas.dataAccess() signs a new one when it is about to expire.
 //
 // Progress is reported through the injected `onStatus` callback, and what is fetched,
@@ -75,7 +75,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   // --- Whole-file download (parallel Ranges) + OPFS cache keyed by the immutable name ---
   async function download(name) {
     const head = await get(name, { method: 'HEAD' });
-    // Gone: the import this page resolved was replaced (deploy_onelake.py keeps two).
+    // Gone: the import this page resolved was replaced (an upload keeps the last two).
     if (head.status === 404) throw Object.assign(new Error(`HEAD ${name}: HTTP 404`), { gone: true });
     if (!head.ok) throw new Error(`HEAD ${name}: HTTP ${head.status}`);
     const size = Number(head.headers.get('content-length'));

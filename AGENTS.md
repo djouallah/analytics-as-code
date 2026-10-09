@@ -177,12 +177,9 @@ The ids live in repository **variables** (public identifiers, not secrets):
   lakehouse, but its own, in the workspace it installs into: see "The whole stack in one
   workspace".)
 - `LAKE_TENANT_ID`, `LAKE_CLIENT_ID` — the Fabric app's tenant and an Entra app there
-  (`fabric-github-deploy`), a member of the app's workspace: it uploads the data
-  (`scripts/deploy_onelake.py`) and is the identity of `deploy_fabric.yml` into a fabriccat
-  workspace (the catalog's tenant gets `AZURE_CLIENT_ID`).
-  It is a second tenant: `deploy_onelake.py` exchanges the job's GitHub OIDC token itself,
-  next to the workflow's catalog login. The app's
-  federated credential for this repo has the subject
+  (`fabric-github-deploy`), a member of the app's workspace: the identity of
+  `deploy_fabric.yml` into a fabriccat workspace (the catalog's tenant gets
+  `AZURE_CLIENT_ID`). The app's federated credential for this repo has the subject
   `repo:djouallah/analytics-as-code:ref:refs/heads/main`.
 - `FABRIC_APP_WORKSPACE_ID` (workspace `app`), `ONELAKE_FILES_URL` (the lakehouse's Files
   folder, where the wasm app's function signs its SAS).
@@ -515,17 +512,16 @@ the whole site near 1 GB (GitHub Pages' limit): the copy is about 880 MB. That i
 `fct_summary` is written by date, time, price, DUID: its price is the region's, so in that
 order the column is runs and costs nothing; in key order the files are 60% larger.
 
-**The same files also go to OneLake**, for the Fabric app (the same page, hosted in Fabric,
-reading a lakehouse in another tenant — workspace `app`, lakehouse `data`).
-`import_onelake.yml` (daily, 22:30 UTC) runs the same `cache_catalog.py` steps and publishes
-with `scripts/deploy_onelake.py`. It builds the same files, with one difference: it sets
-`ALL_PERIODS=true`, so every run copies all the history (OneLake keeps two whole imports and
-has no deployed copy to add to). The build fails on both if a half-year file
-outgrows 100 MB, GitHub's limit for a file.
+**The Fabric app reads the same files from OneLake** (the same page, hosted in Fabric,
+reading a lakehouse in another tenant — workspace `app`, lakehouse `data`). **Nothing
+refreshes them any more**: the daily copy into that tenant (`import_onelake.yml` and its
+uploader `deploy_onelake.py`, removed 2026-10-09) was a stopgap. The app is to be installed
+with the rest of the stack in one workspace (`deploy_fabric.yml`) once Fabric apps reach
+Australia Southeast, the capacity's region.
 On OneLake the files are `dim_`/`today_`/`agg_<ts>.duckdb` and `<YYYY>_h<N>_<ts>.duckdb`;
 `latest.json` (`{"ts", "periods"}`), written last, names the current import, and the files
 of two imports are kept so that an open page keeps reading the one it attached. The page's
-OPFS cache keeps one import, so each daily import downloads a half-year again the first time
+OPFS cache keeps one import, so each new import downloads a half-year again the first time
 it is viewed.
 
 **The Fabric app is `dashboard/fabric_app/wasm/`**, a Rayfin project: static hosting, Fabric
@@ -590,7 +586,8 @@ Fabric workspace, independent of everything GitHub runs: the mechanism of the si
 Then the workflow deploys `dashboard/fabric_app/vertipaq/` (item `vertipaq`), its connector
 naming the model `nem` of the same workspace, and `dashboard/fabric_app/wasm/` (item
 `nemtracker`, CI's own: the laptop's `wasm` refuses another owner), which reads the
-`.duckdb` files of `import_onelake.yml` and fails until microsoft/rayfin#89 is fixed. The workspace must exist, on a capacity in a
+`.duckdb` files at `ONELAKE_FILES_URL` (nothing writes them now: see "The Fabric app reads the
+same files") and fails until microsoft/rayfin#89 is fixed. The workspace must exist, on a capacity in a
 region with Fabric apps (preview); the login is the repo's Entra app of that tenant
 (`AZURE_*` or `LAKE_*`), any other tenant fails at the first step.
 The notebook does what `process_data.yml` does: the same env contract (from `notebookutils`:
@@ -830,8 +827,7 @@ never been probed either.
 ## DuckDB version policy
 Every duckdb, dbt, pyiceberg and duckdb-wasm version is pinned exactly — none floats on
 "latest". Not pinned: the GitHub actions (by major tag), the runner image, and the packages
-those pins pull in. `import_onelake.yml` has the same two venvs as `import_data.yml`, with
-the same pins, and pins the two Azure SDK packages its upload uses.
+those pins pull in.
 - **`process_data.yml`, `build.yml`, `table_maintenance.yml` and `import_data.yml`'s read venv
   pin `duckdb==2.0.0.dev2610011535`** (dbt via `requirements.txt`, which also pins
   `dbt-core`/`dbt-duckdb` exactly — the insert-only merges lean on adapter internals, and

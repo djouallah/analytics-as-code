@@ -35,7 +35,7 @@ on:
         type: boolean
         default: true
       fabric_app_wasm:
-        description: 'Fabric app on DuckDB-WASM (the .duckdb files of import_onelake.yml; microsoft/rayfin#89)'
+        description: 'Fabric app on DuckDB-WASM (the .duckdb files at ONELAKE_FILES_URL; microsoft/rayfin#89)'
         type: boolean
         default: true
 
@@ -71,7 +71,7 @@ jobs:
         if: inputs.data || inputs.semantic_model || inputs.powerbi_report
         with:
           python-version: "3.11"
-      # deploy_model.yml's fabric-cicd, import_onelake.yml's Azure SDK.
+      # deploy_model.yml's fabric-cicd; the Azure SDK deploy_fabric.py uploads the project with.
       - if: inputs.data || inputs.semantic_model || inputs.powerbi_report
         run: pip install -q "fabric-cicd==1.3.0" "azure-identity==1.26.0" "azure-storage-file-datalake==12.26.0"
 
@@ -137,7 +137,7 @@ jobs:
         run: npx rayfin up --item-name vertipaq --workspace-id "$WS_ID" --yes --output json
 
       # --- Fabric app on DuckDB-WASM ---
-      # It reads the .duckdb files import_onelake.yml writes (ONELAKE_FILES_URL), through its
+      # It reads the .duckdb files at ONELAKE_FILES_URL (nothing writes them now), through its
       # function getDataSas. microsoft/rayfin#89: Fabric answers 500 to every function call
       # on an item a service principal owns, so this item deploys but does not work until
       # that is fixed; the app people use is the laptop's `wasm`.
@@ -154,7 +154,7 @@ jobs:
         run: npx rayfin up --item-name nemtracker --workspace-id "$WS_ID" --yes --output json
 
       - name: "WASM app: the function's secret, on a new item"
-        # Where getDataSas signs: the Files folder of the lakehouse import_onelake.yml fills.
+        # Where getDataSas signs: the Files folder of the lakehouse holding the .duckdb files.
         # Only an item that lacks it gets it, followed by the function once more: the first
         # deploy went out before the secret existed.
         if: ${{ !cancelled() && inputs.fabric_app_wasm }}
