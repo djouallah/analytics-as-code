@@ -154,6 +154,22 @@ test('ALLSELECTED: share of what the query selects', async () => {
   [row('Red', 0.960264901), row('Blue', 0.039735099)]);
 });
 
+test('a total over what is selected, read off the groups: one scan of the sales', async () => {
+  // 6130 in all, 11 sales, the largest 2000: Red 4350 / 6130, Black 1600 / 6130, Blue 180 / 6130.
+  const q = `EVALUATE SUMMARIZECOLUMNS(Product[Color], "s", [Sales Amount],
+    "share", DIVIDE([Sales Amount], CALCULATE([Sales Amount], ALLSELECTED(Product))),
+    "max", CALCULATE(MAX(Sales[Amount]), ALLSELECTED(Product)), "n", CALCULATE(COUNTROWS(Sales), ALLSELECTED(Product)))`;
+  const row = r('Color', 's', 'share', 'max', 'n');
+  await eq(q, [row('Red', 4350, 0.709624796, 2000, 11), row('Black', 1600, 0.261011419, 2000, 11), row('Blue', 180, 0.029363785, 2000, 11)]);
+  // (The other reads of Sales are the blank row's check for sales of no product.)
+  assert.equal(h.dax.compile(q).sql.match(/FROM "Sales" AS t/g).length, 1);
+  // A blank key is a group of its own, and counts: the 20 of customer 99, whose city is
+  // blank. Berlin has no sales, but its total is not blank, so it is a group.
+  const city = r('City', 's', 'tot');
+  await eq(`EVALUATE SUMMARIZECOLUMNS(Customer[City], "s", [Sales Amount], "tot", CALCULATE([Sales Amount], ALLSELECTED(Customer)))`,
+    [city('Paris', 4260, 6130), city('London', 1850, 6130), city('Berlin', null, 6130), city(null, 20, 6130)]);
+});
+
 test('IN a table variable, TREATAS', async () => {
   await eq('EVALUATE VAR t = {"Red", "Blue"} RETURN CALCULATETABLE(ROW("s", [Sales Amount]), Product[Color] IN t)', [{ s: 4530 }]);
   await eq('EVALUATE CALCULATETABLE(ROW("s", [Sales Amount]), TREATAS({"Paris"}, Customer[City]))', [{ s: 4260 }]);

@@ -277,6 +277,9 @@ The SQL it writes:
   every row has a value of that column: the scan's own column, or one reached over
   relationships that rely on referential integrity. There is no subquery, so the engine can
   skip the rows the condition rules out.
+- A total over the rows of a fused group, like `CALCULATE(x, ALLSELECTED(…))` next to `x` by
+  group, is the group's values added up, not a second scan. This holds for sums, counts,
+  minima and maxima.
 
 To add an engine, extend `Dialect` in `src/dialects/base.js` (it lists the functions and
 aggregates to write) and pass an instance as `dialect`.
@@ -288,7 +291,7 @@ npm install   # DuckDB for Node, for the tests only
 npm test
 ```
 
-- `test/semantics.test.js` has 55 tests on a small sales model (`test/fixtures/contoso.js`).
+- `test/semantics.test.js` has 56 tests on a small sales model (`test/fixtures/contoso.js`).
   The model has 11 sales, so every expected result was worked out by hand.
 - `test/features.test.js` has 24 more on the same model: calculated tables, calculation
   groups, field parameters, row-level security, ALLSELECTED, `START AT`, the window

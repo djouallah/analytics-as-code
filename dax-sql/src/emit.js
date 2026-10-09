@@ -921,8 +921,15 @@ class Fusion {
       via.forEach((v, j) => { keys.add(v.ref); keyExpr.set(v.ref, `${ma}.g${j}`); });
     }
     const keyList = [...keys].sort((a, b) => a - b);
-    const sig = `${S.table.name}|${state.key}|${keyList.join(',')}|${canonical(`${block.from} ${block.joins.join(' ')} ${block.where.join(' AND ')}`)}`;
+    const body = canonical(`${block.from} ${block.joins.join(' ')} ${block.where.join(' AND ')}`);
+    const sig = `${S.table.name}|${state.key}|${keyList.join(',')}|${body}`, rows = `${S.table.name}|${state.key}|${body}`;
     let g = this.groups.find(x => x.sig === sig), rename = s => s, conds = null, parts = null;
+    // An aggregate over all the rows of a group of the same scan by keys: the group's
+    // aggregates added up, with no second scan.
+    if (!g && !keyList.length && !readsKeys && !edge && !guards.length && OVER[x.fn]) {
+      const h = this.groups.find(y => y.rows === rows && y.keys.length && !y.edge && !y.readsKeys);
+      if (h) return this.over(x, h);
+    }
     if (!g && !keyList.length && !readsKeys && em.d.aggFilter) {
       // An aggregate over the whole of another scan of the same tables (no keys: one row
       // each) is that scan's, over the rows its own conditions on the joined tables keep:
@@ -945,7 +952,7 @@ class Fusion {
       }
     }
     if (!g) {
-      g = { sig, alias: em.alias('f'), block, keys: keyList, aggs: [], merge: !keyList.length && !readsKeys ? `${S.table.name}|${state.key}` : null };
+      g = { sig, rows, edge: !!edge, readsKeys, alias: em.alias('f'), block, keys: keyList, aggs: [], merge: !keyList.length && !readsKeys ? `${S.table.name}|${state.key}` : null };
       g.keyExprs = keyList.map(i => keyExpr.get(i) ?? block.res.meta(this.keyCols[i]));
       g.on = (k, keyNames) => keyList.length
         ? keyList.map((ki, j) => em.d.isNotDistinct(`${g.alias}.g${j}`, `${k}.${em.ident(keyNames[ki])}`)).join(' AND ')
@@ -971,8 +978,36 @@ class Fusion {
   }
 
   // The CTEs, written once every aggregate is known.
+  // Aggregate x over the rows of keyed group h, whole: h's aggregate of it (added to h if h
+  // lacks it), added up over h's groups in a group of its own that reads h. Every row of the
+  // scan is in exactly one of h's groups (its keys are columns of the scan's expanded table,
+  // a blank key a group too), so the sum of the groups' sums is the sum, and so on.
+  over(x, h) {
+    const em = this.em;
+    const parts = em.isolated(() => em.aggParts(x, withRow(new Map(), x.row, h.block.res)));
+    const conds = [...h.block.where];
+    const make = filter => em.d.agg(parts.fn, parts.arg, filter ? { ...parts.extra, filter } : parts.extra);
+    const key = `${make(null)}|${[...conds].sort().join(' AND ')}`;
+    let i = h.aggs.findIndex(a => a.key === key);
+    if (i < 0) { h.aggs.push({ key, conds, make }); i = h.aggs.length - 1; }
+    let d = this.groups.find(y => y.over === h);
+    if (!d) {
+      d = { sig: `over|${h.sig}`, over: h, alias: em.alias('f'), keys: [], aggs: [], keyExprs: [], merge: null, on: () => 'TRUE' };
+      this.groups.push(d);
+    }
+    const sql = OVER[x.fn](`${h.alias}.a${i}`);
+    let j = d.aggs.indexOf(sql);
+    if (j < 0) { d.aggs.push(sql); j = d.aggs.length - 1; }
+    em.fusedIn.set(x, d);
+    return `${d.alias}.a${j}`;
+  }
+
   finish() {
     for (const g of this.groups) {
+      if (g.over) {
+        this.em.ctes.push(`${g.alias} AS (SELECT ${g.aggs.map((a, j) => `${a} AS a${j}`).join(', ')} FROM ${g.over.alias})`);
+        continue;
+      }
       const b = g.block;
       // The scan keeps the conditions every aggregate has; an aggregate's others are its FILTER.
       const common = b.where.filter(c => g.aggs.every(a => a.conds.includes(c)));
@@ -984,11 +1019,20 @@ class Fusion {
       b.setOut([...g.keyExprs.map((_, j) => ({ name: `g${j}` })), ...aggs.map((_, i) => ({ name: `a${i}` }))], [...g.keyExprs, ...aggs]);
       b._names = [...g.keyExprs.map((_, j) => `g${j}`), ...aggs.map((_, i) => `a${i}`)];
       if (g.keyExprs.length) b.group = g.keyExprs;
-      this.em.ctes.push(`${g.alias} AS (${b.render()})`);
+      // Read again by a group over it: written once.
+      const twice = this.groups.some(y => y.over === g);
+      this.em.ctes.push(`${g.alias} AS ${twice ? this.em.d.materialized : ''}(${b.render()})`);
     }
     return this.groups;
   }
 }
+
+// The aggregates whose value over all rows is their values over a partition of the rows,
+// added up: how, from the column of the parts.
+const OVER = {
+  sum: a => `SUM(${a})`, min: a => `MIN(${a})`, max: a => `MAX(${a})`,
+  count: a => `SUM(${a})`, countrows: a => `SUM(${a})`, count0: a => `COALESCE(SUM(${a}), 0)`,
+};
 
 // The fused groups without whose rows an expression is blank, or null if it can be
 // non-blank without any: whether SUMMARIZECOLUMNS can take its groups from them.
