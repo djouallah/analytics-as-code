@@ -224,7 +224,7 @@ on both except `storage/data.js`.
   which the compiler writes as DAX
 - semantic model: `semantic_model/model.bim` (at the top of the repo), a Tabular model in TMSL
 - query: `semantic/query.js`, the page's queries to DAX (`toDax`)
-- compiler: `dax-sql` (staged as `semantic/dax-sql/`), the DAX to SQL
+- compiler: `dax-sql` (its own repo, a submodule at `dax-sql/`; staged as `semantic/dax-sql/`), the DAX to SQL
 - engine: DuckDB-WASM
 - storage: `storage/data.js`, `storage/history.js`, `storage/views.js` (a view per table)
 - and the Logs tab, `frontend/`
@@ -244,7 +244,13 @@ knows nothing of this model, this page or this data**: no case for a measure, a 
 query, and nothing it assumes of the data that the model does not declare
 (`relyOnReferentialIntegrity`, or the page's `assumeIntegrity`). A change there is a
 general rewrite, checked by its own tests and by the page's (below), never a case for a
-query. Which table a measure reads is the model's rule, which DAX answers from the query;
+query. **It is its own repo, [djouallah/dax-sql](https://github.com/djouallah/dax-sql)**
+(MIT, N.S. Devaraj and the owner), whose contract is a model and a DAX query in, SQL out:
+writing the DAX stays here. This repo pins it to one commit as the git submodule `dax-sql/`
+(a clone needs `git submodule update --init`; every workflow checks it out, and a worktree of
+another commit inits its own). A change to the compiler is made and tested there, and reaches
+the page when the pin moves here, in a commit of its own: `compiler_ab.mjs` then compares the
+two pins, as it compares any two commits. Which table a measure reads is the model's rule, which DAX answers from the query;
 which grain a date range gets, and MW to MWh, are the page's.
 **The page knows no DAX.** An agent must not be able to write arbitrary DAX, inline
 calculations and the like into the page; a query asks the way a report visual does, and
@@ -397,7 +403,9 @@ import is of the staged tree (`dax/semantic/query.js` imports `./dax-sql/index.j
   browser (a date as VARCHAR, a whole number as INTEGER, a number as DOUBLE: a BIGINT reaches
   the page as a BigInt). How dax-sql writes its SQL (fused scans, a subquery read once,
   decorrelation across a relationship that filters both ways) is in its DESIGN.md.
-  Checked, offline, on every push (`build.yml`): dax-sql's own tests on made-up data;
+  Checked, offline, on every push (`build.yml`): the compiler on this model
+  (`scripts/parity/repo.test.mjs`: every measure in five filter contexts and every query of
+  the page, on made-up data; dax-sql's own tests run in its repo);
   `sql_page.mjs`, the SQL page against the DAX page on the deployed files (the deploy waits
   for it); `compiler_ab.mjs`, the compiler against the commit before, rows and time (a report,
   with the slower queries' SQL and plans as an artifact). Against the model: the parity

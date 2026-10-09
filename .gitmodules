@@ -1,0 +1,3 @@
+[submodule "dax-sql"]
+	path = dax-sql
+	url = https://github.com/djouallah/dax-sql.git

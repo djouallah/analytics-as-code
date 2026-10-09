@@ -66,6 +66,8 @@ jobs:
           test -n "$CLIENT_ID" || { echo "::error::no Entra app of this repo in tenant ${{ inputs.tenant_id }}: AZURE_TENANT_ID and LAKE_TENANT_ID are the tenants it has one in"; exit 1; }
 
       - uses: actions/checkout@v4
+        with:
+          submodules: true  # dax-sql/, the compiler
 
       - uses: actions/setup-python@v5
         if: inputs.data || inputs.semantic_model || inputs.powerbi_report

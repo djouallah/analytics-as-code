@@ -1,12 +1,11 @@
-// This repository's semantic model and dashboard page (the package sits at dax-sql/, at the top of the repo):
+// The compiler (dax-sql, a submodule at dax-sql/) on this repository's semantic model and page:
 //   - every measure of model.bim, compiled and run in five filter contexts;
 //   - some of them checked against SQL written by hand;
 //   - every query the page sends, in six page states, through the page's compiler
 //     (dashboard/github/dax/semantic/query.js: its DAX, and this package's SQL with the
 //     page's options), runs.
-// All on made-up data in the model's shape (fixtures/nem.js). The page's rows are checked on
-// the deployed files, against the SQL page and the compiler before (scripts/parity, build.yml).
-// Skipped when the repository's files are not there (DAX_SQL_REPO can point at a checkout).
+// All on made-up data in the model's shape (fixtures/nem.mjs). The page's rows are checked on
+// the deployed files, against the SQL page and the compiler before (sql_page.mjs, compiler_ab.mjs).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -14,12 +13,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DuckDBInstance } from '@duckdb/node-api';
-import { createCompiler } from '../src/index.js';
-import { setup } from './fixtures/nem.js';
-import { pageQueries, STATES } from './page-queries.js';
-import { stagePage } from '../../scripts/stage_pages.mjs';
+import { createCompiler } from '../../dax-sql/src/index.js';
+import { setup } from './fixtures/nem.mjs';
+import { pageQueries, STATES } from './repo_queries.mjs';
+import { stagePage } from '../stage_pages.mjs';
 
-const root = process.env.DAX_SQL_REPO ? new URL(`file://${process.env.DAX_SQL_REPO.replace(/\/?$/, '/')}`) : new URL('../../', import.meta.url);
+const root = new URL('../../', import.meta.url);
 const path = p => new URL(p, root);
 const present = ['semantic_model/model.bim', 'dashboard/github/common/index.html', 'dashboard/github/dax/semantic/query.js'].every(p => fs.existsSync(path(p)));
 const skip = present ? false : 'the repository files are not here';

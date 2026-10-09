@@ -51,6 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          submodules: true  # dax-sql/, the compiler
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
@@ -140,6 +141,7 @@ jobs:
           [ "$SINCE" = all ] && SINCE=
           if [ -n "$SINCE" ]; then
             git worktree add -q "$RUNNER_TEMP/since" "$SINCE"
+            git -C "$RUNNER_TEMP/since" submodule update --init -q  # its compiler (none to fetch before 2026-10-09)
             (cd scripts/parity && node page_queries.mjs "$data" "$RUNNER_TEMP/since.json" "$RUNNER_TEMP/since")
             since=("$RUNNER_TEMP/since.json")
           fi

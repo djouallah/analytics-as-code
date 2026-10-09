@@ -24,18 +24,21 @@ permissions:
   contents: write
 
 jobs:
-  dax-sql:
-    # dax-sql: its own tests, on made-up data in an in-memory DuckDB (no catalog, no
-    # capacity). repo.test.js runs every query of the page through the page's compiler.
+  compiler:
+    # The compiler (dax-sql/, a submodule; its own tests run in djouallah/dax-sql) on this
+    # model: every measure in five filter contexts, and every query of the page through the
+    # page's compiler, on made-up data in an in-memory DuckDB (no catalog, no capacity).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true  # dax-sql/, the compiler
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: dax-sql/package-lock.json
-      - run: cd dax-sql && npm ci --no-audit --no-fund && npm test
+          cache-dependency-path: scripts/parity/package-lock.json
+      - run: cd scripts/parity && npm ci --no-audit --no-fund && node --test repo.test.mjs
 
   page:
     # The page's queries over the files the dashboard has deployed (GitHub Pages; no catalog,
@@ -46,6 +49,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true  # dax-sql/, the compiler
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -71,6 +76,7 @@ jobs:
             git fetch -q --depth=1 origin "$BEFORE"
           fi
           git worktree add -q --detach "$RUNNER_TEMP/before" "$BEFORE"
+          git -C "$RUNNER_TEMP/before" submodule update --init -q  # its compiler (none to fetch before 2026-10-09)
           cd scripts/parity && node compiler_ab.mjs "$RUNNER_TEMP/data" "$RUNNER_TEMP/before" "$RUNNER_TEMP/slower"
       - name: The slower queries' SQL and plans
         if: ${{ !cancelled() }}
@@ -81,10 +87,12 @@ jobs:
           if-no-files-found: ignore
 
   test:
-    needs: [dax-sql, page]
+    needs: [compiler, page]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true  # dax-sql/, the compiler
       - uses: actions/setup-node@v4
         with:
           node-version: "24"

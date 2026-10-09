@@ -55,6 +55,8 @@ jobs:
       ALL_PERIODS: ${{ inputs.all_periods && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true  # dax-sql/, the compiler
 
       - uses: actions/setup-python@v5
         with:

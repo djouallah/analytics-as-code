@@ -97,7 +97,7 @@ on purpose: the point is the layers, not their maturity.
   with a description. It is a real Power BI model (`model.bim`), the same file that is
   deployed to Fabric: it holds DAX only, and nothing in it is written for the page.
 - **The compiler** writes the page's queries as DAX, and turns the DAX into SQL over the
-  views of the tables that storage has: `dax-sql`, a general DAX compiler that
+  views of the tables that storage has: [`dax-sql`](https://github.com/djouallah/dax-sql), a general DAX compiler that
   knows nothing of this model or this page.
 - **The query language** is where the layers show. SQL asks for tables, while a semantic
   model offers tables that know how they relate; the page asks for `Generation MW` by
