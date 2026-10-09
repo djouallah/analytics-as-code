@@ -5,9 +5,10 @@ and Analysis Services use) and turns DAX queries over it into one SQL query each
 semantics: filter context, context transition, relationships, blanks. Tested on DuckDB, with a
 dialect layer for other engines.
 
-It replaced the fixed cases of the page's former `dashboard/github/dax/semantic/compiler.js`, which knew
-this repository's model and page only. That one stays as it is; the page does not use this
-package. The page's queries are part of this package's tests.
+It replaced the fixed cases of the page's former `compiler.js`, which knew this repository's
+model and page only, and was removed on 2026-10-08. Since then the page compiles every query
+with this package: `dashboard/github/dax/semantic/query.js` writes the DAX, and this package
+turns it into SQL. The page's queries are part of this package's tests.
 
 **Credit:** written by [N.S. Devaraj](https://github.com/nsdevaraj), contributed in
 [#5](https://github.com/djouallah/analytics-as-code/pull/5), "Generic Approach for dax to sql
