@@ -9,6 +9,10 @@ It replaced the fixed cases of the page's former `dashboard/github/dax/semantic/
 this repository's model and page only. That one stays as it is; the page does not use this
 package. The page's queries are part of this package's tests.
 
+**Credit:** written by [N.S. Devaraj](https://github.com/nsdevaraj), contributed in
+[#5](https://github.com/djouallah/analytics-as-code/pull/5), "Generic Approach for dax to sql
+conversion" (October 2026).
+
 ```js
 import { createCompiler } from './src/index.js';
 

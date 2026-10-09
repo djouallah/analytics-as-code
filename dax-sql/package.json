@@ -2,6 +2,7 @@
   "name": "dax-sql",
   "version": "0.1.0",
   "private": true,
+  "author": "N.S. Devaraj (https://github.com/nsdevaraj)",
   "description": "A DAX to SQL compiler for Tabular (TMSL) semantic models, with DAX semantics; tested on DuckDB",
   "type": "module",
   "main": "src/index.js",
