@@ -1,4 +1,4 @@
-// This repository's semantic model and dashboard page (the package sits at packages/dax-sql):
+// This repository's semantic model and dashboard page (the package sits at dax-sql/, at the top of the repo):
 //   - every measure of model.bim, compiled and run in five filter contexts;
 //   - some of them checked against SQL written by hand;
 //   - every query the page sends, in six page states, through the page's compiler
@@ -17,9 +17,9 @@ import { DuckDBInstance } from '@duckdb/node-api';
 import { createCompiler } from '../src/index.js';
 import { setup } from './fixtures/nem.js';
 import { pageQueries, STATES } from './page-queries.js';
-import { stagePage } from '../../../scripts/stage_pages.mjs';
+import { stagePage } from '../../scripts/stage_pages.mjs';
 
-const root = process.env.DAX_SQL_REPO ? new URL(`file://${process.env.DAX_SQL_REPO.replace(/\/?$/, '/')}`) : new URL('../../../', import.meta.url);
+const root = process.env.DAX_SQL_REPO ? new URL(`file://${process.env.DAX_SQL_REPO.replace(/\/?$/, '/')}`) : new URL('../../', import.meta.url);
 const path = p => new URL(p, root);
 const present = ['semantic_model/model.bim', 'dashboard/github/common/index.html', 'dashboard/github/dax/semantic/query.js'].every(p => fs.existsSync(path(p)));
 const skip = present ? false : 'the repository files are not here';

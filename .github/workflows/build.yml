@@ -25,7 +25,7 @@ permissions:
 
 jobs:
   dax-sql:
-    # packages/dax-sql: its own tests, on made-up data in an in-memory DuckDB (no catalog, no
+    # dax-sql: its own tests, on made-up data in an in-memory DuckDB (no catalog, no
     # capacity). repo.test.js runs every query of the page through the page's compiler.
     runs-on: ubuntu-latest
     steps:
@@ -34,8 +34,8 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: packages/dax-sql/package-lock.json
-      - run: cd packages/dax-sql && npm ci --no-audit --no-fund && npm test
+          cache-dependency-path: dax-sql/package-lock.json
+      - run: cd dax-sql && npm ci --no-audit --no-fund && npm test
 
   page:
     # The page's queries over the files the dashboard has deployed (GitHub Pages; no catalog,

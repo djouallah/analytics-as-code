@@ -224,7 +224,7 @@ on both except `storage/data.js`.
   which the compiler writes as DAX
 - semantic model: `semantic_model/model.bim` (at the top of the repo), a Tabular model in TMSL
 - query: `semantic/query.js`, the page's queries to DAX (`toDax`)
-- compiler: `packages/dax-sql` (staged as `semantic/dax-sql/`), the DAX to SQL
+- compiler: `dax-sql` (staged as `semantic/dax-sql/`), the DAX to SQL
 - engine: DuckDB-WASM
 - storage: `storage/data.js`, `storage/history.js`, `storage/views.js` (a view per table)
 - and the Logs tab, `frontend/`
@@ -236,7 +236,7 @@ on both except `storage/data.js`.
 **It is a proof of concept; the point is that the layers are there, in the formats of a
 real product.** The compiler is two steps, as in Power BI: the page's query becomes DAX
 (`toDax`, in `semantic/query.js`, which knows the page's words and nothing of SQL), and the DAX
-becomes SQL in `packages/dax-sql`, a general DAX compiler: any Tabular model, DAX's filter
+becomes SQL in `dax-sql`, a general DAX compiler: any Tabular model, DAX's filter
 context, context transition, relationships and blanks (see its README and DESIGN.md). Its
 rows are DAX's: `SUMMARIZECOLUMNS` leaves out a group whose measures are all blank, `TOPN`
 keeps the rows tied with the n-th, an ascending `ORDER BY` puts blanks first. **dax-sql
@@ -342,7 +342,7 @@ or imports the page stages it first: the site (`build.yml`, `import_data.yml`), 
 app's build, the parity scripts. To serve it from a laptop, stage the site into a folder
 (`node scripts/stage_pages.mjs <dir> <build>`) and put a copy of `data/` next to it. A relative
 import is of the staged tree (`dax/semantic/query.js` imports `./dax-sql/index.js`, which
-`stagePage` copies there from `packages/dax-sql/src`).
+`stagePage` copies there from `dax-sql/src`).
 - `dashboard/github/common/index.html` is the page: the charts, which draw what
   `dashboard/github/dax/frontend/queries.js` asks: every query the charts send, by tab and chart
   (`createQueries(page)`, over the page's state passed in as functions; the renderers only
@@ -390,7 +390,7 @@ import is of the staged tree (`dax/semantic/query.js` imports `./dax-sql/index.j
   `today` holds, so the default view fetches no history.
 - `dashboard/github/dax/semantic/query.js` (`createModel(dataSource)`: the data source's
   members, `toDax` and `toSQL`): `toDax(query)` writes the page's query as DAX, checking each
-  column and measure against `model.bim`; `toSQL(dax)` is `packages/dax-sql`'s compile of it
+  column and measure against `model.bim`; `toSQL(dax)` is `dax-sql`'s compile of it
   over the data source's `v_<table>` views (staged next to the compiler as `semantic/dax-sql/`
   by `stagePage`), the same text once (a Map). The page's options: `assumeIntegrity` (a
   dimension's key is read off the fact: the dbt tests keep the data so) and its casts for the
@@ -472,7 +472,7 @@ rather than round them:
   link's small chart in its row; the History calendar lays its years out to fill the card; a
   tab's notes are an (i) popover. A new chart goes into a cell of that grid, not under it.
 
-**Checking a change to `model.bim`, `packages/dax-sql`, `query.js`, a `data.js` or the page:** in headless
+**Checking a change to `model.bim`, `dax-sql`, `query.js`, a `data.js` or the page:** in headless
 Chrome, the page before against the page after on one copy of the deployed files, through
 the same page states; compare what each chart draws (its ECharts series) and the SQL that
 ran (the Logs tab has it, translated), read `EXPLAIN` for a join that was not there, and

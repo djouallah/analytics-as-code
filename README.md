@@ -32,7 +32,7 @@ market (AEMO).
     rows are checked against the DAX page's, question by question.
 - **The compiler** is what lets the page read a Power BI model without Power BI: the page's
   queries become DAX ([`query.js`](dashboard/github/dax/semantic/query.js)), and the
-  DAX becomes SQL in [`packages/dax-sql`](packages/dax-sql/), a general-purpose DAX
+  DAX becomes SQL in [`dax-sql`](dax-sql/), a general-purpose DAX
   compiler (by N.S. Devaraj): any Tabular model, DAX's filter context, context transition
   and relationships, with nothing written for this model or this page. Its SQL is checked
   against the SQL page and against the deployed model.

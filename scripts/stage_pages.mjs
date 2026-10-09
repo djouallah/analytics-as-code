@@ -3,7 +3,7 @@
 //   dax/     frontend/queries.js and semantic/query.js: the page through the semantic model
 //   sql/     frontend/queries.js: the page in plain SQL
 // A page is common/ with one of the two copied over it (dax also gets semantic_model/model.bim
-// and packages/dax-sql/src, as semantic/dax-sql/, next to semantic/query.js). The repo tree is not the served tree: everything that serves or
+// and dax-sql/src, as semantic/dax-sql/, next to semantic/query.js). The repo tree is not the served tree: everything that serves or
 // imports the page stages it first, with stagePage (the site, the Fabric app's build, the
 // parity scripts).
 //   node scripts/stage_pages.mjs <dir> <build>
@@ -27,9 +27,11 @@ export async function stagePage(variant, dir, root = REPO) {
   await cp(join(page, variant), dir, { recursive: true });
   if (variant === "dax") {
     await cp(join(root, "semantic_model", "model.bim"), join(dir, "semantic", "model.bim"));
-    // A checkout from before 2026-10-08 (the parity's `since`) has its compiler whole.
-    const daxSql = join(root, "packages", "dax-sql", "src");
-    if (existsSync(daxSql)) await cp(daxSql, join(dir, "semantic", "dax-sql"), { recursive: true });
+    // The compiler is dax-sql/ at the top; an older checkout (the A/B's `before`, the parity's
+    // `since`) has it under packages/ (until 2026-10-09), or none before 2026-10-08, when
+    // semantic/ held its compiler whole.
+    const daxSql = [join(root, "dax-sql", "src"), join(root, "packages", "dax-sql", "src")].find(existsSync);
+    if (daxSql) await cp(daxSql, join(dir, "semantic", "dax-sql"), { recursive: true });
   }
 }
 

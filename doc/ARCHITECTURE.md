@@ -89,7 +89,7 @@ on purpose: the point is the layers, not their maturity.
 | Consumer | `dashboard/github/common/index.html` | the BI tool |
 | Query language | a query of the model's fields (`frontend/queries.js`), which the compiler writes as DAX | DAX, MDX, VizQL, Malloy, a metrics request |
 | Semantic model | `semantic_model/model.bim`, a Tabular model in TMSL | a Tabular model (TMSL, TMDL), LookML, MetricFlow YAML |
-| Compiler | `packages/dax-sql` | MetricFlow, Cube's schema compiler, Malloy's compiler, Looker's SQL generator, Power BI's formula engine, Tableau's VizQL |
+| Compiler | `dax-sql` | MetricFlow, Cube's schema compiler, Malloy's compiler, Looker's SQL generator, Power BI's formula engine, Tableau's VizQL |
 | Engine | DuckDB-WASM | the warehouse, VertiPaq, Hyper |
 | Storage | `dashboard/github/common/storage/` | the lakehouse or warehouse connection |
 
@@ -97,7 +97,7 @@ on purpose: the point is the layers, not their maturity.
   with a description. It is a real Power BI model (`model.bim`), the same file that is
   deployed to Fabric: it holds DAX only, and nothing in it is written for the page.
 - **The compiler** writes the page's queries as DAX, and turns the DAX into SQL over the
-  views of the tables that storage has: `packages/dax-sql`, a general DAX compiler that
+  views of the tables that storage has: `dax-sql`, a general DAX compiler that
   knows nothing of this model or this page.
 - **The query language** is where the layers show. SQL asks for tables, while a semantic
   model offers tables that know how they relate; the page asks for `Generation MW` by

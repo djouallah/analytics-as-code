@@ -1,13 +1,13 @@
 // =============================================================================
 // query.js — the page's queries as DAX over the semantic model (model.bim), and the DAX
-// as SQL over the data source's views (packages/dax-sql, the compiler)
+// as SQL over the data source's views (dax-sql, the compiler)
 // =============================================================================
 // The layers of the dashboard, and what stands in each place in a real product:
 //   consumer        index.html                 the BI tool
 //   query language  DAX                        DAX, MDX, VizQL, Malloy, a metrics request
 //   semantic model  model.bim (TMSL)           a Tabular model, LookML, MetricFlow YAML
 //   query           this file                  a report visual writing its query
-//   compiler        packages/dax-sql           Power BI's query service and formula engine,
+//   compiler        dax-sql           Power BI's query service and formula engine,
 //                                              MetricFlow, Cube
 //   engine          DuckDB-WASM                the warehouse, VertiPaq, Hyper
 //   storage         ../storage/data.js         the lakehouse or warehouse connection
@@ -21,7 +21,7 @@
 //                  totals, orderBy, top) as DAX, each column and measure checked against the
 //                  model. The words of a query are the owner's to add to, not a page's.
 //   toSQL(dax)     the DAX as one SELECT over the data source's views (v_<table>, which
-//                  ../storage/views.js builds), by packages/dax-sql (staged next to this file
+//                  ../storage/views.js builds), by dax-sql (staged next to this file
 //                  as ./dax-sql/): DAX's filter context, context transition, relationships and
 //                  blanks. The relationships rely on referential integrity (the dbt tests keep
 //                  the data so), so a dimension's key is read off the fact, with no join.
