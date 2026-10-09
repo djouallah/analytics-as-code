@@ -148,7 +148,7 @@ jobs:
         env:
           EXPIRE_OLDER_THAN_DAYS: "1"
           ORPHAN_OLDER_THAN_DAYS: "3"
-          # Lists without deleting. Deletion is irreversible: set "false" only after a dry
-          # run's report has been read.
-          ORPHAN_DRY_RUN: "true"
+          # Deletes. The dry run of 2026-10-09 (run 37858451559) named 14,524 files, ~11.5 GB,
+          # all data/*.parquet older than 3 days. "true" lists without deleting.
+          ORPHAN_DRY_RUN: "false"
         run: python scripts/expire_snapshots.py

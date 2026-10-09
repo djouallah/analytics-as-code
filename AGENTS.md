@@ -132,8 +132,11 @@ Four deliberate local differences, all of which must survive a port:
    `remove_orphan_files()` per table (apache/iceberg-python PR #3361, unreleased, built from
    its commit): it lists the table's folder and deletes the files no snapshot or metadata
    references, older than 3 days, skipping every `_`/`.` path (OneLake's `_delta_log`) and
-   refusing when a listed and a referenced path differ only in scheme or host. It is a dry
-   run (`ORPHAN_DRY_RUN`) until a dry run's report has been read: deletion can't be undone.
+   refusing when a listed and a referenced path differ only in scheme or host (adlfs lists
+   `abfss://<ws>/...` for the metadata's `abfss://<ws>@onelake.dfs.fabric.microsoft.com/...`,
+   so the script declares those the same authority). It deletes; `ORPHAN_DRY_RUN=true`
+   only lists. The first pass, 2026-10-09, found 14,524 orphans, ~11.5 GB, 7 GB of it
+   `fct_scada`'s.
    Tables hold 16-18 snapshots, none older than a day,
    so something on the OneLake side already trims them; treat this step as a bounded safety
    net, and if a table is ever seen above ~48 snapshots that assumption has changed. The job
