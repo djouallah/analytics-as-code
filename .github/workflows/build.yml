@@ -147,7 +147,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add dashboard/github/common/dag/
-          git diff --cached --quiet || (git commit -m "Update dbt docs" && git pull --rebase && git push)
+          # A run checks out the commit that triggered it, so the previous run's docs commit
+          # can land on main after it: both rewrite the same generated files and the rebase
+          # conflicts. Runs are queued in push order, so this run's files are the newer ones:
+          # keep them (-X theirs is the commit being replayed).
+          git diff --cached --quiet || (git commit -m "Update dbt docs" && git pull --rebase -X theirs && git push)
       - name: Prepare deploy directory
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: |
