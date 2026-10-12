@@ -109,8 +109,12 @@ Four deliberate local differences, all of which must survive a port:
    `MIN`/`MAX` of a date column come from the Iceberg manifests
    (`macros/date_bounds.sql`, `iceberg_column_stats()`), and the dates a run recomputes are
    written into the SQL as literals, so every scan of a big table carries a constant `DATE`
-   filter that duckdb-iceberg prunes data files on — a subquery (`MAX(DATE) FROM ...`,
-   `DATE IN (SELECT ...)`) does not prune. Each model logs the bounds it read and the ranges
+   filter that duckdb-iceberg prunes data files on. The pinned 2.0 build also prunes on a
+   subquery or a join (a runtime min/max filter: `fct_scada`, 3 of 160 files, run
+   38255990890, 2026-10-12), but the literals stay: `MAX(DATE)` of the table itself still
+   reads it whole (87 s), a model decides at compile time whether it has anything to write
+   (`nothing_to_do()`), and a refill's two ranges would become one min/max spanning every
+   file between them. Each model logs the bounds it read and the ranges
    it chose, so a run's log says what it decided. The `ci` target (no Iceberg) reads plain
    `MIN`/`MAX`.
    The staging model appends only the rows the Iceberg table is missing (anti-join on
