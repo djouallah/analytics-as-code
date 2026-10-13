@@ -47,7 +47,10 @@ export function createQueries(page) {
   const OUT = 'GREATEST(CAST(s.mw AS DOUBLE), 0)', IN = 'LEAST(CAST(s.mw AS DOUBLE), 0)';
   // The model's MW and prices are fixed decimal numbers: one times or divided by a number is
   // one too, rounded to four places, as DAX computes it; a figure the model makes so is too.
+  // What it rounds is summed in the columns' own type, exact as the model's: a sum of doubles
+  // can land a half on the other side.
   const fixed = sql => `ROUND(${sql}, 4)`;
+  const OUT_FIXED = 'GREATEST(s.mw, 0)', IN_FIXED = 'LEAST(s.mw, 0)';
   const filtered = cond => cond ? ` FILTER (WHERE ${cond})` : '';
   const FIVE = {
     units: 'v_fct_summary', regions: 'v_fct_region',
@@ -179,9 +182,10 @@ export function createQueries(page) {
       FROM dem LEFT JOIN roof USING (${k}) WHERE dem.v IS NOT NULL`;
   };
 
-  // The plain average price: on the daily table the model's, the daily prices' sum over their
-  // count, so rounded.
-  const averagePrice = () => page.intraday() ? 'AVG(r.price)' : fixed('AVG(r.price)');
+  // The plain average price: on the daily table the model's, the sum of the days' 288
+  // intervals over their count, rounded.
+  const DAILY_PRICE = fixed('288 * SUM(r.price) / (288 * COUNT(r.price))');
+  const averagePrice = () => page.intraday() ? 'AVG(r.price)' : DAILY_PRICE;
 
   // Revenue over energy: the price a fleet is paid.
   const capturePrice = g => `${g.revenue} / NULLIF(${g.mwh()}, 0)`;
@@ -327,7 +331,7 @@ export function createQueries(page) {
     changeGeneration: () => change('units',
       (a, b) => `(${onUnits(DAILY.mwh(), changeUnits(a, b))} / NULLIF(${hours(a, b, pickedUnits(), false)}, 0))`, pickedUnits(), true),
     changePrice: () => change('regions',
-      (a, b) => `(SELECT ${fixed('AVG(r.price)')} FROM v_fct_region_daily r ${where([`r.date BETWEEN ${a} AND ${b}`, ...regionFilters('r.REGIONID', pickedUnits())])})`,
+      (a, b) => `(SELECT ${DAILY_PRICE} FROM v_fct_region_daily r ${where([`r.date BETWEEN ${a} AND ${b}`, ...regionFilters('r.REGIONID', pickedUnits())])})`,
       pickedUnits(), false),
     changeRenewables: () => change('units',
       (a, b) => onUnits(renewableShare(DAILY), changeUnits(a, b, false)), pickedUnits(false), false),
@@ -350,7 +354,7 @@ export function createQueries(page) {
     profile: intraday => {
       if (intraday) {
         const conds = [...whereGen(), 'd.Storage = FALSE'];
-        return `SELECT ${FUEL} AS fuel, CAST(s.time AS INTEGER) AS time, ${fixed(`${FIVE.output} / NULLIF(COUNT(DISTINCT s.date), 0)`)}::DOUBLE AS mw
+        return `SELECT ${FUEL} AS fuel, CAST(s.time AS INTEGER) AS time, ${fixed(`SUM(${OUT_FIXED}) / NULLIF(COUNT(DISTINCT s.date), 0)`)}::DOUBLE AS mw
           FROM ${units('v_fct_summary', 'd.')} ${where(conds)} GROUP BY ALL ORDER BY time, fuel NULLS FIRST`;
       }
       const conds = [months('s.month'), ...unitFilters('s'), 'd.Storage = FALSE'];
@@ -437,8 +441,8 @@ export function createQueries(page) {
     // Per time of day: the output and the charging of an average day, and the price seen.
     batteryDay: () => {
       const conds = [...whereGen({ withFuel: false }), 'd.Storage = TRUE'];
-      return `SELECT CAST(s.time AS INTEGER) AS time, ${fixed(`${FIVE.output} / NULLIF(COUNT(DISTINCT s.date), 0)`)}::DOUBLE AS discharge,
-        ${fixed(`${FIVE.charging} / NULLIF(COUNT(DISTINCT s.date), 0)`)}::DOUBLE AS charge, AVG(s.price)::DOUBLE AS price
+      return `SELECT CAST(s.time AS INTEGER) AS time, ${fixed(`SUM(${OUT_FIXED}) / NULLIF(COUNT(DISTINCT s.date), 0)`)}::DOUBLE AS discharge,
+        ${fixed(`SUM(${IN_FIXED}) / NULLIF(COUNT(DISTINCT s.date), 0)`)}::DOUBLE AS charge, AVG(s.price)::DOUBLE AS price
         FROM ${units('v_fct_summary', 'd.')} ${where(conds)} GROUP BY s.time ORDER BY time`;
     },
     // "Sold" and "bought": the prices weighted by the energy discharged and charged, and the
@@ -524,7 +528,7 @@ export function createQueries(page) {
     historyPrice: () => {
       const { first, last } = queries.wholeDaysRange('regions', null, shiftDate(page.newestDate(), -1));
       const conds = [between('r.date', first, last), ...(page.region() ? [`r.REGIONID = ${str(page.region())}`] : [])];
-      return `SELECT CAST(r.date AS VARCHAR) AS date, ${fixed('AVG(r.price)')}::DOUBLE AS price, (SUM(r.demand) / COUNT(DISTINCT r.date))::DOUBLE AS demand
+      return `SELECT CAST(r.date AS VARCHAR) AS date, ${DAILY_PRICE}::DOUBLE AS price, (SUM(r.demand) / COUNT(DISTINCT r.date))::DOUBLE AS demand
         FROM v_fct_region_daily r ${where(conds)} GROUP BY r.date ORDER BY date`;
     },
   };
