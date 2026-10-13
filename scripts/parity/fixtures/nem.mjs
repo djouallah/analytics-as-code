@@ -1,4 +1,4 @@
-// Made-up data in the shape of this repository's model (semantic_model/model.bim): a few
+// Made-up data in the shape of this repository's model (semantic_model/ossie.yaml): a few
 // units in each region, 5-minute rows for the last days, daily rows for the month before.
 // Deterministic: the values come from hashes of the keys. Each table is v_<table>, the
 // names the page's compiler reads.

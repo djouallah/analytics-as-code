@@ -36,16 +36,25 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import yaml  # fabric-cicd brings it
+
 API = "https://api.powerbi.com/v1.0/myorg"
 TOKEN = os.environ["POWERBI_TOKEN"]
 WORKSPACE = os.environ["WS_ID"]
 ITEM = Path(__file__).resolve().parent.parent / "semantic_model"
 NAME = json.loads((ITEM / ".platform").read_text(encoding="utf-8"))["metadata"]["displayName"]
-MODEL = json.loads((ITEM / "model.bim").read_text(encoding="utf-8"))["model"]
-TABLES = [t["name"] for t in MODEL["tables"]]
+# The model, in Apache Ossie: a measure's table is in its POWER_BI extension.
+MODEL = yaml.safe_load((ITEM / "ossie.yaml").read_text(encoding="utf-8"))
+TABLES = [d["name"] for d in MODEL["datasets"]]
 # The tables that hold whole months: dim_calendar does not reach them, dim_month does.
-MONTHLY = {"dim_month"} | {r["fromTable"] for r in MODEL["relationships"] if r["toTable"] == "dim_month"}
-MEASURES = [(m["name"], t["name"] in MONTHLY) for t in MODEL["tables"] for m in t.get("measures", [])]
+MONTHLY = {"dim_month"} | {r["from"] for r in MODEL.get("relationships", []) if r["to"] == "dim_month"}
+
+
+def power_bi(o):
+    return next((json.loads(e["data"]) for e in o.get("custom_extensions", []) if e["vendor_name"] == "POWER_BI"), {})
+
+
+MEASURES = [(m["name"], power_bi(m).get("table") in MONTHLY) for m in MODEL.get("metrics", [])]
 REPORT = json.loads((ITEM.parent / "dashboard" / "powerbi_report" / "nem.Report" / ".platform")
                     .read_text(encoding="utf-8"))["metadata"]["displayName"]
 

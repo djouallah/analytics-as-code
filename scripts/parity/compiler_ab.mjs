@@ -19,7 +19,7 @@ import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync } from 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { engine, pageOf, states, lists, asked, shiftDate, compare, order } from './page_states.mjs';
+import { engine, pageOf, states, lists, asked, shiftDate, compare, order, fetchFiles } from './page_states.mjs';
 import { stagePage } from '../stage_pages.mjs';
 
 const [dataDir, other, outDir] = process.argv.slice(2);
@@ -27,14 +27,10 @@ if (!dataDir || !other) { console.error('usage: node compiler_ab.mjs <data dir> 
 const HERE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 // A side: its page staged from its checkout, its compiler over its own engine. The page's
-// semantic/query.js (compiler.js before 2026-10-08) fetches model.bim next to itself: each
-// side gets its own checkout's.
+// semantic/query.js (compiler.js before 2026-10-08) fetches its model next to itself: each
+// side reads its own staged one.
 async function side(root) {
-  const bim = JSON.parse(readFileSync(path.join(root, 'semantic_model/model.bim'), 'utf8'));
-  globalThis.fetch = async url => {
-    if (!String(url).includes('model.bim')) throw new Error(`no fetch here: ${url}`);
-    return { ok: true, json: async () => bim };
-  };
+  fetchFiles(root);
   const dir = mkdtempSync(path.join(tmpdir(), 'ab-'));
   await stagePage('dax', dir, root);
   const load = p => import(pathToFileURL(path.join(dir, p)));

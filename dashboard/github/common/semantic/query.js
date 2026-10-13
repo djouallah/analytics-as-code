@@ -1,20 +1,22 @@
 // =============================================================================
-// query.js — the page's queries as DAX over the semantic model (model.bim), and the DAX
+// query.js — the page's queries as DAX over the semantic model (ossie.yaml), and the DAX
 // as SQL over the data source's views (dax-sql, the compiler)
 // =============================================================================
 // The layers of the dashboard, and what stands in each place in a real product:
 //   consumer        index.html                 the BI tool
 //   query language  DAX                        DAX, MDX, VizQL, Malloy, a metrics request
-//   semantic model  model.bim (TMSL)           a Tabular model, LookML, MetricFlow YAML
+//   semantic model  ossie.yaml (Apache Ossie)  a Tabular model, LookML, MetricFlow YAML
 //   query           this file                  a report visual writing its query
 //   compiler        dax-sql           Power BI's query service and formula engine,
 //                                              MetricFlow, Cube
 //   engine          DuckDB-WASM                the warehouse, VertiPaq, Hyper
 //   storage         ../storage/data.js         the lakehouse or warehouse connection
 //
-// The model is the repo's semantic_model/model.bim, the file Power BI runs in Direct Lake:
-// it holds DAX only, and nothing in it is written for this compiler. The builds put it next
-// to this file.
+// The model is the repo's semantic_model/ossie.yaml, in Apache Ossie, its measures in DAX:
+// the model Power BI runs in Direct Lake is written from it (scripts/ossie_to_bim.mjs), and
+// nothing in it is written for this compiler. The builds put it next to this file as
+// ossie.json, and dax-sql's reader (formats/ossie.js) gives the compiler its model object and
+// this file the TMSL it stands for.
 //
 // Two steps, as in Power BI:
 //   toDax(query)   the page's query (an object of the model's fields: select, where, having,
@@ -45,11 +47,11 @@
 // =============================================================================
 
 import { createCompiler } from './dax-sql/index.js';
-import { tmslToModel } from './formats/tmsl.js';
+import { ossieToTmsl, ossieToModel } from './formats/ossie.js';
 
 // The model, fetched next to this file, with this file's ?v= (the Fabric build's cache-buster).
-const BIM = await (await fetch(new URL('./model.bim' + new URL(import.meta.url).search, import.meta.url))).json();
-const MODEL = BIM.model;
+const OSSIE = await (await fetch(new URL('./ossie.json' + new URL(import.meta.url).search, import.meta.url))).json();
+const MODEL = ossieToTmsl(OSSIE).model;
 
 const TYPES = { string: 'string', int64: 'int', double: 'double', decimal: 'double', dateTime: 'date', boolean: 'bool' };
 const TABLES = new Map(MODEL.tables.map(t => [t.name, new Map(t.columns.map(c => [c.name,
@@ -165,7 +167,7 @@ export function toDax(q) {
 // DAX -> SQL
 // =============================================================================
 
-const DAX = createCompiler(tmslToModel(BIM), {
+const DAX = createCompiler(ossieToModel(OSSIE), {
   tableSource: t => `v_${t.name}`,
   assumeIntegrity: true,
   castOutput: {
@@ -204,7 +206,7 @@ function fromSql(text) {
 // Analyze's compiler: no casts for the browser, so a SELECT over the model gives the engine's
 // types (a DATE, a DECIMAL) and composes with the views' columns in a JOIN or a UNION. The
 // preview and the CSV cast every column to text at the end.
-const ANALYZE = createCompiler(tmslToModel(BIM), { tableSource: t => `v_${t.name}`, assumeIntegrity: true, castOutput: false });
+const ANALYZE = createCompiler(ossieToModel(OSSIE), { tableSource: t => `v_${t.name}`, assumeIntegrity: true, castOutput: false });
 
 export function createModel(data) {
   if (data.engine === 'dax') return {

@@ -3,21 +3,29 @@
 //            semantic/query.js (the page's queries through the semantic model)
 //   dax/     frontend/queries.js: the page's queries as objects of the model's fields
 //   sql/     frontend/queries.js: the page's queries as SELECTs over the model
-// A page is common/ with one of the two copied over it, and semantic_model/model.bim and
-// dax-sql/src (as semantic/dax-sql/) next to semantic/query.js. The repo tree is not the served tree: everything that serves or
+// A page is common/ with one of the two copied over it, and next to semantic/query.js the
+// model (semantic_model/ossie.yaml as semantic/ossie.json: the browser reads no YAML), the
+// compiler (dax-sql/src as semantic/dax-sql/) and its readers (dax-sql/formats as
+// semantic/formats/). The repo tree is not the served tree: everything that serves or
 // imports the page stages it first, with stagePage (the site, the Fabric app's build, the
 // parity scripts).
 //   node scripts/stage_pages.mjs <dir> <build>
 // stages the GitHub Pages site: dax at the root (the default), sql at sql/ (it reads the
 // site's data/, one folder up); then the build stamp and ?v=<build> on every relative
 // import (stamp_build.mjs), and the dbt docs, which are not stamped.
-import { cp, mkdir } from "node:fs/promises";
+import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { join } from "node:path";
 import { stampBuild } from "./stamp_build.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
+
+// semantic_model/ossie.yaml of a checkout, parsed (yaml: `npm ci --prefix scripts`).
+export async function readOssie(root = REPO) {
+  const { parse } = await import("yaml");
+  return parse(await readFile(join(root, "semantic_model", "ossie.yaml"), "utf8"));
+}
 
 // common/ (without the dbt docs) and the variant over it, into <dir>. `root`: another
 // checkout to take them from (the parity's `since`).
@@ -29,7 +37,11 @@ export async function stagePage(variant, dir, root = REPO) {
   // The model and its compiler, next to semantic/query.js: common/'s since both pages ask
   // through it (2026-10-13), dax/'s in an older checkout.
   if (existsSync(join(dir, "semantic", "query.js"))) {
-    await cp(join(root, "semantic_model", "model.bim"), join(dir, "semantic", "model.bim"));
+    // The model: Ossie since 2026-10-14; an older checkout (the A/B's `before`, the parity's
+    // `since`) has the TMSL, model.bim, which its query.js fetches.
+    const bim = join(root, "semantic_model", "model.bim");
+    if (existsSync(bim)) await cp(bim, join(dir, "semantic", "model.bim"));
+    else await writeFile(join(dir, "semantic", "ossie.json"), JSON.stringify(await readOssie(root)));
     // The compiler is dax-sql/ at the top; an older checkout (the A/B's `before`, the parity's
     // `since`) has it under packages/ (until 2026-10-09), or none before 2026-10-08, when
     // semantic/ held its compiler whole.

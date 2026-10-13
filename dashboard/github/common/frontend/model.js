@@ -1,9 +1,10 @@
 // =============================================================================
-// model.js — the Analyze tab's Model page: the semantic model (model.bim) as a star, and
+// model.js — the Analyze tab's Model page: the semantic model (ossie.yaml) as a star, and
 // what the model says of the table picked
 // =============================================================================
-// The same file on every host. It reads semantic/model.bim, the file Power BI runs (staged
-// next to semantic/query.js), with this module's own ?v= as query.js does. A dimension is a
+// The same file on every host. It reads semantic/ossie.json (the repo's ossie.yaml, staged
+// next to semantic/query.js) with this module's own ?v= as query.js does, as the TMSL it
+// stands for (dax-sql's formats/ossie.js), the model Power BI runs. A dimension is a
 // table a relationship points to, a fact any other: the model says it, not the names. Where
 // each card and line goes is draw.js's (modelLayout). Hover a table to see what it reaches;
 // click it for its columns, measures and relationships. index.html has the page and calls
@@ -11,6 +12,7 @@
 // =============================================================================
 
 import { modelLayout, MODEL_CARD } from './draw.js';
+import { ossieToTmsl } from '../semantic/formats/ossie.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 let _built = null;
@@ -33,8 +35,8 @@ export function renderModel() {
 }
 
 async function build() {
-  const url = new URL('../semantic/model.bim' + new URL(import.meta.url).search, import.meta.url);
-  const { model } = await (await fetch(url)).json();
+  const url = new URL('../semantic/ossie.json' + new URL(import.meta.url).search, import.meta.url);
+  const { model } = ossieToTmsl(await (await fetch(url)).json());
   const rels = model.relationships;
   const keys = name => [...new Set(rels.flatMap(r => [
     ...(r.fromTable === name ? [r.fromColumn] : []), ...(r.toTable === name ? [r.toColumn] : [])]))];
@@ -103,7 +105,7 @@ async function build() {
     if (!t) {
       const measures = tables.flatMap(x => x.measures ?? []);
       out.push(el('h3', {}, 'Semantic model'));
-      out.push(el('p', {}, `${tables.length} tables · ${rels.length} relationships · ${measures.length} measures (${measures.filter(m => m.isHidden).length} hidden). The file Power BI runs in Direct Lake, and the one the page's queries are compiled against.`));
+      out.push(el('p', {}, `${tables.length} tables · ${rels.length} relationships · ${measures.length} measures (${measures.filter(m => m.isHidden).length} hidden). The Apache Ossie model the page's queries are compiled against, and the one Power BI runs in Direct Lake.`));
       if (model.description) out.push(el('p', {}, lines(model.description)));
       out.push(el('p', { class: 'm-hint' }, 'Hover a table to see what it reaches; click it for its columns, measures and relationships.'));
       document.getElementById('modelPanel').replaceChildren(...out);

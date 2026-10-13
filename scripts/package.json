@@ -1,0 +1,9 @@
+{
+  "name": "scripts",
+  "private": true,
+  "type": "module",
+  "description": "What the scripts here need of npm: yaml, to read semantic_model/ossie.yaml (stage_pages.mjs writes it as JSON for the page, ossie_to_bim.mjs writes Power BI's model.bim from it). Installed with `npm ci --prefix scripts`; scripts/parity resolves it from here too.",
+  "dependencies": {
+    "yaml": "2.8.1"
+  }
+}

@@ -84,6 +84,20 @@ jobs:
           tenant-id: ${{ inputs.tenant_id }}
           allow-no-subscriptions: true
 
+      # Node for semantic_model/ossie.yaml (yaml, `npm ci --prefix scripts`): the model's
+      # model.bim is written from it (scripts/ossie_to_bim.mjs), and the apps' builds stage the
+      # page with it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            scripts/package-lock.json
+            dashboard/fabric_app/vertipaq/package-lock.json
+            dashboard/fabric_app/wasm/package-lock.json
+            dashboard/fabric_app/wasm/rayfin/functions/package-lock.json
+      - run: npm ci --prefix scripts --no-audit --no-fund
+
       - name: Data, semantic model, Power BI report
         if: inputs.data || inputs.semantic_model || inputs.powerbi_report
         run: >-
@@ -92,16 +106,6 @@ jobs:
 
       # The Fabric apps (Rayfin). Only an item's owner can deploy to it, so CI deploys into
       # items of its own: `vertipaq` and `nemtracker` (the laptop's `wasm` refuses this login).
-      - uses: actions/setup-node@v4
-        if: inputs.fabric_app_vertipaq || inputs.fabric_app_wasm
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: |
-            dashboard/fabric_app/vertipaq/package-lock.json
-            dashboard/fabric_app/wasm/package-lock.json
-            dashboard/fabric_app/wasm/rayfin/functions/package-lock.json
-
       - name: Mint Fabric token
         # RAYFIN_TOKEN: the CLI takes a ready Bearer token instead of an interactive login.
         if: inputs.fabric_app_vertipaq || inputs.fabric_app_wasm
@@ -119,7 +123,7 @@ jobs:
       - name: "VertiPaq app: declare the connector to the semantic model"
         # rayfin.yml in the repo has no `connectors:` entry: it names the workspace and the
         # model by id, and `connector add` takes literals only. So the entry is written here,
-        # as model.bim's ids are at its deploy. The model is found by its name.
+        # as the model's ids are at its deploy. The model is found by its name.
         if: inputs.fabric_app_vertipaq
         working-directory: dashboard/fabric_app/vertipaq
         run: |

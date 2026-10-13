@@ -1,5 +1,6 @@
-// The compiler (dax-sql, a submodule at dax-sql/) on this repository's semantic model and page:
-//   - every measure of model.bim, compiled and run in five filter contexts;
+// The compiler (dax-sql, a submodule at dax-sql/) on this repository's semantic model
+// (semantic_model/ossie.yaml, read with dax-sql's formats/ossie.js) and page:
+//   - every measure of the model, compiled and run in five filter contexts;
 //   - some of them checked against SQL written by hand;
 //   - every query the page sends, in six page states, through the page's compiler
 //     (dashboard/github/common/semantic/query.js: its DAX, and this package's SQL with the
@@ -18,30 +19,29 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DuckDBInstance } from '@duckdb/node-api';
 import { createCompiler } from '../../dax-sql/src/index.js';
-import { tmslToModel } from '../../dax-sql/formats/tmsl.js';
-import { ossieToModel } from '../../dax-sql/formats/ossie.js';
+import { tmslToOssie, ossieToTmsl, ossieToModel } from '../../dax-sql/formats/ossie.js';
 import { setup } from './fixtures/nem.mjs';
 import { pageQueries, STATES } from './repo_queries.mjs';
-import { stagePage } from '../stage_pages.mjs';
-import { parse } from 'yaml';
-import { OSSIE, generate } from './bim_to_ossie.mjs';
+import { stagePage, readOssie } from '../stage_pages.mjs';
+import { fetchFiles } from './page_states.mjs';
 
 const root = new URL('../../', import.meta.url);
 const path = p => new URL(p, root);
-const present = ['semantic_model/model.bim', 'dashboard/github/common/index.html', 'dashboard/github/common/semantic/query.js'].every(p => fs.existsSync(path(p)));
+const present = ['semantic_model/ossie.yaml', 'dashboard/github/common/index.html', 'dashboard/github/common/semantic/query.js'].every(p => fs.existsSync(path(p)));
 const skip = present ? false : 'the repository files are not here';
 
-let con, dax, page, bim, staged, createQueries, sqlPage;
+let con, dax, page, doc, bim, staged, createQueries, sqlPage;
 before(async () => {
   if (skip) return;
-  const bimText = fs.readFileSync(path('semantic_model/model.bim'), 'utf8');
-  bim = JSON.parse(bimText);
+  // The model, semantic_model/ossie.yaml, and the TMSL it stands for (dax-sql's formats/).
+  doc = await readOssie(fileURLToPath(root));
+  bim = ossieToTmsl(doc);
   staged = fs.mkdtempSync(join(tmpdir(), 'dax-sql-page-'));
   await stagePage('dax', staged, fileURLToPath(root));
   fs.writeFileSync(join(staged, 'package.json'), '{"type":"module"}\n');
-  // query.js fetches model.bim next to itself when it loads.
+  // query.js fetches its model (ossie.json) next to itself when it loads.
   const fetch = globalThis.fetch;
-  globalThis.fetch = async () => ({ json: async () => JSON.parse(bimText) });
+  fetchFiles(fileURLToPath(root));
   const stagedSql = join(staged, 'sql');
   await stagePage('sql', stagedSql, fileURLToPath(root));
   try {
@@ -55,7 +55,7 @@ before(async () => {
   const db = await DuckDBInstance.create(':memory:');
   con = await db.connect();
   await con.run(setup);
-  dax = createCompiler(tmslToModel(bim), { tableSource: t => `v_${t.name}` });
+  dax = createCompiler(ossieToModel(doc), { tableSource: t => `v_${t.name}` });
 });
 after(() => {
   if (staged) fs.rmSync(staged, { recursive: true, force: true });
@@ -195,24 +195,9 @@ test("Analyze: a SELECT over the model, through the page's compiler", { skip }, 
   await assert.rejects(() => model.query('SELECT * FROM v_dim_duid'), /SELECTs over the model/);
 });
 
-// semantic_model/ossie.yaml, the model in Apache Ossie (bim_to_ossie.mjs writes it from
-// model.bim): it is model.bim's copy, and dax-sql compiles every measure and every query of the
-// page from it to the SQL it compiles from model.bim. The bidirectional relationship and the
-// measures' tables are in its POWER_BI extensions.
-test('ossie.yaml is model.bim, as bim_to_ossie.mjs writes it', { skip }, () => {
-  assert.equal(fs.readFileSync(OSSIE, 'utf8').replace(/\r\n/g, '\n'), generate(), 'run node scripts/parity/bim_to_ossie.mjs');
-});
-
-test('the Ossie model compiles as model.bim does', { skip }, async () => {
-  const options = { tableSource: t => `v_${t.name}`, assumeIntegrity: true, castOutput: { double: s => `CAST(${s} AS DOUBLE)` } };
-  const [fromBim, fromOssie] = [tmslToModel(bim), ossieToModel(parse(fs.readFileSync(OSSIE, 'utf8')))].map(m => createCompiler(m, options));
-  const same = q => assert.equal(fromOssie.compile(q).sql, fromBim.compile(q).sql, q);
-  let n = 0;
-  for (const m of bim.model.tables.flatMap(t => (t.measures ?? []).map(x => x.name))) {
-    for (const q of Object.values(CONTEXTS)) { same(q(m)); n++; }
-  }
-  for (const s of Object.values(STATES)) {
-    for (const { query } of await pageQueries(createQueries, s, async q => rows(page.toSQL(page.toDax(q))))) { same(page.toDax(query)); n++; }
-  }
-  assert.ok(n > 500, `${n} queries`);
+// semantic_model/ossie.yaml is read whole: written back from the TMSL it stands for, it is
+// itself, so no property of it is one dax-sql's reader passes over (Power BI's model.bim is
+// written from that TMSL, scripts/ossie_to_bim.mjs).
+test('ossie.yaml reads back as itself', { skip }, () => {
+  assert.deepEqual(tmslToOssie(ossieToTmsl(doc), doc.name), doc);
 });

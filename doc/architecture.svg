@@ -52,7 +52,7 @@ text{font-family:Virgil,"Segoe Print","Comic Sans MS",cursive;text-anchor:middle
 <path d="M895.0,295.0 Q885.9,294.1 885.0,285.0" fill="none" stroke="#e8e8e8" stroke-width="2" stroke-linecap="round"/>
 <path d="M885.0,185.0 Q885.9,175.9 895.0,175.0" fill="none" stroke="#e8e8e8" stroke-width="2" stroke-linecap="round"/>
 <text x="1002.5" y="229.0" class="t">Semantic model</text>
-<text x="1002.5" y="259.0" class="s">Power BI, model.bim</text>
+<text x="1002.5" y="259.0" class="s">Ossie, DAX measures</text>
 <path d="M274.2,234.0 C283.2,235.1 296.8,235.1 307.9,233.8 M273.4,234.6 C283.2,235.0 296.8,235.0 308.1,235.2" fill="none" stroke="#9a9a9a" stroke-width="2" stroke-linecap="round"/>
 <path d="M308.1,233.8 C302.7,237.1 296.9,239.8 294.1,242.3" fill="none" stroke="#9a9a9a" stroke-width="2" stroke-linecap="round"/>
 <path d="M307.9,234.3 C302.7,232.9 296.9,230.2 294.1,228.3" fill="none" stroke="#9a9a9a" stroke-width="2" stroke-linecap="round"/>

@@ -42,7 +42,7 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: scripts/parity/package-lock.json
-      - run: cd scripts/parity && npm ci --no-audit --no-fund && node --test repo.test.mjs
+      - run: npm ci --prefix scripts --no-audit --no-fund && cd scripts/parity && npm ci --no-audit --no-fund && node --test repo.test.mjs
 
   page:
     # The page's queries over the files the dashboard has deployed (GitHub Pages; no catalog,
@@ -63,6 +63,7 @@ jobs:
       - name: The dashboard's files
         run: |
           bash scripts/parity/fetch_data.sh "$RUNNER_TEMP/data"
+          npm ci --prefix scripts --no-audit --no-fund
           cd scripts/parity && npm ci --no-audit --no-fund
       - name: The SQL page against the DAX page
         continue-on-error: ${{ inputs.deploy_anyway == true }}
@@ -103,9 +104,10 @@ jobs:
           node-version: "24"
       - name: The page works out no figure
         # scripts/parity/page_lint.mjs: no arithmetic in the page's script or its queries; a
-        # figure is a measure of semantic_model/model.bim. How the page draws (scales, sizes,
-        # text) is in dashboard/github/common/frontend/draw.js, which a review reads.
-        run: cd scripts/parity && npm ci --no-audit --no-fund && node page_lint.mjs
+        # figure is a measure of semantic_model/ossie.yaml. How the page draws (scales, sizes,
+        # text) is in dashboard/github/common/frontend/draw.js, which a review reads. The
+        # scripts' own yaml is installed here too: the site's staging, below, reads the model.
+        run: npm ci --prefix scripts --no-audit --no-fund && cd scripts/parity && npm ci --no-audit --no-fund && node page_lint.mjs
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

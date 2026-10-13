@@ -22,7 +22,7 @@ import { readFileSync, writeFileSync, existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { engine, pageOf, states, lists, asked, keysOf, shiftDate } from './page_states.mjs';
+import { engine, pageOf, states, lists, asked, keysOf, shiftDate, readModel, fetchFiles } from './page_states.mjs';
 import { stagePage } from '../stage_pages.mjs';
 
 // [root]: another checkout to take the compiler, the queries and the model from (the commit a
@@ -31,13 +31,9 @@ const [dataDir, out, other] = process.argv.slice(2);
 if (!dataDir || !out) { console.error('usage: node page_queries.mjs <data dir> <out.json> [root]'); process.exit(2); }
 const ROOT = other ? path.resolve(other) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-// semantic/query.js (compiler.js before 2026-10-08) fetches model.bim from next to itself,
-// where the builds copy it.
-const bim = JSON.parse(readFileSync(path.join(ROOT, 'semantic_model/model.bim'), 'utf8'));
-globalThis.fetch = async url => {
-  if (!String(url).includes('model.bim')) throw new Error(`no fetch here: ${url}`);
-  return { ok: true, json: async () => bim };
-};
+// semantic/query.js (compiler.js before 2026-10-08) fetches its model from next to itself.
+const bim = await readModel(ROOT);
+fetchFiles(ROOT);
 // The DAX page, staged (common/ with dax/ over it, scripts/stage_pages.mjs); in a checkout
 // from before 2026-10-08, which `since` can compare with, the page as it was in the repo:
 // dashboard/github-dax, or dashboard/github before the rename of 2026-10-07.

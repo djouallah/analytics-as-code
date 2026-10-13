@@ -230,7 +230,8 @@ on both except `storage/data.js`.
 - consumer: `index.html` (the charts) and `frontend/queries.js` (what each chart asks)
 - query language: the page's queries, objects of the model's fields (`select`, `where`, ...),
   which the compiler writes as DAX
-- semantic model: `semantic_model/model.bim` (at the top of the repo), a Tabular model in TMSL
+- semantic model: `semantic_model/ossie.yaml` (at the top of the repo), an Apache Ossie model
+  whose measures are DAX
 - query: `semantic/query.js`, the page's queries to DAX (`toDax`)
 - compiler: `dax-sql` (its own repo, a submodule at `dax-sql/`; staged as `semantic/dax-sql/`), the DAX to SQL
 - engine: DuckDB-WASM
@@ -269,7 +270,7 @@ the model's fields, and these words only:
 `= <> < <= > >= between in notIn blank notBlank`, and `{ any: [...] }`; a value is a string,
 a number, true or false, or a date), `having` (on a value of the select), `totals` (a
 subtotal over some of the select's columns), `orderBy` and `top`. `toDax` in `query.js`
-writes its DAX, checking each column and measure against `model.bim`, and `query()` refuses
+writes its DAX, checking each column and measure against the model, and `query()` refuses
 DAX text. What DAX needs that a query does not say is the compiler's to add: a query of a
 dimension's columns alone leaves out the blank row DAX gives a dimension whose key a fact
 names and it lacks (`dim_duid`, `dim_interconnector`).
@@ -302,11 +303,11 @@ does not read `draw.js`, which a review reads instead. The rows the page uses as
 stored are not figures: the filter lists, the newest interval, the Flows rows (a unit's MW,
 a link's flow and limits).
 
-**Analyze opens on Model**, its first sub-tab: `model.bim` drawn as a star
+**Analyze opens on Model**, its first sub-tab: the model drawn as a star
 (`frontend/model.js`, the layout `draw.js`'s `modelLayout`: a dimension is a table a
 relationship points to, in the centre; the facts either side), and for the table picked its
 columns, measures and relationships as the file has them. It reads the staged
-`semantic/model.bim` and no data. The SQL box is the second sub-tab.
+`semantic/ossie.json`, as the TMSL it stands for, and no data. The SQL box is the second sub-tab.
 **The Analyze tab's SQL is SQL, and only SQL**, on both pages: DuckDB's, over the views
 (`v_<table>`, the stored columns), in which **a SELECT over the semantic model** is a
 relation. That SELECT (dax-sql's SQL: `SELECT <columns>, AGG("<measure>"),
@@ -371,7 +372,8 @@ How the check runs:
 `index.html` is the one file at the top of the staged page: it is the site's URL, and `data.js`
 finds `data/` from the page's URL. **The repo tree is not the served tree**: a page is staged
 (`scripts/stage_pages.mjs`: `common/`, the variant over it, and for the DAX page
-`semantic_model/model.bim` next to the compiler that fetches it), and everything that serves
+`semantic_model/ossie.yaml`, as `semantic/ossie.json`, next to the compiler and its readers,
+`dax-sql/formats` as `semantic/formats/`), and everything that serves
 or imports the page stages it first: the site (`build.yml`, `import_data.yml`), the Fabric
 app's build, the parity scripts. To serve it from a laptop, stage the site into a folder
 (`node scripts/stage_pages.mjs <dir> <build>`) and put a copy of `data/` next to it. A relative
@@ -405,13 +407,19 @@ import is of the staged tree (`semantic/query.js` imports `./dax-sql/index.js`, 
   `fct_summary` like any unit's, so every filter on the units reaches it and no query adds
   it on its own. It is in the unit picker, search and Analyze; not on the map (no position)
   and not in `[Units]`.
-- `semantic_model/model.bim` is the semantic model, **the same file Power BI runs**
-  (see "The semantic model"): TMSL, compatibility level 1604, every table one Direct Lake
-  partition on a `mart` table, single-column relationships, and the measures. It holds DAX
-  only: nothing in it is written for DuckDB, and no SQL goes into it, as an annotation or
-  otherwise. `.platform` and `definition.pbism` next to it make the folder a Fabric item.
-  It is JSON, so a browser reads it with no library: there are no comments, so the why goes
-  in a `description`, and a long expression is an array of lines.
+- `semantic_model/ossie.yaml` is the semantic model (see "The semantic model"), in
+  [Apache Ossie](https://github.com/apache/ossie) (core-spec 0.2.0.dev0), edited by hand:
+  datasets, fields, keys, relationships, and the measures as metrics in the DAX dialect.
+  What Ossie has no place for is in `POWER_BI` custom extensions, as the TMSL properties (a
+  JSON string): a relationship's `crossFilteringBehavior` (`dim_duid` → `dim_region`,
+  `bothDirections`; apache/ossie#580 asks Ossie for a property) and
+  `relyOnReferentialIntegrity`, a measure's `table` and `formatString`, the Direct Lake
+  partitions, `compatibilityLevel` 1604. dax-sql's reader (`dax-sql/formats/ossie.js`)
+  turns it into the TMSL it stands for, losslessly, and that TMSL is what Power BI runs:
+  `scripts/ossie_to_bim.mjs` writes the `model.bim`, at deploy only (the repo holds none).
+  It holds DAX only: nothing in it is written for DuckDB, and no SQL goes into it. The
+  browser reads no YAML: staging writes it as `semantic/ossie.json`. Reading it needs
+  `yaml` (`npm ci --prefix scripts`). `repo.test.mjs` checks it reads back as itself.
 - `dashboard/github/common/storage/views.js` (`withViews(data)`, which every `data.js`
   returns itself wrapped in) is the tables as views: a view `v_<table>` per table attached,
   over the files (the table whole in `dim` or `agg`, or split by date over `today` and the
@@ -424,7 +432,7 @@ import is of the staged tree (`semantic/query.js` imports `./dax-sql/index.js`, 
   `today` holds, so the default view fetches no history.
 - `dashboard/github/common/semantic/query.js` (`createModel(dataSource)`: the data source's
   members, `toDax`, `toSQL` and `analyze`): `toDax(query)` writes the DAX page's query as
-  DAX, checking each column and measure against `model.bim`; a SELECT over the model (the SQL
+  DAX, checking each column and measure against the model; a SELECT over the model (the SQL
   page's) dax-sql reads itself, into the same syntax tree; `toSQL(dax)` is `dax-sql`'s compile of it
   over the data source's `v_<table>` views (staged next to the compiler as `semantic/dax-sql/`
   by `stagePage`), the same text once (a Map). The page's options: `assumeIntegrity` (a
@@ -514,7 +522,7 @@ rather than round them:
   link's small chart in its row; the History calendar lays its years out to fill the card; a
   tab's notes are an (i) popover. A new chart goes into a cell of that grid, not under it.
 
-**Checking a change to `model.bim`, `dax-sql`, `query.js`, a `data.js` or the page:** in headless
+**Checking a change to `ossie.yaml`, `dax-sql`, `query.js`, a `data.js` or the page:** in headless
 Chrome, the page before against the page after on one copy of the deployed files, through
 the same page states; compare what each chart draws (its ECharts series) and the SQL that
 ran (the Logs tab has it, translated), read `EXPLAIN` for a join that was not there, and
@@ -572,16 +580,17 @@ sign-in, and one function, `getDataSas` (`dashboard/fabric_app/wasm/rayfin/funct
 signs a read-only SAS on the data folder so that the browser never holds a storage token.
 `dashboard/fabric_app/common/build.mjs` assembles a project's `dist/` (here
 `dashboard/fabric_app/wasm/dist`): the DAX page staged (`stagePage('dax')`: `common/`,
-`dax/` and `semantic_model/model.bim`) and the dbt docs, with `fabric_app/common/site/`
+`dax/` and the model, `semantic_model/ossie.yaml` as `ossie.json`; it needs
+`npm ci --prefix scripts` first) and the dbt docs, with `fabric_app/common/site/`
 (`storage/auth.js`) and then the project's own `site/` copied over them (here
 `storage/data.js` and `storage/sas.js`), and `?v=<build>` added to every relative import;
-`query.js` passes its own on to `model.bim`. The project is the working directory of
+`query.js` passes its own on to `ossie.json`. The project is the working directory of
 `build.mjs` (`npm run build:fabric` in it).
 
 **It is deployed from the owner's laptop**, under their own login:
 ```
 cd dashboard/fabric_app/wasm
-npm ci && npm ci --prefix rayfin/functions
+npm ci && npm ci --prefix rayfin/functions && npm ci --prefix ../../../scripts
 export RAYFIN_TOKEN=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv)
 npx rayfin up --yes --output json
 ```
@@ -650,7 +659,7 @@ capacity is in Australia Southeast, where Fabric refuses an app item
 
 A table or a column the page asks for and a deployed file lacks reads as "no data" where
 the page checks (`data.has`), so a new page can go out before its data; a new table goes
-into `cache_catalog.py`'s lists once it is a dbt model and a table of `model.bim`.
+into `cache_catalog.py`'s lists once it is a dbt model and a table of the model.
 What the charts read beyond 30 days: `fct_summary_daily` and `fct_region_daily` (whole
 days: a day is written once the next-day files hold it, so a long range ends on the newest
 whole day), `fct_summary_hourly`, `fct_region_hourly` and `dim_month` (hour of day by whole
@@ -688,9 +697,10 @@ in `landing` are what these tables are built from.
   two facts at query time is too slow; rooftop's source is its own table, kept as published;
   a value that is held, carried forward or interpolated is never stored in a source table
   (a derived reporting table may hold it); the logic is measures.
-- `semantic_model/` is the model, a Fabric item (`model.bim`, `definition.pbism`,
-  `.platform`; fabric-cicd finds an item by its `.platform`, whatever the folder is called,
-  and `deploy_model.py` publishes a copy of that folder): each table one Direct Lake
+- `semantic_model/` is the model and, with a `model.bim` in it, a Fabric item
+  (`ossie.yaml`, `definition.pbism`, `.platform`; fabric-cicd finds an item by its
+  `.platform`, whatever the folder is called, and `deploy_model.py` publishes a copy of that
+  folder with `ossie_to_bim.mjs`'s `model.bim` in place of the YAML): each table one Direct Lake
   partition on a `mart` table of the `nem` lakehouse, reached through OneLake (no SQL
   endpoint; Fabric shows Direct Lake the Iceberg tables as Delta on its own), single-column
   relationships, and the measures. `{WS_ID}`/`{LH_ID}` in the `DirectLake` expression are
@@ -699,15 +709,6 @@ in `landing` are what these tables are built from.
   `fct_rooftop`, its source, is a dbt model and not a table of the model, and no measure
   adds rooftop to the units. `[Units]` leaves those five out; `[Capacity MW]` and
   `[Capacity factor]` do too, as they have no registered capacity.
-- `semantic_model/ossie.yaml` is the same model in [Apache Ossie](https://github.com/apache/ossie)
-  (core-spec 0.2.0.dev0), generated from `model.bim` (`node scripts/parity/bim_to_ossie.mjs`;
-  edit the bim, never the YAML): datasets, fields, keys, relationships, and the measures as
-  metrics in the DAX dialect, opaque to Ossie. What Ossie has no property for is in `POWER_BI`
-  extensions, as TMSL properties: the `dim_duid` → `dim_region` relationship's
-  `bothDirections` (apache/ossie#580 asks for a property), the two
-  `relyOnReferentialIntegrity`, each measure's home table. dax-sql reads either file;
-  `repo.test.mjs` fails if the YAML is stale or compiles any measure or page query to other
-  SQL than the bim. `deploy_model.py` leaves it out of the Fabric item. Nothing else reads it.
 - **A quantity is one measure, and the measure picks the table.** Direct Lake has no
   aggregation tables (user-defined aggregations are not supported), so the switch is DAX:
   `[Generation MWh]`, `[Charging MWh]`, `[Revenue]`, `[Capture price]`, `[Units]` and

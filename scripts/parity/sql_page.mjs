@@ -17,21 +17,17 @@
 // against what the SQL page draws.
 // =============================================================================
 
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { engine, pageOf, states, lists, asked, keysOf, shiftDate, compare, order } from './page_states.mjs';
+import { engine, pageOf, states, lists, asked, keysOf, shiftDate, compare, order, fetchFiles } from './page_states.mjs';
 import { stagePage } from '../stage_pages.mjs';
 
 const [dataDir, out] = process.argv.slice(2);
 if (!dataDir) { console.error('usage: node sql_page.mjs <data dir> [out.json]'); process.exit(2); }
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const bim = JSON.parse(readFileSync(path.join(ROOT, 'semantic_model/model.bim'), 'utf8'));
-globalThis.fetch = async url => {
-  if (!String(url).includes('model.bim')) throw new Error(`no fetch here: ${url}`);
-  return { ok: true, json: async () => bim };
-};
+fetchFiles(ROOT);
 // Each page staged as the site has it (scripts/stage_pages.mjs).
 const staged = async variant => { const dir = mkdtempSync(path.join(tmpdir(), `${variant}-`)); await stagePage(variant, dir); return dir; };
 const [daxDir, sqlDir] = [await staged('dax'), await staged('sql')];

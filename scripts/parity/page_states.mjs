@@ -7,9 +7,38 @@
 // another commit against this one).
 // =============================================================================
 
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { DuckDBInstance } from '@duckdb/node-api';
+import { ossieToTmsl } from '../../dax-sql/formats/ossie.js';
+import { readOssie } from '../stage_pages.mjs';
+
+const json = file => JSON.parse(readFileSync(file, 'utf8').replace(/^﻿/, ''));
+
+// A checkout's model as TMSL: semantic_model/ossie.yaml read with dax-sql's formats/ossie.js,
+// or in a checkout from before 2026-10-14 its model.bim.
+export async function readModel(root) {
+  const bim = path.join(root, 'semantic_model/model.bim');
+  return existsSync(bim) ? json(bim) : ossieToTmsl(await readOssie(root));
+}
+
+// The page's modules fetch their model next to themselves (semantic/ossie.json, or model.bim
+// before 2026-10-14): in Node, fetch reads the staged file the URL names. A checkout from
+// before 2026-10-08, which was not staged, gets its own model.bim.
+export function fetchFiles(root) {
+  globalThis.fetch = async url => {
+    const u = new URL(url);
+    u.search = '';
+    let file = u.protocol === 'file:' ? fileURLToPath(u) : null;
+    if (!file || !existsSync(file)) {
+      if (!String(url).includes('model.bim')) throw new Error(`no fetch here: ${url}`);
+      file = path.join(root, 'semantic_model/model.bim');
+    }
+    const body = json(file);
+    return { ok: true, json: async () => body };
+  };
+}
 
 export const UNKNOWN = 'Unknown', ROOFTOP = 'Rooftop solar';
 export const shiftDate = (date, n) => {

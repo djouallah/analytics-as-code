@@ -1,6 +1,6 @@
 name: Deploy Semantic Model
 
-# Publishes semantic_model/model.bim (a Direct Lake model over the catalog's
+# Publishes semantic_model/ossie.yaml, as the model.bim it stands for (a Direct Lake model over the catalog's
 # Iceberg tables) and the Power BI report on it (dashboard/powerbi_report/nem.Report) to the
 # workspace that holds the lakehouse, then refreshes the model and asks it, in DAX over
 # XMLA, a row count per table and its measures (scripts/check_model.py).
@@ -58,6 +58,12 @@ jobs:
           python-version: "3.11"
       # Pinned exactly, like every other version here (AGENTS.md, version policy).
       - run: pip install -q "fabric-cicd==1.3.0" "pythonnet==3.1.0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      # yaml, for semantic_model/ossie.yaml: deploy_model.py writes Power BI's model.bim from it
+      # (scripts/ossie_to_bim.mjs), and the parity scripts stage the page with it.
+      - run: npm ci --prefix scripts --no-audit --no-fund
       - name: Install the ADOMD.NET client
         # What scripts/check_model.py asks its DAX through (XMLA). The .NET Core build runs on
         # Linux under pythonnet; publishing a throwaway project that references it puts the
@@ -104,9 +110,6 @@ jobs:
         env:
           PYTHONNET_RUNTIME: coreclr
         run: python scripts/check_model.py
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
       - name: The dashboard's files
         # What the dashboard has deployed (scripts/parity/fetch_data.sh). Both checks below
         # run over them.

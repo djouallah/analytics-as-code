@@ -2,7 +2,7 @@
 // queries.js — what each chart of the page asks the semantic model, in SQL
 // =============================================================================
 // The same members as ../../dax/frontend/queries.js, called the same way by the same
-// index.html, and each returns one SELECT over the model (semantic_model/model.bim), in
+// index.html, and each returns one SELECT over the model (semantic_model/ossie.yaml), in
 // dax-sql's SQL: the model's columns (table.column) to group by, its measures as
 // AGG("name"), MIN and MAX of a column, FROM model, WHERE, GROUP BY ALL (or a list with
 // ROLLUP for a subtotal, flagged by GROUPING), HAVING, ORDER BY and FETCH FIRST n ROWS WITH

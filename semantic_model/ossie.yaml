@@ -1,4 +1,8 @@
-# Generated from model.bim by scripts/parity/bim_to_ossie.mjs: edit model.bim, not this file.
+# The semantic model, in Apache Ossie (https://github.com/apache/ossie, core-spec 0.2.0.dev0).
+# Measures are metrics in the DAX dialect. What Ossie has no place for (a relationship's
+# filter direction, a measure's table and format string, the Direct Lake partitions, ...) is in
+# POWER_BI extensions, as the TMSL properties: scripts/ossie_to_bim.mjs writes Power BI's
+# model.bim from this file (dax-sql/formats/ossie.js), and the page reads it the same way.
 version: 0.2.0.dev0
 name: nem
 description: "Australia's National Electricity Market, over the Iceberg tables of the nem lakehouse, in Direct Lake: nothing is imported and no SQL endpoint is involved. Deployed by scripts/deploy_model.py, which writes the workspace and the lakehouse into the DirectLake expression. A quantity is one measure whatever the grain and whoever asks: the measures of fct_summary and fct_region pick the daily table or the 5-minute one themselves, by whether a time of day is asked for. Power BI and the dashboard's page (through its compiler) call the same measures."
@@ -16,6 +20,9 @@ datasets:
               expression: date
         datatype: Date
         description: Calendar date, NEM time (AEST all year).
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"date","summarizeBy":"none","formatString":"yyyy-MM-dd"}'
       - name: year
         expression:
           dialects:
@@ -23,6 +30,9 @@ datasets:
               expression: year
         datatype: Integer
         description: Calendar year.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"year","summarizeBy":"none"}'
       - name: month
         expression:
           dialects:
@@ -30,6 +40,12 @@ datasets:
               expression: month
         datatype: Integer
         description: Month of the year, 1-12.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"month","summarizeBy":"none"}'
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"sourceLineageTag":"[mart].[dim_calendar]","partitions":[{"name":"dim_calendar","mode":"directLake","source":{"type":"entity","entityName":"dim_calendar","expressionSource":"DirectLake","schemaName":"mart"}}]}'
   - name: dim_duid
     source: mart.dim_duid
     primary_key:
@@ -43,6 +59,9 @@ datasets:
               expression: DUID
         datatype: String
         description: AEMO's id of a dispatchable unit.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"DUID","summarizeBy":"none"}'
       - name: Region
         expression:
           dialects:
@@ -50,6 +69,9 @@ datasets:
               expression: Region
         datatype: String
         description: NSW1, QLD1, SA1, TAS1, VIC1; WA1 for Western Australia, another market.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"Region","summarizeBy":"none"}'
       - name: State
         expression:
           dialects:
@@ -57,6 +79,9 @@ datasets:
               expression: State
         datatype: String
         description: The region's name.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"State","summarizeBy":"none"}'
       - name: FuelSourceDescriptor
         expression:
           dialects:
@@ -64,6 +89,9 @@ datasets:
               expression: FuelSourceDescriptor
         datatype: String
         description: The fuel as registered; blank for the loads AEMO gives no energy source for.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"FuelSourceDescriptor","summarizeBy":"none"}'
       - name: Participant
         expression:
           dialects:
@@ -71,6 +99,9 @@ datasets:
               expression: Participant
         datatype: String
         description: The registered participant that operates the unit.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"Participant","summarizeBy":"none"}'
       - name: StationName
         expression:
           dialects:
@@ -78,6 +109,9 @@ datasets:
               expression: StationName
         datatype: String
         description: The power station the unit belongs to; blank for WA.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"StationName","summarizeBy":"none"}'
       - name: TechnologyType
         expression:
           dialects:
@@ -85,6 +119,9 @@ datasets:
               expression: TechnologyType
         datatype: String
         description: AEMO's technology descriptor; blank off the registration list.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"TechnologyType","summarizeBy":"none"}'
       - name: Classification
         expression:
           dialects:
@@ -92,6 +129,9 @@ datasets:
               expression: Classification
         datatype: String
         description: Scheduled, Semi-Scheduled (wind and solar farms that can be capped) or Non-Scheduled; blank off the registration list.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"Classification","summarizeBy":"none"}'
       - name: CO2eFactor
         expression:
           dialects:
@@ -99,6 +139,9 @@ datasets:
               expression: CO2eFactor
         datatype: Float
         description: "CO2-e emitted per MWh sent out, tonnes: AEMO's factor for the unit's gensets (MMSDM GENUNITS through DUALLOC), registered or not. Blank for loads, AEMO's dummy units, the gensets AEMO lists \"On Exclusion List\" and WA."
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"CO2eFactor","summarizeBy":"none","formatString":"0.000"}'
       - name: Renewable
         expression:
           dialects:
@@ -106,6 +149,9 @@ datasets:
               expression: Renewable
         datatype: Boolean
         description: Whether the unit's fuel is renewable; the list of fuels is in dim_duid.sql.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"Renewable","summarizeBy":"none"}'
       - name: RegCapMW
         expression:
           dialects:
@@ -113,6 +159,9 @@ datasets:
               expression: RegCapMW
         datatype: Float
         description: Registered generating capacity, MW.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"RegCapMW","summarizeBy":"none"}'
       - name: MaxCapMW
         expression:
           dialects:
@@ -120,6 +169,9 @@ datasets:
               expression: MaxCapMW
         datatype: Float
         description: Maximum generating capacity, MW.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"MaxCapMW","summarizeBy":"none"}'
       - name: StorageMWh
         expression:
           dialects:
@@ -127,6 +179,9 @@ datasets:
               expression: StorageMWh
         datatype: Float
         description: A battery's storage, MWh.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"StorageMWh","summarizeBy":"none"}'
       - name: latitude
         expression:
           dialects:
@@ -134,6 +189,9 @@ datasets:
               expression: latitude
         datatype: Float
         description: Latitude; blank when unknown.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"latitude","summarizeBy":"none"}'
       - name: longitude
         expression:
           dialects:
@@ -141,6 +199,9 @@ datasets:
               expression: longitude
         datatype: Float
         description: Longitude; blank when unknown.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"longitude","summarizeBy":"none"}'
       - name: Storage
         expression:
           dialects:
@@ -148,6 +209,9 @@ datasets:
               expression: Storage
         datatype: Boolean
         description: Whether the unit is storage, a battery (the fuel "Grid"). The rule is in dim_duid.sql; the measures that leave storage out filter on it.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"Storage","summarizeBy":"none"}'
       - name: Plant
         expression:
           dialects:
@@ -155,6 +219,9 @@ datasets:
               expression: Plant
         datatype: String
         description: "What units are grouped by when they are grouped by plant: the station, or the unit itself when it has none."
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"Plant","summarizeBy":"none"}'
       - name: Owner
         expression:
           dialects:
@@ -162,6 +229,12 @@ datasets:
               expression: Owner
         datatype: String
         description: "Who the output is counted to: the participant, or for rooftop solar the estimate it is. Blank where AEMO names no participant."
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"Owner","summarizeBy":"none"}'
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"sourceLineageTag":"[mart].[dim_duid]","partitions":[{"name":"dim_duid","mode":"directLake","source":{"type":"entity","entityName":"dim_duid","expressionSource":"DirectLake","schemaName":"mart"}}]}'
   - name: fct_summary
     source: mart.fct_summary
     description: "Output and price per unit and 5 minutes: the daily files where they have landed, the intraday feed after them. A unit's row carries the price of its region, so no measure joins two facts. An interval at 0 MW is not stored."
@@ -173,6 +246,9 @@ datasets:
               expression: date
         datatype: Date
         description: Date of the dispatch interval, NEM time (AEST all year).
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"date","summarizeBy":"none","formatString":"yyyy-MM-dd"}'
       - name: time
         expression:
           dialects:
@@ -180,6 +256,9 @@ datasets:
               expression: time
         datatype: Integer
         description: "Time of day as HHMM: 1435 is 14:35. The interval ends at it."
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"time","summarizeBy":"none"}'
       - name: DUID
         expression:
           dialects:
@@ -187,6 +266,9 @@ datasets:
               expression: DUID
         datatype: String
         description: The unit.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"DUID","summarizeBy":"none"}'
       - name: mw
         expression:
           dialects:
@@ -194,6 +276,9 @@ datasets:
               expression: mw
         datatype: Decimal
         description: MW in that 5 minutes; a battery charging is negative.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"mw","summarizeBy":"none","formatString":"#,##0.00"}'
       - name: price
         expression:
           dialects:
@@ -201,6 +286,9 @@ datasets:
               expression: price
         datatype: Decimal
         description: The regional reference price of the unit's region in that interval, $/MWh.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"price","summarizeBy":"none","formatString":"$#,##0.00"}'
       - name: cutoff
         expression:
           dialects:
@@ -208,6 +296,12 @@ datasets:
               expression: cutoff
         datatype: DateTime
         description: The newest interval in the facts when the row was written. Provenance only.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"cutoff","summarizeBy":"none","formatString":"yyyy-MM-dd HH:mm"}'
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"sourceLineageTag":"[mart].[fct_summary]","partitions":[{"name":"fct_summary","mode":"directLake","source":{"type":"entity","entityName":"fct_summary","expressionSource":"DirectLake","schemaName":"mart"}}]}'
   - name: dim_region
     source: mart.dim_region
     primary_key:
@@ -221,6 +315,9 @@ datasets:
               expression: Region
         datatype: String
         description: NSW1, QLD1, SA1, TAS1, VIC1; WA1 is Western Australia, another market (units, no prices).
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"Region","summarizeBy":"none"}'
       - name: State
         expression:
           dialects:
@@ -228,6 +325,12 @@ datasets:
               expression: State
         datatype: String
         description: The region's name.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"State","summarizeBy":"none"}'
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"sourceLineageTag":"[mart].[dim_region]","partitions":[{"name":"dim_region","mode":"directLake","source":{"type":"entity","entityName":"dim_region","expressionSource":"DirectLake","schemaName":"mart"}}]}'
   - name: dim_time
     source: mart.dim_time
     primary_key:
@@ -241,6 +344,9 @@ datasets:
               expression: time
         datatype: Integer
         description: "Time of day as HHMM: 1435 is 14:35. An interval ends at it."
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"time","summarizeBy":"none"}'
       - name: minute
         expression:
           dialects:
@@ -248,6 +354,9 @@ datasets:
               expression: minute
         datatype: Integer
         description: The same time as minutes since midnight, 0 to 1435.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"minute","summarizeBy":"none"}'
       - name: hour
         expression:
           dialects:
@@ -255,6 +364,12 @@ datasets:
               expression: hour
         datatype: Integer
         description: Hour of day, 0 to 23.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"hour","summarizeBy":"none"}'
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"sourceLineageTag":"[mart].[dim_time]","partitions":[{"name":"dim_time","mode":"directLake","source":{"type":"entity","entityName":"dim_time","expressionSource":"DirectLake","schemaName":"mart"}}]}'
   - name: fct_region
     source: mart.fct_region
     description: Price, demand and net interchange per region and 5 minutes, with the region's semi-scheduled wind and solar. The intraday record where it exists (2026-08 on), the next-day record before it.
@@ -266,6 +381,9 @@ datasets:
               expression: REGIONID
         datatype: String
         description: The region.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"REGIONID","summarizeBy":"none"}'
       - name: date
         expression:
           dialects:
@@ -273,6 +391,9 @@ datasets:
               expression: date
         datatype: Date
         description: Date of the interval, NEM time (AEST all year).
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"date","summarizeBy":"none","formatString":"yyyy-MM-dd"}'
       - name: time
         expression:
           dialects:
@@ -280,6 +401,9 @@ datasets:
               expression: time
         datatype: Integer
         description: "Time of day as HHMM: 1435 is 14:35. The interval ends at it."
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"time","summarizeBy":"none"}'
       - name: price
         expression:
           dialects:
@@ -287,6 +411,9 @@ datasets:
               expression: price
         datatype: Decimal
         description: The regional reference price (AEMO's RRP), $/MWh.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"price","summarizeBy":"none","formatString":"$#,##0.00"}'
       - name: demand
         expression:
           dialects:
@@ -294,6 +421,9 @@ datasets:
               expression: demand
         datatype: Decimal
         description: "Operational demand, MW: rooftop solar is not in it."
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"demand","summarizeBy":"none","formatString":"#,##0.00"}'
       - name: net_interchange
         expression:
           dialects:
@@ -301,6 +431,9 @@ datasets:
               expression: net_interchange
         datatype: Decimal
         description: MW, positive when the region exports.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"net_interchange","summarizeBy":"none","formatString":"#,##0.00"}'
       - name: wind_available
         expression:
           dialects:
@@ -308,6 +441,9 @@ datasets:
               expression: wind_available
         datatype: Decimal
         description: MW the region's semi-scheduled wind could make. Blank before 2026-08.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"wind_available","summarizeBy":"none","formatString":"#,##0.00"}'
       - name: wind_curtailed
         expression:
           dialects:
@@ -315,6 +451,9 @@ datasets:
               expression: wind_curtailed
         datatype: Decimal
         description: MW of it that was not dispatched.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"wind_curtailed","summarizeBy":"none","formatString":"#,##0.00"}'
       - name: solar_available
         expression:
           dialects:
@@ -322,6 +461,9 @@ datasets:
               expression: solar_available
         datatype: Decimal
         description: MW the region's semi-scheduled solar could make. Blank before 2026-08.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"solar_available","summarizeBy":"none","formatString":"#,##0.00"}'
       - name: solar_curtailed
         expression:
           dialects:
@@ -329,6 +471,12 @@ datasets:
               expression: solar_curtailed
         datatype: Decimal
         description: MW of it that was not dispatched.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"solar_curtailed","summarizeBy":"none","formatString":"#,##0.00"}'
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"sourceLineageTag":"[mart].[fct_region]","partitions":[{"name":"fct_region","mode":"directLake","source":{"type":"entity","entityName":"fct_region","expressionSource":"DirectLake","schemaName":"mart"}}]}'
   - name: fct_interconnector
     source: mart.fct_interconnector
     description: "Flow on each link between regions, per 5 minutes, back to 2018. Positive from the first region in the id to the second (T-V-MNSP1 > 0: Tasmania to Victoria); the limits bound it in the same sign."
@@ -340,6 +488,9 @@ datasets:
               expression: interconnector
         datatype: String
         description: AEMO's id of the link.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"interconnector","summarizeBy":"none"}'
       - name: date
         expression:
           dialects:
@@ -347,6 +498,9 @@ datasets:
               expression: date
         datatype: Date
         description: Date of the interval, NEM time (AEST all year).
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"date","summarizeBy":"none","formatString":"yyyy-MM-dd"}'
       - name: time
         expression:
           dialects:
@@ -354,6 +508,9 @@ datasets:
               expression: time
         datatype: Integer
         description: "Time of day as HHMM: 1435 is 14:35. The interval ends at it."
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"time","summarizeBy":"none"}'
       - name: mw
         expression:
           dialects:
@@ -361,6 +518,9 @@ datasets:
               expression: mw
         datatype: Decimal
         description: The dispatch target flow, MW.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"mw","summarizeBy":"none","formatString":"#,##0.00"}'
       - name: export_limit
         expression:
           dialects:
@@ -368,6 +528,9 @@ datasets:
               expression: export_limit
         datatype: Decimal
         description: Limit in the positive direction, MW.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"export_limit","summarizeBy":"none","formatString":"#,##0.00"}'
       - name: import_limit
         expression:
           dialects:
@@ -375,6 +538,12 @@ datasets:
               expression: import_limit
         datatype: Decimal
         description: Limit in the negative direction, MW.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"import_limit","summarizeBy":"none","formatString":"#,##0.00"}'
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"sourceLineageTag":"[mart].[fct_interconnector]","partitions":[{"name":"fct_interconnector","mode":"directLake","source":{"type":"entity","entityName":"fct_interconnector","expressionSource":"DirectLake","schemaName":"mart"}}]}'
   - name: dim_interconnector
     source: mart.dim_interconnector
     primary_key:
@@ -388,6 +557,9 @@ datasets:
               expression: interconnector
         datatype: String
         description: AEMO's id of the link, as fct_interconnector carries it.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"interconnector","summarizeBy":"none"}'
       - name: from_region
         expression:
           dialects:
@@ -395,6 +567,9 @@ datasets:
               expression: from_region
         datatype: String
         description: The region a positive flow leaves.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"from_region","summarizeBy":"none"}'
       - name: to_region
         expression:
           dialects:
@@ -402,6 +577,9 @@ datasets:
               expression: to_region
         datatype: String
         description: The region a positive flow enters.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"to_region","summarizeBy":"none"}'
       - name: description
         expression:
           dialects:
@@ -409,6 +587,12 @@ datasets:
               expression: description
         datatype: String
         description: AEMO's description of the link.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"description","summarizeBy":"none"}'
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"sourceLineageTag":"[mart].[dim_interconnector]","partitions":[{"name":"dim_interconnector","mode":"directLake","source":{"type":"entity","entityName":"dim_interconnector","expressionSource":"DirectLake","schemaName":"mart"}}]}'
   - name: fct_curtailment
     source: mart.fct_curtailment
     description: Curtailment per semi-scheduled unit (wind and solar farms) and day, up to the newest whole day of the next-day files.
@@ -420,6 +604,9 @@ datasets:
               expression: DUID
         datatype: String
         description: The unit.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"DUID","summarizeBy":"none"}'
       - name: date
         expression:
           dialects:
@@ -427,6 +614,9 @@ datasets:
               expression: date
         datatype: Date
         description: Date of the interval, NEM time (AEST all year).
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"date","summarizeBy":"none","formatString":"yyyy-MM-dd"}'
       - name: curtailed_mwh
         expression:
           dialects:
@@ -434,6 +624,9 @@ datasets:
               expression: curtailed_mwh
         datatype: Decimal
         description: "What the unit could have made and was not dispatched for: sum of max(availability - target, 0) / 12."
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"curtailed_mwh","summarizeBy":"none","formatString":"#,##0.00"}'
       - name: available_mwh
         expression:
           dialects:
@@ -441,6 +634,12 @@ datasets:
               expression: available_mwh
         datatype: Decimal
         description: What the unit could have made.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"available_mwh","summarizeBy":"none","formatString":"#,##0.00"}'
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"sourceLineageTag":"[mart].[fct_curtailment]","partitions":[{"name":"fct_curtailment","mode":"directLake","source":{"type":"entity","entityName":"fct_curtailment","expressionSource":"DirectLake","schemaName":"mart"}}]}'
   - name: fct_curtailment_region
     source: mart.fct_curtailment_region
     description: "Curtailment per region, day and fuel (Wind, Solar): the semi-scheduled farms (fct_curtailment) added up to their newest day, AEMO's regional figures after it (source). What the curtailment chart reads when no unit is picked."
@@ -452,6 +651,9 @@ datasets:
               expression: REGIONID
         datatype: String
         description: NEM region.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"REGIONID","summarizeBy":"none"}'
       - name: date
         expression:
           dialects:
@@ -459,6 +661,9 @@ datasets:
               expression: date
         datatype: Date
         description: Date, NEM time (AEST all year).
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"date","summarizeBy":"none","formatString":"yyyy-MM-dd"}'
       - name: fuel
         expression:
           dialects:
@@ -466,6 +671,9 @@ datasets:
               expression: fuel
         datatype: String
         description: Wind or Solar.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"fuel","summarizeBy":"none"}'
       - name: curtailed_mwh
         expression:
           dialects:
@@ -473,6 +681,9 @@ datasets:
               expression: curtailed_mwh
         datatype: Decimal
         description: Energy available and not dispatched.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"curtailed_mwh","summarizeBy":"none","formatString":"#,##0.00"}'
       - name: available_mwh
         expression:
           dialects:
@@ -480,6 +691,9 @@ datasets:
               expression: available_mwh
         datatype: Decimal
         description: Energy available.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"available_mwh","summarizeBy":"none","formatString":"#,##0.00"}'
       - name: source
         expression:
           dialects:
@@ -487,6 +701,12 @@ datasets:
               expression: source
         datatype: String
         description: farms (the units' next-day data, added up) or aemo (AEMO's regional figures, the days after the farms' newest).
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"source","summarizeBy":"none"}'
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"sourceLineageTag":"[mart].[fct_curtailment_region]","partitions":[{"name":"fct_curtailment_region","mode":"directLake","source":{"type":"entity","entityName":"fct_curtailment_region","expressionSource":"DirectLake","schemaName":"mart"}}]}'
   - name: fct_summary_daily
     source: mart.fct_summary_daily
     description: "Energy per unit and day: fct_summary one grain up, whole days only (a day is written once the next-day files hold all of it). The measures of fct_summary read this table when no time of day is asked for: output_mwh, charging_mwh and revenue are the day's sums of what they sum at 5 minutes, so the answer is the same. mwh (net) and price (the day's average) are not the same numbers and no measure reads them: they are kept for the dashboard's Analyze tab, which is SQL."
@@ -498,6 +718,9 @@ datasets:
               expression: DUID
         datatype: String
         description: The unit.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"DUID","summarizeBy":"none"}'
       - name: date
         expression:
           dialects:
@@ -505,6 +728,9 @@ datasets:
               expression: date
         datatype: Date
         description: Calendar date, NEM time (AEST all year).
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"date","summarizeBy":"none","formatString":"yyyy-MM-dd"}'
       - name: mwh
         expression:
           dialects:
@@ -512,6 +738,9 @@ datasets:
               expression: mwh
         datatype: Decimal
         description: "The day's net energy, MWh: a battery's charging is taken off its output."
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"mwh","summarizeBy":"none","formatString":"#,##0.00"}'
       - name: price
         expression:
           dialects:
@@ -519,6 +748,9 @@ datasets:
               expression: price
         datatype: Decimal
         description: The day's average price of the unit's region, $/MWh.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"price","summarizeBy":"none","formatString":"$#,##0.00"}'
       - name: output_mwh
         expression:
           dialects:
@@ -526,6 +758,9 @@ datasets:
               expression: output_mwh
         datatype: Float
         description: "The day's output, MWh: the 5-minute intervals above 0 MW. What [Generation MWh] sums."
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"output_mwh","summarizeBy":"none","formatString":"#,##0.00"}'
       - name: charging_mwh
         expression:
           dialects:
@@ -533,6 +768,9 @@ datasets:
               expression: charging_mwh
         datatype: Float
         description: "The day's charging, MWh, negative: the 5-minute intervals below 0 MW."
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"charging_mwh","summarizeBy":"none","formatString":"#,##0.00"}'
       - name: revenue
         expression:
           dialects:
@@ -540,6 +778,12 @@ datasets:
               expression: revenue
         datatype: Float
         description: "What the day's output earned, $: each interval's output at its own 5-minute price."
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"revenue","summarizeBy":"none","formatString":"$#,##0.00"}'
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"sourceLineageTag":"[mart].[fct_summary_daily]","partitions":[{"name":"fct_summary_daily","mode":"directLake","source":{"type":"entity","entityName":"fct_summary_daily","expressionSource":"DirectLake","schemaName":"mart"}}]}'
   - name: fct_region_daily
     source: mart.fct_region_daily
     description: "Price, demand and net interchange per region and day: the plain average of the day's 288 intervals, whole days only. The measures of fct_region read this table when no time of day is asked for; it is also where fct_summary_daily takes its price."
@@ -551,6 +795,9 @@ datasets:
               expression: REGIONID
         datatype: String
         description: The region.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"REGIONID","summarizeBy":"none"}'
       - name: date
         expression:
           dialects:
@@ -558,6 +805,9 @@ datasets:
               expression: date
         datatype: Date
         description: Calendar date, NEM time (AEST all year).
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"date","summarizeBy":"none","formatString":"yyyy-MM-dd"}'
       - name: price
         expression:
           dialects:
@@ -565,6 +815,9 @@ datasets:
               expression: price
         datatype: Decimal
         description: Average regional reference price of the day, $/MWh.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"price","summarizeBy":"none","formatString":"$#,##0.00"}'
       - name: demand
         expression:
           dialects:
@@ -572,6 +825,9 @@ datasets:
               expression: demand
         datatype: Decimal
         description: Average operational demand of the day, MW.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"demand","summarizeBy":"none","formatString":"#,##0.00"}'
       - name: net_interchange
         expression:
           dialects:
@@ -579,6 +835,12 @@ datasets:
               expression: net_interchange
         datatype: Decimal
         description: Average net flow out of the region, MW; positive is exporting.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"net_interchange","summarizeBy":"none","formatString":"#,##0.00"}'
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"sourceLineageTag":"[mart].[fct_region_daily]","partitions":[{"name":"fct_region_daily","mode":"directLake","source":{"type":"entity","entityName":"fct_region_daily","expressionSource":"DirectLake","schemaName":"mart"}}]}'
   - name: dim_month
     source: mart.dim_month
     primary_key:
@@ -592,6 +854,9 @@ datasets:
               expression: month
         datatype: Date
         description: The month's first day.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"month","summarizeBy":"none","formatString":"yyyy-MM"}'
       - name: days
         expression:
           dialects:
@@ -599,6 +864,12 @@ datasets:
               expression: days
         datatype: Integer
         description: Days in the month.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"days","summarizeBy":"none"}'
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"sourceLineageTag":"[mart].[dim_month]","partitions":[{"name":"dim_month","mode":"directLake","source":{"type":"entity","entityName":"dim_month","expressionSource":"DirectLake","schemaName":"mart"}}]}'
   - name: fct_summary_hourly
     source: mart.fct_summary_hourly
     description: "Output energy per unit, month and hour of day, whole months only: what an average-day chart reads over a long range."
@@ -610,6 +881,9 @@ datasets:
               expression: DUID
         datatype: String
         description: The unit.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"DUID","summarizeBy":"none"}'
       - name: month
         expression:
           dialects:
@@ -617,6 +891,9 @@ datasets:
               expression: month
         datatype: Date
         description: The month's first day.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"month","summarizeBy":"none","formatString":"yyyy-MM"}'
       - name: hour
         expression:
           dialects:
@@ -624,6 +901,9 @@ datasets:
               expression: hour
         datatype: Integer
         description: "Hour of day, 0 to 23, as time // 100: the interval ending 14:00 is hour 14."
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"hour","summarizeBy":"none"}'
       - name: mwh
         expression:
           dialects:
@@ -631,6 +911,12 @@ datasets:
               expression: mwh
         datatype: Decimal
         description: Output energy at that hour over the month, MWh; charging is left out.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"mwh","summarizeBy":"none","formatString":"#,##0.00"}'
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"sourceLineageTag":"[mart].[fct_summary_hourly]","partitions":[{"name":"fct_summary_hourly","mode":"directLake","source":{"type":"entity","entityName":"fct_summary_hourly","expressionSource":"DirectLake","schemaName":"mart"}}]}'
   - name: fct_region_hourly
     source: mart.fct_region_hourly
     description: "Average price per region, month and hour of day, whole months only: what a price-by-hour chart reads over a long range."
@@ -642,6 +928,9 @@ datasets:
               expression: REGIONID
         datatype: String
         description: The region.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"REGIONID","summarizeBy":"none"}'
       - name: month
         expression:
           dialects:
@@ -649,6 +938,9 @@ datasets:
               expression: month
         datatype: Date
         description: The month's first day.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"month","summarizeBy":"none","formatString":"yyyy-MM"}'
       - name: hour
         expression:
           dialects:
@@ -656,6 +948,9 @@ datasets:
               expression: hour
         datatype: Integer
         description: "Hour of day, 0 to 23, as time // 100: the interval ending 14:00 is hour 14."
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"hour","summarizeBy":"none"}'
       - name: price
         expression:
           dialects:
@@ -663,6 +958,9 @@ datasets:
               expression: price
         datatype: Decimal
         description: Plain average of the month's prices at that hour, $/MWh.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"price","summarizeBy":"none","formatString":"$#,##0.00"}'
       - name: intervals
         expression:
           dialects:
@@ -670,6 +968,12 @@ datasets:
               expression: intervals
         datatype: Integer
         description: How many intervals were averaged.
+        custom_extensions:
+          - vendor_name: POWER_BI
+            data: '{"sourceLineageTag":"intervals","summarizeBy":"none"}'
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"sourceLineageTag":"[mart].[fct_region_hourly]","partitions":[{"name":"fct_region_hourly","mode":"directLake","source":{"type":"entity","entityName":"fct_region_hourly","expressionSource":"DirectLake","schemaName":"mart"}}]}'
 relationships:
   - name: fct_summary_to_dim_duid
     from: fct_summary
@@ -843,7 +1147,7 @@ metrics:
     description: The units in the selection, whether they ran or not. For the ones that did, [Units].
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"dim_duid"}'
+        data: '{"table":"dim_duid","formatString":"#,##0"}'
   - name: Registered MW
     expression:
       dialects:
@@ -852,7 +1156,7 @@ metrics:
     description: Registered generating capacity of the units in the selection, MW.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"dim_duid"}'
+        data: '{"table":"dim_duid","formatString":"#,##0"}'
   - name: Storage MWh
     expression:
       dialects:
@@ -861,7 +1165,7 @@ metrics:
     description: Storage of the batteries in the selection, MWh.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"dim_duid"}'
+        data: '{"table":"dim_duid","formatString":"#,##0"}'
   - name: Reads 5 minutes
     expression:
       dialects:
@@ -870,7 +1174,7 @@ metrics:
     description: "Whether the measures of fct_summary have to read it rather than its daily table: a time of day is asked for (any column of dim_time is filtered or grouped), or a column of fct_summary itself is filtered. Hidden: it is the one place the rule is written."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","isHidden":true}'
   - name: Newest whole day
     expression:
       dialects:
@@ -879,7 +1183,7 @@ metrics:
     description: "The newest day fct_summary_daily holds, whatever the filters: the measures that read it add fct_summary for the days after it. The daily table is written in date order with no gaps (a day once it is whole, the days after its newest; a refill below its oldest), so the days after this one are the days it lacks. A cutoff, not the set of those days (an EXCEPT): over a year grouped by unit or plant, that set took more memory than the capacity gives a query (1.4 GB against 1 GB, 2026-10-07). Hidden: it is the one place the rule is written."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","isHidden":true}'
   - name: Generation MWh
     expression:
       dialects:
@@ -893,7 +1197,7 @@ metrics:
     description: "Energy generated. Output only: a unit that is charging (negative) generates nothing. A 5-minute row is MW / 12. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days after the newest one the daily table holds ([Newest whole day]). The number is the same from either. CONVERT is there because MW is a fixed decimal: divided as one, the energy of a small unit at one 5-minute time is rounded to 4 decimals. Rooftop solar is in it: five units, ROOFTOP_<region>, the half-hourly estimate on the straight line between two half hours."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"#,##0"}'
   - name: Charging MWh
     expression:
       dialects:
@@ -907,7 +1211,7 @@ metrics:
     description: "Energy the batteries took, negative. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days after the newest one the daily table holds ([Newest whole day]). The number is the same from either. CONVERT is there because MW is a fixed decimal: divided as one, the energy of a small unit at one 5-minute time is rounded to 4 decimals."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"#,##0"}'
   - name: Revenue
     expression:
       dialects:
@@ -921,7 +1225,7 @@ metrics:
     description: "What the output earned at the spot price, $: each 5 minutes of output at the price of the unit's region in that interval. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days after the newest one the daily table holds ([Newest whole day]). The number is the same from either."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"$#,##0"}'
   - name: Capture price
     expression:
       dialects:
@@ -930,7 +1234,7 @@ metrics:
     description: "The price the output earned, $/MWh: the 5-minute prices of the unit's region weighted by the output. From [Revenue] and [Generation MWh], so it reads the table they read."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"$#,##0.00"}'
   - name: Units
     expression:
       dialects:
@@ -946,7 +1250,7 @@ metrics:
     description: "Units with output or charging in the selection, rooftop solar's five (one per region) left out: they are not plant. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days after the newest one the daily table holds ([Newest whole day]). The number is the same from either."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"#,##0"}'
   - name: Latest update
     expression:
       dialects:
@@ -955,7 +1259,7 @@ metrics:
     description: The newest interval the table had seen at its last write, whatever is filtered.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"yyyy-MM-dd HH:mm"}'
   - name: Renewable share
     expression:
       dialects:
@@ -968,7 +1272,7 @@ metrics:
     description: Renewable share of the output, %. Rooftop solar is in it, as the units of the fuel "Rooftop solar". Batteries (fuel Grid) are in neither the renewables nor the total. 0 when the units ran and none is renewable, blank when no generator ran.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"0.0"}'
   - name: Generation share
     expression:
       dialects:
@@ -977,7 +1281,7 @@ metrics:
     description: "The share of the output of all the units the selection shows, %: per fuel, the fuel's part of what is shown. Batteries discharging are in the whole, as they are in the stack of the generation chart."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"0.0"}'
   - name: Renewable share change
     expression:
       dialects:
@@ -992,7 +1296,7 @@ metrics:
     description: "The change of [Renewable share], percentage points. Against the days just before the selection: as many days, ending the day before its first. Blank unless both have every hour of their days. Asked over a range of dim_calendar[date]."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"0.0"}'
   - name: Capacity MW
     expression:
       dialects:
@@ -1007,7 +1311,7 @@ metrics:
     description: "The registered capacity of the units that have output in the selection, MW: what [Capacity factor] divides by. [Registered MW] is every unit on the list, whether it ran or not."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"#,##0"}'
   - name: Capacity factor
     expression:
       dialects:
@@ -1019,7 +1323,7 @@ metrics:
     description: Energy over what the registered capacity could make in the hours of the selection, %. The capacity is that of the units with output or charging in the selection (found in the daily table when no time of day is asked for); a unit without a registered capacity is left out. The hours are [Hours].
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"0.0"}'
   - name: Generation MW
     expression:
       dialects:
@@ -1028,7 +1332,7 @@ metrics:
     description: "Output of the units in MW at a 5-minute time, always from fct_summary: read it at one time, it is a sum over the intervals in the selection. For energy use [Generation MWh]. Rooftop solar is in it: five units, ROOFTOP_<region>, the half-hourly estimate on the straight line between two half hours."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"#,##0"}'
   - name: Charging MW
     expression:
       dialects:
@@ -1037,7 +1341,7 @@ metrics:
     description: "What the batteries are taking in MW at a 5-minute time, negative, always from fct_summary: read it at one time, like [Generation MW]. For energy use [Charging MWh]."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"#,##0"}'
   - name: Average MW
     expression:
       dialects:
@@ -1046,7 +1350,7 @@ metrics:
     description: "A unit's average MW over the 5-minute intervals it ran in, always from fct_summary: an interval at 0 MW has no row and is not counted. Read it per unit."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"#,##0.0"}'
   - name: Days with output
     expression:
       dialects:
@@ -1055,7 +1359,7 @@ metrics:
     description: The days on which the selection has output or charging, always from fct_summary. At one time of day, what an average day divides by.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"#,##0"}'
   - name: Price seen
     expression:
       dialects:
@@ -1064,7 +1368,7 @@ metrics:
     description: "The plain average of the price on the units' rows, $/MWh, always from fct_summary: the price the units in the selection saw while they ran, not weighted by their output."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"$#,##0.00"}'
   - name: Charging price
     expression:
       dialects:
@@ -1073,7 +1377,7 @@ metrics:
     description: "The price the charging paid, $/MWh: the 5-minute prices of the unit's region weighted by what it took. Always from fct_summary. Next to [Capture price], a battery's spread."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"$#,##0.00"}'
   - name: Battery spread
     expression:
       dialects:
@@ -1085,7 +1389,7 @@ metrics:
     description: "What a MWh discharged earned over what a MWh charged paid, $/MWh: [Capture price] less [Charging price]. Blank unless the selection both discharged and charged."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"$#,##0.00"}'
   - name: Average generation MW
     expression:
       dialects:
@@ -1094,7 +1398,7 @@ metrics:
     description: 'The output as an average MW: [Generation MWh] over [Hours], the hours the selection holds. Follows the unit filters; rooftop solar is in it, as the units of the fuel "Rooftop solar".'
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"#,##0"}'
   - name: Average generation MW change
     expression:
       dialects:
@@ -1109,7 +1413,7 @@ metrics:
     description: "The change of [Average generation MW], %. Against the days just before the selection: as many days, ending the day before its first. Blank unless both have every hour of their days. Asked over a range of dim_calendar[date]."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"0.0"}'
   - name: Generation MW on an average day
     expression:
       dialects:
@@ -1118,7 +1422,7 @@ metrics:
     description: "By time of day: the output at that time on an average day, MW. [Generation MW] over the days that have a row at it. Always from fct_summary."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"#,##0.0"}'
   - name: Charging MW on an average day
     expression:
       dialects:
@@ -1127,7 +1431,7 @@ metrics:
     description: "By time of day: what the units took at that time on an average day, MW, negative. [Charging MW] over the days that have a row at it. Always from fct_summary."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"#,##0.0"}'
   - name: Emissions t
     expression:
       dialects:
@@ -1142,7 +1446,7 @@ metrics:
     description: "Tonnes of CO2-e emitted: each unit's output ([Generation MWh]'s, from the same table) times its dim_duid[CO2eFactor]. A unit with no factor counts nothing: loads, and the gensets AEMO lists \"On Exclusion List\" (Colongra, Jeeralang, Braemar 3 and 6), so the total is short of AEMO's by what those emit. Rooftop solar has no unit and emits nothing."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"#,##0"}'
   - name: Emissions intensity
     expression:
       dialects:
@@ -1151,7 +1455,7 @@ metrics:
     description: "Tonnes of CO2-e per MWh, over the units that have a factor: [Emissions t] divided by their [Generation MWh]. Rooftop solar is not in it."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"0.000"}'
   - name: Emissions intensity change
     expression:
       dialects:
@@ -1166,7 +1470,7 @@ metrics:
     description: "The change of [Emissions intensity], %. Against the days just before the selection: as many days, ending the day before its first. Blank unless both have every hour of their days. Asked over a range of dim_calendar[date]."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary"}'
+        data: '{"table":"fct_summary","formatString":"0.0"}'
   - name: Reads 5 minutes regional
     expression:
       dialects:
@@ -1175,7 +1479,7 @@ metrics:
     description: "Whether the measures of fct_region have to read it rather than its daily table: a time of day is asked for (any column of dim_time is filtered or grouped), or a column of fct_region itself is filtered. Hidden: it is the one place the rule is written."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region"}'
+        data: '{"table":"fct_region","isHidden":true}'
   - name: Newest whole day regional
     expression:
       dialects:
@@ -1184,7 +1488,7 @@ metrics:
     description: "The newest day fct_region_daily holds, whatever the filters: the measures that read it add fct_region for the days after it. Every region has the same days (3,136 each, 2026-10-07). The daily table is written in date order with no gaps (a day once it is whole, the days after its newest; a refill below its oldest), so the days after this one are the days it lacks. A cutoff, not the set of those days (an EXCEPT): over a year grouped by unit or plant, that set took more memory than the capacity gives a query (1.4 GB against 1 GB, 2026-10-07). Hidden: it is the one place the rule is written."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region"}'
+        data: '{"table":"fct_region","isHidden":true}'
   - name: Average price
     expression:
       dialects:
@@ -1200,7 +1504,7 @@ metrics:
     description: "The plain average of the 5-minute regional prices in the selection, $/MWh. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise fct_region_daily (a day there is 288 intervals), plus fct_region for the days after the newest one it holds ([Newest whole day regional]). The daily table is what lets a reader that cannot hold years of 5-minute rows, a browser, ask the same measure over a long range."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region"}'
+        data: '{"table":"fct_region","formatString":"$#,##0.00"}'
   - name: Average price change
     expression:
       dialects:
@@ -1215,7 +1519,7 @@ metrics:
     description: "The change of [Average price], $/MWh. Against the days just before the selection: as many days, ending the day before its first. Blank unless both have every hour of their days. Asked over a range of dim_calendar[date]."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region"}'
+        data: '{"table":"fct_region","formatString":"$#,##0.00"}'
   - name: Demand MWh
     expression:
       dialects:
@@ -1229,7 +1533,7 @@ metrics:
     description: "Operational demand as energy; rooftop solar is not in it. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise fct_region_daily (a day there is 288 intervals), plus fct_region for the days after the newest one it holds ([Newest whole day regional])."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region"}'
+        data: '{"table":"fct_region","formatString":"#,##0"}'
   - name: Net interchange MW
     expression:
       dialects:
@@ -1245,7 +1549,7 @@ metrics:
     description: "Average net flow out of a region, MW; positive is exporting. Read it per region. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise fct_region_daily (a day there is 288 intervals), plus fct_region for the days after the newest one it holds ([Newest whole day regional])."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region"}'
+        data: '{"table":"fct_region","formatString":"#,##0"}'
   - name: Demand MW
     expression:
       dialects:
@@ -1254,7 +1558,7 @@ metrics:
     description: "Operational demand in MW at a 5-minute time, always from fct_region: read it at one time, it is a sum over the regions and the intervals in the selection. Blank when a region in the selection has no demand yet, so that it is left out and not undercounted. For energy use [Demand MWh]."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region"}'
+        data: '{"table":"fct_region","formatString":"#,##0"}'
   - name: Demand with rooftop MW
     expression:
       dialects:
@@ -1265,7 +1569,7 @@ metrics:
     description: "Operational demand plus what rooftop solar supplied, MW at a 5-minute time: AEMO's operational demand leaves rooftop out, the generation stack has it. Blank when a region has no demand yet. Asked through the dimensions (dim_calendar, dim_time, dim_region), which reach both."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region"}'
+        data: '{"table":"fct_region","formatString":"#,##0"}'
   - name: Demand with rooftop MWh
     expression:
       dialects:
@@ -1276,7 +1580,7 @@ metrics:
     description: "Operational demand plus what rooftop solar supplied, MWh: [Demand with rooftop MW] as energy. Asked through the dimensions, which reach both."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region"}'
+        data: '{"table":"fct_region","formatString":"#,##0"}'
   - name: Hours
     expression:
       dialects:
@@ -1290,7 +1594,7 @@ metrics:
     description: "The hours the selection holds data for: its 5-minute intervals / 12. What a capacity factor divides by, and / 24 the days. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise 24 hours per day of fct_region_daily, plus the intervals of fct_region on the days after the newest one it holds ([Newest whole day regional])."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region"}'
+        data: '{"table":"fct_region","formatString":"#,##0.0"}'
   - name: Negative price share
     expression:
       dialects:
@@ -1299,7 +1603,7 @@ metrics:
     description: Share of the 5-minute intervals with a price below zero, %, always from fct_region. Read it per region.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region"}'
+        data: '{"table":"fct_region","formatString":"0.0"}'
   - name: Lowest price
     expression:
       dialects:
@@ -1308,7 +1612,7 @@ metrics:
     description: The lowest 5-minute price in the selection, $/MWh, always from fct_region.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region"}'
+        data: '{"table":"fct_region","formatString":"$#,##0.00"}'
   - name: Average demand MW
     expression:
       dialects:
@@ -1317,7 +1621,7 @@ metrics:
     description: "Operational demand as an average MW: [Demand MWh] over [Hours]. Summed over the regions in the selection."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region"}'
+        data: '{"table":"fct_region","formatString":"#,##0"}'
   - name: Regional wind curtailed MWh
     expression:
       dialects:
@@ -1326,7 +1630,7 @@ metrics:
     description: Semi-scheduled wind not dispatched, from AEMO's regional figures (2026-08 on, up to the newest interval).
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region"}'
+        data: '{"table":"fct_region","formatString":"#,##0"}'
   - name: Regional wind available MWh
     expression:
       dialects:
@@ -1335,7 +1639,7 @@ metrics:
     description: What the region's semi-scheduled wind could have made.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region"}'
+        data: '{"table":"fct_region","formatString":"#,##0"}'
   - name: Regional solar curtailed MWh
     expression:
       dialects:
@@ -1344,7 +1648,7 @@ metrics:
     description: Semi-scheduled solar not dispatched, from AEMO's regional figures (2026-08 on, up to the newest interval).
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region"}'
+        data: '{"table":"fct_region","formatString":"#,##0"}'
   - name: Regional solar available MWh
     expression:
       dialects:
@@ -1353,7 +1657,7 @@ metrics:
     description: What the region's semi-scheduled solar could have made.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region"}'
+        data: '{"table":"fct_region","formatString":"#,##0"}'
   - name: Flow MW
     expression:
       dialects:
@@ -1362,7 +1666,7 @@ metrics:
     description: Average flow on a link, MW. Read it per link.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_interconnector"}'
+        data: '{"table":"fct_interconnector","formatString":"#,##0"}'
   - name: Flow utilisation
     expression:
       dialects:
@@ -1374,7 +1678,7 @@ metrics:
     description: "The flow as a share of the limit in its direction, %: export_limit when it flows from from_region, import_limit (negative) the other way. 0 when that limit is not above zero, blank where the link has no rows (so a query of the links' rows keeps only the links its filters reach). Read it per link and interval."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_interconnector"}'
+        data: '{"table":"fct_interconnector","formatString":"0"}'
   - name: No flow
     expression:
       dialects:
@@ -1394,7 +1698,7 @@ metrics:
     description: Energy semi-scheduled wind and solar farms could have made and were not dispatched for.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_curtailment"}'
+        data: '{"table":"fct_curtailment","formatString":"#,##0"}'
   - name: Available MWh
     expression:
       dialects:
@@ -1403,7 +1707,7 @@ metrics:
     description: Energy those farms could have made.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_curtailment"}'
+        data: '{"table":"fct_curtailment","formatString":"#,##0"}'
   - name: Curtailment rate
     expression:
       dialects:
@@ -1412,7 +1716,7 @@ metrics:
     description: Curtailed energy over available energy, %.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_curtailment"}'
+        data: '{"table":"fct_curtailment","formatString":"0.0"}'
   - name: Wind and solar curtailed MWh
     expression:
       dialects:
@@ -1421,7 +1725,7 @@ metrics:
     description: "Energy the semi-scheduled wind and solar farms could have made and were not dispatched for: the farms' own figures to their newest day, AEMO's regional ones after."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_curtailment_region"}'
+        data: '{"table":"fct_curtailment_region","formatString":"#,##0"}'
   - name: Wind and solar available MWh
     expression:
       dialects:
@@ -1430,7 +1734,7 @@ metrics:
     description: Energy those farms could have made, from the same sources.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_curtailment_region"}'
+        data: '{"table":"fct_curtailment_region","formatString":"#,##0"}'
   - name: Wind and solar curtailment rate
     expression:
       dialects:
@@ -1439,7 +1743,7 @@ metrics:
     description: Curtailed energy over available energy, %.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_curtailment_region"}'
+        data: '{"table":"fct_curtailment_region","formatString":"0.0"}'
   - name: Average MWh a day
     expression:
       dialects:
@@ -1448,7 +1752,7 @@ metrics:
     description: A unit's average output per day, MWh, over the whole days it ran in. Names this table, like the measures of the tables by month. Read it per unit.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary_daily"}'
+        data: '{"table":"fct_summary_daily","formatString":"#,##0.0"}'
   - name: Negative price days share
     expression:
       dialects:
@@ -1457,7 +1761,7 @@ metrics:
     description: "Share of the whole days whose average price was below zero, %. Not [Negative price share], which counts 5-minute intervals: this one names the daily table. Read it per region."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region_daily"}'
+        data: '{"table":"fct_region_daily","formatString":"0.0"}'
   - name: Lowest daily price
     expression:
       dialects:
@@ -1466,7 +1770,7 @@ metrics:
     description: The lowest daily average price in the selection, $/MWh. Names the daily table.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region_daily"}'
+        data: '{"table":"fct_region_daily","formatString":"$#,##0.00"}'
   - name: Month days
     expression:
       dialects:
@@ -1475,7 +1779,7 @@ metrics:
     description: Days of the months in the selection.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"dim_month"}'
+        data: '{"table":"dim_month","formatString":"#,##0"}'
   - name: Output MWh hourly
     expression:
       dialects:
@@ -1484,7 +1788,7 @@ metrics:
     description: Output energy at an hour of day over the months in the selection.
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary_hourly"}'
+        data: '{"table":"fct_summary_hourly","formatString":"#,##0"}'
   - name: Average MW at hour
     expression:
       dialects:
@@ -1493,7 +1797,7 @@ metrics:
     description: "Average output at an hour of day over the months in the selection, MW: the energy at that hour over the days of those months. Read it per hour."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_summary_hourly"}'
+        data: '{"table":"fct_summary_hourly","formatString":"#,##0"}'
   - name: Price at hour
     expression:
       dialects:
@@ -1502,4 +1806,7 @@ metrics:
     description: "Average price at an hour of day over the months in the selection: the monthly averages weighted by their intervals."
     custom_extensions:
       - vendor_name: POWER_BI
-        data: '{"table":"fct_region_hourly"}'
+        data: '{"table":"fct_region_hourly","formatString":"$#,##0.00"}'
+custom_extensions:
+  - vendor_name: POWER_BI
+    data: '{"compatibilityLevel":1604,"name":null,"model":{"culture":"en-US","defaultPowerBIDataSourceVersion":"powerBI_V3","expressions":[{"name":"DirectLake","kind":"m","description":"The nem lakehouse in OneLake. {WS_ID} and {LH_ID} are filled in at deploy.","expression":["let","    Source = AzureStorage.DataLake(\"https://onelake.dfs.fabric.microsoft.com/{WS_ID}/{LH_ID}\", [HierarchicalNavigation=true])","in","    Source"]}]}}'

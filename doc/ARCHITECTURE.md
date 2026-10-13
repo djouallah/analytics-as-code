@@ -12,12 +12,12 @@ describes the version in use, not the product.
 
 | Source Data | → | dbt-duckdb | → | Iceberg Catalog | → | Semantic model | → | Clients |
 |:-----------:|---|:----------:|---|:---------------:|---|:------:|---|:---------:|
-| *external*  |   | *ephemeral, in-memory* | | *persistent, only state* | | *one Power BI `model.bim`: tables, relationships, measures* | | *one page on two hosts (DuckDB-WASM), and a Power BI report* |
+| *external*  |   | *ephemeral, in-memory* | | *persistent, only state* | | *one Apache Ossie model (`ossie.yaml`): tables, relationships, measures in DAX* | | *one page on two hosts (DuckDB-WASM), and a Power BI report* |
 
 - **dbt-duckdb** — transformation engine that runs entirely in-memory. No database server, no cluster. A Python model handles data ingestion; SQL models handle transformation.
 - **Iceberg REST catalog** — the single persistent layer. All warehouse state lives here as Iceberg tables, and the gzipped source CSVs are archived next to them in object storage, so nothing depends on the ephemeral CI runner's disk.
 - **GitHub Actions** — orchestrates everything. Scheduled workflows replace traditional schedulers (Airflow, Dagster, etc.). Auth is OIDC, no secrets.
-- **One semantic model** — a Power BI model (`semantic_model/model.bim`) over the Iceberg tables: what a table is, how tables relate, and every measure, in DAX. Every client reads the data through it.
+- **One semantic model** — an [Apache Ossie](https://github.com/apache/ossie) model (`semantic_model/ossie.yaml`) over the Iceberg tables, its measures in DAX (Power BI gets the `model.bim` it stands for, written at deploy): what a table is, how tables relate, and every measure, in DAX. Every client reads the data through it.
 - **The clients** — a static HTML page that queries a cached copy of the tables in the browser (DuckDB-WASM, no backend API), deployed to GitHub Pages (public) and as a Microsoft Fabric app (sign-in, data in a lakehouse), and a Power BI report on the same model in Direct Lake. See [The clients](#the-clients).
 
 ## Design Principles
@@ -54,7 +54,7 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 
 ## The clients
 
-One semantic model (`semantic_model/model.bim`), its clients under `dashboard/`:
+One semantic model (`semantic_model/ossie.yaml`), its clients under `dashboard/`:
 
 - `github/` and `fabric_app/wasm/` are one page (`dashboard/github/common/index.html`) on two hosts. A
   host only decides where the data files live and how the browser gets them
@@ -88,14 +88,15 @@ on purpose: the point is the layers, not their maturity.
 |---|---|---|
 | Consumer | `dashboard/github/common/index.html` | the BI tool |
 | Query language | a query of the model's fields (`frontend/queries.js`), which the compiler writes as DAX | DAX, MDX, VizQL, Malloy, a metrics request |
-| Semantic model | `semantic_model/model.bim`, a Tabular model in TMSL | a Tabular model (TMSL, TMDL), LookML, MetricFlow YAML |
+| Semantic model | `semantic_model/ossie.yaml`, Apache Ossie with DAX measures (the TMSL in its `POWER_BI` extensions) | a Tabular model (TMSL, TMDL), LookML, MetricFlow YAML |
 | Compiler | `dax-sql` | MetricFlow, Cube's schema compiler, Malloy's compiler, Looker's SQL generator, Power BI's formula engine, Tableau's VizQL |
 | Engine | DuckDB-WASM | the warehouse, VertiPaq, Hyper |
 | Storage | `dashboard/github/common/storage/` | the lakehouse or warehouse connection |
 
 - **The semantic model** describes the tables, their relationships and the measures, each
-  with a description. It is a real Power BI model (`model.bim`), the same file that is
-  deployed to Fabric: it holds DAX only, and nothing in it is written for the page.
+  with a description. It is an Apache Ossie model (`ossie.yaml`), its measures in DAX, and
+  what Ossie has no place for in `POWER_BI` extensions: the `model.bim` deployed to Fabric is
+  written from it, and nothing in it is written for the page.
 - **The compiler** writes the page's queries as DAX, and turns the DAX into SQL over the
   views of the tables that storage has: [`dax-sql`](https://github.com/djouallah/dax-sql), a general DAX compiler that
   knows nothing of this model or this page.
@@ -177,7 +178,7 @@ no query service.
 │   └── marts/            # Incremental fact tables (landing) and the tables the model reads (mart)
 ├── macros/               # Iceberg adapter overrides, the pending-files and date-bounds helpers
 ├── scripts/              # The cache (Iceberg → DuckDB files), table maintenance, deploys, parity/
-├── semantic_model/       # The one semantic model (model.bim): what every client reads, and a Fabric item
+├── semantic_model/       # The one semantic model (ossie.yaml): what every client reads; with model.bim written in at deploy, a Fabric item
 ├── dashboard/            # Its clients
 │   ├── github/           # The page on GitHub Pages, and its two ways of asking
 │   │   ├── common/       # index.html, frontend/ (draws, Logs tab), storage/ (the host, the tables as views), semantic/ (the model's queries), dag/ (dbt docs)

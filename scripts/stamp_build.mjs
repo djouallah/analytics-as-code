@@ -3,7 +3,7 @@
 // every relative import gets ?v=<build>. A browser keeps a module it cached (Pages sends
 // max-age=600), so without it a new index.html could run with an old module: on
 // 2026-10-07 that broke the page ("s.replace is not a function") until the cache expired.
-// semantic/query.js passes its own ?v= on to model.bim.
+// semantic/query.js passes its own ?v= on to the model (ossie.json).
 //   node scripts/stamp_build.mjs <dir> <build>
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
