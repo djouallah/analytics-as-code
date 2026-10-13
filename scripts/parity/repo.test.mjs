@@ -83,11 +83,12 @@ test('measures against SQL written by hand', { skip }, async () => {
   await same(`EVALUATE CALCULATETABLE(ROW("v", [Capacity factor]), dim_duid[DUID] = "WIND1", dim_calendar[date] >= dt"2026-09-20", dim_calendar[date] <= dt"2026-10-05")`,
     `SELECT 100 * (SELECT SUM(output_mwh) FROM v_fct_summary_daily WHERE "DUID" = 'WIND1' AND date BETWEEN '2026-09-20' AND '2026-10-05')
       / (100.0 * 24 * (SELECT COUNT(DISTINCT date) FROM v_fct_region_daily WHERE date BETWEEN '2026-09-20' AND '2026-10-05')) v`);
-  // A day of the daily table (288 intervals) and a day it lacks (its 5-minute rows).
+  // A day of the daily table (288 intervals) and a day it lacks (its 5-minute rows); prices
+  // are fixed decimal, so their sum over a count is rounded to four places.
   await same(`EVALUATE CALCULATETABLE(ROW("v", [Average price]), dim_region[Region] = "NSW1", dim_calendar[date] >= dt"2026-10-05", dim_calendar[date] <= dt"2026-10-06")`,
-    `SELECT (288 * (SELECT SUM(price) FROM v_fct_region_daily WHERE "REGIONID" = 'NSW1' AND date = '2026-10-05')
+    `SELECT ROUND((288 * (SELECT SUM(price) FROM v_fct_region_daily WHERE "REGIONID" = 'NSW1' AND date = '2026-10-05')
       + (SELECT SUM(price) FROM v_fct_region WHERE "REGIONID" = 'NSW1' AND date = '2026-10-06'))::DOUBLE
-      / (288 + (SELECT COUNT(price) FROM v_fct_region WHERE "REGIONID" = 'NSW1' AND date = '2026-10-06')) v`);
+      / (288 + (SELECT COUNT(price) FROM v_fct_region WHERE "REGIONID" = 'NSW1' AND date = '2026-10-06')), 4) v`);
   await same(`EVALUATE CALCULATETABLE(ROW("v", [Units]), fct_summary[date] = dt"2026-10-06")`,
     `SELECT COUNT(DISTINCT "DUID")::BIGINT v FROM v_fct_summary JOIN v_dim_duid d USING ("DUID") WHERE date = '2026-10-06' AND d."FuelSourceDescriptor" IS DISTINCT FROM 'Rooftop solar'`);
 });
