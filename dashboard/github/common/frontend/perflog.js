@@ -21,6 +21,13 @@ const MAX_EVENTS = 5000;
 const events = [];
 const listeners = new Set();
 
+// When the DuckDB worker finished its last logged operation (a query or an ATTACH). The
+// worker runs its messages one at a time, in the order sent, so a query starts when the one
+// before it ends: the time between its call and then is its wait in the queue. Worker work
+// that is never logged (the SETs at init, before any query) is not seen, and would count as
+// the next query's run.
+let _workerFreeAt = 0;
+
 function push(e) {
   events.push(e);
   if (events.length > MAX_EVENTS) events.shift();
@@ -28,8 +35,9 @@ function push(e) {
 }
 
 export const perf = {
-  log(kind, what, { ms = null, status = '', bytes = null, range = '', dax = '' } = {}) {
-    push({ at: performance.timeOrigin + performance.now(), kind, what, ms, status, bytes, range, dax });
+  log(kind, what, { ms = null, wait = null, status = '', bytes = null, range = '', dax = '' } = {}) {
+    if (kind === 'attach') _workerFreeAt = performance.now();
+    push({ at: performance.timeOrigin + performance.now(), kind, what, ms, wait, status, bytes, range, dax });
   },
   // Time an async step: await perf.time('attach', file, () => conn.query(...))
   async time(kind, what, fn) {
@@ -46,17 +54,27 @@ export const perf = {
   // Time a query: perf.query(sql, () => conn.query(sql)). A failure is logged and rethrown.
   // `what` is the SQL that ran, always: it is what a change is checked against. `dax` is the
   // query as the page wrote it, when it wrote it in DAX (the compiler passes it on).
-  async query(sql, run, dax = '') {
+  // Its `ms` is the time it ran and `wait` the time it queued behind the worker's earlier
+  // work. `queued: false` is a host with no queue (the VertiPaq app's queries are concurrent
+  // calls): no wait, and `ms` is the call's whole time.
+  async query(sql, run, dax = '', { queued = true } = {}) {
     const flat = s => s.replace(/\s+/g, ' ').trim();
     const what = flat(sql);
     dax = flat(dax);
     const t = performance.now();
+    const timing = () => {
+      const end = performance.now();
+      if (!queued) return { ms: end - t };
+      const wait = Math.max(0, _workerFreeAt - t);
+      _workerFreeAt = end;
+      return { ms: end - t - wait, wait };
+    };
     try {
       const result = await run();
-      perf.log('query', what, { ms: performance.now() - t, status: `${result.numRows} rows`, dax });
+      perf.log('query', what, { ...timing(), status: `${result.numRows} rows`, dax });
       return result;
     } catch (e) {
-      perf.log('error', what, { ms: performance.now() - t, status: String(e?.message || e), dax });
+      perf.log('error', what, { ...timing(), status: String(e?.message || e), dax });
       throw e;
     }
   },

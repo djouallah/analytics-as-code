@@ -15,7 +15,7 @@ import { perf, BUILD } from './perflog.js';
 const _pageStart = performance.timeOrigin;
 let _logsFrame = 0;
 // The table's columns, in header order: the event field each one sorts on.
-const COLS = ['at', 'kind', 'what', 'range', 'status', 'bytes', 'ms'];
+const COLS = ['at', 'kind', 'what', 'range', 'status', 'bytes', 'wait', 'ms'];
 let _sort = { col: 'at', desc: true };
 
 export function renderLogs() {
@@ -25,6 +25,7 @@ export function renderLogs() {
   const sum = (k) => ev.filter(e => e.kind === k);
   const http = sum('http'), reads = http.filter(e => e.range);
   const ms = (a) => a.reduce((s, e) => s + (e.ms || 0), 0);
+  const waits = (a) => a.reduce((s, e) => s + (e.wait || 0), 0);
   const kb = (a) => a.reduce((s, e) => s + (e.bytes || 0), 0) / 1024;
   const pct = (a, p) => { const v = a.map(e => e.ms).sort((x, y) => x - y); return v.length ? v[Math.min(v.length - 1, Math.floor(p * v.length))] : 0; };
   const fetches = sum('fetch'), sas = sum('sas');
@@ -34,8 +35,8 @@ export function renderLogs() {
     `build         : ${BUILD.startsWith('__') ? 'not stamped (a local copy)' : BUILD}`,
     `files         : ${fetches.length} fetched  (${(ms(fetches) / 1000).toFixed(1)} s)    ATTACH: ${ms(sum('attach')).toFixed(0)} ms`,
     // Summed, not elapsed: a render sends its queries together and they queue in one thread,
-    // so each one's time includes its wait.
-    `queries       : ${sum('query').length}  (${(ms(sum('query')) / 1000).toFixed(1)} s summed, waits included)    errors: ${sum('error').length}`,
+    // so the wait is the queue (perflog.js) and the run what the queries cost.
+    `queries       : ${sum('query').length}  (run ${(ms(sum('query')) / 1000).toFixed(1)} s, waiting ${(waits(sum('query')) / 1000).toFixed(1)} s, summed)    errors: ${sum('error').length}`,
     `worker HTTP   : ${http.length}  (Range reads/seeks: ${reads.length})   ${(kb(http) / 1024).toFixed(1)} MB`,
     ...(reads.length ? [`seek latency  : avg ${(ms(reads) / reads.length).toFixed(0)} ms   p50 ${pct(reads, 0.5).toFixed(0)} ms   p95 ${pct(reads, 0.95).toFixed(0)} ms   max ${pct(reads, 1).toFixed(0)} ms   sum ${(ms(reads) / 1000).toFixed(1)} s`] : []),
     ...(sas.length ? [`SAS calls     : ${sas.length}  (${ms(sas).toFixed(0)} ms)`] : []),
@@ -57,7 +58,8 @@ export function renderLogs() {
   document.querySelector('#logsTable tbody').innerHTML = rows.map(e =>
     `<tr><td>${((e.at - _pageStart) / 1000).toFixed(2)}</td><td>${e.kind}</td><td>${what(e)}</td>` +
     `<td>${esc(e.range || '')}</td><td>${esc(e.status ?? '')}</td>` +
-    `<td>${e.bytes == null ? '' : (e.bytes / 1024).toFixed(0)}</td><td>${e.ms == null ? '' : e.ms.toFixed(0)}</td></tr>`).join('');
+    `<td>${e.bytes == null ? '' : (e.bytes / 1024).toFixed(0)}</td><td>${e.wait == null ? '' : e.wait.toFixed(0)}</td>` +
+    `<td>${e.ms == null ? '' : e.ms.toFixed(0)}</td></tr>`).join('');
 }
 
 perf.log('info', `build ${BUILD}`);
@@ -66,8 +68,8 @@ document.getElementById('logsClear').onclick = () => perf.clear();
 document.querySelector('#logsTable thead').onclick = (e) => {
   const col = COLS[e.target.closest('th')?.cellIndex];
   if (!col) return;
-  // A new column starts largest first for numbers (time, KB, ms), A-Z for text.
-  _sort = col === _sort.col ? { col, desc: !_sort.desc } : { col, desc: ['at', 'bytes', 'ms'].includes(col) };
+  // A new column starts largest first for numbers (time, KB, wait, ms), A-Z for text.
+  _sort = col === _sort.col ? { col, desc: !_sort.desc } : { col, desc: ['at', 'bytes', 'wait', 'ms'].includes(col) };
   renderLogs();
 };
 // Copy: summary + table as TSV (pastes cleanly into chat or a spreadsheet). A DAX query and

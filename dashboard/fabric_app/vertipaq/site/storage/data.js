@@ -79,6 +79,6 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     attachAgg: async () => {},
     ensureHistory: async () => false,
     has: () => true,
-    query: dax => perf.query(dax, () => run(dax)),
+    query: dax => perf.query(dax, () => run(dax), '', { queued: false }),
   };
 }
