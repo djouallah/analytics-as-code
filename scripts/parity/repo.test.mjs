@@ -164,6 +164,29 @@ test("Analyze: a SELECT over the model, through the page's compiler", { skip }, 
     SELECT date, mw, AVG(mw) OVER (ORDER BY date ROWS 2 PRECEDING) AS avg3 FROM x ORDER BY date`);
   assert.ok(rolling.length > 0 && 'avg3' in rolling[0]);
   assert.deepEqual(sent, [undefined, undefined]);
+  // "FROM model" in a comment or a string is text: the SQL runs as written.
+  await assert.doesNotReject(() => ask(`-- not FROM model\nSELECT 'FROM model' AS x, COUNT(*) AS n FROM v_dim_duid`));
+  // A SELECT over the model is a relation of any SQL: a WITH's query joined to a view, the arms
+  // of a UNION. Its rows are its own, and each one's DAX goes to the Logs tab.
+  sent.length = 0;
+  const gen = await ask(`WITH g AS (SELECT dim_calendar.date, AGG("Generation MWh") AS mwh FROM model
+      WHERE dim_calendar.date BETWEEN DATE '2026-10-04' AND DATE '2026-10-07' GROUP BY ALL)
+    SELECT g.date, g.mwh, r.price FROM g
+    JOIN (SELECT date, AVG(price) AS price FROM v_fct_region_daily GROUP BY ALL) r USING (date) ORDER BY 1`);
+  const alone = await ask(`SELECT dim_calendar.date, AGG("Generation MWh") AS mwh FROM model
+    WHERE dim_calendar.date BETWEEN DATE '2026-10-04' AND DATE '2026-10-07' GROUP BY ALL`);
+  assert.ok(gen.length > 0 && 'price' in gen[0]);
+  assert.deepEqual(bag(gen.map(({ date, mwh }) => ({ date, mwh }))), bag(alone.filter(a => gen.some(g => g.date === a.date))));
+  assert.match(sent[0], /^EVALUATE /);
+  const arms = await ask(`(SELECT dim_region.Region AS k, AGG("Average price") AS v FROM model GROUP BY ALL)
+    UNION ALL (SELECT dim_duid.FuelSourceDescriptor, AGG("Generation MWh") FROM model GROUP BY ALL)`);
+  const [regions, fuels] = [await ask(`SELECT dim_region.Region, AGG("Average price") FROM model GROUP BY ALL`),
+    await ask(`SELECT dim_duid.FuelSourceDescriptor, AGG("Generation MWh") FROM model GROUP BY ALL`)];
+  assert.equal(arms.length, regions.length + fuels.length);
+  assert.equal(sent.at(-3).split('\n\n').length, 2);
+  // The model is no table, and DAX is refused however it starts.
+  assert.throws(() => model.analyze('SELECT * FROM v_dim_duid JOIN model USING ("DUID")'), /not a table/);
+  assert.throws(() => model.analyze('DEFINE MEASURE fct_summary[x] = 1 EVALUATE ROW("v", [x])'), /Analyze takes SQL/);
   // The page's own queries are the model's words only.
   await assert.rejects(() => model.query('SELECT * FROM v_dim_duid'), /SELECTs over the model/);
 });

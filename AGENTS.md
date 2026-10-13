@@ -307,15 +307,22 @@ a link's flow and limits).
 relationship points to, in the centre; the facts either side), and for the table picked its
 columns, measures and relationships as the file has them. It reads the staged
 `semantic/model.bim` and no data. The SQL box is the second sub-tab.
-**The Analyze tab's SQL is SQL, and only SQL**, of two kinds, on both pages. **A SELECT over the
-semantic model** (a text with `FROM model`; dax-sql's SQL: `SELECT <columns>,
-AGG("<measure>"), SUM(<table.column>) ... FROM model WHERE ... GROUP BY ALL | ROLLUP ...
-HAVING ... ORDER BY ... LIMIT | FETCH ... WITH TIES`) is compiled as the page's own queries
-are, so a figure in it is the model's measure, as the charts compute it; a column is
-`table.column`, or its name alone when one table has it. **Any other SQL runs on DuckDB as
-written** over the views (`v_<table>`, the stored columns): joins, CTEs, window functions.
+**The Analyze tab's SQL is SQL, and only SQL**, on both pages: DuckDB's, over the views
+(`v_<table>`, the stored columns), in which **a SELECT over the semantic model** is a
+relation. That SELECT (dax-sql's SQL: `SELECT <columns>, AGG("<measure>"),
+SUM(<table.column>) ... FROM model WHERE ... GROUP BY ALL | ROLLUP ... HAVING ... ORDER BY
+... LIMIT | FETCH ... WITH TIES`) is compiled as the page's own queries are, so a figure in it
+is the model's measure, as the charts compute it; a column is `table.column`, or its name
+alone when one table has it. It is the whole text, or in parentheses anywhere DuckDB takes a
+subquery (a `WITH`'s query, `FROM`, an arm of a `UNION`, `IN`), and the SQL round it runs as
+written: joins with the views, unions, window functions. **The model is not a view, and
+cannot be one**: a measure has no value until the groups are chosen, so `JOIN model` or an
+unparenthesised `UNION` arm over it is an error. Which text is a SELECT over the model is
+dax-sql's to say (`compileStatement`, with a lexer: `FROM model` in a comment or a string is
+text), never a regex of the page's. Analyze compiles with no browser casts
+(`castOutput: false`), so the model's columns keep DuckDB's types and compose with the views'.
 `analyze(text)` in `query.js` returns what runs; the preview, the count, EXPLAIN and the CSV
-are built round it, and the Logs tab shows a model SELECT's DAX with it. The example is the
+are built round it, and the Logs tab shows the DAX of each model SELECT in it. The example is the
 model query alone. The page writes no SQL into it: SQL built from the page's filters would
 be a second query language with figures of its own. `query()`, which the page's own queries
 go through, takes a query object or a SELECT over the model and nothing else, so SQL over

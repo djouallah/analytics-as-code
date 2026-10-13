@@ -2891,9 +2891,10 @@
     // --- Analyze: SQL, and only SQL ---
     // A SELECT ... FROM model asks the semantic model: its columns and measures, so a figure
     // is the model's measure, as the charts compute it (data.analyze compiles it as the page's
-    // queries are). Any other SQL runs as written over the data's views (a table's view
-    // v_<table>): what the files store, as they store it. The page writes no SQL here; the
-    // example is a query over the model.
+    // queries are). It is the whole text, or a relation in parentheses of any other SQL (a
+    // WITH's query, a subquery, an arm of a UNION), which runs as written over the data's views
+    // (a table's view v_<table>): what the files store, as they store it. The page writes no
+    // SQL here; the example is a query over the model.
     function syncAnalyzeSql() {
       const ta = document.getElementById('analyzeSql');
       if (!ta) return;
