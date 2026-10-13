@@ -36,7 +36,7 @@ export function renderLogs() {
     `files         : ${fetches.length} fetched  (${(ms(fetches) / 1000).toFixed(1)} s)    ATTACH: ${ms(sum('attach')).toFixed(0)} ms`,
     // Summed, not elapsed: a render sends its queries together and they queue in one thread,
     // so the wait is the queue (perflog.js) and the run what the queries cost.
-    `queries       : ${sum('query').length}  (run ${(ms(sum('query')) / 1000).toFixed(1)} s, waiting ${(waits(sum('query')) / 1000).toFixed(1)} s, summed)    errors: ${sum('error').length}`,
+    `queries       : ${sum('query').length}  (run ${(ms(sum('query')) / 1000).toFixed(1)} s, waiting ${(waits(sum('query')) / 1000).toFixed(1)} s, summed)    skipped: ${sum('skip').length}    errors: ${sum('error').length}`,
     `worker HTTP   : ${http.length}  (Range reads/seeks: ${reads.length})   ${(kb(http) / 1024).toFixed(1)} MB`,
     ...(reads.length ? [`seek latency  : avg ${(ms(reads) / reads.length).toFixed(0)} ms   p50 ${pct(reads, 0.5).toFixed(0)} ms   p95 ${pct(reads, 0.95).toFixed(0)} ms   max ${pct(reads, 1).toFixed(0)} ms   sum ${(ms(reads) / 1000).toFixed(1)} s`] : []),
     ...(sas.length ? [`SAS calls     : ${sas.length}  (${ms(sas).toFixed(0)} ms)`] : []),

@@ -901,8 +901,9 @@
     // Nothing is drawn until init has filled the filters: a click before that would query a
     // database that isn't there yet. Init then draws whichever tab is open.
     let _ready = false;
-    // A render started outside renderAll (a tab, a control) reports a failure the same way.
-    const guarded = promise => promise.catch(e => { setStatus("Query error: " + e.message, "error"); console.error(e); });
+    // A render started outside renderAll (a tab, a control) reports a failure the same way. A
+    // query dropped because a newer render replaced this one (runQuery) is no failure.
+    const guarded = promise => promise.catch(e => { if (e?.skipped) return; setStatus("Query error: " + e.message, "error"); console.error(e); });
 
     function updateFilterTags() {
       const el = document.getElementById("activeFilters");
@@ -953,8 +954,9 @@
     // agg while the first is still running would fail.
     let _aggLoading = null;
     function loadDailyAggDatabase() {
+      // Not a render's: a newer render must not drop it (runQuery's `keep`).
       return _aggLoading ??= data.attachAgg().then(
-        async () => { viewsChanged(); await queries.readWholeDays(runQuery); aggLoaded = true; },
+        async () => { viewsChanged(); await queries.readWholeDays(q => runQuery(q, data.query, { keep: true })); aggLoaded = true; },
         e => { _aggLoading = null; throw e; });
     }
 
@@ -979,19 +981,25 @@
     // The cache holds the promise, not the rows: two charts asking the same query in one
     // render share one run. A query that fails is forgotten, so the next call tries again.
     // `run` is what sends it (Analyze's goes with the query it was compiled from).
-    function runQuery(q, run = data.query) {
+    // A page query belongs to the render that asked it last: the engine drops it, unrun, if
+    // a newer render has started by its turn (storage/queue.js), so a filter clicked twice
+    // does not run the first render's queries. `keep`: no render's (the daily tables' days,
+    // read once); Analyze's are never dropped. `early`: ahead of the others (the hero's);
+    // `later`: once the others asked are done (the KPI deltas).
+    function runQuery(q, run = data.query, { keep = false, early = false, later = false } = {}) {
       const key = `${_viewGen}|${typeof q === 'string' ? q : JSON.stringify(q)}`;
       const cached = _queryCache.get(key);
-      if (cached) return cached;
+      if (cached) { if (!cached.owner.keep) cached.owner.seq = _renderSeq; return cached.rows; }
       _queriesRun++;
-      const rows = fetchRows(q, run);
+      const owner = { seq: _renderSeq, keep: keep || run !== data.query };
+      const rows = fetchRows(q, run, { early, later, stale: owner.keep ? null : () => owner.seq !== _renderSeq });
       if (_queryCache.size >= 200) _queryCache.delete(_queryCache.keys().next().value);  // oldest first
-      _queryCache.set(key, rows);
-      rows.catch(() => { if (_queryCache.get(key) === rows) _queryCache.delete(key); });
+      _queryCache.set(key, { rows, owner });
+      rows.catch(() => { if (_queryCache.get(key)?.rows === rows) _queryCache.delete(key); });
       return rows;
     }
-    async function fetchRows(q, run = data.query) {
-      const result = await run(q);
+    async function fetchRows(q, run = data.query, options) {
+      const result = await run(q, options);
       const numRows = Number(result.numRows);
       const fields = result.schema.fields;
       // Columnar: extract all columns as arrays at once (much faster than per-row .get())
@@ -1173,13 +1181,16 @@
 
     // The newest interval of the units (and so of rooftop solar: fct_summary writes an
     // interval once both have it).
-    const newestInterval = async () => (await runQuery(queries.cutoff()))[0];
+    // The hero's queries go `early`, ahead of the charts': they are small, a chain of them
+    // (the newest interval, then its figures), and the first thing on the page.
+    const heroQuery = q => runQuery(q, data.query, { early: true });
+    const newestInterval = async () => (await heroQuery(queries.cutoff()))[0];
     // Each region at the newest interval of the regional table.
     async function newestRegions() {
-      const [{ date } = {}] = await runQuery(queries.regionNewestDate);
+      const [{ date } = {}] = await heroQuery(queries.regionNewestDate);
       if (!date) return [];
-      const [{ time } = {}] = await runQuery(queries.regionNewestTime(date));
-      return time == null ? [] : runQuery(queries.nowByRegion(date, time));
+      const [{ time } = {}] = await heroQuery(queries.regionNewestTime(date));
+      return time == null ? [] : heroQuery(queries.nowByRegion(date, time));
     }
     // --- Generation by Fuel Type (stacked area) ---
     // In drill mode the chart shows the top `drillShown` series; clicking "Other units" shows
@@ -1426,8 +1437,8 @@
       const region = activeRegion(), layoutReady = _layoutReady;
       const now = await newestInterval();
       const [units, share, prices] = await Promise.all([
-        now?.date ? runQuery(queries.nowByFuel(now, region)) : [],
-        now?.date ? runQuery(queries.nowShare(now, region)) : [],
+        now?.date ? heroQuery(queries.nowByFuel(now, region)) : [],
+        now?.date ? heroQuery(queries.nowShare(now, region)) : [],
         newestRegions(),
       ]);
       if (seq !== _renderSeq) return;
@@ -1439,7 +1450,7 @@
       if (seq !== _renderSeq) return;
       const layout = heroLayout();
       const small = mix.filter(r => r.mw > 0 && (layout ? layout.other.has(r.fuel) || !layout.order.includes(r.fuel) : r.share < MIX_MIN_SHARE)).map(r => r.fuel);
-      const other = small.length ? (await runQuery(queries.nowOf(now, region, small)))[0]?.mw ?? null : null;
+      const other = small.length ? (await heroQuery(queries.nowOf(now, region, small)))[0]?.mw ?? null : null;
       if (seq !== _renderSeq) return;
       _heroNow = {
         when: 'Right now',
@@ -1794,7 +1805,8 @@
       const { first, last } = queries.wholeDaysRange('units', from, to);
       const days = dayCount(first, last);
       if (!(days >= 1)) return ids.forEach(id => show(id));
-      const one = q => runQuery(q).then(([r]) => r?.v ?? null);
+      // `later`: behind the hero and the charts, which are what a reader looks at first.
+      const one = q => runQuery(q, data.query, { later: true }).then(([r]) => r?.v ?? null);
       const [gen, price, re, co2] = await Promise.all([
         one(queries.changeGeneration()), one(queries.changePrice()), one(queries.changeRenewables()), one(queries.changeEmissions())]);
       if (seq !== _renderSeq) return;
@@ -2956,9 +2968,9 @@
         html += '</tbody>';
         table.innerHTML = html;
 
-        const countSql = `SELECT COUNT(*) AS cnt FROM (\n${sql}\n)`;
-        const countResult = await runQuery(countSql, query);
-        const total = countResult[0]?.cnt || rows.length;
+        // The count runs the query again: only when the preview is cut at its 500 rows.
+        const total = rows.length < 500 ? rows.length
+          : (await runQuery(`SELECT COUNT(*) AS cnt FROM (\n${sql}\n)`, query))[0]?.cnt || rows.length;
         info.textContent = rows.length < total
           ? `Showing ${rows.length} of ${Number(total).toLocaleString()} rows`
           : `${Number(total).toLocaleString()} rows`;
@@ -3178,7 +3190,7 @@
         }
         const visible = id => document.getElementById(id).style.display !== 'none';
         await Promise.all([renderNow(seq), renderGeneration(seq), renderPrice(seq), renderMap(seq), updateRenewablesKpi(seq), updateEmissionsKpi(seq),
-          updateKpiDeltas(seq).catch(e => console.warn('[KPI] deltas unavailable:', e)),
+          updateKpiDeltas(seq).catch(e => e?.skipped || console.warn('[KPI] deltas unavailable:', e)),
           visible('view-insights') ? renderInsights(seq) : null,
           visible('view-history') ? renderHistory(seq) : null,
           visible('view-flows') ? renderFlows(seq) : null,
@@ -3198,8 +3210,8 @@
         // What this render cost: queries that ran (a cached view runs none) and wall time.
         setConnected(renderCost(ranBefore, _queriesRun, started, performance.now()));
       } catch (e) {
+        if (seq !== _renderSeq) return;   // a newer render owns the page now (and dropped its queries)
         console.error(e);
-        if (seq !== _renderSeq) return;   // a newer render owns the page now
         dim(false);
         // No figure is coming: the placeholders stop shimmering.
         document.querySelectorAll('.skeleton').forEach(el => el.classList.remove('skeleton'));
@@ -3219,7 +3231,7 @@
         if (!isIntradayMode()) return renderAll();
         setConnected();   // clear "Downloading..."
         // The daily history is what a comparison with earlier days, and the History page, read.
-        updateKpiDeltas(_renderSeq).catch(e => console.warn('[KPI] deltas unavailable:', e));
+        updateKpiDeltas(_renderSeq).catch(e => e?.skipped || console.warn('[KPI] deltas unavailable:', e));
         if (document.getElementById('view-history').style.display !== 'none') guarded(renderHistory(_renderSeq));
         // Curtailment reads agg whatever the range.
         if (document.getElementById('view-insights').style.display !== 'none' && insightsPage() === 'renewables') guarded(renderCurtailment(_renderSeq));

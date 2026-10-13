@@ -459,6 +459,10 @@ import is of the staged tree (`semantic/query.js` imports `./dax-sql/index.js`, 
 - `dashboard/github/common/storage/history.js` is what both `data.js` share about the
   half-year history files: `periodsForRange` (which ones a date range needs) and
   `attachCached` (ATTACH from OPFS in place, into memory if a second tab holds the file).
+- `dashboard/github/common/storage/queue.js` is how both DuckDB `data.js` send queries: one
+  at a time (the worker runs one anyway), the hero's `early`, the KPI deltas `later`, and a
+  query whose render a newer one replaced dropped unrun when its turn comes (`runQuery` in
+  `index.html` says which render a query is for; Analyze's are never dropped).
 - `dashboard/github/common/frontend/perflog.js` and `dashboard/github/common/frontend/logs.js`
   are the Logs tab, on both hosts: a table of what this session fetched, attached and ran,
   with timings, and the build stamp. This session only: it lives in the page's memory,

@@ -30,6 +30,7 @@
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev65.0/+esm";
 import { periodsForRange, attachCached } from "./history.js";
 import { withViews } from "./views.js";
+import { serialQueue } from "./queue.js";
 import { createAuth } from "./auth.js";
 import { createSas } from "./sas.js";
 import { perf, HTTP_TRACE_SHIM } from "../frontend/perflog.js";
@@ -242,6 +243,9 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   }
 
   // `dax`: the query as the page wrote it, for the Logs tab (the compiler passes it).
+  // `options`: the page's for the queue (queue.js, the page's): `stale`, `early`, `later`.
   // A view per table over the attached files (views.js, the page's).
-  return withViews({ init, attachAgg, ensureHistory, query: (sql, dax) => perf.query(sql, () => conn.query(sql), dax) });
+  const serial = serialQueue();
+  return withViews({ init, attachAgg, ensureHistory,
+    query: (sql, dax, options) => perf.query(sql, () => serial(() => conn.query(sql), options), dax) });
 }
