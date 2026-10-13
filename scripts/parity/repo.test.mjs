@@ -3,7 +3,9 @@
 //   - some of them checked against SQL written by hand;
 //   - every query the page sends, in six page states, through the page's compiler
 //     (dashboard/github/dax/semantic/query.js: its DAX, and this package's SQL with the
-//     page's options), runs.
+//     page's options), runs;
+//   - the Analyze tab's SELECT over the model (query.js's `analyze`), and its rows against
+//     the page's query of the same fields.
 // All on made-up data in the model's shape (fixtures/nem.mjs). The page's rows are checked on
 // the deployed files, against the SQL page and the compiler before (sql_page.mjs, compiler_ab.mjs).
 import { test, before, after } from 'node:test';
@@ -103,4 +105,34 @@ test("the page's queries run through the page's compiler", { skip }, async () =>
     }
   }
   assert.ok(ran > 250, `${ran} queries ran`);
+});
+
+test("Analyze: a SELECT over the model, through the page's compiler", { skip }, async () => {
+  const sent = [];
+  const model = page.createModel({ query: async (sql, dax) => { sent.push(dax); return rows(sql); } });
+  const ask = async text => { const a = model.analyze(text); return a.query(a.sql); };
+  // The same figure as the page's query of the same fields.
+  const byFuel = await ask(`SELECT dim_calendar.date, FuelSourceDescriptor, AGG("Generation MWh") AS mwh FROM model
+    WHERE dim_calendar.date BETWEEN DATE '2026-10-04' AND DATE '2026-10-07' GROUP BY ALL ORDER BY 1 DESC, mwh DESC`);
+  assert.ok(byFuel.length > 0);
+  assert.match(sent.at(-1), /^EVALUATE /);
+  const asked = await rows(page.toSQL(page.toDax({ select: { date: 'dim_calendar.date', FuelSourceDescriptor: 'dim_duid.FuelSourceDescriptor', mwh: 'Generation MWh' },
+    where: [['dim_calendar.date', 'between', '2026-10-04', '2026-10-07']] })));
+  assert.deepEqual(bag(byFuel), bag(asked));
+  // The example the tab writes, and the other words of a SELECT.
+  for (const text of [
+    `-- a comment\nSELECT dim_calendar.date, FuelSourceDescriptor, AGG("Generation MWh") AS mwh\nFROM model\nWHERE dim_calendar.date >= TODAY() - 7\nGROUP BY ALL\nORDER BY 1 DESC, mwh DESC`,
+    `SELECT dim_region.Region, AGG("Average price") AS price FROM model GROUP BY ALL HAVING price > 0 ORDER BY price DESC LIMIT 2`,
+    `SELECT dim_calendar.date, SUM(fct_summary.mw) AS mw, COUNT(DISTINCT fct_summary.DUID) AS units FROM model GROUP BY ALL`,
+    `SELECT AGG("Generation MWh") FROM model`,
+  ]) await assert.doesNotReject(() => ask(text), text);
+  assert.equal((await ask(`SELECT dim_region.Region, AGG("Average price") AS p FROM model GROUP BY ALL LIMIT 2`)).length, 2);
+  // A name several tables have needs its table; DAX text is refused.
+  assert.throws(() => model.analyze('SELECT date, AGG("Generation MWh") FROM model GROUP BY ALL'), /several tables/);
+  assert.throws(() => model.analyze('EVALUATE ROW("v", [Generation MWh])'), /SELECT over the model/);
+  // What the example lists: every visible table, a shared name with the tables that also have it.
+  const fields = model.fields();
+  assert.ok(fields.some(t => t.name === 'fct_summary' && t.measures.includes('Generation MWh')));
+  assert.deepEqual(fields.find(t => t.name === 'dim_duid').columns.find(c => c.name === 'FuelSourceDescriptor').alsoIn, []);
+  assert.ok(fields.find(t => t.name === 'dim_calendar').columns.find(c => c.name === 'date').alsoIn.includes('fct_summary'));
 });

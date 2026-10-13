@@ -105,8 +105,11 @@ on purpose: the point is the layers, not their maturity.
   joined, and writes the SQL. The page knows no DAX: a query is an object of the model's
   fields (`select`, `where`, `having`, `totals`, `orderBy`, `top`), as a report visual asks.
   Which measure a chart draws at which grain is the page's to say; every figure is a
-  measure, and the page only draws the rows. The Analyze tab is the exception: a SQL box,
-  written by whoever uses it, over the same views; its CSV export is the rows of that SQL.
+  measure, and the page only draws the rows. The Analyze tab is a SQL box written by whoever
+  uses it: a SELECT over the semantic model (`SELECT FuelSourceDescriptor, AGG("Generation MWh")
+  FROM model GROUP BY ALL`, a column named with its table when several tables have it), which the
+  compiler turns into the DAX it stands for and then SQL, so its figures are the model's
+  measures; its CSV export is the rows of that SQL. On the SQL page it is SQL over the views.
 - **The same page without the semantic layer** is `dashboard/github/sql/`, at `sql/` on the
   site: the same `index.html` and storage, and its own `frontend/queries.js`, which asks in
   SQL, each figure written out where a chart uses it, the joins written out. It is how a

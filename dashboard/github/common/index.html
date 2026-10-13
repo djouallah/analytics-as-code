@@ -666,7 +666,7 @@
     </div>
     <div class="analyze-sql">
       <div class="analyze-sql-head">
-        <label for="analyzeSql">SQL <span>— over the views of the tables: their stored columns, so a figure here is what the query works out, not a chart's</span></label>
+        <label for="analyzeSql">SQL <span id="analyzeWhat">— over the views of the tables: their stored columns, so a figure here is what the query works out, not a chart's</span></label>
         <button class="btn-analyze" id="analyzeSqlReset" type="button">Example</button>
       </div>
       <textarea id="analyzeSql" spellcheck="false" wrap="off"></textarea>
@@ -873,10 +873,11 @@
     // Where the .duckdb files live and how they are fetched and attached is data.js's business
     // (a host that stores the files differently ships its own): it has a view per table. How
     // the page asks is frontend/queries.js's: the queries, and `connect`, what runs them over
-    // the data. The Analyze tab is SQL, over the same views.
+    // the data. The Analyze tab is SQL: over the semantic model where `connect` has one
+    // (`analyze`), else over the same views.
     const data = connect(createDataSource({ onStatus: setStatus }));
-    // Analyze is SQL. A host whose engine is the model itself (VertiPaq, in the Fabric app
-    // of that name) runs none: its data source has no `needs`, and the tab is left out.
+    // A host whose engine is the model itself (VertiPaq, in the Fabric app of that name) runs
+    // no SQL: its data source has no `needs`, and the tab is left out.
     if (!data.needs) document.getElementById('tab-analyze').remove();
     // What each chart asks the model (frontend/queries.js), over the page's state.
     const queries = createQueries({
@@ -921,19 +922,20 @@
     let _queriesRun = 0;   // queries that reached the engine (cache misses), for the status readout
     // The cache holds the promise, not the rows: two charts asking the same query in one
     // render share one run. A query that fails is forgotten, so the next call tries again.
-    function runQuery(q) {
+    // `run` is what sends it (Analyze's goes with the query it was compiled from).
+    function runQuery(q, run = data.query) {
       const key = `${_viewGen}|${typeof q === 'string' ? q : JSON.stringify(q)}`;
       const cached = _queryCache.get(key);
       if (cached) return cached;
       _queriesRun++;
-      const rows = fetchRows(q);
+      const rows = fetchRows(q, run);
       if (_queryCache.size >= 200) _queryCache.delete(_queryCache.keys().next().value);  // oldest first
       _queryCache.set(key, rows);
       rows.catch(() => { if (_queryCache.get(key) === rows) _queryCache.delete(key); });
       return rows;
     }
-    async function fetchRows(q) {
-      const result = await data.query(q);
+    async function fetchRows(q, run = data.query) {
+      const result = await run(q);
       const numRows = Number(result.numRows);
       const fields = result.schema.fields;
       // Columnar: extract all columns as arrays at once (much faster than per-row .get())
@@ -2808,18 +2810,38 @@
     }
 
     // --- Analyze: SQL, and only SQL ---
-    // The box is SQL over the data's views (a table's view v_<table>, and with the semantic
-    // model a relationship's view under its name): what the files store, as they store it.
-    // The page writes no SQL here; the example lists the views and their columns.
+    // With the semantic model (`data.analyze`, the page that asks through it) the box is a
+    // SELECT over the model: its columns and measures FROM model, so a figure is the model's
+    // measure, as the charts compute it. Without it (the SQL page) it is SQL over the data's
+    // views (a table's view v_<table>): what the files store, as they store it. The page
+    // writes no SQL here; the example lists what the box can name.
+    const MODEL_SQL = !!data.analyze;
+    if (MODEL_SQL) document.getElementById('analyzeWhat').textContent =
+      '— over the semantic model: its columns (table.column, or the name alone when one table has it) and measures (AGG("name")) FROM model, so a figure here is the model\'s, as the charts compute it';
     function syncAnalyzeSql() {
       const ta = document.getElementById('analyzeSql');
       if (!ta) return;
-      const views = data.views().map(v => `--   ${v.name}: ${v.columns.join(', ')}`).join('\n');
-      ta.value = `-- The views over the attached files:\n${views}\n`
-        + 'SELECT * FROM v_fct_region_daily ORDER BY date DESC LIMIT 100';
+      if (!MODEL_SQL) {
+        const views = data.views().map(v => `--   ${v.name}: ${v.columns.join(', ')}`).join('\n');
+        ta.value = `-- The views over the attached files:\n${views}\n`
+          + 'SELECT * FROM v_fct_region_daily ORDER BY date DESC LIMIT 100';
+        return;
+      }
+      const column = c => c.alsoIn.length ? `${c.name} (also in ${c.alsoIn.join(', ')})` : c.name;
+      const tables = data.fields().map(t => `--   ${t.name}: ${t.columns.map(column).join(', ')}`
+        + (t.measures.length ? `\n--     measures: ${t.measures.map(m => `"${m}"`).join(', ')}` : '')).join('\n');
+      ta.value = '-- A SELECT over the semantic model: columns to group by (table.column, or the name\n'
+        + '-- alone when one table has it), measures as AGG("name"), SUM/AVG/MIN/MAX/COUNT of a column.\n'
+        + `-- The tables, their columns and measures:\n${tables}\n`
+        + 'SELECT dim_calendar.date, FuelSourceDescriptor, AGG("Generation MWh") AS mwh\nFROM model\n'
+        + 'WHERE dim_calendar.date >= TODAY() - 7\nGROUP BY ALL\nORDER BY 1 DESC, mwh DESC';
     }
     function getAnalyzeSql() {
       return document.getElementById('analyzeSql').value.trim().replace(/;+\s*$/, '');
+    }
+    // What the box holds as SQL over the views (`sql`), and what runs SQL built round it.
+    function analyzeQuery(text) {
+      return MODEL_SQL ? data.analyze(text) : { sql: text, query: q => data.query(q) };
     }
 
     // --- Analyze: ensure data loaded ---
@@ -2851,12 +2873,13 @@
       info.textContent = '';
 
       try {
-        await ensureAnalyzeData(base);
+        const { sql, query } = analyzeQuery(base);
+        await ensureAnalyzeData(sql);
         setStatus("Previewing...", "loading");
         // Every column as DuckDB prints it: a DATE, TIMESTAMP or DECIMAL read through Arrow
         // would show as its raw number.
-        const previewSql = `SELECT COLUMNS(*)::VARCHAR FROM (\n${base}\n) LIMIT 500`;
-        const rows = await runQuery(previewSql);
+        const previewSql = `SELECT COLUMNS(*)::VARCHAR FROM (\n${sql}\n) LIMIT 500`;
+        const rows = await runQuery(previewSql, query);
 
         if (!rows.length) {
           info.textContent = 'No data found for the selected filters.';
@@ -2872,8 +2895,8 @@
         html += '</tbody>';
         table.innerHTML = html;
 
-        const countSql = `SELECT COUNT(*) AS cnt FROM (\n${base}\n)`;
-        const countResult = await runQuery(countSql);
+        const countSql = `SELECT COUNT(*) AS cnt FROM (\n${sql}\n)`;
+        const countResult = await runQuery(countSql, query);
         const total = countResult[0]?.cnt || rows.length;
         info.textContent = rows.length < total
           ? `Showing ${rows.length} of ${Number(total).toLocaleString()} rows`
@@ -2908,9 +2931,10 @@
       info.textContent = '';
 
       try {
-        await ensureAnalyzeData(base);
+        const { sql, query } = analyzeQuery(base);
+        await ensureAnalyzeData(sql);
         setStatus("Explaining...", "loading");
-        const rows = await runQuery(`EXPLAIN ${base}`);
+        const rows = await runQuery(`EXPLAIN ${sql}`, query);
         const plan = rows.map(r => r.explain_value ?? Object.values(r).join('  ')).join('\n');
         const esc = plan.replace(/&/g, '&amp;').replace(/</g, '&lt;');
         table.innerHTML = `<tbody><tr><td><pre style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.72rem;line-height:1.4;white-space:pre;overflow-x:auto;margin:0">${esc}</pre></td></tr></tbody>`;
@@ -2939,12 +2963,13 @@
       btn.textContent = 'Loading...';
 
       try {
-        await ensureAnalyzeData(base);
+        const { sql } = analyzeQuery(base);
+        await ensureAnalyzeData(sql);
         btn.textContent = 'Exporting...';
         setStatus("Exporting CSV...", "loading");
         // Cast like the preview, so the file holds what the preview shows (a DECIMAL would
         // otherwise be written without its decimal point).
-        const exportSql = `SELECT COLUMNS(*)::VARCHAR FROM (\n${base}\n) LIMIT 1000000`;
+        const exportSql = `SELECT COLUMNS(*)::VARCHAR FROM (\n${sql}\n) LIMIT 1000000`;
         const { from, to } = getDateRange();
         const filename = `energy_export_${from}_${to}.csv`;
         const rowCount = await downloadCSVDirect(exportSql, filename);

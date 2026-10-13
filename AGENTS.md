@@ -298,12 +298,19 @@ does not read `draw.js`, which a review reads instead. The rows the page uses as
 stored are not figures: the filter lists, the newest interval, the Flows rows (a unit's MW,
 a link's flow and limits).
 
-**The Analyze tab is SQL, and only SQL**: a box over the views the compiler builds (the
-example lists them, with their columns), which shows the stored columns, not the model's
-measures, and says so. The page writes no SQL into it: SQL built from the page's filters
-would be a second query language with figures of its own. The compiler never sees text a
-user typed: `query()` translates a query object, which only the page's own queries are, and
-refuses DAX text. Don't make the box accept DAX. Its CSV is the rows of its SQL (`draw.js`'s
+**The Analyze tab is SQL, and only SQL: a SELECT over the semantic model** (dax-sql's SQL:
+`SELECT <columns>, AGG("<measure>"), SUM(<table.column>) ... FROM model WHERE ... GROUP BY
+ALL HAVING ... ORDER BY ... LIMIT`), so a figure in it is the model's measure, as the charts
+compute it. A column is `table.column`, or its name alone when one table has it; the
+example lists the tables, their columns (with the other tables a name is in) and measures
+(`fields()` in `query.js`). `analyze(text)` in `query.js` compiles it to the DAX it stands
+for and that DAX to SQL over the views; the preview, the count, EXPLAIN and the CSV are
+built round that SQL, and the Logs tab shows the DAX with it. The page writes no SQL into
+it: SQL built from the page's filters would be a second query language with figures of its
+own. The compiler sees text a user typed only as such a SELECT: `query()` translates a query
+object, which only the page's own queries are, and `query()` and `analyze()` refuse DAX
+text. Don't make the box accept DAX. The SQL page (no semantic layer, no compiler) keeps the
+box as SQL over the views, their stored columns. Its CSV is the rows of its SQL (`draw.js`'s
 `writeCsv`).
 
 **The compiler is checked against the model:** `scripts/parity/page_queries.mjs`
