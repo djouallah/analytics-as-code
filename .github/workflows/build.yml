@@ -10,6 +10,10 @@ on:
       before:
         description: "The commit the page's compiler is compared with (empty: the parent)"
         default: ""
+      deploy_anyway:
+        description: "Deploy even if the SQL page differs from the DAX page (the check still runs and says how)"
+        type: boolean
+        default: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -61,6 +65,7 @@ jobs:
           bash scripts/parity/fetch_data.sh "$RUNNER_TEMP/data"
           cd scripts/parity && npm ci --no-audit --no-fund
       - name: The SQL page against the DAX page
+        continue-on-error: ${{ inputs.deploy_anyway == true }}
         run: cd scripts/parity && node sql_page.mjs "$RUNNER_TEMP/data"
       - name: The compiler against the commit before
         if: ${{ !cancelled() }}
