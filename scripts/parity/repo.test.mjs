@@ -130,9 +130,4 @@ test("Analyze: a SELECT over the model, through the page's compiler", { skip }, 
   // A name several tables have needs its table; DAX text is refused.
   assert.throws(() => model.analyze('SELECT date, AGG("Generation MWh") FROM model GROUP BY ALL'), /several tables/);
   assert.throws(() => model.analyze('EVALUATE ROW("v", [Generation MWh])'), /SELECT over the model/);
-  // What the example lists: every visible table, a shared name with the tables that also have it.
-  const fields = model.fields();
-  assert.ok(fields.some(t => t.name === 'fct_summary' && t.measures.includes('Generation MWh')));
-  assert.deepEqual(fields.find(t => t.name === 'dim_duid').columns.find(c => c.name === 'FuelSourceDescriptor').alsoIn, []);
-  assert.ok(fields.find(t => t.name === 'dim_calendar').columns.find(c => c.name === 'date').alsoIn.includes('fct_summary'));
 });

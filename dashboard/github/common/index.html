@@ -2814,7 +2814,7 @@
     // SELECT over the model: its columns and measures FROM model, so a figure is the model's
     // measure, as the charts compute it. Without it (the SQL page) it is SQL over the data's
     // views (a table's view v_<table>): what the files store, as they store it. The page
-    // writes no SQL here; the example lists what the box can name.
+    // writes no SQL here; the example is a query (on the SQL page, with the views it can read).
     const MODEL_SQL = !!data.analyze;
     if (MODEL_SQL) document.getElementById('analyzeWhat').textContent =
       '— over the semantic model: its columns (table.column, or the name alone when one table has it) and measures (AGG("name")) FROM model, so a figure here is the model\'s, as the charts compute it';
@@ -2827,13 +2827,7 @@
           + 'SELECT * FROM v_fct_region_daily ORDER BY date DESC LIMIT 100';
         return;
       }
-      const column = c => c.alsoIn.length ? `${c.name} (also in ${c.alsoIn.join(', ')})` : c.name;
-      const tables = data.fields().map(t => `--   ${t.name}: ${t.columns.map(column).join(', ')}`
-        + (t.measures.length ? `\n--     measures: ${t.measures.map(m => `"${m}"`).join(', ')}` : '')).join('\n');
-      ta.value = '-- A SELECT over the semantic model: columns to group by (table.column, or the name\n'
-        + '-- alone when one table has it), measures as AGG("name"), SUM/AVG/MIN/MAX/COUNT of a column.\n'
-        + `-- The tables, their columns and measures:\n${tables}\n`
-        + 'SELECT dim_calendar.date, FuelSourceDescriptor, AGG("Generation MWh") AS mwh\nFROM model\n'
+      ta.value = 'SELECT dim_calendar.date, FuelSourceDescriptor, AGG("Generation MWh") AS mwh\nFROM model\n'
         + 'WHERE dim_calendar.date >= TODAY() - 7\nGROUP BY ALL\nORDER BY 1 DESC, mwh DESC';
     }
     function getAnalyzeSql() {

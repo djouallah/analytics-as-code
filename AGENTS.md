@@ -302,8 +302,7 @@ a link's flow and limits).
 `SELECT <columns>, AGG("<measure>"), SUM(<table.column>) ... FROM model WHERE ... GROUP BY
 ALL HAVING ... ORDER BY ... LIMIT`), so a figure in it is the model's measure, as the charts
 compute it. A column is `table.column`, or its name alone when one table has it; the
-example lists the tables, their columns (with the other tables a name is in) and measures
-(`fields()` in `query.js`). `analyze(text)` in `query.js` compiles it to the DAX it stands
+example is the query alone. `analyze(text)` in `query.js` compiles it to the DAX it stands
 for and that DAX to SQL over the views; the preview, the count, EXPLAIN and the CSV are
 built round that SQL, and the Logs tab shows the DAX with it. The page writes no SQL into
 it: SQL built from the page's filters would be a second query language with figures of its

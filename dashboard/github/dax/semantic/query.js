@@ -35,7 +35,7 @@
 // text. ../frontend/queries.js hands it to the page (`connect`).
 // The Analyze tab's box is a SELECT over the model (dax-sql's SQL: columns, AGG("measure"),
 // SUM(table.column) ... FROM model), which the user types: `analyze` compiles it to the DAX
-// it stands for and that DAX to SQL over the views; `fields` lists what it can name.
+// it stands for and that DAX to SQL over the views.
 // A data source whose engine speaks DAX (`engine: 'dax'`: the deployed semantic model, in
 // dashboard/fabric_app/vertipaq) gets the query's DAX as it is: no views, no SQL.
 // =============================================================================
@@ -183,23 +183,6 @@ export function toSQL(dax) {
 }
 const isDax = q => /^\s*EVALUATE\b/i.test(q);
 
-// The model's tables, their columns and measures, as a SELECT over the model names them: the
-// hidden ones left out, and with each column the other tables that have its name (a column
-// one table has can go without its table).
-export function fields() {
-  const owners = new Map();
-  for (const t of MODEL.tables) for (const c of t.columns) {
-    const k = c.name.toLowerCase();
-    owners.set(k, [...owners.get(k) ?? [], t.name]);
-  }
-  return MODEL.tables.filter(t => !t.isHidden).map(t => ({
-    name: t.name,
-    columns: t.columns.filter(c => !c.isHidden)
-      .map(c => ({ name: c.name, alsoIn: owners.get(c.name.toLowerCase()).filter(n => n !== t.name) })),
-    measures: (t.measures || []).filter(m => !m.isHidden).map(m => m.name),
-  }));
-}
-
 export function createModel(data) {
   if (data.engine === 'dax') return {
     ...data,
@@ -227,7 +210,6 @@ export function createModel(data) {
       const { sql } = DAX.compile(text);
       return { sql, query: s => data.query(s, dax) };
     },
-    fields,
     toDax,
     toSQL,
   };
