@@ -40,7 +40,9 @@ def main(items=("SemanticModel", "Report")):
     with tempfile.TemporaryDirectory() as tmp:
         # Resolved: fabric-cicd finds the report's model by comparing resolved paths.
         tmp = Path(tmp).resolve()
-        bim = Path(shutil.copytree(ITEM, tmp / ITEM.relative_to(REPO)), "model.bim")
+        # ossie.yaml is the model in Apache Ossie, for the compiler: not a part of the item.
+        bim = Path(shutil.copytree(ITEM, tmp / ITEM.relative_to(REPO),
+                                   ignore=shutil.ignore_patterns("ossie.yaml")), "model.bim")
         bim.write_text(bim.read_text(encoding="utf-8")
                        .replace("{WS_ID}", workspace).replace("{LH_ID}", lakehouse), encoding="utf-8")
         shutil.copytree(REPORT, tmp / REPORT.relative_to(REPO))

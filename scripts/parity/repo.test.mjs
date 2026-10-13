@@ -21,6 +21,8 @@ import { createCompiler } from '../../dax-sql/src/index.js';
 import { setup } from './fixtures/nem.mjs';
 import { pageQueries, STATES } from './repo_queries.mjs';
 import { stagePage } from '../stage_pages.mjs';
+import { parse } from 'yaml';
+import { OSSIE, generate } from './bim_to_ossie.mjs';
 
 const root = new URL('../../', import.meta.url);
 const path = p => new URL(p, root);
@@ -66,17 +68,17 @@ async function rows(sql) {
 const run = async q => rows(dax.compile(q).sql);
 const bag = rs => rs.map(r => JSON.stringify(Object.fromEntries(Object.entries(r).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))))).sort();
 
+const CONTEXTS = {
+  alone: m => `EVALUATE ROW("v", [${m}])`,
+  days: m => `EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS(dim_calendar[date], "v", [${m}]), dim_calendar[date] >= dt"2026-09-10", dim_calendar[date] <= dt"2026-10-07")`,
+  fiveMinutes: m => `EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS(fct_summary[date], dim_duid[FuelSourceDescriptor], "v", [${m}]), fct_summary[date] >= dt"2026-10-05")`,
+  regionMonth: m => `EVALUATE SUMMARIZECOLUMNS(dim_region[Region], dim_calendar[month], "v", [${m}])`,
+  unit: m => `EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS(dim_duid[DUID], "v", [${m}]), dim_calendar[date] >= dt"2026-09-20")`,
+};
 test('every measure, in five filter contexts', { skip }, async () => {
-  const contexts = {
-    alone: m => `EVALUATE ROW("v", [${m}])`,
-    days: m => `EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS(dim_calendar[date], "v", [${m}]), dim_calendar[date] >= dt"2026-09-10", dim_calendar[date] <= dt"2026-10-07")`,
-    fiveMinutes: m => `EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS(fct_summary[date], dim_duid[FuelSourceDescriptor], "v", [${m}]), fct_summary[date] >= dt"2026-10-05")`,
-    regionMonth: m => `EVALUATE SUMMARIZECOLUMNS(dim_region[Region], dim_calendar[month], "v", [${m}])`,
-    unit: m => `EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS(dim_duid[DUID], "v", [${m}]), dim_calendar[date] >= dt"2026-09-20")`,
-  };
   const measures = bim.model.tables.flatMap(t => (t.measures ?? []).map(m => m.name));
   assert.ok(measures.length > 40);
-  for (const m of measures) for (const [name, q] of Object.entries(contexts)) {
+  for (const m of measures) for (const [name, q] of Object.entries(CONTEXTS)) {
     await assert.doesNotReject(() => run(q(m)), `[${m}] ${name}`);
   }
 });
@@ -189,4 +191,26 @@ test("Analyze: a SELECT over the model, through the page's compiler", { skip }, 
   assert.throws(() => model.analyze('DEFINE MEASURE fct_summary[x] = 1 EVALUATE ROW("v", [x])'), /Analyze takes SQL/);
   // The page's own queries are the model's words only.
   await assert.rejects(() => model.query('SELECT * FROM v_dim_duid'), /SELECTs over the model/);
+});
+
+// semantic_model/ossie.yaml, the model in Apache Ossie (bim_to_ossie.mjs writes it from
+// model.bim): it is model.bim's copy, and dax-sql compiles every measure and every query of the
+// page from it to the SQL it compiles from model.bim. The bidirectional relationship and the
+// measures' tables are in its POWER_BI extensions.
+test('ossie.yaml is model.bim, as bim_to_ossie.mjs writes it', { skip }, () => {
+  assert.equal(fs.readFileSync(OSSIE, 'utf8').replace(/\r\n/g, '\n'), generate(), 'run node scripts/parity/bim_to_ossie.mjs');
+});
+
+test('the Ossie model compiles as model.bim does', { skip }, async () => {
+  const options = { tableSource: t => `v_${t.name}`, assumeIntegrity: true, castOutput: { double: s => `CAST(${s} AS DOUBLE)` } };
+  const [fromBim, fromOssie] = [bim, parse(fs.readFileSync(OSSIE, 'utf8'))].map(m => createCompiler(m, options));
+  const same = q => assert.equal(fromOssie.compile(q).sql, fromBim.compile(q).sql, q);
+  let n = 0;
+  for (const m of bim.model.tables.flatMap(t => (t.measures ?? []).map(x => x.name))) {
+    for (const q of Object.values(CONTEXTS)) { same(q(m)); n++; }
+  }
+  for (const s of Object.values(STATES)) {
+    for (const { query } of await pageQueries(createQueries, s, async q => rows(page.toSQL(page.toDax(q))))) { same(page.toDax(query)); n++; }
+  }
+  assert.ok(n > 500, `${n} queries`);
 });

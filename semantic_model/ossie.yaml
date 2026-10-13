@@ -1,0 +1,1505 @@
+# Generated from model.bim by scripts/parity/bim_to_ossie.mjs: edit model.bim, not this file.
+version: 0.2.0.dev0
+name: nem
+description: "Australia's National Electricity Market, over the Iceberg tables of the nem lakehouse, in Direct Lake: nothing is imported and no SQL endpoint is involved. Deployed by scripts/deploy_model.py, which writes the workspace and the lakehouse into the DirectLake expression. A quantity is one measure whatever the grain and whoever asks: the measures of fct_summary and fct_region pick the daily table or the 5-minute one themselves, by whether a time of day is asked for. Power BI and the dashboard's page (through its compiler) call the same measures."
+datasets:
+  - name: dim_calendar
+    source: mart.dim_calendar
+    primary_key:
+      - date
+    description: One row per day, from 2018-03-06 (where the history starts) to two years ahead.
+    fields:
+      - name: date
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: date
+        datatype: Date
+        description: Calendar date, NEM time (AEST all year).
+      - name: year
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: year
+        datatype: Integer
+        description: Calendar year.
+      - name: month
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: month
+        datatype: Integer
+        description: Month of the year, 1-12.
+  - name: dim_duid
+    source: mart.dim_duid
+    primary_key:
+      - DUID
+    description: "One row per unit: the units on AEMO's registration list, the ones in the data that are not on it (retired plant, replaced DUIDs), and the WA facilities."
+    fields:
+      - name: DUID
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: DUID
+        datatype: String
+        description: AEMO's id of a dispatchable unit.
+      - name: Region
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: Region
+        datatype: String
+        description: NSW1, QLD1, SA1, TAS1, VIC1; WA1 for Western Australia, another market.
+      - name: State
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: State
+        datatype: String
+        description: The region's name.
+      - name: FuelSourceDescriptor
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: FuelSourceDescriptor
+        datatype: String
+        description: The fuel as registered; blank for the loads AEMO gives no energy source for.
+      - name: Participant
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: Participant
+        datatype: String
+        description: The registered participant that operates the unit.
+      - name: StationName
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: StationName
+        datatype: String
+        description: The power station the unit belongs to; blank for WA.
+      - name: TechnologyType
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: TechnologyType
+        datatype: String
+        description: AEMO's technology descriptor; blank off the registration list.
+      - name: Classification
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: Classification
+        datatype: String
+        description: Scheduled, Semi-Scheduled (wind and solar farms that can be capped) or Non-Scheduled; blank off the registration list.
+      - name: CO2eFactor
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: CO2eFactor
+        datatype: Float
+        description: "CO2-e emitted per MWh sent out, tonnes: AEMO's factor for the unit's gensets (MMSDM GENUNITS through DUALLOC), registered or not. Blank for loads, AEMO's dummy units, the gensets AEMO lists \"On Exclusion List\" and WA."
+      - name: Renewable
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: Renewable
+        datatype: Boolean
+        description: Whether the unit's fuel is renewable; the list of fuels is in dim_duid.sql.
+      - name: RegCapMW
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: RegCapMW
+        datatype: Float
+        description: Registered generating capacity, MW.
+      - name: MaxCapMW
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: MaxCapMW
+        datatype: Float
+        description: Maximum generating capacity, MW.
+      - name: StorageMWh
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: StorageMWh
+        datatype: Float
+        description: A battery's storage, MWh.
+      - name: latitude
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: latitude
+        datatype: Float
+        description: Latitude; blank when unknown.
+      - name: longitude
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: longitude
+        datatype: Float
+        description: Longitude; blank when unknown.
+      - name: Storage
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: Storage
+        datatype: Boolean
+        description: Whether the unit is storage, a battery (the fuel "Grid"). The rule is in dim_duid.sql; the measures that leave storage out filter on it.
+      - name: Plant
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: Plant
+        datatype: String
+        description: "What units are grouped by when they are grouped by plant: the station, or the unit itself when it has none."
+      - name: Owner
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: Owner
+        datatype: String
+        description: "Who the output is counted to: the participant, or for rooftop solar the estimate it is. Blank where AEMO names no participant."
+  - name: fct_summary
+    source: mart.fct_summary
+    description: "Output and price per unit and 5 minutes: the daily files where they have landed, the intraday feed after them. A unit's row carries the price of its region, so no measure joins two facts. An interval at 0 MW is not stored."
+    fields:
+      - name: date
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: date
+        datatype: Date
+        description: Date of the dispatch interval, NEM time (AEST all year).
+      - name: time
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: time
+        datatype: Integer
+        description: "Time of day as HHMM: 1435 is 14:35. The interval ends at it."
+      - name: DUID
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: DUID
+        datatype: String
+        description: The unit.
+      - name: mw
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: mw
+        datatype: Decimal
+        description: MW in that 5 minutes; a battery charging is negative.
+      - name: price
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: price
+        datatype: Decimal
+        description: The regional reference price of the unit's region in that interval, $/MWh.
+      - name: cutoff
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: cutoff
+        datatype: DateTime
+        description: The newest interval in the facts when the row was written. Provenance only.
+  - name: dim_region
+    source: mart.dim_region
+    primary_key:
+      - Region
+    description: "One row per region: what the units, the regional table and rooftop are all filtered by."
+    fields:
+      - name: Region
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: Region
+        datatype: String
+        description: NSW1, QLD1, SA1, TAS1, VIC1; WA1 is Western Australia, another market (units, no prices).
+      - name: State
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: State
+        datatype: String
+        description: The region's name.
+  - name: dim_time
+    source: mart.dim_time
+    primary_key:
+      - time
+    description: "The 5-minute times of a day, 288 rows: the time axis of every fact, and what a measure reads rooftop solar against between two half hours."
+    fields:
+      - name: time
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: time
+        datatype: Integer
+        description: "Time of day as HHMM: 1435 is 14:35. An interval ends at it."
+      - name: minute
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: minute
+        datatype: Integer
+        description: The same time as minutes since midnight, 0 to 1435.
+      - name: hour
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: hour
+        datatype: Integer
+        description: Hour of day, 0 to 23.
+  - name: fct_region
+    source: mart.fct_region
+    description: Price, demand and net interchange per region and 5 minutes, with the region's semi-scheduled wind and solar. The intraday record where it exists (2026-08 on), the next-day record before it.
+    fields:
+      - name: REGIONID
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: REGIONID
+        datatype: String
+        description: The region.
+      - name: date
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: date
+        datatype: Date
+        description: Date of the interval, NEM time (AEST all year).
+      - name: time
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: time
+        datatype: Integer
+        description: "Time of day as HHMM: 1435 is 14:35. The interval ends at it."
+      - name: price
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: price
+        datatype: Decimal
+        description: The regional reference price (AEMO's RRP), $/MWh.
+      - name: demand
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: demand
+        datatype: Decimal
+        description: "Operational demand, MW: rooftop solar is not in it."
+      - name: net_interchange
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: net_interchange
+        datatype: Decimal
+        description: MW, positive when the region exports.
+      - name: wind_available
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: wind_available
+        datatype: Decimal
+        description: MW the region's semi-scheduled wind could make. Blank before 2026-08.
+      - name: wind_curtailed
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: wind_curtailed
+        datatype: Decimal
+        description: MW of it that was not dispatched.
+      - name: solar_available
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: solar_available
+        datatype: Decimal
+        description: MW the region's semi-scheduled solar could make. Blank before 2026-08.
+      - name: solar_curtailed
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: solar_curtailed
+        datatype: Decimal
+        description: MW of it that was not dispatched.
+  - name: fct_interconnector
+    source: mart.fct_interconnector
+    description: "Flow on each link between regions, per 5 minutes, back to 2018. Positive from the first region in the id to the second (T-V-MNSP1 > 0: Tasmania to Victoria); the limits bound it in the same sign."
+    fields:
+      - name: interconnector
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: interconnector
+        datatype: String
+        description: AEMO's id of the link.
+      - name: date
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: date
+        datatype: Date
+        description: Date of the interval, NEM time (AEST all year).
+      - name: time
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: time
+        datatype: Integer
+        description: "Time of day as HHMM: 1435 is 14:35. The interval ends at it."
+      - name: mw
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: mw
+        datatype: Decimal
+        description: The dispatch target flow, MW.
+      - name: export_limit
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: export_limit
+        datatype: Decimal
+        description: Limit in the positive direction, MW.
+      - name: import_limit
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: import_limit
+        datatype: Decimal
+        description: Limit in the negative direction, MW.
+  - name: dim_interconnector
+    source: mart.dim_interconnector
+    primary_key:
+      - interconnector
+    description: "One row per link between two regions, from AEMO's MMSDM INTERCONNECTOR: what fct_interconnector's id stands for."
+    fields:
+      - name: interconnector
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: interconnector
+        datatype: String
+        description: AEMO's id of the link, as fct_interconnector carries it.
+      - name: from_region
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: from_region
+        datatype: String
+        description: The region a positive flow leaves.
+      - name: to_region
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: to_region
+        datatype: String
+        description: The region a positive flow enters.
+      - name: description
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: description
+        datatype: String
+        description: AEMO's description of the link.
+  - name: fct_curtailment
+    source: mart.fct_curtailment
+    description: Curtailment per semi-scheduled unit (wind and solar farms) and day, up to the newest whole day of the next-day files.
+    fields:
+      - name: DUID
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: DUID
+        datatype: String
+        description: The unit.
+      - name: date
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: date
+        datatype: Date
+        description: Date of the interval, NEM time (AEST all year).
+      - name: curtailed_mwh
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: curtailed_mwh
+        datatype: Decimal
+        description: "What the unit could have made and was not dispatched for: sum of max(availability - target, 0) / 12."
+      - name: available_mwh
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: available_mwh
+        datatype: Decimal
+        description: What the unit could have made.
+  - name: fct_curtailment_region
+    source: mart.fct_curtailment_region
+    description: "Curtailment per region, day and fuel (Wind, Solar): the semi-scheduled farms (fct_curtailment) added up to their newest day, AEMO's regional figures after it (source). What the curtailment chart reads when no unit is picked."
+    fields:
+      - name: REGIONID
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: REGIONID
+        datatype: String
+        description: NEM region.
+      - name: date
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: date
+        datatype: Date
+        description: Date, NEM time (AEST all year).
+      - name: fuel
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: fuel
+        datatype: String
+        description: Wind or Solar.
+      - name: curtailed_mwh
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: curtailed_mwh
+        datatype: Decimal
+        description: Energy available and not dispatched.
+      - name: available_mwh
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: available_mwh
+        datatype: Decimal
+        description: Energy available.
+      - name: source
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: source
+        datatype: String
+        description: farms (the units' next-day data, added up) or aemo (AEMO's regional figures, the days after the farms' newest).
+  - name: fct_summary_daily
+    source: mart.fct_summary_daily
+    description: "Energy per unit and day: fct_summary one grain up, whole days only (a day is written once the next-day files hold all of it). The measures of fct_summary read this table when no time of day is asked for: output_mwh, charging_mwh and revenue are the day's sums of what they sum at 5 minutes, so the answer is the same. mwh (net) and price (the day's average) are not the same numbers and no measure reads them: they are kept for the dashboard's Analyze tab, which is SQL."
+    fields:
+      - name: DUID
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: DUID
+        datatype: String
+        description: The unit.
+      - name: date
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: date
+        datatype: Date
+        description: Calendar date, NEM time (AEST all year).
+      - name: mwh
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: mwh
+        datatype: Decimal
+        description: "The day's net energy, MWh: a battery's charging is taken off its output."
+      - name: price
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: price
+        datatype: Decimal
+        description: The day's average price of the unit's region, $/MWh.
+      - name: output_mwh
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: output_mwh
+        datatype: Float
+        description: "The day's output, MWh: the 5-minute intervals above 0 MW. What [Generation MWh] sums."
+      - name: charging_mwh
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: charging_mwh
+        datatype: Float
+        description: "The day's charging, MWh, negative: the 5-minute intervals below 0 MW."
+      - name: revenue
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: revenue
+        datatype: Float
+        description: "What the day's output earned, $: each interval's output at its own 5-minute price."
+  - name: fct_region_daily
+    source: mart.fct_region_daily
+    description: "Price, demand and net interchange per region and day: the plain average of the day's 288 intervals, whole days only. The measures of fct_region read this table when no time of day is asked for; it is also where fct_summary_daily takes its price."
+    fields:
+      - name: REGIONID
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: REGIONID
+        datatype: String
+        description: The region.
+      - name: date
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: date
+        datatype: Date
+        description: Calendar date, NEM time (AEST all year).
+      - name: price
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: price
+        datatype: Decimal
+        description: Average regional reference price of the day, $/MWh.
+      - name: demand
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: demand
+        datatype: Decimal
+        description: Average operational demand of the day, MW.
+      - name: net_interchange
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: net_interchange
+        datatype: Decimal
+        description: Average net flow out of the region, MW; positive is exporting.
+  - name: dim_month
+    source: mart.dim_month
+    primary_key:
+      - month
+    description: "The whole months the hour-of-day tables hold, with their number of days: the divisor that turns a month's energy at an hour into an average MW."
+    fields:
+      - name: month
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: month
+        datatype: Date
+        description: The month's first day.
+      - name: days
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: days
+        datatype: Integer
+        description: Days in the month.
+  - name: fct_summary_hourly
+    source: mart.fct_summary_hourly
+    description: "Output energy per unit, month and hour of day, whole months only: what an average-day chart reads over a long range."
+    fields:
+      - name: DUID
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: DUID
+        datatype: String
+        description: The unit.
+      - name: month
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: month
+        datatype: Date
+        description: The month's first day.
+      - name: hour
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: hour
+        datatype: Integer
+        description: "Hour of day, 0 to 23, as time // 100: the interval ending 14:00 is hour 14."
+      - name: mwh
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: mwh
+        datatype: Decimal
+        description: Output energy at that hour over the month, MWh; charging is left out.
+  - name: fct_region_hourly
+    source: mart.fct_region_hourly
+    description: "Average price per region, month and hour of day, whole months only: what a price-by-hour chart reads over a long range."
+    fields:
+      - name: REGIONID
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: REGIONID
+        datatype: String
+        description: The region.
+      - name: month
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: month
+        datatype: Date
+        description: The month's first day.
+      - name: hour
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: hour
+        datatype: Integer
+        description: "Hour of day, 0 to 23, as time // 100: the interval ending 14:00 is hour 14."
+      - name: price
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: price
+        datatype: Decimal
+        description: Plain average of the month's prices at that hour, $/MWh.
+      - name: intervals
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: intervals
+        datatype: Integer
+        description: How many intervals were averaged.
+relationships:
+  - name: fct_summary_to_dim_duid
+    from: fct_summary
+    to: dim_duid
+    from_columns:
+      - DUID
+    to_columns:
+      - DUID
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"relyOnReferentialIntegrity":true}'
+  - name: fct_summary_to_dim_calendar
+    from: fct_summary
+    to: dim_calendar
+    from_columns:
+      - date
+    to_columns:
+      - date
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"relyOnReferentialIntegrity":true}'
+  - name: dim_duid_to_dim_region
+    from: dim_duid
+    to: dim_region
+    from_columns:
+      - Region
+    to_columns:
+      - Region
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"crossFilteringBehavior":"bothDirections"}'
+  - name: fct_region_to_dim_region
+    from: fct_region
+    to: dim_region
+    from_columns:
+      - REGIONID
+    to_columns:
+      - Region
+  - name: fct_region_to_dim_calendar
+    from: fct_region
+    to: dim_calendar
+    from_columns:
+      - date
+    to_columns:
+      - date
+  - name: fct_interconnector_to_dim_calendar
+    from: fct_interconnector
+    to: dim_calendar
+    from_columns:
+      - date
+    to_columns:
+      - date
+  - name: fct_curtailment_to_dim_duid
+    from: fct_curtailment
+    to: dim_duid
+    from_columns:
+      - DUID
+    to_columns:
+      - DUID
+  - name: fct_curtailment_to_dim_calendar
+    from: fct_curtailment
+    to: dim_calendar
+    from_columns:
+      - date
+    to_columns:
+      - date
+  - name: fct_curtailment_region_to_dim_region
+    from: fct_curtailment_region
+    to: dim_region
+    from_columns:
+      - REGIONID
+    to_columns:
+      - Region
+  - name: fct_curtailment_region_to_dim_calendar
+    from: fct_curtailment_region
+    to: dim_calendar
+    from_columns:
+      - date
+    to_columns:
+      - date
+  - name: fct_summary_to_dim_time
+    from: fct_summary
+    to: dim_time
+    from_columns:
+      - time
+    to_columns:
+      - time
+  - name: fct_region_to_dim_time
+    from: fct_region
+    to: dim_time
+    from_columns:
+      - time
+    to_columns:
+      - time
+  - name: fct_interconnector_to_dim_time
+    from: fct_interconnector
+    to: dim_time
+    from_columns:
+      - time
+    to_columns:
+      - time
+  - name: fct_interconnector_to_dim_interconnector
+    from: fct_interconnector
+    to: dim_interconnector
+    from_columns:
+      - interconnector
+    to_columns:
+      - interconnector
+  - name: fct_summary_daily_to_dim_duid
+    from: fct_summary_daily
+    to: dim_duid
+    from_columns:
+      - DUID
+    to_columns:
+      - DUID
+  - name: fct_summary_daily_to_dim_calendar
+    from: fct_summary_daily
+    to: dim_calendar
+    from_columns:
+      - date
+    to_columns:
+      - date
+  - name: fct_region_daily_to_dim_region
+    from: fct_region_daily
+    to: dim_region
+    from_columns:
+      - REGIONID
+    to_columns:
+      - Region
+  - name: fct_region_daily_to_dim_calendar
+    from: fct_region_daily
+    to: dim_calendar
+    from_columns:
+      - date
+    to_columns:
+      - date
+  - name: fct_summary_hourly_to_dim_duid
+    from: fct_summary_hourly
+    to: dim_duid
+    from_columns:
+      - DUID
+    to_columns:
+      - DUID
+  - name: fct_summary_hourly_to_dim_month
+    from: fct_summary_hourly
+    to: dim_month
+    from_columns:
+      - month
+    to_columns:
+      - month
+  - name: fct_region_hourly_to_dim_region
+    from: fct_region_hourly
+    to: dim_region
+    from_columns:
+      - REGIONID
+    to_columns:
+      - Region
+  - name: fct_region_hourly_to_dim_month
+    from: fct_region_hourly
+    to: dim_month
+    from_columns:
+      - month
+    to_columns:
+      - month
+metrics:
+  - name: Registered units
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: COUNTROWS(dim_duid)
+    description: The units in the selection, whether they ran or not. For the ones that did, [Units].
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"dim_duid"}'
+  - name: Registered MW
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: SUM(dim_duid[RegCapMW])
+    description: Registered generating capacity of the units in the selection, MW.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"dim_duid"}'
+  - name: Storage MWh
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: SUM(dim_duid[StorageMWh])
+    description: Storage of the batteries in the selection, MWh.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"dim_duid"}'
+  - name: Reads 5 minutes
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: ISCROSSFILTERED(dim_time[time]) || ISFILTERED(fct_summary[date]) || ISFILTERED(fct_summary[time]) || ISFILTERED(fct_summary[DUID]) || ISFILTERED(fct_summary[mw]) || ISFILTERED(fct_summary[price]) || ISFILTERED(fct_summary[cutoff])
+    description: "Whether the measures of fct_summary have to read it rather than its daily table: a time of day is asked for (any column of dim_time is filtered or grouped), or a column of fct_summary itself is filtered. Hidden: it is the one place the rule is written."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Newest whole day
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: CALCULATE(MAX(fct_summary_daily[date]), REMOVEFILTERS())
+    description: "The newest day fct_summary_daily holds, whatever the filters: the measures that read it add fct_summary for the days after it. The daily table is written in date order with no gaps (a day once it is whole, the days after its newest; a refill below its oldest), so the days after this one are the days it lacks. A cutoff, not the set of those days (an EXCEPT): over a year grouped by unit or plant, that set took more memory than the capacity gives a query (1.4 GB against 1 GB, 2026-10-07). Hidden: it is the one place the rule is written."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Generation MWh
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _last = [Newest whole day]
+            RETURN
+                IF([Reads 5 minutes],
+                    CONVERT(SUMX(fct_summary, MAX(fct_summary[mw], 0)), DOUBLE) / 12,
+                    SUM(fct_summary_daily[output_mwh]) + CONVERT(CALCULATE(SUMX(fct_summary, MAX(fct_summary[mw], 0)), KEEPFILTERS(dim_calendar[date] > _last)), DOUBLE) / 12)
+    description: "Energy generated. Output only: a unit that is charging (negative) generates nothing. A 5-minute row is MW / 12. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days after the newest one the daily table holds ([Newest whole day]). The number is the same from either. CONVERT is there because MW is a fixed decimal: divided as one, the energy of a small unit at one 5-minute time is rounded to 4 decimals. Rooftop solar is in it: five units, ROOFTOP_<region>, the half-hourly estimate on the straight line between two half hours."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Charging MWh
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _last = [Newest whole day]
+            RETURN
+                IF([Reads 5 minutes],
+                    CONVERT(SUMX(fct_summary, MIN(fct_summary[mw], 0)), DOUBLE) / 12,
+                    SUM(fct_summary_daily[charging_mwh]) + CONVERT(CALCULATE(SUMX(fct_summary, MIN(fct_summary[mw], 0)), KEEPFILTERS(dim_calendar[date] > _last)), DOUBLE) / 12)
+    description: "Energy the batteries took, negative. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days after the newest one the daily table holds ([Newest whole day]). The number is the same from either. CONVERT is there because MW is a fixed decimal: divided as one, the energy of a small unit at one 5-minute time is rounded to 4 decimals."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Revenue
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _last = [Newest whole day]
+            RETURN
+                IF([Reads 5 minutes],
+                    SUMX(fct_summary, MAX(fct_summary[mw], 0) * fct_summary[price]) / 12,
+                    SUM(fct_summary_daily[revenue]) + CALCULATE(SUMX(fct_summary, MAX(fct_summary[mw], 0) * fct_summary[price]), KEEPFILTERS(dim_calendar[date] > _last)) / 12)
+    description: "What the output earned at the spot price, $: each 5 minutes of output at the price of the unit's region in that interval. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days after the newest one the daily table holds ([Newest whole day]). The number is the same from either."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Capture price
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: DIVIDE([Revenue], [Generation MWh])
+    description: "The price the output earned, $/MWh: the 5-minute prices of the unit's region weighted by the output. From [Revenue] and [Generation MWh], so it reads the table they read."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Units
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _last = [Newest whole day]
+            RETURN
+                CALCULATE(
+                    IF([Reads 5 minutes],
+                        DISTINCTCOUNT(fct_summary[DUID]),
+                        COUNTROWS(DISTINCT(UNION(VALUES(fct_summary_daily[DUID]), CALCULATETABLE(VALUES(fct_summary[DUID]), KEEPFILTERS(dim_calendar[date] > _last)))))),
+                    KEEPFILTERS(dim_duid[FuelSourceDescriptor] <> "Rooftop solar"))
+    description: "Units with output or charging in the selection, rooftop solar's five (one per region) left out: they are not plant. Which table: fct_summary when a time of day is asked for (dim_time is filtered or grouped) or a column of fct_summary is filtered; otherwise fct_summary_daily, plus fct_summary for the days after the newest one the daily table holds ([Newest whole day]). The number is the same from either."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Latest update
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: CALCULATE(MAX(fct_summary[cutoff]), REMOVEFILTERS())
+    description: The newest interval the table had seen at its last write, whatever is filtered.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Renewable share
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            DIVIDE(
+                100 * COALESCE(CALCULATE([Generation MWh], dim_duid[Renewable] = TRUE()), 0),
+                CALCULATE([Generation MWh], dim_duid[Storage] = FALSE())
+            )
+    description: Renewable share of the output, %. Rooftop solar is in it, as the units of the fuel "Rooftop solar". Batteries (fuel Grid) are in neither the renewables nor the total. 0 when the units ran and none is renewable, blank when no generator ran.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Generation share
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: DIVIDE(100 * [Generation MWh], CALCULATE([Generation MWh], ALLSELECTED(dim_duid)))
+    description: "The share of the output of all the units the selection shows, %: per fuel, the fuel's part of what is shown. Batteries discharging are in the whole, as they are in the stack of the generation chart."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Renewable share change
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _first = MIN(dim_calendar[date])
+            VAR _days = DATEDIFF(_first, MAX(dim_calendar[date]), DAY) + 1
+            VAR _now = [Renewable share]
+            VAR _before = CALCULATE([Renewable share], DATESBETWEEN(dim_calendar[date], _first - _days, _first - 1))
+            VAR _whole = [Hours] = 24 * _days && CALCULATE([Hours], DATESBETWEEN(dim_calendar[date], _first - _days, _first - 1)) = 24 * _days
+            RETURN IF(_whole, _now - _before)
+    description: "The change of [Renewable share], percentage points. Against the days just before the selection: as many days, ending the day before its first. Blank unless both have every hour of their days. Asked over a range of dim_calendar[date]."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Capacity MW
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _last = [Newest whole day]
+            RETURN
+                IF([Reads 5 minutes],
+                    CALCULATE(SUM(dim_duid[RegCapMW]), SUMMARIZE(fct_summary, dim_duid[DUID])),
+                    CALCULATE(SUM(dim_duid[RegCapMW]),
+                        DISTINCT(UNION(SUMMARIZE(fct_summary_daily, dim_duid[DUID]), CALCULATETABLE(SUMMARIZE(fct_summary, dim_duid[DUID]), KEEPFILTERS(dim_calendar[date] > _last))))))
+    description: "The registered capacity of the units that have output in the selection, MW: what [Capacity factor] divides by. [Registered MW] is every unit on the list, whether it ran or not."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Capacity factor
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR hours = [Hours]
+            VAR capacity = [Capacity MW]
+            RETURN DIVIDE(100 * CALCULATE([Generation MWh], dim_duid[RegCapMW] > 0), capacity * hours)
+    description: Energy over what the registered capacity could make in the hours of the selection, %. The capacity is that of the units with output or charging in the selection (found in the daily table when no time of day is asked for); a unit without a registered capacity is left out. The hours are [Hours].
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Generation MW
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: SUMX(fct_summary, MAX(fct_summary[mw], 0))
+    description: "Output of the units in MW at a 5-minute time, always from fct_summary: read it at one time, it is a sum over the intervals in the selection. For energy use [Generation MWh]. Rooftop solar is in it: five units, ROOFTOP_<region>, the half-hourly estimate on the straight line between two half hours."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Charging MW
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: SUMX(fct_summary, MIN(fct_summary[mw], 0))
+    description: "What the batteries are taking in MW at a 5-minute time, negative, always from fct_summary: read it at one time, like [Generation MW]. For energy use [Charging MWh]."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Average MW
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: AVERAGE(fct_summary[mw])
+    description: "A unit's average MW over the 5-minute intervals it ran in, always from fct_summary: an interval at 0 MW has no row and is not counted. Read it per unit."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Days with output
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: DISTINCTCOUNT(fct_summary[date])
+    description: The days on which the selection has output or charging, always from fct_summary. At one time of day, what an average day divides by.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Price seen
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: AVERAGE(fct_summary[price])
+    description: "The plain average of the price on the units' rows, $/MWh, always from fct_summary: the price the units in the selection saw while they ran, not weighted by their output."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Charging price
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: DIVIDE(SUMX(fct_summary, MIN(fct_summary[mw], 0) * fct_summary[price]), SUMX(fct_summary, MIN(fct_summary[mw], 0)))
+    description: "The price the charging paid, $/MWh: the 5-minute prices of the unit's region weighted by what it took. Always from fct_summary. Next to [Capture price], a battery's spread."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Battery spread
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _sold = [Capture price]
+            VAR _bought = [Charging price]
+            RETURN IF(NOT ISBLANK(_sold) && NOT ISBLANK(_bought), _sold - _bought)
+    description: "What a MWh discharged earned over what a MWh charged paid, $/MWh: [Capture price] less [Charging price]. Blank unless the selection both discharged and charged."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Average generation MW
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: DIVIDE([Generation MWh], [Hours])
+    description: 'The output as an average MW: [Generation MWh] over [Hours], the hours the selection holds. Follows the unit filters; rooftop solar is in it, as the units of the fuel "Rooftop solar".'
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Average generation MW change
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _first = MIN(dim_calendar[date])
+            VAR _days = DATEDIFF(_first, MAX(dim_calendar[date]), DAY) + 1
+            VAR _now = [Average generation MW]
+            VAR _before = CALCULATE([Average generation MW], DATESBETWEEN(dim_calendar[date], _first - _days, _first - 1))
+            VAR _whole = [Hours] = 24 * _days && CALCULATE([Hours], DATESBETWEEN(dim_calendar[date], _first - _days, _first - 1)) = 24 * _days
+            RETURN IF(_whole, DIVIDE(100 * (_now - _before), _before))
+    description: "The change of [Average generation MW], %. Against the days just before the selection: as many days, ending the day before its first. Blank unless both have every hour of their days. Asked over a range of dim_calendar[date]."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Generation MW on an average day
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: DIVIDE([Generation MW], [Days with output])
+    description: "By time of day: the output at that time on an average day, MW. [Generation MW] over the days that have a row at it. Always from fct_summary."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Charging MW on an average day
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: DIVIDE([Charging MW], [Days with output])
+    description: "By time of day: what the units took at that time on an average day, MW, negative. [Charging MW] over the days that have a row at it. Always from fct_summary."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Emissions t
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _last = [Newest whole day]
+            RETURN
+                IF([Reads 5 minutes],
+                    SUMX(fct_summary, MAX(fct_summary[mw], 0) * RELATED(dim_duid[CO2eFactor])) / 12,
+                    SUMX(fct_summary_daily, fct_summary_daily[output_mwh] * RELATED(dim_duid[CO2eFactor]))
+                        + CALCULATE(SUMX(fct_summary, MAX(fct_summary[mw], 0) * RELATED(dim_duid[CO2eFactor])), KEEPFILTERS(dim_calendar[date] > _last)) / 12)
+    description: "Tonnes of CO2-e emitted: each unit's output ([Generation MWh]'s, from the same table) times its dim_duid[CO2eFactor]. A unit with no factor counts nothing: loads, and the gensets AEMO lists \"On Exclusion List\" (Colongra, Jeeralang, Braemar 3 and 6), so the total is short of AEMO's by what those emit. Rooftop solar has no unit and emits nothing."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Emissions intensity
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: DIVIDE([Emissions t], CALCULATE([Generation MWh], NOT ISBLANK(dim_duid[CO2eFactor])))
+    description: "Tonnes of CO2-e per MWh, over the units that have a factor: [Emissions t] divided by their [Generation MWh]. Rooftop solar is not in it."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Emissions intensity change
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _first = MIN(dim_calendar[date])
+            VAR _days = DATEDIFF(_first, MAX(dim_calendar[date]), DAY) + 1
+            VAR _now = [Emissions intensity]
+            VAR _before = CALCULATE([Emissions intensity], DATESBETWEEN(dim_calendar[date], _first - _days, _first - 1))
+            VAR _whole = [Hours] = 24 * _days && CALCULATE([Hours], DATESBETWEEN(dim_calendar[date], _first - _days, _first - 1)) = 24 * _days
+            RETURN IF(_whole, DIVIDE(100 * (_now - _before), _before))
+    description: "The change of [Emissions intensity], %. Against the days just before the selection: as many days, ending the day before its first. Blank unless both have every hour of their days. Asked over a range of dim_calendar[date]."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary"}'
+  - name: Reads 5 minutes regional
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: ISCROSSFILTERED(dim_time[time]) || ISFILTERED(fct_region[REGIONID]) || ISFILTERED(fct_region[date]) || ISFILTERED(fct_region[time]) || ISFILTERED(fct_region[price]) || ISFILTERED(fct_region[demand]) || ISFILTERED(fct_region[net_interchange]) || ISFILTERED(fct_region[wind_available]) || ISFILTERED(fct_region[wind_curtailed]) || ISFILTERED(fct_region[solar_available]) || ISFILTERED(fct_region[solar_curtailed])
+    description: "Whether the measures of fct_region have to read it rather than its daily table: a time of day is asked for (any column of dim_time is filtered or grouped), or a column of fct_region itself is filtered. Hidden: it is the one place the rule is written."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region"}'
+  - name: Newest whole day regional
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: CALCULATE(MAX(fct_region_daily[date]), REMOVEFILTERS())
+    description: "The newest day fct_region_daily holds, whatever the filters: the measures that read it add fct_region for the days after it. Every region has the same days (3,136 each, 2026-10-07). The daily table is written in date order with no gaps (a day once it is whole, the days after its newest; a refill below its oldest), so the days after this one are the days it lacks. A cutoff, not the set of those days (an EXCEPT): over a year grouped by unit or plant, that set took more memory than the capacity gives a query (1.4 GB against 1 GB, 2026-10-07). Hidden: it is the one place the rule is written."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region"}'
+  - name: Average price
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _last = [Newest whole day regional]
+            RETURN
+                IF([Reads 5 minutes regional],
+                    AVERAGE(fct_region[price]),
+                    DIVIDE(
+                        288 * SUM(fct_region_daily[price]) + CALCULATE(SUM(fct_region[price]), KEEPFILTERS(dim_calendar[date] > _last)),
+                        288 * COUNT(fct_region_daily[price]) + CALCULATE(COUNT(fct_region[price]), KEEPFILTERS(dim_calendar[date] > _last))))
+    description: "The plain average of the 5-minute regional prices in the selection, $/MWh. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise fct_region_daily (a day there is 288 intervals), plus fct_region for the days after the newest one it holds ([Newest whole day regional]). The daily table is what lets a reader that cannot hold years of 5-minute rows, a browser, ask the same measure over a long range."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region"}'
+  - name: Average price change
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _first = MIN(dim_calendar[date])
+            VAR _days = DATEDIFF(_first, MAX(dim_calendar[date]), DAY) + 1
+            VAR _now = [Average price]
+            VAR _before = CALCULATE([Average price], DATESBETWEEN(dim_calendar[date], _first - _days, _first - 1))
+            VAR _whole = [Hours] = 24 * _days && CALCULATE([Hours], DATESBETWEEN(dim_calendar[date], _first - _days, _first - 1)) = 24 * _days
+            RETURN IF(_whole, _now - _before)
+    description: "The change of [Average price], $/MWh. Against the days just before the selection: as many days, ending the day before its first. Blank unless both have every hour of their days. Asked over a range of dim_calendar[date]."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region"}'
+  - name: Demand MWh
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _last = [Newest whole day regional]
+            RETURN
+                IF([Reads 5 minutes regional],
+                    SUM(fct_region[demand]) / 12,
+                    24 * SUM(fct_region_daily[demand]) + CALCULATE(SUM(fct_region[demand]), KEEPFILTERS(dim_calendar[date] > _last)) / 12)
+    description: "Operational demand as energy; rooftop solar is not in it. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise fct_region_daily (a day there is 288 intervals), plus fct_region for the days after the newest one it holds ([Newest whole day regional])."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region"}'
+  - name: Net interchange MW
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _last = [Newest whole day regional]
+            RETURN
+                IF([Reads 5 minutes regional],
+                    AVERAGE(fct_region[net_interchange]),
+                    DIVIDE(
+                        288 * SUM(fct_region_daily[net_interchange]) + CALCULATE(SUM(fct_region[net_interchange]), KEEPFILTERS(dim_calendar[date] > _last)),
+                        288 * COUNT(fct_region_daily[net_interchange]) + CALCULATE(COUNT(fct_region[net_interchange]), KEEPFILTERS(dim_calendar[date] > _last))))
+    description: "Average net flow out of a region, MW; positive is exporting. Read it per region. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise fct_region_daily (a day there is 288 intervals), plus fct_region for the days after the newest one it holds ([Newest whole day regional])."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region"}'
+  - name: Demand MW
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: IF(COUNT(fct_region[demand]) = COUNTROWS(fct_region), SUM(fct_region[demand]))
+    description: "Operational demand in MW at a 5-minute time, always from fct_region: read it at one time, it is a sum over the regions and the intervals in the selection. Blank when a region in the selection has no demand yet, so that it is left out and not undercounted. For energy use [Demand MWh]."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region"}'
+  - name: Demand with rooftop MW
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _demand = [Demand MW]
+            RETURN IF(NOT ISBLANK(_demand), _demand + COALESCE(CALCULATE([Generation MW], dim_duid[FuelSourceDescriptor] = "Rooftop solar"), 0))
+    description: "Operational demand plus what rooftop solar supplied, MW at a 5-minute time: AEMO's operational demand leaves rooftop out, the generation stack has it. Blank when a region has no demand yet. Asked through the dimensions (dim_calendar, dim_time, dim_region), which reach both."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region"}'
+  - name: Demand with rooftop MWh
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _demand = [Demand MWh]
+            RETURN IF(NOT ISBLANK(_demand), _demand + COALESCE(CALCULATE([Generation MWh], dim_duid[FuelSourceDescriptor] = "Rooftop solar"), 0))
+    description: "Operational demand plus what rooftop solar supplied, MWh: [Demand with rooftop MW] as energy. Asked through the dimensions, which reach both."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region"}'
+  - name: Hours
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _last = [Newest whole day regional]
+            RETURN
+                IF([Reads 5 minutes regional],
+                    COUNTROWS(SUMMARIZE(fct_region, fct_region[date], fct_region[time])) / 12,
+                    24 * DISTINCTCOUNT(fct_region_daily[date]) + CALCULATE(COUNTROWS(SUMMARIZE(fct_region, fct_region[date], fct_region[time])), KEEPFILTERS(dim_calendar[date] > _last)) / 12)
+    description: "The hours the selection holds data for: its 5-minute intervals / 12. What a capacity factor divides by, and / 24 the days. Which table: fct_region when a time of day is asked for or a column of fct_region is filtered; otherwise 24 hours per day of fct_region_daily, plus the intervals of fct_region on the days after the newest one it holds ([Newest whole day regional])."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region"}'
+  - name: Negative price share
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: 100 * AVERAGEX(fct_region, IF(fct_region[price] < 0, 1, 0))
+    description: Share of the 5-minute intervals with a price below zero, %, always from fct_region. Read it per region.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region"}'
+  - name: Lowest price
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: MIN(fct_region[price])
+    description: The lowest 5-minute price in the selection, $/MWh, always from fct_region.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region"}'
+  - name: Average demand MW
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: DIVIDE([Demand MWh], [Hours])
+    description: "Operational demand as an average MW: [Demand MWh] over [Hours]. Summed over the regions in the selection."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region"}'
+  - name: Regional wind curtailed MWh
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: SUM(fct_region[wind_curtailed]) / 12
+    description: Semi-scheduled wind not dispatched, from AEMO's regional figures (2026-08 on, up to the newest interval).
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region"}'
+  - name: Regional wind available MWh
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: SUM(fct_region[wind_available]) / 12
+    description: What the region's semi-scheduled wind could have made.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region"}'
+  - name: Regional solar curtailed MWh
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: SUM(fct_region[solar_curtailed]) / 12
+    description: Semi-scheduled solar not dispatched, from AEMO's regional figures (2026-08 on, up to the newest interval).
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region"}'
+  - name: Regional solar available MWh
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: SUM(fct_region[solar_available]) / 12
+    description: What the region's semi-scheduled solar could have made.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region"}'
+  - name: Flow MW
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: AVERAGE(fct_interconnector[mw])
+    description: Average flow on a link, MW. Read it per link.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_interconnector"}'
+  - name: Flow utilisation
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _flow = SUM(fct_interconnector[mw])
+            VAR _limit = IF(_flow >= 0, SUM(fct_interconnector[export_limit]), -SUM(fct_interconnector[import_limit]))
+            RETURN IF(NOT ISBLANK(_flow), IF(_limit > 0, DIVIDE(100 * ABS(_flow), _limit), 0))
+    description: "The flow as a share of the limit in its direction, %: export_limit when it flows from from_region, import_limit (negative) the other way. 0 when that limit is not above zero, blank where the link has no rows (so a query of the links' rows keeps only the links its filters reach). Read it per link and interval."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_interconnector"}'
+  - name: No flow
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: |-
+            VAR _flow = SUM(fct_interconnector[mw])
+            RETURN IF(NOT ISBLANK(_flow), IF(ABS(_flow) < 1 && SUM(fct_interconnector[export_limit]) - SUM(fct_interconnector[import_limit]) < 5, 1, 0))
+    description: "1 when a link is out: carrying under 1 MW with its two limits closed on each other (less than 5 MW apart); 0 when not; blank where the link has no rows. A number, not a boolean: a boolean measure is never blank (IF's missing else is FALSE), so a query of the links' rows would keep every link, the ones its filters leave out included. Read it per link and interval."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_interconnector"}'
+  - name: Curtailed MWh
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: SUM(fct_curtailment[curtailed_mwh])
+    description: Energy semi-scheduled wind and solar farms could have made and were not dispatched for.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_curtailment"}'
+  - name: Available MWh
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: SUM(fct_curtailment[available_mwh])
+    description: Energy those farms could have made.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_curtailment"}'
+  - name: Curtailment rate
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: DIVIDE(100 * [Curtailed MWh], [Available MWh])
+    description: Curtailed energy over available energy, %.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_curtailment"}'
+  - name: Wind and solar curtailed MWh
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: SUM(fct_curtailment_region[curtailed_mwh])
+    description: "Energy the semi-scheduled wind and solar farms could have made and were not dispatched for: the farms' own figures to their newest day, AEMO's regional ones after."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_curtailment_region"}'
+  - name: Wind and solar available MWh
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: SUM(fct_curtailment_region[available_mwh])
+    description: Energy those farms could have made, from the same sources.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_curtailment_region"}'
+  - name: Wind and solar curtailment rate
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: DIVIDE(100 * [Wind and solar curtailed MWh], [Wind and solar available MWh])
+    description: Curtailed energy over available energy, %.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_curtailment_region"}'
+  - name: Average MWh a day
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: AVERAGE(fct_summary_daily[output_mwh])
+    description: A unit's average output per day, MWh, over the whole days it ran in. Names this table, like the measures of the tables by month. Read it per unit.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary_daily"}'
+  - name: Negative price days share
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: 100 * AVERAGEX(fct_region_daily, IF(fct_region_daily[price] < 0, 1, 0))
+    description: "Share of the whole days whose average price was below zero, %. Not [Negative price share], which counts 5-minute intervals: this one names the daily table. Read it per region."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region_daily"}'
+  - name: Lowest daily price
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: MIN(fct_region_daily[price])
+    description: The lowest daily average price in the selection, $/MWh. Names the daily table.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region_daily"}'
+  - name: Month days
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: SUM(dim_month[days])
+    description: Days of the months in the selection.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"dim_month"}'
+  - name: Output MWh hourly
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: SUM(fct_summary_hourly[mwh])
+    description: Output energy at an hour of day over the months in the selection.
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary_hourly"}'
+  - name: Average MW at hour
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: DIVIDE([Output MWh hourly], [Month days])
+    description: "Average output at an hour of day over the months in the selection, MW: the energy at that hour over the days of those months. Read it per hour."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_summary_hourly"}'
+  - name: Price at hour
+    expression:
+      dialects:
+        - dialect: DAX
+          expression: DIVIDE(SUMX(fct_region_hourly, fct_region_hourly[price] * fct_region_hourly[intervals]), SUM(fct_region_hourly[intervals]))
+    description: "Average price at an hour of day over the months in the selection: the monthly averages weighted by their intervals."
+    custom_extensions:
+      - vendor_name: POWER_BI
+        data: '{"table":"fct_region_hourly"}'

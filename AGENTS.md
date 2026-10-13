@@ -699,6 +699,15 @@ in `landing` are what these tables are built from.
   `fct_rooftop`, its source, is a dbt model and not a table of the model, and no measure
   adds rooftop to the units. `[Units]` leaves those five out; `[Capacity MW]` and
   `[Capacity factor]` do too, as they have no registered capacity.
+- `semantic_model/ossie.yaml` is the same model in [Apache Ossie](https://github.com/apache/ossie)
+  (core-spec 0.2.0.dev0), generated from `model.bim` (`node scripts/parity/bim_to_ossie.mjs`;
+  edit the bim, never the YAML): datasets, fields, keys, relationships, and the measures as
+  metrics in the DAX dialect, opaque to Ossie. What Ossie has no property for is in `POWER_BI`
+  extensions, as TMSL properties: the `dim_duid` → `dim_region` relationship's
+  `bothDirections` (apache/ossie#580 asks for a property), the two
+  `relyOnReferentialIntegrity`, each measure's home table. dax-sql reads either file;
+  `repo.test.mjs` fails if the YAML is stale or compiles any measure or page query to other
+  SQL than the bim. `deploy_model.py` leaves it out of the Fabric item. Nothing else reads it.
 - **A quantity is one measure, and the measure picks the table.** Direct Lake has no
   aggregation tables (user-defined aggregations are not supported), so the switch is DAX:
   `[Generation MWh]`, `[Charging MWh]`, `[Revenue]`, `[Capture price]`, `[Units]` and
