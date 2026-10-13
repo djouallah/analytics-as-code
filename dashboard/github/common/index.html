@@ -227,8 +227,8 @@
     .model-page { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: var(--gap); padding: var(--gap) var(--gutter) 1.5rem; }
     .model-page[hidden], .analyze-sql-page[hidden] { display: none; }
     .model-diagram, .model-panel { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); overflow: auto; }
-    .model-diagram { padding: 0.8rem; }
-    .model-diagram svg { display: block; width: 100%; min-width: 640px; height: auto; margin: 0 auto; font-family: inherit; }
+    .model-diagram { padding: 0.8rem; display: flex; }
+    .model-diagram svg { display: block; flex: none; width: 100%; min-width: 640px; height: auto; margin: auto; font-family: inherit; }
     .model-panel { padding: 0.9rem 1rem; font-size: 0.82rem; max-height: 75vh; }
     .model-panel h3 { font-size: 1rem; font-weight: 700; margin: 0 0 0.3rem; display: flex; align-items: center; gap: 0.5rem; }
     .model-panel h4 { font-size: 0.7rem; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; margin: 1.1rem 0 0.4rem; }
@@ -401,6 +401,7 @@
       .analyze-sql-page:not([hidden]) { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
       .model-page:not([hidden]) { flex: 1 1 0; min-height: 0; grid-template-rows: minmax(0, 1fr); }
       .model-panel { max-height: none; }
+      .model-diagram svg { height: 100%; }
     }
     /* Short screens (a laptop, or a 1080p screen scaled up): the hero is one band with the
        regions as a list, the KPIs are smaller, and the Dashboard's three charts sit side by side. */

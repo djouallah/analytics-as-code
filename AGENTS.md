@@ -302,7 +302,12 @@ does not read `draw.js`, which a review reads instead. The rows the page uses as
 stored are not figures: the filter lists, the newest interval, the Flows rows (a unit's MW,
 a link's flow and limits).
 
-**The Analyze tab is SQL, and only SQL**, of two kinds, on both pages. **A SELECT over the
+**Analyze opens on Model**, its first sub-tab: `model.bim` drawn as a star
+(`frontend/model.js`, the layout `draw.js`'s `modelLayout`: a dimension is a table a
+relationship points to, in the centre; the facts either side), and for the table picked its
+columns, measures and relationships as the file has them. It reads the staged
+`semantic/model.bim` and no data. The SQL box is the second sub-tab.
+**The Analyze tab's SQL is SQL, and only SQL**, of two kinds, on both pages. **A SELECT over the
 semantic model** (a text with `FROM model`; dax-sql's SQL: `SELECT <columns>,
 AGG("<measure>"), SUM(<table.column>) ... FROM model WHERE ... GROUP BY ALL | ROLLUP ...
 HAVING ... ORDER BY ... LIMIT | FETCH ... WITH TIES`) is compiled as the page's own queries
