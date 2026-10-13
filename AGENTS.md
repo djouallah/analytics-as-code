@@ -205,15 +205,19 @@ over the deployed model). **`dashboard/fabric_app/` is one app and two backends*
 whole stack in one workspace"). Each backend is a Rayfin project of its own, named by its
 engine.
 **`dashboard/github/` is one page and two ways of asking:**
-`common/` (`index.html`, `frontend/` draw.js, logs.js, perflog.js, `storage/`, `dag/`), `dax/`
-(`frontend/queries.js` and `semantic/query.js`: the page through the semantic model) and
-`sql/` (`frontend/queries.js`: the page in plain SQL, with no semantic layer, each member one
-SELECT over the views, its figures written in SQL: how a team would build the page in
-practice). A page is `common/` with one of the two copied over it
-(`scripts/stage_pages.mjs`, `stagePage`). The DAX page is served at the site's root, the
-default, the SQL page at `sql/`, which reads the site's `data/` (`connect` in its `queries.js`
-passes `base: '../'` to `data.js`'s `init`). The SQL page holds to the model through the DAX
-page (`scripts/parity/sql_page.mjs`, below). Below, "the page" is the DAX page unless said.
+`common/` (`index.html`, `frontend/` draw.js, logs.js, perflog.js, `storage/`, `dag/`, and
+`semantic/query.js`, which both ask through), `dax/` (`frontend/queries.js`: each query an
+object of the model's fields) and `sql/` (`frontend/queries.js`: each query a SELECT over the
+model in dax-sql's SQL, `... AGG("measure") ... FROM model`). The compiler builds the same
+plan from either, as Spark's SQL and DataFrames build one logical plan: the same measures,
+the same rows. No figure is written in SQL by hand any more (until 2026-10-13 the SQL page
+was hand-written SQL over the views, and fell behind every rule the compiler learned). A page
+is `common/` with one of the two copied over it, and the model and the compiler next to
+`semantic/query.js` (`scripts/stage_pages.mjs`, `stagePage`). The DAX page is served at the
+site's root, the default, the SQL page at `sql/`, which reads the site's `data/` (`connect`
+in its `queries.js` passes `base: '../'` to `data.js`'s `init`). The SQL page is held to the
+DAX page (`scripts/parity/sql_page.mjs`, below). Below, "the page" is the DAX page unless
+said.
 **The GitHub page is the critical one: it is public and must never break.** The Fabric app
 and Power BI are internal: they should not break either, but it is not the end of the world
 if one does. So a change that touches what they share (the model, the `mart` tables, the
@@ -233,8 +237,8 @@ on both except `storage/data.js`.
 - storage: `storage/data.js`, `storage/history.js`, `storage/views.js` (a view per table)
 - and the Logs tab, `frontend/`
 `index.html` imports `storage/data.js` and `frontend/queries.js`, nothing else of these:
-`queries.js` exports `connect(data)`, what runs its queries (here the compiler's
-`createModel`, in the SQL page the data source as it is). So a client of the page swaps
+`queries.js` exports `connect(data)`, what runs its queries (the compiler's `createModel`,
+on both pages). So a client of the page swaps
 `frontend/queries.js`, not `index.html`.
 
 **It is a proof of concept; the point is that the layers are there, in the formats of a
@@ -293,24 +297,25 @@ of a link or a price between two intervals), no "how long a link has had no flow
 share on the hero's "Other" (the share of several fuels together is no measure).
 **`scripts/parity/page_lint.mjs` enforces it** (`build.yml`, on every push): no `+ - * / %`
 on numbers, no `+= -=`, no `.reduce()` in the script of `index.html` or in either page's
-`queries.js` (the SQL page's figures are SQL, in its strings); it
+`queries.js` (the SQL page's are measures named in its SELECTs); it
 does not read `draw.js`, which a review reads instead. The rows the page uses as they are
 stored are not figures: the filter lists, the newest interval, the Flows rows (a unit's MW,
 a link's flow and limits).
 
-**The Analyze tab is SQL, and only SQL: a SELECT over the semantic model** (dax-sql's SQL:
-`SELECT <columns>, AGG("<measure>"), SUM(<table.column>) ... FROM model WHERE ... GROUP BY
-ALL HAVING ... ORDER BY ... LIMIT`), so a figure in it is the model's measure, as the charts
-compute it. A column is `table.column`, or its name alone when one table has it; the
-example is the query alone. `analyze(text)` in `query.js` compiles it to the DAX it stands
-for and that DAX to SQL over the views; the preview, the count, EXPLAIN and the CSV are
-built round that SQL, and the Logs tab shows the DAX with it. The page writes no SQL into
-it: SQL built from the page's filters would be a second query language with figures of its
-own. The compiler sees text a user typed only as such a SELECT: `query()` translates a query
-object, which only the page's own queries are, and `query()` and `analyze()` refuse DAX
-text. Don't make the box accept DAX. The SQL page (no semantic layer, no compiler) keeps the
-box as SQL over the views, their stored columns. Its CSV is the rows of its SQL (`draw.js`'s
-`writeCsv`).
+**The Analyze tab is SQL, and only SQL**, of two kinds, on both pages. **A SELECT over the
+semantic model** (a text with `FROM model`; dax-sql's SQL: `SELECT <columns>,
+AGG("<measure>"), SUM(<table.column>) ... FROM model WHERE ... GROUP BY ALL | ROLLUP ...
+HAVING ... ORDER BY ... LIMIT | FETCH ... WITH TIES`) is compiled as the page's own queries
+are, so a figure in it is the model's measure, as the charts compute it; a column is
+`table.column`, or its name alone when one table has it. **Any other SQL runs on DuckDB as
+written** over the views (`v_<table>`, the stored columns): joins, CTEs, window functions.
+`analyze(text)` in `query.js` returns what runs; the preview, the count, EXPLAIN and the CSV
+are built round it, and the Logs tab shows a model SELECT's DAX with it. The example is the
+model query alone. The page writes no SQL into it: SQL built from the page's filters would
+be a second query language with figures of its own. `query()`, which the page's own queries
+go through, takes a query object or a SELECT over the model and nothing else, so SQL over
+the views cannot come back into the pages; `query()` and `analyze()` refuse DAX text. Don't
+make the box accept DAX. Its CSV is the rows of its SQL (`draw.js`'s `writeCsv`).
 
 **The compiler is checked against the model:** `scripts/parity/page_queries.mjs`
 calls every member of `queries.js` the way `index.html` does, over 12 page states, and runs
@@ -324,9 +329,10 @@ fixed decimal). `deploy_model.yml` runs it after `check_model.py` **only when di
 (`scripts/parity/sql_page.mjs`, the step after in `deploy_model.yml`): every member of the
 SQL page's `queries.js`, in the same states, against the DAX page's over the same files, the
 same rows (matched on the columns that are not figures, to a part in a million) in the order
-its `orderBy` asks. A measure changed in the model that the SQL page does not follow fails
-there. With an output file it writes the shape `parity_model.py` reads, the DAX next to the
-SQL page's rows, to ask the model directly.
+its `orderBy` asks. Both compile through the same model, so a difference is a SELECT that
+does not ask what the object asks, or a fault of dax-sql's SQL front end. With an output file
+it writes the shape `parity_model.py` reads, the DAX next to the SQL page's rows, to ask the
+model directly.
 Rules these checks hold the page and the model to:
 - A count of no rows is blank, as in DAX, not 0.
 - `dim_duid` has one spelling per name (VertiPaq compares text case-insensitively, DuckDB
@@ -357,7 +363,7 @@ finds `data/` from the page's URL. **The repo tree is not the served tree**: a p
 or imports the page stages it first: the site (`build.yml`, `import_data.yml`), the Fabric
 app's build, the parity scripts. To serve it from a laptop, stage the site into a folder
 (`node scripts/stage_pages.mjs <dir> <build>`) and put a copy of `data/` next to it. A relative
-import is of the staged tree (`dax/semantic/query.js` imports `./dax-sql/index.js`, which
+import is of the staged tree (`semantic/query.js` imports `./dax-sql/index.js`, which
 `stagePage` copies there from `dax-sql/src`).
 - `dashboard/github/common/index.html` is the page: the charts, which draw what
   `dashboard/github/dax/frontend/queries.js` asks: every query the charts send, by tab and chart
@@ -404,9 +410,10 @@ import is of the staged tree (`dax/semantic/query.js` imports `./dax-sql/index.j
   `views`, `has` and `needs` to the data source: `needs(sql)` says what a SQL
   query reads; `ensureHistory` attaches nothing for a range that starts inside the days
   `today` holds, so the default view fetches no history.
-- `dashboard/github/dax/semantic/query.js` (`createModel(dataSource)`: the data source's
-  members, `toDax` and `toSQL`): `toDax(query)` writes the page's query as DAX, checking each
-  column and measure against `model.bim`; `toSQL(dax)` is `dax-sql`'s compile of it
+- `dashboard/github/common/semantic/query.js` (`createModel(dataSource)`: the data source's
+  members, `toDax`, `toSQL` and `analyze`): `toDax(query)` writes the DAX page's query as
+  DAX, checking each column and measure against `model.bim`; a SELECT over the model (the SQL
+  page's) dax-sql reads itself, into the same syntax tree; `toSQL(dax)` is `dax-sql`'s compile of it
   over the data source's `v_<table>` views (staged next to the compiler as `semantic/dax-sql/`
   by `stagePage`), the same text once (a Map). The page's options: `assumeIntegrity` (a
   dimension's key is read off the fact: the dbt tests keep the data so) and its casts for the
@@ -414,8 +421,9 @@ import is of the staged tree (`dax/semantic/query.js` imports `./dax-sql/index.j
   the page as a BigInt). How dax-sql writes its SQL (fused scans, a subquery read once,
   decorrelation across a relationship that filters both ways) is in its DESIGN.md.
   Checked, offline, on every push (`build.yml`): the compiler on this model
-  (`scripts/parity/repo.test.mjs`: every measure in five filter contexts and every query of
-  the page, on made-up data; dax-sql's own tests run in its repo);
+  (`scripts/parity/repo.test.mjs`: every measure in five filter contexts, every query of
+  the page, and the SQL page's against the DAX page's, on made-up data; dax-sql's own tests
+  run in its repo);
   `sql_page.mjs`, the SQL page against the DAX page on the deployed files (the deploy waits
   for it); `compiler_ab.mjs`, the compiler against the commit before, rows and time (a report,
   with the slower queries' SQL and plans as an artifact). Against the model: the parity
@@ -501,7 +509,8 @@ other way.
 
 ## Dashboard deploy
 `build.yml` (the pages, staged by `scripts/stage_pages.mjs`: the DAX page at the root with its
-`frontend/`, `semantic/` and `storage/` folders, the SQL page at `sql/`, the dbt docs) and
+`frontend/`, `semantic/` and `storage/` folders, the SQL page at `sql/` with its own, the dbt
+docs) and
 `import_data.yml` (the .duckdb files; with `with_page`, the same staging)
 publish into `NemTracker/nemtracker.github.io` with `scripts/deploy_pages.sh`: a blobless
 depth-1 clone, the published paths added with `-f` (so the deploy repo's `.gitignore` can't

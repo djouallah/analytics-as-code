@@ -1,13 +1,16 @@
 // =============================================================================
-// sql_page.mjs — the page in SQL (dashboard/github/sql) against the page through the model
-// (dashboard/github/dax): the same questions, the same rows
+// sql_page.mjs — the page asking in SQL (dashboard/github/sql: SELECTs over the model)
+// against the page asking in query objects (dashboard/github/dax): the same questions, the
+// same rows
 // =============================================================================
 //   cd scripts/parity && npm ci && node sql_page.mjs <data dir> [out.json]
 //
 // <data dir> holds the files the pages attach, as deployed (page_queries.mjs says which).
 // For every state of page_states.mjs, each member of the SQL page's frontend/queries.js is
-// called as index.html calls it and its SQL run on the files; the DAX page's same member goes
-// through the compiler and runs on the same files. The rows are matched on their columns
+// called as index.html calls it, its SELECT compiled by its own semantic/query.js and run on
+// the files; the DAX page's same member goes through the compiler and runs on the same files.
+// Both are the same model and compiler, so a difference is a SELECT that does not ask what
+// the object asks, or a fault of dax-sql's SQL front end. The rows are matched on their columns
 // that are not figures, and the figures compared to a part in a million (or 1e-9 near 0).
 // Exits 1 and lists what differs. [out.json]: per query, the DAX page's DAX and the SQL page's
 // SQL and rows, the shape parity_model.py reads: what the deployed model answers to the DAX
@@ -40,10 +43,11 @@ const sql = await load(sqlDir, 'frontend/queries.js');
 // Two engines over the same files, each wrapped as its page wraps its data source.
 const daxEngine = await engine(dataDir), sqlEngine = await engine(dataDir);
 const model = dax.connect(withViews(daxEngine.source));
-const data = withViews(sqlEngine.source);
+const data = sql.connect(withViews(sqlEngine.source));
 for (const d of [model, data]) { await d.init(); await d.attachAgg(); }
 const daxRows = q => daxEngine.run(model.toSQL(model.toDax(q)));
-const sqlRows = q => sqlEngine.run(q);
+// The SQL page's SELECT over the model, compiled by its own semantic/query.js.
+const sqlRows = q => sqlEngine.run(data.toSQL(q));
 
 const [{ d: newest }] = await daxRows({ select: { d: { max: 'fct_summary.date' } } });
 const to = shiftDate(newest, -2);

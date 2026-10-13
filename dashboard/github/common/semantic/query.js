@@ -31,11 +31,12 @@
 // both and compares the rows (deploy_model.yml).
 //
 // createModel(data) wraps a data source (../storage/data.js, wrapped by ../storage/views.js)
-// with `toDax` and `toSQL`; `query` takes the page's query (an object) or SQL, never DAX
-// text. ../frontend/queries.js hands it to the page (`connect`).
-// The Analyze tab's box is a SELECT over the model (dax-sql's SQL: columns, AGG("measure"),
-// SUM(table.column) ... FROM model), which the user types: `analyze` compiles it to the DAX
-// it stands for and that DAX to SQL over the views.
+// with `toDax` and `toSQL`; `query` takes the page's query, as an object (the DAX page's) or
+// as a SELECT over the model (dax-sql's SQL: columns, AGG("measure"), ... FROM model; the SQL
+// page's), never DAX text: the compiler builds one plan from either. ../frontend/queries.js
+// hands it to the page (`connect`).
+// The Analyze tab's box is what the user types: a SELECT over the model, which `analyze`
+// compiles as the page's are, or any other SQL, which runs as written over the views.
 // A data source whose engine speaks DAX (`engine: 'dax'`: the deployed semantic model, in
 // dashboard/fabric_app/vertipaq) gets the query's DAX as it is: no views, no SQL.
 // =============================================================================
@@ -182,6 +183,17 @@ export function toSQL(dax) {
   return sql;
 }
 const isDax = q => /^\s*EVALUATE\b/i.test(q);
+// A SELECT over the model: its SQL over the views, and the DAX it stands for (the Logs tab's).
+const MODEL_SQL = /\bFROM\s+model\b/i;
+const _selects = new Map();
+function fromSql(text) {
+  let out = _selects.get(text);
+  if (out) return out;
+  out = { sql: DAX.compile(text).sql, dax: DAX.sqlToDax(text).dax };
+  if (_selects.size >= 500) _selects.clear();
+  _selects.set(text, out);
+  return out;
+}
 
 export function createModel(data) {
   if (data.engine === 'dax') return {
@@ -194,20 +206,24 @@ export function createModel(data) {
   };
   return {
     ...data,
-    // The page's query (an object) becomes DAX, and the DAX SQL; both go to the Logs tab.
-    // SQL (Analyze) goes as it is. DAX text is refused: the page asks in the query's words.
+    // The page's query, an object or a SELECT over the model, becomes SQL over the views; the
+    // SQL and the DAX go to the Logs tab. Nothing else: DAX text, or SQL of the views, is
+    // refused, so the page asks in the model's words.
     query: async q => {
       if (typeof q !== 'string') { const dax = toDax(q); return data.query(toSQL(dax), dax); }
       if (isDax(q)) throw new Error('DAX is written by the compiler: send the query as an object');
-      return data.query(q);
+      if (!MODEL_SQL.test(q)) throw new Error("the page's queries are SELECTs over the model (FROM model)");
+      const { sql, dax } = fromSql(q);
+      return data.query(sql, dax);
     },
-    // Analyze: a SELECT over the model, as typed. `sql` is its SQL over the views (with its
-    // LIMIT and OFFSET); `query` runs SQL built round it (the preview's cast, the count,
-    // EXPLAIN) with the DAX the SELECT stands for, for the Logs tab. DAX text is refused.
+    // Analyze, as typed. A SELECT ... FROM model is compiled as the page's are; any other SQL
+    // runs as written over the views. `sql` is what runs (with its LIMIT and OFFSET); `query`
+    // runs SQL built round it (the preview's cast, the count, EXPLAIN), with the DAX for the
+    // Logs tab. DAX text is refused.
     analyze: text => {
-      if (!DAX.isSql(text)) throw new Error('Analyze takes a SELECT over the model: SELECT ... FROM model');
-      const { dax } = DAX.sqlToDax(text);
-      const { sql } = DAX.compile(text);
+      if (isDax(text)) throw new Error('Analyze takes SQL: a SELECT ... FROM model, or SQL over the views');
+      if (!MODEL_SQL.test(text)) return { sql: text, query: s => data.query(s) };
+      const { sql, dax } = fromSql(text);
       return { sql, query: s => data.query(s, dax) };
     },
     toDax,

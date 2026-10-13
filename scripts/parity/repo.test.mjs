@@ -2,10 +2,12 @@
 //   - every measure of model.bim, compiled and run in five filter contexts;
 //   - some of them checked against SQL written by hand;
 //   - every query the page sends, in six page states, through the page's compiler
-//     (dashboard/github/dax/semantic/query.js: its DAX, and this package's SQL with the
+//     (dashboard/github/common/semantic/query.js: its DAX, and this package's SQL with the
 //     page's options), runs;
+//   - the SQL page's queries (SELECTs over the model) against the DAX page's, in the same
+//     states: the same rows;
 //   - the Analyze tab's SELECT over the model (query.js's `analyze`), and its rows against
-//     the page's query of the same fields.
+//     the page's query of the same fields; and SQL over the views, as written.
 // All on made-up data in the model's shape (fixtures/nem.mjs). The page's rows are checked on
 // the deployed files, against the SQL page and the compiler before (sql_page.mjs, compiler_ab.mjs).
 import { test, before, after } from 'node:test';
@@ -22,10 +24,10 @@ import { stagePage } from '../stage_pages.mjs';
 
 const root = new URL('../../', import.meta.url);
 const path = p => new URL(p, root);
-const present = ['semantic_model/model.bim', 'dashboard/github/common/index.html', 'dashboard/github/dax/semantic/query.js'].every(p => fs.existsSync(path(p)));
+const present = ['semantic_model/model.bim', 'dashboard/github/common/index.html', 'dashboard/github/common/semantic/query.js'].every(p => fs.existsSync(path(p)));
 const skip = present ? false : 'the repository files are not here';
 
-let con, dax, page, bim, staged, createQueries;
+let con, dax, page, bim, staged, createQueries, sqlPage;
 before(async () => {
   if (skip) return;
   const bimText = fs.readFileSync(path('semantic_model/model.bim'), 'utf8');
@@ -36,9 +38,15 @@ before(async () => {
   // query.js fetches model.bim next to itself when it loads.
   const fetch = globalThis.fetch;
   globalThis.fetch = async () => ({ json: async () => JSON.parse(bimText) });
+  const stagedSql = join(staged, 'sql');
+  await stagePage('sql', stagedSql, fileURLToPath(root));
   try {
     ({ createQueries } = await import(pathToFileURL(join(staged, 'frontend/queries.js')).href));
     page = await import(pathToFileURL(join(staged, 'semantic/query.js')).href);
+    sqlPage = {
+      ...await import(pathToFileURL(join(stagedSql, 'frontend/queries.js')).href),
+      model: await import(pathToFileURL(join(stagedSql, 'semantic/query.js')).href),
+    };
   } finally { globalThis.fetch = fetch; }
   const db = await DuckDBInstance.create(':memory:');
   con = await db.connect();
@@ -56,7 +64,7 @@ async function rows(sql) {
   return r.getRowObjectsJS().map(row => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, value(v)])));
 }
 const run = async q => rows(dax.compile(q).sql);
-const bag = rs => rs.map(r => JSON.stringify(r)).sort();
+const bag = rs => rs.map(r => JSON.stringify(Object.fromEntries(Object.entries(r).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))))).sort();
 
 test('every measure, in five filter contexts', { skip }, async () => {
   const contexts = {
@@ -107,6 +115,23 @@ test("the page's queries run through the page's compiler", { skip }, async () =>
   assert.ok(ran > 250, `${ran} queries ran`);
 });
 
+test("the SQL page's SELECTs answer what the DAX page's queries answer", { skip }, async () => {
+  let ran = 0;
+  for (const [state, s] of Object.entries(STATES)) {
+    const daxRun = async q => rows(page.toSQL(page.toDax(q)));
+    const sqlRun = async q => rows(sqlPage.model.toSQL(q));
+    const daxQueries = await pageQueries(createQueries, s, daxRun);
+    const sqlQueries = await pageQueries(sqlPage.createQueries, s, sqlRun);
+    assert.deepEqual(sqlQueries.map(x => x.name), daxQueries.map(x => x.name));
+    for (const [i, { name, query }] of sqlQueries.entries()) {
+      const got = await sqlRun(query).catch(e => { throw new Error(`${state}.${name}: ${e.message}\n${query}`); });
+      assert.deepEqual(bag(got), bag(await daxRun(daxQueries[i].query)), `${state}.${name}\n${query}`);
+      ran++;
+    }
+  }
+  assert.ok(ran > 250, `${ran} queries ran`);
+});
+
 test("Analyze: a SELECT over the model, through the page's compiler", { skip }, async () => {
   const sent = [];
   const model = page.createModel({ query: async (sql, dax) => { sent.push(dax); return rows(sql); } });
@@ -129,5 +154,16 @@ test("Analyze: a SELECT over the model, through the page's compiler", { skip }, 
   assert.equal((await ask(`SELECT dim_region.Region, AGG("Average price") AS p FROM model GROUP BY ALL LIMIT 2`)).length, 2);
   // A name several tables have needs its table; DAX text is refused.
   assert.throws(() => model.analyze('SELECT date, AGG("Generation MWh") FROM model GROUP BY ALL'), /several tables/);
-  assert.throws(() => model.analyze('EVALUATE ROW("v", [Generation MWh])'), /SELECT over the model/);
+  assert.throws(() => model.analyze('EVALUATE ROW("v", [Generation MWh])'), /Analyze takes SQL/);
+  // Any other SQL runs as written over the views: a join, a CTE, a window function. It
+  // carries no DAX.
+  sent.length = 0;
+  const joined = await ask(`SELECT d.FuelSourceDescriptor AS fuel, SUM(s.mw) AS mw FROM v_fct_summary s JOIN v_dim_duid d USING ("DUID") GROUP BY 1 ORDER BY 1`);
+  assert.ok(joined.length > 0);
+  const rolling = await ask(`WITH x AS (SELECT date, SUM(mw) AS mw FROM v_fct_summary GROUP BY date)
+    SELECT date, mw, AVG(mw) OVER (ORDER BY date ROWS 2 PRECEDING) AS avg3 FROM x ORDER BY date`);
+  assert.ok(rolling.length > 0 && 'avg3' in rolling[0]);
+  assert.deepEqual(sent, [undefined, undefined]);
+  // The page's own queries are the model's words only.
+  await assert.rejects(() => model.query('SELECT * FROM v_dim_duid'), /SELECTs over the model/);
 });

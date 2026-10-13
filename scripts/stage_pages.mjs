@@ -1,9 +1,10 @@
 // Stages the page. dashboard/github/ holds it as one page and two ways of asking:
-//   common/  index.html, frontend/ (draw, logs, perflog), storage/ (data, history, views), dag/
-//   dax/     frontend/queries.js and semantic/query.js: the page through the semantic model
-//   sql/     frontend/queries.js: the page in plain SQL
-// A page is common/ with one of the two copied over it (dax also gets semantic_model/model.bim
-// and dax-sql/src, as semantic/dax-sql/, next to semantic/query.js). The repo tree is not the served tree: everything that serves or
+//   common/  index.html, frontend/ (draw, logs, perflog), storage/ (data, history, views), dag/,
+//            semantic/query.js (the page's queries through the semantic model)
+//   dax/     frontend/queries.js: the page's queries as objects of the model's fields
+//   sql/     frontend/queries.js: the page's queries as SELECTs over the model
+// A page is common/ with one of the two copied over it, and semantic_model/model.bim and
+// dax-sql/src (as semantic/dax-sql/) next to semantic/query.js. The repo tree is not the served tree: everything that serves or
 // imports the page stages it first, with stagePage (the site, the Fabric app's build, the
 // parity scripts).
 //   node scripts/stage_pages.mjs <dir> <build>
@@ -25,7 +26,9 @@ export async function stagePage(variant, dir, root = REPO) {
   await mkdir(dir, { recursive: true });
   await cp(join(page, "common"), dir, { recursive: true, filter: src => !src.startsWith(join(page, "common", "dag")) });
   await cp(join(page, variant), dir, { recursive: true });
-  if (variant === "dax") {
+  // The model and its compiler, next to semantic/query.js: common/'s since both pages ask
+  // through it (2026-10-13), dax/'s in an older checkout.
+  if (existsSync(join(dir, "semantic", "query.js"))) {
     await cp(join(root, "semantic_model", "model.bim"), join(dir, "semantic", "model.bim"));
     // The compiler is dax-sql/ at the top; an older checkout (the A/B's `before`, the parity's
     // `since`) has it under packages/ (until 2026-10-09), or none before 2026-10-08, when

@@ -223,6 +223,45 @@
     .analyze-table th { position: sticky; top: 0; background: var(--card); color: var(--muted); font-size: 0.74rem; font-weight: 600; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); text-align: left; }
     .analyze-table td { padding: 0.35rem 0.7rem; border-bottom: 1px solid var(--row-line); color: var(--text); }
     .analyze-table tr:hover td { background: var(--hover-soft); }
+    /* Analyze, Model: the star (an SVG, model.js) and the table picked. */
+    .model-page { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: var(--gap); padding: var(--gap) var(--gutter) 1.5rem; }
+    .model-page[hidden], .analyze-sql-page[hidden] { display: none; }
+    .model-diagram, .model-panel { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); overflow: auto; }
+    .model-diagram { padding: 0.8rem; }
+    .model-diagram svg { display: block; width: 100%; min-width: 640px; height: auto; margin: 0 auto; font-family: inherit; }
+    .model-panel { padding: 0.9rem 1rem; font-size: 0.82rem; max-height: 75vh; }
+    .model-panel h3 { font-size: 1rem; font-weight: 700; margin: 0 0 0.3rem; display: flex; align-items: center; gap: 0.5rem; }
+    .model-panel h4 { font-size: 0.7rem; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; margin: 1.1rem 0 0.4rem; }
+    .model-panel p { color: var(--muted); line-height: 1.5; margin: 0.35rem 0; }
+    .model-panel .m-src { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.75rem; color: var(--faint); }
+    .model-panel .m-hint { color: var(--faint); }
+    .model-panel a { color: var(--text); }
+    .m-tag { font-size: 0.66rem; font-weight: 600; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 0.45rem; margin-left: 0.4rem; white-space: nowrap; vertical-align: 1px; }
+    .model-panel h3 .m-tag { margin-left: 0; }
+    .m-rels { list-style: none; margin: 0; padding: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.76rem; }
+    .m-rels li { padding: 0.2rem 0; border-bottom: 1px solid var(--row-line); }
+    .m-cols td { vertical-align: top; }
+    .m-desc { color: var(--faint); font-size: 0.74rem; line-height: 1.4; margin-top: 0.15rem; }
+    .m-measure { border-bottom: 1px solid var(--row-line); padding: 0.35rem 0; }
+    .m-measure summary { cursor: pointer; font-weight: 600; }
+    .m-fmt { float: right; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.72rem; font-weight: 400; color: var(--faint); }
+    .m-measure pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.74rem; line-height: 1.5; background: var(--input-bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.5rem 0.65rem; margin: 0.45rem 0 0.3rem; overflow-x: auto; white-space: pre; }
+    .m-card { cursor: pointer; outline: none; transition: opacity 0.15s; }
+    .m-box { fill: var(--card); stroke: var(--border); stroke-width: 1; transition: stroke 0.15s; }
+    .m-card.dim .m-box { fill: var(--raised); }
+    .m-card.m-on .m-box, .m-card:focus-visible .m-box { stroke: var(--muted); }
+    .m-card.m-sel .m-box { stroke: var(--accent); stroke-width: 2; }
+    .m-name { fill: var(--text); font-size: 13px; font-weight: 700; }
+    .m-cap { fill: var(--faint); font-size: 10.5px; }
+    .m-key { fill: var(--muted); font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .m-sep { stroke: var(--hairline); }
+    .m-rel { transition: opacity 0.15s; }
+    .m-edge { fill: none; stroke: var(--faint); stroke-opacity: 0.6; stroke-width: 1.3; }
+    .m-edge.m-inactive { stroke-dasharray: 4 3; }
+    .m-rel.m-on .m-edge { stroke: var(--accent); stroke-opacity: 1; stroke-width: 2; }
+    .m-mark { fill: var(--faint); font-size: 11px; font-weight: 700; }
+    .m-rel.m-on .m-mark { fill: var(--text); }
+    .m-card.m-off, .m-rel.m-off { opacity: 0.2; }
 
     /* --- Flows page --- */
     .flows-bar { display: flex; align-items: center; gap: 0.8rem; padding: var(--gap) var(--gutter) 0.2rem; flex-wrap: wrap; }
@@ -272,7 +311,7 @@
       .kpi-row.records { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
     @media (max-width: 900px) {
-      .charts, .flows-main { grid-template-columns: 1fr; }
+      .charts, .flows-main, .model-page { grid-template-columns: 1fr; }
       .filter-bar { position: static; }
       .top-actions { margin-left: 0; }
     }
@@ -359,6 +398,9 @@
       .flows-board { overflow-y: auto; }
       .analyze-sql textarea { height: 16vh; min-height: 80px; }
       .analyze-table-wrap { flex: 1 1 0; min-height: 0; max-height: none; }
+      .analyze-sql-page:not([hidden]) { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+      .model-page:not([hidden]) { flex: 1 1 0; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+      .model-panel { max-height: none; }
     }
     /* Short screens (a laptop, or a 1080p screen scaled up): the hero is one band with the
        regions as a list, the KPIs are smaller, and the Dashboard's three charts sit side by side. */
@@ -659,6 +701,18 @@
   </div>
 
   <div id="view-analyze" role="tabpanel" aria-labelledby="tab-analyze" style="display:none">
+    <div class="subtab-bar">
+      <div class="subtabs" role="tablist" aria-label="Analyze pages">
+        <button type="button" class="subtab active" data-apage="model" role="tab" aria-selected="true">Model</button>
+        <button type="button" class="subtab" data-apage="sql" role="tab" aria-selected="false" tabindex="-1">SQL</button>
+      </div>
+    </div>
+    <!-- The semantic model (model.bim) as a star, and what it says of the table picked (model.js fills it). -->
+    <div class="model-page" id="analyze-model">
+      <div class="model-diagram"><svg id="modelSvg" role="img" aria-label="The tables of the semantic model and their relationships"></svg></div>
+      <aside class="model-panel" id="modelPanel"></aside>
+    </div>
+    <div class="analyze-sql-page" id="analyze-sql-page" hidden>
     <div class="analyze-controls">
       <button class="btn-analyze" id="analyzePreview" type="button">Preview</button>
       <button class="btn-analyze" id="analyzePlan" type="button">Show plan</button>
@@ -666,7 +720,7 @@
     </div>
     <div class="analyze-sql">
       <div class="analyze-sql-head">
-        <label for="analyzeSql">SQL <span id="analyzeWhat">— over the views of the tables: their stored columns, so a figure here is what the query works out, not a chart's</span></label>
+        <label for="analyzeSql">SQL <span>— a SELECT … FROM model asks the semantic model (its columns, and its measures as AGG("name"): a figure as the charts compute it); any other SQL runs as written over the views of the tables (v_&lt;table&gt;, their stored columns)</span></label>
         <button class="btn-analyze" id="analyzeSqlReset" type="button">Example</button>
       </div>
       <textarea id="analyzeSql" spellcheck="false" wrap="off"></textarea>
@@ -674,6 +728,7 @@
     <div class="analyze-info" id="analyzeInfo"></div>
     <div class="analyze-table-wrap">
       <table class="analyze-table" id="analyzeTable"></table>
+    </div>
     </div>
   </div>
 
@@ -696,6 +751,7 @@
   <script type="module">
     import { createDataSource } from "./storage/data.js";
     import { renderLogs } from "./frontend/logs.js";
+    import { renderModel } from "./frontend/model.js";
     import { createQueries, connect } from "./frontend/queries.js";
     import { largestBy, smallestBy, orderBy, cycle, pick, hashIndex, clampIndex, axisClip, percentiles, daysApart, dayCount,
       shiftDate, formatTime, dayAhead, playStep, playDelay, renderCost, round1, round2, kLabel, mwhAxis, fmtGwh, fmtMwh,
@@ -873,8 +929,7 @@
     // Where the .duckdb files live and how they are fetched and attached is data.js's business
     // (a host that stores the files differently ships its own): it has a view per table. How
     // the page asks is frontend/queries.js's: the queries, and `connect`, what runs them over
-    // the data. The Analyze tab is SQL: over the semantic model where `connect` has one
-    // (`analyze`), else over the same views.
+    // the data. The Analyze tab is SQL: over the semantic model, or over the same views.
     const data = connect(createDataSource({ onStatus: setStatus }));
     // A host whose engine is the model itself (VertiPaq, in the Fabric app of that name) runs
     // no SQL: its data source has no `needs`, and the tab is left out.
@@ -1762,7 +1817,7 @@
       market: [renderHeatmap, renderCapture, renderNegative, renderNetExports],
       fleet: [renderCapacityFactor, renderBattery, renderOwners],
     };
-    const insightsPage = () => document.querySelector('.subtab.active').dataset.page;
+    const insightsPage = () => document.querySelector('#view-insights .subtab.active').dataset.page;
     async function renderInsights(seq) {
       // Beyond 30 days the charts read the daily tables, attached after the first paint: a
       // sub-tab clicked before that waits for them instead of asking for days not held yet.
@@ -1770,7 +1825,7 @@
       if (seq !== _renderSeq) return;
       await Promise.all(INSIGHTS_PAGES[insightsPage()].map(render => render(seq)));
     }
-    const subtabs = [...document.querySelectorAll('.subtab')];
+    const subtabs = [...document.querySelectorAll('#view-insights .subtab')];
     for (const btn of subtabs) {
       btn.addEventListener('keydown', e => {
         if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
@@ -2796,6 +2851,7 @@
         }
         if (tab !== 'flows') icStop();
         if (tab === 'logs') renderLogs();
+        if (tab === 'analyze' && analyzePage() === 'model') renderModel();
         if (_ready) {
           if (tab === 'insights') guarded(renderInsights(_renderSeq));
           if (tab === 'history') guarded(renderHistory(_renderSeq));
@@ -2809,33 +2865,42 @@
       });
     }
 
+    // --- Analyze: two pages, the model (frontend/model.js) and the SQL box ---
+    const analyzePage = () => document.querySelector('#view-analyze .subtab.active').dataset.apage;
+    const analyzeTabs = [...document.querySelectorAll('#view-analyze .subtab')];
+    for (const btn of analyzeTabs) {
+      btn.addEventListener('keydown', e => {
+        if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+        const next = cycle(analyzeTabs, btn, e.key === 'ArrowRight' ? 1 : -1);
+        next.focus(); next.click();
+      });
+      btn.addEventListener('click', () => {
+        for (const b of analyzeTabs) {
+          const on = b === btn;
+          b.classList.toggle('active', on);
+          b.setAttribute('aria-selected', String(on));
+          b.tabIndex = on ? 0 : -1;
+        }
+        document.getElementById('analyze-model').hidden = btn.dataset.apage !== 'model';
+        document.getElementById('analyze-sql-page').hidden = btn.dataset.apage !== 'sql';
+        if (btn.dataset.apage === 'model') renderModel();
+      });
+    }
+
     // --- Analyze: SQL, and only SQL ---
-    // With the semantic model (`data.analyze`, the page that asks through it) the box is a
-    // SELECT over the model: its columns and measures FROM model, so a figure is the model's
-    // measure, as the charts compute it. Without it (the SQL page) it is SQL over the data's
-    // views (a table's view v_<table>): what the files store, as they store it. The page
-    // writes no SQL here; the example is a query (on the SQL page, with the views it can read).
-    const MODEL_SQL = !!data.analyze;
-    if (MODEL_SQL) document.getElementById('analyzeWhat').textContent =
-      '— over the semantic model: its columns (table.column, or the name alone when one table has it) and measures (AGG("name")) FROM model, so a figure here is the model\'s, as the charts compute it';
+    // A SELECT ... FROM model asks the semantic model: its columns and measures, so a figure
+    // is the model's measure, as the charts compute it (data.analyze compiles it as the page's
+    // queries are). Any other SQL runs as written over the data's views (a table's view
+    // v_<table>): what the files store, as they store it. The page writes no SQL here; the
+    // example is a query over the model.
     function syncAnalyzeSql() {
       const ta = document.getElementById('analyzeSql');
       if (!ta) return;
-      if (!MODEL_SQL) {
-        const views = data.views().map(v => `--   ${v.name}: ${v.columns.join(', ')}`).join('\n');
-        ta.value = `-- The views over the attached files:\n${views}\n`
-          + 'SELECT * FROM v_fct_region_daily ORDER BY date DESC LIMIT 100';
-        return;
-      }
       ta.value = 'SELECT dim_calendar.date, FuelSourceDescriptor, AGG("Generation MWh") AS mwh\nFROM model\n'
         + 'WHERE dim_calendar.date >= TODAY() - 7\nGROUP BY ALL\nORDER BY 1 DESC, mwh DESC';
     }
     function getAnalyzeSql() {
       return document.getElementById('analyzeSql').value.trim().replace(/;+\s*$/, '');
-    }
-    // What the box holds as SQL over the views (`sql`), and what runs SQL built round it.
-    function analyzeQuery(text) {
-      return MODEL_SQL ? data.analyze(text) : { sql: text, query: q => data.query(q) };
     }
 
     // --- Analyze: ensure data loaded ---
@@ -2867,7 +2932,7 @@
       info.textContent = '';
 
       try {
-        const { sql, query } = analyzeQuery(base);
+        const { sql, query } = data.analyze(base);
         await ensureAnalyzeData(sql);
         setStatus("Previewing...", "loading");
         // Every column as DuckDB prints it: a DATE, TIMESTAMP or DECIMAL read through Arrow
@@ -2925,7 +2990,7 @@
       info.textContent = '';
 
       try {
-        const { sql, query } = analyzeQuery(base);
+        const { sql, query } = data.analyze(base);
         await ensureAnalyzeData(sql);
         setStatus("Explaining...", "loading");
         const rows = await runQuery(`EXPLAIN ${sql}`, query);
@@ -2957,7 +3022,7 @@
       btn.textContent = 'Loading...';
 
       try {
-        const { sql } = analyzeQuery(base);
+        const { sql } = data.analyze(base);
         await ensureAnalyzeData(sql);
         btn.textContent = 'Exporting...';
         setStatus("Exporting CSV...", "loading");

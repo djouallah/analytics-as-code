@@ -109,11 +109,14 @@ on purpose: the point is the layers, not their maturity.
   uses it: a SELECT over the semantic model (`SELECT FuelSourceDescriptor, AGG("Generation MWh")
   FROM model GROUP BY ALL`, a column named with its table when several tables have it), which the
   compiler turns into the DAX it stands for and then SQL, so its figures are the model's
-  measures; its CSV export is the rows of that SQL. On the SQL page it is SQL over the views.
-- **The same page without the semantic layer** is `dashboard/github/sql/`, at `sql/` on the
-  site: the same `index.html` and storage, and its own `frontend/queries.js`, which asks in
-  SQL, each figure written out where a chart uses it, the joins written out. It is how a
-  team would build the page in practice.
+  measures; any other SQL runs as written over the views. Its CSV export is the rows of that
+  SQL.
+- **The same page asking in SQL** is `dashboard/github/sql/`, at `sql/` on the site: the
+  same `index.html`, storage and model, and its own `frontend/queries.js`, each query a
+  SELECT over the model (`SELECT dim_calendar.date, AGG("Generation MWh") FROM model ...`).
+  dax-sql reads it into the same syntax tree a DAX query is, so the compiler builds one plan
+  from either way of asking, as Spark's SQL and DataFrames build one logical plan, and the
+  two pages draw the same rows.
 
 ### How the page is checked
 
@@ -177,9 +180,9 @@ no query service.
 ├── semantic_model/       # The one semantic model (model.bim): what every client reads, and a Fabric item
 ├── dashboard/            # Its clients
 │   ├── github/           # The page on GitHub Pages, and its two ways of asking
-│   │   ├── common/       # index.html, frontend/ (draws, Logs tab), storage/ (the host, the tables as views), dag/ (dbt docs)
-│   │   ├── dax/          # through the semantic model: frontend/queries.js, semantic/ (the compiler); served at /
-│   │   └── sql/          # in plain SQL, no semantic layer: frontend/queries.js; served at sql/
+│   │   ├── common/       # index.html, frontend/ (draws, Logs tab), storage/ (the host, the tables as views), semantic/ (the model's queries), dag/ (dbt docs)
+│   │   ├── dax/          # the queries as objects of the model's fields: frontend/queries.js; served at /
+│   │   └── sql/          # the queries as SELECTs over the model: frontend/queries.js; served at sql/
 │   ├── fabric_app/       # The same page as a Fabric app, and its two backends
 │   │   ├── common/       # build.mjs and the Fabric sign-in (site/storage/auth.js)
 │   │   ├── wasm/         # DuckDB-WASM over a copy of the tables: its host code and the Rayfin project (deployed)
