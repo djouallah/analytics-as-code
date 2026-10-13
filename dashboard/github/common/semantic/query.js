@@ -45,6 +45,7 @@
 // =============================================================================
 
 import { createCompiler } from './dax-sql/index.js';
+import { tmslToModel } from './formats/tmsl.js';
 
 // The model, fetched next to this file, with this file's ?v= (the Fabric build's cache-buster).
 const BIM = await (await fetch(new URL('./model.bim' + new URL(import.meta.url).search, import.meta.url))).json();
@@ -164,7 +165,7 @@ export function toDax(q) {
 // DAX -> SQL
 // =============================================================================
 
-const DAX = createCompiler(BIM, {
+const DAX = createCompiler(tmslToModel(BIM), {
   tableSource: t => `v_${t.name}`,
   assumeIntegrity: true,
   castOutput: {
@@ -203,7 +204,7 @@ function fromSql(text) {
 // Analyze's compiler: no casts for the browser, so a SELECT over the model gives the engine's
 // types (a DATE, a DECIMAL) and composes with the views' columns in a JOIN or a UNION. The
 // preview and the CSV cast every column to text at the end.
-const ANALYZE = createCompiler(BIM, { tableSource: t => `v_${t.name}`, assumeIntegrity: true, castOutput: false });
+const ANALYZE = createCompiler(tmslToModel(BIM), { tableSource: t => `v_${t.name}`, assumeIntegrity: true, castOutput: false });
 
 export function createModel(data) {
   if (data.engine === 'dax') return {

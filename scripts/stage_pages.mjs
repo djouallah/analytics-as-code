@@ -35,6 +35,11 @@ export async function stagePage(variant, dir, root = REPO) {
     // semantic/ held its compiler whole.
     const daxSql = [join(root, "dax-sql", "src"), join(root, "packages", "dax-sql", "src")].find(existsSync);
     if (daxSql) await cp(daxSql, join(dir, "semantic", "dax-sql"), { recursive: true });
+    // Its readers of a model file (dax-sql/formats, since 2026-10-14), as semantic/formats/.
+    for (const f of ["tmsl.js", "ossie.js"]) {
+      const src = join(root, "dax-sql", "formats", f);
+      if (existsSync(src)) await cp(src, join(dir, "semantic", "formats", f));
+    }
   }
 }
 

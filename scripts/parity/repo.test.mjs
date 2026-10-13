@@ -18,6 +18,8 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DuckDBInstance } from '@duckdb/node-api';
 import { createCompiler } from '../../dax-sql/src/index.js';
+import { tmslToModel } from '../../dax-sql/formats/tmsl.js';
+import { ossieToModel } from '../../dax-sql/formats/ossie.js';
 import { setup } from './fixtures/nem.mjs';
 import { pageQueries, STATES } from './repo_queries.mjs';
 import { stagePage } from '../stage_pages.mjs';
@@ -53,7 +55,7 @@ before(async () => {
   const db = await DuckDBInstance.create(':memory:');
   con = await db.connect();
   await con.run(setup);
-  dax = createCompiler(bim, { tableSource: t => `v_${t.name}` });
+  dax = createCompiler(tmslToModel(bim), { tableSource: t => `v_${t.name}` });
 });
 after(() => {
   if (staged) fs.rmSync(staged, { recursive: true, force: true });
@@ -203,7 +205,7 @@ test('ossie.yaml is model.bim, as bim_to_ossie.mjs writes it', { skip }, () => {
 
 test('the Ossie model compiles as model.bim does', { skip }, async () => {
   const options = { tableSource: t => `v_${t.name}`, assumeIntegrity: true, castOutput: { double: s => `CAST(${s} AS DOUBLE)` } };
-  const [fromBim, fromOssie] = [bim, parse(fs.readFileSync(OSSIE, 'utf8'))].map(m => createCompiler(m, options));
+  const [fromBim, fromOssie] = [tmslToModel(bim), ossieToModel(parse(fs.readFileSync(OSSIE, 'utf8')))].map(m => createCompiler(m, options));
   const same = q => assert.equal(fromOssie.compile(q).sql, fromBim.compile(q).sql, q);
   let n = 0;
   for (const m of bim.model.tables.flatMap(t => (t.measures ?? []).map(x => x.name))) {
