@@ -3,14 +3,15 @@ holds the catalog's lakehouse.
 
     python deploy_model.py
 
-The model is semantic_model/ossie.yaml, in Apache Ossie, the file the dashboards read. Power BI
-takes TMSL: scripts/ossie_to_bim.mjs writes the model.bim it stands for (a Tabular model whose
+The model is semantic_model/ossie.yaml, in Apache Ossie, the file the dashboards read; the repo
+holds nothing else of it. The Fabric item is written here, into a temporary semantic_model/:
+model.bim, the TMSL the YAML stands for (scripts/ossie_to_bim.mjs: a Tabular model whose
 tables are Direct Lake partitions on the Iceberg tables of the `nem` lakehouse; what Ossie has
-no place for is in the YAML's POWER_BI extensions) into a copy of the folder, without the
-YAML. With .platform and definition.pbism next to it, that folder is a Fabric item:
-fabric-cicd finds an item by its .platform, whatever the folder is called. It is
-published with fabric-cicd, as the sibling repo publishes its own (dbt-fabric,
-.github/scripts/deploy.py): the item is created on the first run and updated after that.
+no place for is in the YAML's POWER_BI extensions), definition.pbism, and .platform, named
+after the model (its `name`) with a fixed logicalId. fabric-cicd finds an item by its
+.platform. It is published with fabric-cicd, as the sibling repo publishes its own
+(dbt-fabric, .github/scripts/deploy.py): the item is created on the first run and updated
+after that.
 
 The report is dashboard/powerbi_report/nem.Report (PBIR). Its definition.pbir names the model by
 its path in the repo, and fabric-cicd turns that into the deployed model's id, so the two
@@ -24,15 +25,27 @@ Needs `az login` (azure/login on CI) as an identity that can create items in the
 and node with `npm ci --prefix scripts` (yaml) for ossie_to_bim.mjs.
 """
 
+import json
 import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
+import yaml  # fabric-cicd brings it
+
 REPO = Path(__file__).resolve().parent.parent
 ITEM = REPO / "semantic_model"
 REPORT = REPO / "dashboard" / "powerbi_report" / "nem.Report"
+# The model's name in the workspace: the Ossie model's.
+NAME = yaml.safe_load((ITEM / "ossie.yaml").read_text(encoding="utf-8"))["name"]
+# The item's identity in fabric-cicd's eyes; the same on every deploy.
+LOGICAL_ID = "d0f250b0-e001-44ac-91d8-48faea5ec2ed"
+PLATFORM = {
+    "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+    "metadata": {"type": "SemanticModel", "displayName": NAME},
+    "config": {"version": "2.0", "logicalId": LOGICAL_ID},
+}
 
 
 def main(items=("SemanticModel", "Report")):
@@ -44,9 +57,12 @@ def main(items=("SemanticModel", "Report")):
     with tempfile.TemporaryDirectory() as tmp:
         # Resolved: fabric-cicd finds the report's model by comparing resolved paths.
         tmp = Path(tmp).resolve()
-        # The item: the folder without the Ossie model, and the model.bim written from it.
-        bim = Path(shutil.copytree(ITEM, tmp / ITEM.relative_to(REPO),
-                                   ignore=shutil.ignore_patterns("ossie.yaml")), "model.bim")
+        # The item, at the model's path in the repo (the report's definition.pbir names it so).
+        item = tmp / ITEM.relative_to(REPO)
+        item.mkdir(parents=True)
+        (item / ".platform").write_text(json.dumps(PLATFORM, indent=2), encoding="utf-8")
+        (item / "definition.pbism").write_text(json.dumps({"version": "1.0"}), encoding="utf-8")
+        bim = item / "model.bim"
         subprocess.run(["node", str(REPO / "scripts" / "ossie_to_bim.mjs"), str(bim)], check=True)
         bim.write_text(bim.read_text(encoding="utf-8")
                        .replace("{WS_ID}", workspace).replace("{LH_ID}", lakehouse), encoding="utf-8")

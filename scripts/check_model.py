@@ -42,9 +42,10 @@ API = "https://api.powerbi.com/v1.0/myorg"
 TOKEN = os.environ["POWERBI_TOKEN"]
 WORKSPACE = os.environ["WS_ID"]
 ITEM = Path(__file__).resolve().parent.parent / "semantic_model"
-NAME = json.loads((ITEM / ".platform").read_text(encoding="utf-8"))["metadata"]["displayName"]
-# The model, in Apache Ossie: a measure's table is in its POWER_BI extension.
+# The model, in Apache Ossie: a measure's table is in its POWER_BI extension. Its name is the
+# deployed model's (deploy_model.py names the item so).
 MODEL = yaml.safe_load((ITEM / "ossie.yaml").read_text(encoding="utf-8"))
+NAME = MODEL["name"]
 TABLES = [d["name"] for d in MODEL["datasets"]]
 # The tables that hold whole months: dim_calendar does not reach them, dim_month does.
 MONTHLY = {"dim_month"} | {r["from"] for r in MODEL.get("relationships", []) if r["to"] == "dim_month"}

@@ -40,11 +40,14 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import yaml  # fabric-cicd brings it
+
 API = "https://api.powerbi.com/v1.0/myorg"
 TOKEN = os.environ["POWERBI_TOKEN"]
 WORKSPACE = os.environ["WS_ID"]
 ITEM = Path(__file__).resolve().parent.parent / "semantic_model"
-NAME = json.loads((ITEM / ".platform").read_text(encoding="utf-8"))["metadata"]["displayName"]
+# The model's name in the workspace is the Ossie model's (deploy_model.py names the item so).
+NAME = yaml.safe_load((ITEM / "ossie.yaml").read_text(encoding="utf-8"))["name"]
 CENT = 0.01
 
 

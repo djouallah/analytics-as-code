@@ -697,10 +697,12 @@ in `landing` are what these tables are built from.
   two facts at query time is too slow; rooftop's source is its own table, kept as published;
   a value that is held, carried forward or interpolated is never stored in a source table
   (a derived reporting table may hold it); the logic is measures.
-- `semantic_model/` is the model and, with a `model.bim` in it, a Fabric item
-  (`ossie.yaml`, `definition.pbism`, `.platform`; fabric-cicd finds an item by its
-  `.platform`, whatever the folder is called, and `deploy_model.py` publishes a copy of that
-  folder with `ossie_to_bim.mjs`'s `model.bim` in place of the YAML): each table one Direct Lake
+- `semantic_model/` holds the model, `ossie.yaml`, and nothing else. The Fabric item is the
+  deploy's business: `deploy_model.py` writes it into a temporary `semantic_model/` (the path
+  the report's `definition.pbir` names): `model.bim` (`ossie_to_bim.mjs`), `definition.pbism`,
+  and `.platform`, named after the YAML's `name` (`nem`, what `check_model.py`,
+  `parity_model.py` and the workflows look the model up by) with a fixed logicalId. The model
+  Power BI runs: each table one Direct Lake
   partition on a `mart` table of the `nem` lakehouse, reached through OneLake (no SQL
   endpoint; Fabric shows Direct Lake the Iceberg tables as Delta on its own), single-column
   relationships, and the measures. `{WS_ID}`/`{LH_ID}` in the `DirectLake` expression are

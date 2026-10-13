@@ -178,7 +178,7 @@ no query service.
 │   └── marts/            # Incremental fact tables (landing) and the tables the model reads (mart)
 ├── macros/               # Iceberg adapter overrides, the pending-files and date-bounds helpers
 ├── scripts/              # The cache (Iceberg → DuckDB files), table maintenance, deploys, parity/
-├── semantic_model/       # The one semantic model (ossie.yaml): what every client reads; with model.bim written in at deploy, a Fabric item
+├── semantic_model/       # The one semantic model (ossie.yaml): what every client reads; the deploy writes the Fabric item from it
 ├── dashboard/            # Its clients
 │   ├── github/           # The page on GitHub Pages, and its two ways of asking
 │   │   ├── common/       # index.html, frontend/ (draws, Logs tab), storage/ (the host, the tables as views), semantic/ (the model's queries), dag/ (dbt docs)

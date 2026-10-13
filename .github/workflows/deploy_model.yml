@@ -90,7 +90,7 @@ jobs:
         run: |
           set -euo pipefail
           token=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv)
-          name=$(jq -r .metadata.displayName semantic_model/.platform)
+          name=$(python -c "import yaml; print(yaml.safe_load(open('semantic_model/ossie.yaml'))['name'])")
           found=$(curl -fsS -H "Authorization: Bearer $token" "https://api.fabric.microsoft.com/v1/workspaces/$WS_ID/semanticModels" \
             | jq --arg n "$name" '[.value[] | select(.displayName == $n)] | length')
           if [ "$found" = 0 ]; then
