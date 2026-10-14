@@ -267,7 +267,14 @@ SELECT * REPLACE (
   -- solar's five units, which have none, the estimate they are. NULL where AEMO names none.
   coalesce(max(Participant) OVER (PARTITION BY lower(Participant)),
            CASE WHEN starts_with(DUID, 'ROOFTOP_') THEN 'Rooftop solar (AEMO estimate)' END) AS Owner
-FROM units
+-- Names without the spaces round them (added 2026-10-14): AEMO's list ends some with a space,
+-- or a non-breaking one ("Moorabool Wind Farm "), and spells the same owner with and without.
+-- Power BI drops trailing spaces as it loads; the dashboard's compiler reads text as stored.
+FROM (SELECT * REPLACE (
+  nullif(regexp_replace(StationName, '^[\s\x{00A0}]+|[\s\x{00A0}]+$', '', 'g'), '') AS StationName,
+  nullif(regexp_replace(Participant, '^[\s\x{00A0}]+|[\s\x{00A0}]+$', '', 'g'), '') AS Participant,
+  nullif(regexp_replace(TechnologyType, '^[\s\x{00A0}]+|[\s\x{00A0}]+$', '', 'g'), '') AS TechnologyType)
+  FROM units) AS units
 {% else %}
 -- No new DUIDs found, return empty result to keep existing data
 {{ nothing_to_do() }}
