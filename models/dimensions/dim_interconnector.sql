@@ -20,7 +20,7 @@ SELECT
   REGIONFROM AS from_region,
   REGIONTO AS to_region,
   DESCRIPTION AS description
-FROM read_csv({{ source('duid_reference', 'interconnector') }}, all_varchar = true)
+FROM {{ read_reference('interconnector', ['INTERCONNECTORID', 'REGIONFROM', 'REGIONTO', 'DESCRIPTION']) }}
 WHERE REGIONFROM IN (SELECT Region FROM {{ ref('dim_region') }})
   AND REGIONTO IN (SELECT Region FROM {{ ref('dim_region') }})
 {%- endset %}

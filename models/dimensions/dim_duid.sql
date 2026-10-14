@@ -180,7 +180,7 @@ WITH
   -- hh:mm:ss, so they order as text.
   dualloc AS (
     SELECT DUID, GENSETID
-    FROM read_csv({{ source('duid_reference', 'dualloc') }}, all_varchar = true)
+    FROM {{ read_reference('dualloc', ['DUID', 'GENSETID', 'EFFECTIVEDATE', 'VERSIONNO']) }}
     QUALIFY rank() OVER (PARTITION BY DUID
                          ORDER BY EFFECTIVEDATE DESC, CAST(VERSIONNO AS INT) DESC) = 1
   ),
@@ -189,7 +189,7 @@ WITH
     SELECT GENSETID,
            TRY_CAST(CO2E_EMISSIONS_FACTOR AS DOUBLE) AS factor,
            TRY_CAST(REGISTEREDCAPACITY AS DOUBLE) AS capacity
-    FROM read_csv({{ source('duid_reference', 'genunits') }}, all_varchar = true)
+    FROM {{ read_reference('genunits', ['GENSETID', 'CO2E_EMISSIONS_FACTOR', 'REGISTEREDCAPACITY']) }}
   ),
 
   co2e AS (
