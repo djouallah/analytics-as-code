@@ -5,16 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>How it works · NEM dashboard</title>
   <!--
-    How a BI tool answers a click, shown with this dashboard's own engine, live: a click on a
-    region runs the "Right now" query of the Dashboard tab (nowByFuel in ../frontend/queries.js)
-    the way the page runs it, and a card is added for each step with what that step really
-    produced. Three zones, as in any BI tool: the client (the report), the engine (here
-    query.js, dax-sql and DuckDB-WASM; in Power BI, the Power BI engine) and the storage
-    (here the .duckdb copies of the Iceberg tables, found through DuckDB's catalog). One
-    screen, no scrolling: the newest card is open, the others fold to a strip with their
-    summary; a click or the arrow keys open another. Documentation, not the dashboard: it reads
-    the same modules and files and changes nothing of them. Only the DAX page has it
-    (dashboard/github/dax/), at the site's how/.
+    How it works, in two tabs. dbt: the lineage of the models that build the tables (the dbt
+    docs, ../dag/). Analytics: how a BI engine answers a click, shown with this dashboard's own
+    engine, live: a click on a region runs the "Right now" query of the Dashboard tab
+    (nowByFuel in ../frontend/queries.js) the way the page runs it, and a card is added for
+    each step with what that step really produced: the query object, the model it names, the
+    DAX (toDax), the plan (dax-sql's SQL), the run on DuckDB-WASM, the catalog and the files.
+    The report on the left, the cards in two rows: one screen, no scrolling. Documentation,
+    not the dashboard: it reads the same modules and files and changes nothing of them. Only
+    the DAX page has it (dashboard/github/dax/), at the site's how/.
   -->
   <script>
     try {
@@ -25,7 +24,7 @@
   <style>
     :root {
       color-scheme: dark;
-      --bg: #0a0c10; --card: #12151c; --raised: #181c25; --border: #262b36; --zone: #0e1117;
+      --bg: #0a0c10; --card: #12151c; --raised: #181c25; --border: #262b36;
       --text: #f2f4f8; --muted: #9aa3b2; --faint: #6b7483;
       --accent: #f2f4f8; --on-accent: #0a0c10; --hairline: rgba(255,255,255,0.07);
       --live: #f0a33e; --live-glow: rgba(240,163,62,0.18); --model: #6ea8fe; --model-bg: #111a2b;
@@ -34,7 +33,7 @@
     }
     :root[data-theme="light"] {
       color-scheme: light;
-      --bg: #f4f3ef; --card: #ffffff; --raised: #faf9f6; --border: #dcdad2; --zone: #ecebe6;
+      --bg: #f4f3ef; --card: #ffffff; --raised: #faf9f6; --border: #dcdad2;
       --text: #14161a; --muted: #5c6068; --faint: #82858c;
       --accent: #14161a; --on-accent: #ffffff; --hairline: rgba(20,22,26,0.09);
       --live: #c25e00; --live-glow: rgba(194,94,0,0.14); --model: #2563eb; --model-bg: #eff6ff;
@@ -43,74 +42,49 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { background: var(--bg); color: var(--text); height: 100%; }
     body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 15px; line-height: 1.45;
-      display: flex; flex-direction: column; padding: 0.9rem 1.1rem 0.7rem; gap: 0.65rem; overflow: hidden; -webkit-font-smoothing: antialiased; }
+      display: flex; flex-direction: column; padding: 0.8rem 1.1rem 0.6rem; gap: 0.6rem; overflow: hidden; -webkit-font-smoothing: antialiased; }
     a { color: inherit; }
-    code, pre { font-family: Consolas, "JetBrains Mono", Menlo, monospace; font-size: 12.5px; }
+    code, pre { font-family: Consolas, "JetBrains Mono", Menlo, monospace; font-size: 12px; }
 
-    header { display: flex; align-items: baseline; gap: 0.3rem 1rem; flex-wrap: wrap; flex: none; }
-    header h1 { font-size: 1.4rem; letter-spacing: -0.02em; }
-    header p { color: var(--muted); font-size: 0.92rem; }
-    header .right { margin-left: auto; display: flex; gap: 1rem; align-items: baseline; color: var(--muted); font-size: 0.85rem; }
-    kbd { font-family: inherit; font-size: 0.78rem; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 0.3rem; }
-
-    /* The two parts and their contract: the page's navigation. */
-    .strip { flex: none; display: flex; align-items: stretch; gap: 0.5rem; }
-    .part { flex: 1; text-align: left; font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--border);
-      border-radius: 12px; padding: 0.5rem 0.85rem; cursor: pointer; display: flex; flex-direction: column; gap: 0.1rem; transition: border-color .2s, background .2s; }
-    .part:hover { border-color: var(--muted); }
-    .part b { font-size: 0.92rem; }
-    .part span { color: var(--muted); font-size: 0.8rem; }
-    .part.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-    .part.contract { flex: 0.8; background: var(--model-bg); border-color: var(--model); }
-    .part.contract b { color: var(--model); }
-    .part.contract.active { box-shadow: 0 0 0 1px var(--model); }
-    .strip .arrow { align-self: center; color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
-    .view { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+    header { display: flex; align-items: center; gap: 0.5rem 1.2rem; flex-wrap: wrap; flex: none; }
+    header h1 { font-size: 1.35rem; letter-spacing: -0.02em; }
+    .tabs { display: flex; gap: 0.15rem; padding: 0.22rem; background: var(--card); border: 1px solid var(--border); border-radius: 999px; }
+    .tabs button { display: flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.9rem; border: none; border-radius: 999px; background: none;
+      color: var(--muted); font: inherit; font-weight: 600; font-size: 0.88rem; cursor: pointer; }
+    .tabs button svg { width: 16px; height: 16px; }
+    .tabs button:hover { color: var(--text); }
+    .tabs button.active { background: var(--accent); color: var(--on-accent); }
+    header p { color: var(--muted); font-size: 0.88rem; }
+    header a { margin-left: auto; color: var(--muted); font-size: 0.85rem; }
+    .view { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.55rem; }
     .view[hidden] { display: none; }
-    .panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.6rem; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.9rem 1.1rem; }
-    .panel > p { color: var(--muted); max-width: 70rem; flex: none; }
-    .panel iframe { flex: 1; min-height: 0; width: 100%; border: 1px solid var(--border); border-radius: 10px; background: #fff; }
-    .contract-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.5rem; align-content: start; overflow: auto; flex: 1; min-height: 0; }
-    .contract-grid div { border: 1px solid var(--border); border-radius: 10px; padding: 0.45rem 0.7rem; background: var(--raised); font-size: 0.84rem; }
-    .contract-grid code { font-weight: 600; }
-    .contract-grid span { color: var(--muted); }
 
-    /* Three zones: the client, the engine, the storage. The zone with the open card grows. */
-    main { flex: 1; min-height: 0; display: flex; gap: 0.6rem; }
-    .zone { flex: 0 0 auto; min-width: 0; display: flex; flex-direction: column; gap: 0.5rem; background: var(--zone);
-      border: 1px solid var(--border); border-radius: 18px; padding: 0.55rem 0.6rem 0.6rem; transition: flex-grow .45s ease; }
-    .zone.has-open { flex: 1 1 0; }
-    .zone.client { flex: 0 0 clamp(230px, 19vw, 290px); }
-    .zone:not(.has-open):not(.client) > .label span { display: none; }
-    .zone > .label { flex: none; display: flex; gap: 0.5rem; align-items: baseline; padding: 0 0.3rem; min-width: 0; }
-    .zone > .label b { font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; }
-    .zone > .label span { color: var(--muted); font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .track { flex: 1; min-height: 0; display: flex; gap: 0.5rem; }
-    .empty { flex: 0 0 90px; border: 1px dashed var(--border); border-radius: var(--radius); }
-
-    .card { flex: 0 0 96px; min-width: 0; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--border);
-      border-radius: var(--radius); padding: 0.75rem 0.7rem; cursor: pointer; overflow: hidden;
-      transition: flex-basis .45s ease, flex-grow .45s ease, border-color .25s, box-shadow .25s; animation: enter .45s ease both; }
+    /* Analytics: the report on the left, the cards in two rows. */
+    .stage { flex: 1; min-height: 0; display: grid; gap: 0.5rem 0.6rem;
+      grid-template-columns: clamp(230px, 19vw, 290px) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1.3fr);
+      grid-template-rows: auto minmax(0, 1fr) auto minmax(0, 1fr); }
+    .rowlabel { grid-column: 2 / -1; display: flex; gap: 0.55rem; align-items: baseline; padding: 0 0.2rem; min-width: 0; }
+    .rowlabel b { font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; }
+    .rowlabel span { color: var(--muted); font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .report { grid-column: 1; grid-row: 1 / -1; }
+    .slot { border: 1px dashed var(--border); border-radius: var(--radius); min-height: 0; min-width: 0; display: flex; }
+    .card { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 0.75rem 0.9rem; overflow: hidden; transition: border-color .25s, box-shadow .25s; }
+    .slot .card { animation: enter .45s ease both; }
     .card[hidden] { display: none; }
-    .card.open { flex: 1 1 0; cursor: default; padding: 0.85rem 1.05rem; }
-    .report { flex: 1; cursor: default; }
-    @keyframes enter { from { opacity: 0; transform: translateX(28px); } }
+    @keyframes enter { from { opacity: 0; transform: translateY(14px) scale(0.98); } }
     .on { border-color: var(--live) !important; box-shadow: 0 0 0 1px var(--live), 0 0 24px var(--live-glow); }
 
-    .head { display: flex; flex-direction: column; gap: 0.35rem; flex: none; }
-    .card.open .head, .report .head { flex-direction: row; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
-    .n { width: 1.7rem; height: 1.7rem; border-radius: 50%; display: grid; place-items: center; flex: none; align-self: flex-start;
-      font-weight: 700; font-size: 0.8rem; background: var(--live); color: #fff; }
-    .card.open .n, .report .n { align-self: center; }
-    .title { font-weight: 700; font-size: 0.98rem; line-height: 1.2; }
-    .meta { color: var(--muted); font-size: 0.85rem; }
-    .sum { color: var(--live); font-weight: 600; font-size: 0.82rem; font-variant-numeric: tabular-nums; line-height: 1.3; }
-    .card.open .sum { margin-left: auto; }
-    .card:not(.open):not(.report) .meta, .card:not(.open):not(.report) .body { display: none; }
-    .body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.55rem; margin-top: 0.6rem; }
+    .head { display: flex; align-items: center; gap: 0.5rem; flex: none; min-width: 0; }
+    .n { width: 1.6rem; height: 1.6rem; border-radius: 50%; display: grid; place-items: center; flex: none;
+      font-weight: 700; font-size: 0.78rem; background: var(--live); color: #fff; }
+    .title { font-weight: 700; font-size: 0.98rem; white-space: nowrap; }
+    .sum { margin-left: auto; color: var(--live); font-weight: 600; font-size: 0.8rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .meta { color: var(--muted); font-size: 0.8rem; margin-top: 0.25rem; flex: none; }
+    .body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.45rem; margin-top: 0.45rem; }
     .body pre, .scroll { flex: 1; min-height: 0; overflow: auto; }
-    .body pre { background: var(--raised); border: 1px solid var(--hairline); border-radius: 8px; padding: 0.7rem 0.85rem; white-space: pre-wrap; word-break: break-word; }
-    .here { flex: none; color: var(--faint); font-size: 0.82rem; border-top: 1px solid var(--hairline); padding-top: 0.45rem; }
+    .body pre { font-size: 11.5px; background: var(--raised); border: 1px solid var(--hairline); border-radius: 8px; padding: 0.55rem 0.7rem; white-space: pre-wrap; word-break: break-word; }
+    .here { flex: none; color: var(--faint); font-size: 0.78rem; }
     .here b { color: var(--muted); font-weight: 600; }
     .k { color: var(--code-key); } .s { color: var(--code-str); } .kw { color: var(--code-kw); font-weight: 600; }
 
@@ -127,147 +101,139 @@
     .bars .total { grid-column: 1 / -1; color: var(--muted); border-top: 1px solid var(--hairline); padding-top: 0.3rem; margin-top: 0.15rem; }
     #status { color: var(--muted); font-size: 0.82rem; flex: none; margin-top: 0.5rem; }
 
-    .facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 0.9rem; font-size: 0.88rem; align-content: start; }
+    .facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 0.8rem; font-size: 0.84rem; align-content: start; }
     .facts dt { color: var(--muted); }
-    .facts code { font-size: 12px; }
-    table.rows { border-collapse: collapse; font-size: 0.84rem; font-variant-numeric: tabular-nums; }
-    table.rows th, table.rows td { padding: 0.18rem 0.85rem 0.18rem 0; text-align: left; border-bottom: 1px solid var(--hairline); white-space: nowrap; }
+    .facts code { font-size: 11.5px; }
+    table.rows { border-collapse: collapse; font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+    table.rows th, table.rows td { padding: 0.12rem 0.7rem 0.12rem 0; text-align: left; border-bottom: 1px solid var(--hairline); white-space: nowrap; }
     table.rows th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--card); }
 
     /* The model: the part Apache Ossie describes. */
     .card.model { background: var(--model-bg); border-color: var(--model); border-width: 2px; }
     .card.model .n { background: var(--model); }
     .card.model .sum { color: var(--model); }
-    .tag { background: var(--model); color: #fff; font-weight: 700; font-size: 0.75rem; padding: 0.12rem 0.6rem; border-radius: 999px; white-space: nowrap; }
-    .card:not(.open) .tag { white-space: normal; align-self: flex-start; }
-    .model .measure b { font-size: 0.9rem; }
-    .model .measure pre { margin-top: 0.25rem; background: var(--card); border: 1px solid var(--hairline); border-radius: 8px; padding: 0.5rem 0.7rem; white-space: pre-wrap; word-break: break-word; font-size: 11.5px; }
-    .model h3 { font-size: 0.75rem; margin: 0.7rem 0 0.3rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
-    .model .measure { margin-bottom: 0.55rem; }
+    .tag { background: var(--model); color: #fff; font-weight: 700; font-size: 0.7rem; padding: 0.08rem 0.5rem; border-radius: 999px; white-space: nowrap; margin-right: 0.3rem; }
+    .model .measure b { font-size: 0.84rem; }
+    .model .measure pre { margin-top: 0.2rem; background: var(--card); border: 1px solid var(--hairline); border-radius: 8px; padding: 0.4rem 0.6rem; white-space: pre-wrap; word-break: break-word; font-size: 11px; }
+    .model h3 { font-size: 0.7rem; margin: 0.55rem 0 0.25rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+    .model .measure { margin-bottom: 0.45rem; }
+    .model .cols { font-size: 0.8rem; }
 
-    /* The way back: under the zones, from the engine to the report. */
-    .back { flex: none; height: 28px; display: flex; align-items: center; gap: 0.6rem; color: var(--muted); font-size: 0.85rem; opacity: 0; transition: opacity .4s; }
+    /* The way back: under the cards, from the engine to the report. */
+    .back { flex: none; height: 26px; display: flex; align-items: center; gap: 0.6rem; color: var(--muted); font-size: 0.85rem; opacity: 0; transition: opacity .4s; }
     .back.shown { opacity: 1; }
     .back .line { flex: 1; height: 0; border-top: 2px dashed var(--live); position: relative; }
     .back .line::before { content: ""; position: absolute; left: -2px; top: -7px; border: 6px solid transparent; border-right: 9px solid var(--live); border-left: 0; }
     .back b { color: var(--live); }
 
-    /* A narrow window: one under the other, and the page scrolls. */
+    /* dbt. */
+    .panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.6rem; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.9rem 1.1rem; }
+    .panel > p { color: var(--muted); max-width: 72rem; flex: none; }
+    .panel iframe { flex: 1; min-height: 0; width: 100%; border: 1px solid var(--border); border-radius: 10px; background: #fff; }
+
+    /* A narrow window: one column, and the page scrolls. */
     @media (max-width: 900px), (max-height: 520px) {
       body { overflow: auto; height: auto; }
-      main, .track { flex-direction: column; }
-      .zone, .zone.client, .card, .card.open { flex: none; }
+      .stage { display: flex; flex-direction: column; }
+      .slot, .report { min-height: 220px; }
+      .slot:has(.card[hidden]) { display: none; }
       .card .body { max-height: 60vh; }
+      .panel iframe { min-height: 70vh; }
     }
   </style>
 </head>
 <body>
   <header>
     <h1>How it works</h1>
-    <p>Two parts, and the catalog between them as the contract. Each card is what this page just ran, in your browser.</p>
-    <span class="right"><span><kbd>←</kbd> <kbd>→</kbd> step through</span><a href="../">← dashboard</a></span>
+    <nav class="tabs" id="tabs">
+      <button data-view="dbt" title="The models that build the tables">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="3" cy="4" r="1.8"/><circle cx="3" cy="12" r="1.8"/><circle cx="13" cy="8" r="1.8"/><path d="M4.7 4.6 11.3 7.4M4.7 11.4 11.3 8.6"/></svg>dbt</button>
+      <button data-view="analytics" class="active" title="How a BI engine answers a click">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1.5" y="8" width="3" height="6.5" rx="0.6"/><rect x="6.5" y="3" width="3" height="11.5" rx="0.6"/><rect x="11.5" y="6" width="3" height="8.5" rx="0.6"/></svg>Analytics</button>
+    </nav>
+    <p id="tagline">How a BI engine answers a click: the names change from tool to tool, the steps don't. Each card is what this page just ran, in your browser.</p>
+    <a href="../">← dashboard</a>
   </header>
 
-  <nav class="strip">
-    <button class="part" data-view="engineering"><b>Data engineering</b><span>dbt: nemweb files → landing → mart, every hour</span></button>
-    <span class="arrow">writes →</span>
-    <button class="part contract" data-view="catalog"><b>Catalog · the contract</b><span>the mart tables, in Iceberg</span></button>
-    <span class="arrow">→ reads</span>
-    <button class="part active" data-view="analytics"><b>Analytics</b><span>a BI engine answers a click: the names change from tool to tool, the steps don't</span></button>
-  </nav>
-
-  <div class="view" id="view-engineering" hidden>
+  <div class="view" id="view-dbt" hidden>
     <section class="panel">
       <p>dbt-duckdb, run every hour by GitHub Actions: it downloads AEMO's files, loads them as they are published into
-        <code>landing</code>, and builds the <code>mart</code> tables (dimensions, facts, daily and monthly aggregates)
-        that it writes as Iceberg tables to OneLake, through the catalog. Everything a report reads is a <code>mart</code> table.
+        <code>landing</code>, and builds the <code>mart</code> tables (dimensions, facts, daily and monthly aggregates) that it
+        writes as Iceberg tables to OneLake. Everything a report reads is a <code>mart</code> table.
         <a href="../dag/#!/overview?g_v=1" target="_blank" rel="noopener">Open the dbt docs</a></p>
-      <iframe id="dag" title="dbt lineage" loading="lazy"></iframe>
-    </section>
-  </div>
-
-  <div class="view" id="view-catalog" hidden>
-    <section class="panel">
-      <p>The contract between the two parts: the <code>mart</code> tables, their columns and their types, in an Iceberg
-        catalog (OneLake). Data engineering writes them and knows nothing of the reports; every client reads them and knows
-        nothing of dbt: Power BI in Direct Lake, this page through copies of the same tables. The semantic model is built on
-        this contract: one dataset per table.</p>
-      <div class="contract-grid" id="contract"></div>
+      <iframe id="dag" title="dbt lineage"></iframe>
     </section>
   </div>
 
   <div class="view" id="view-analytics">
-  <main>
-    <section class="zone client">
-      <div class="label"><b>Client</b><span>the report</span></div>
-      <div class="track">
-        <section class="card report" id="report">
-          <div class="head"><span class="n">1</span><span class="title">Report</span><span class="meta">generation by fuel, the newest 5 minutes</span></div>
-          <div class="regions" id="regions"></div>
-          <div class="chart-title" id="chartTitle"></div>
-          <div class="bars scroll" id="bars"></div>
-          <div id="status">Loading DuckDB and today's data…</div>
-        </section>
-      </div>
-    </section>
+    <div class="stage">
+      <section class="card report" id="report">
+        <div class="head"><span class="n">1</span><span class="title">Report</span></div>
+        <div class="meta">the client: generation by fuel, the newest 5 minutes</div>
+        <div class="regions" id="regions"></div>
+        <div class="chart-title" id="chartTitle"></div>
+        <div class="bars scroll" id="bars"></div>
+        <div id="status">Loading DuckDB and today's data…</div>
+      </section>
 
-    <section class="zone" id="engineZone">
-      <div class="label"><b>Engine</b><span>here: dax-sql and DuckDB, in this tab · in Power BI: the Power BI engine</span></div>
-      <div class="track">
-        <section class="card" data-step="2" hidden>
-          <div class="head"><span class="n">2</span><span class="title">Visual query</span><span class="meta">received: fields and filters, no query language yet</span><span class="sum" id="sum2"></span></div>
-          <div class="body"><pre id="vq"></pre></div>
-        </section>
+      <div class="rowlabel" style="grid-row:1"><b>Engine</b><span>here: dax-sql and DuckDB, in this tab · in Power BI: the Power BI engine</span></div>
 
-        <section class="card model" data-step="3" hidden>
-          <div class="head"><span class="n">3</span><span class="title">Semantic model</span><span class="tag">Apache Ossie</span><span class="sum" id="sum3"></span></div>
-          <div class="body"><div class="scroll">
-            <p class="meta">Read: the tables, their relationships, the measures. Here <code>semantic_model/ossie.yaml</code>, the one model: Power BI runs the same file as <code>model.bim</code> (TMSL).</p>
-            <p class="meta" id="modelCounts" style="margin-top:0.3rem"></p>
-            <h3>Measures the query names</h3><div id="measures"></div>
-            <h3>Columns the query names</h3><div id="columns"></div>
-          </div></div>
-        </section>
+      <div class="slot" style="grid-row:2"><section class="card" data-step="2" hidden>
+        <div class="head"><span class="n">2</span><span class="title">Visual query</span><span class="sum" id="sum2"></span></div>
+        <div class="meta">received: fields and filters, no query language yet</div>
+        <div class="body"><pre id="vq"></pre></div>
+      </section></div>
 
-        <section class="card" data-step="4" hidden>
-          <div class="head"><span class="n">4</span><span class="title">DAX</span><span class="meta">written from the visual query, checked against the model</span><span class="sum" id="sum4"></span></div>
-          <div class="body"><pre id="dax"></pre>
-            <p class="here"><b>Here:</b> <code>toDax()</code> in semantic/query.js.</p></div>
-        </section>
+      <div class="slot" style="grid-row:2"><section class="card model" data-step="3" hidden>
+        <div class="head"><span class="n">3</span><span class="title">Semantic model</span><span class="sum" id="sum3"></span></div>
+        <div class="meta"><span class="tag">Apache Ossie</span> read: tables, relationships, measures</div>
+        <div class="body"><div class="scroll">
+          <p class="meta" id="modelCounts" style="margin:0"></p>
+          <h3>Measures the query names</h3><div id="measures"></div>
+          <h3>Columns the query names</h3><div id="columns" class="cols"></div>
+        </div>
+          <p class="here"><b>Here:</b> <code>semantic_model/ossie.yaml</code>. Power BI runs the same file as <code>model.bim</code> (TMSL).</p></div>
+      </section></div>
 
-        <section class="card" data-step="5" hidden>
-          <div class="head"><span class="n">5</span><span class="title">Plan</span><span class="meta">how the engine will run the DAX: filter context, relationships, measures</span><span class="sum" id="sum5"></span></div>
-          <div class="body"><pre id="sql"></pre>
-            <p class="here"><b>Here:</b> the plan is SQL, compiled by dax-sql. Another engine plans in its own terms.</p></div>
-        </section>
+      <div class="slot" style="grid-row:2"><section class="card" data-step="4" hidden>
+        <div class="head"><span class="n">4</span><span class="title">DAX</span><span class="sum" id="sum4"></span></div>
+        <div class="meta">written from the visual query, checked against the model</div>
+        <div class="body"><pre id="dax"></pre>
+          <p class="here"><b>Here:</b> <code>toDax()</code> in semantic/query.js.</p></div>
+      </section></div>
 
-        <section class="card" data-step="6" hidden>
-          <div class="head"><span class="n">6</span><span class="title">Execute</span><span class="meta">scan the columns, aggregate, return a table</span><span class="sum" id="sum6"></span></div>
-          <div class="body"><dl class="facts" id="engine" style="flex:none"></dl><div class="scroll" id="rows"></div>
-            <p class="here"><b>Here:</b> DuckDB compiled to WebAssembly, one thread, in this browser tab: no server.</p></div>
-        </section>
-      </div>
-    </section>
+      <div class="slot" style="grid-row:2"><section class="card" data-step="5" hidden>
+        <div class="head"><span class="n">5</span><span class="title">Plan</span><span class="sum" id="sum5"></span></div>
+        <div class="meta">how the engine will run the DAX: filter context, relationships, measures</div>
+        <div class="body"><pre id="sql"></pre>
+          <p class="here"><b>Here:</b> SQL, compiled by dax-sql. Another engine plans in its own terms.</p></div>
+      </section></div>
 
-    <section class="zone" id="storageZone">
-      <div class="label"><b>Storage</b><span>here: copies of the Iceberg tables</span></div>
-      <div class="track">
-        <section class="card" data-step="7" hidden>
-          <div class="head"><span class="n">7</span><span class="title">Catalog</span><span class="meta">the contract: which files hold each table</span><span class="sum" id="sum7"></span></div>
-          <div class="body"><dl class="facts scroll" id="catalog"></dl>
-            <p class="here"><b>Here:</b> DuckDB's own catalog: a view per table of the model over the attached files. In a lakehouse: the Iceberg or Delta catalog.</p></div>
-        </section>
+      <div class="rowlabel" style="grid-row:3"><b>Execute &amp; storage</b><span>the engine runs the plan over the tables the catalog points to</span></div>
 
-        <section class="card" data-step="8" hidden>
-          <div class="head"><span class="n">8</span><span class="title">Files</span><span class="meta">the data itself</span><span class="sum" id="sum8"></span></div>
-          <div class="body"><dl class="facts scroll" id="files"></dl>
-            <p class="here"><b>Here:</b> .duckdb files, downloaded once and kept in the browser (OPFS). In a lakehouse: parquet files and their metadata.</p></div>
-        </section>
-        <div class="empty" id="storageEmpty"></div>
-      </div>
-    </section>
-  </main>
-  <div class="back" id="back"><span class="line"></span><span id="backText"></span></div>
+      <div class="slot" style="grid-row:4"><section class="card" data-step="6" hidden>
+        <div class="head"><span class="n">6</span><span class="title">Execute</span><span class="sum" id="sum6"></span></div>
+        <div class="meta">scan the columns, aggregate, return a table</div>
+        <div class="body"><div class="scroll" id="rows"></div>
+          <p class="here"><b>Here:</b> DuckDB compiled to WebAssembly, one thread, in this tab: no server.</p></div>
+      </section></div>
+
+      <div class="slot" style="grid-row:4"><section class="card" data-step="7" hidden>
+        <div class="head"><span class="n">7</span><span class="title">Catalog</span><span class="sum" id="sum7"></span></div>
+        <div class="meta">which files hold each table</div>
+        <div class="body"><dl class="facts scroll" id="catalog"></dl>
+          <p class="here"><b>Here:</b> DuckDB's catalog, a view per table. In a lakehouse: the Iceberg or Delta catalog.</p></div>
+      </section></div>
+
+      <div class="slot" style="grid-row:4; grid-column: span 2"><section class="card" data-step="8" hidden>
+        <div class="head"><span class="n">8</span><span class="title">Files</span><span class="sum" id="sum8"></span></div>
+        <div class="meta">the data itself</div>
+        <div class="body"><dl class="facts scroll" id="files"></dl>
+          <p class="here"><b>Here:</b> .duckdb copies of the <code>mart</code> Iceberg tables, kept in the browser (OPFS). In a lakehouse: parquet files and their metadata.</p></div>
+      </section></div>
+
+    </div>
+    <div class="back" id="back"><span class="line"></span><span id="backText"></span></div>
   </div>
 
 <script type="module">
@@ -279,6 +245,15 @@ const $ = id => document.getElementById(id);
 const esc = t => String(t ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
 const status = t => { $('status').textContent = t; };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// The two tabs.
+function view(name) {
+  for (const v of ['dbt', 'analytics']) $(`view-${v}`).hidden = v !== name;
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+  $('tagline').hidden = name !== 'analytics';
+  if (name === 'dbt' && !$('dag').src) $('dag').src = '../dag/#!/overview?g_v=1';
+}
+$('tabs').onclick = e => { const b = e.target.closest('button'); if (b) view(b.dataset.view); };
 
 // The page's state, as queries.js wants it: only what the "Right now" queries read.
 let newest = null;
@@ -306,12 +281,12 @@ const run = async q => rowsOf(await data.query(q));
 // --- How each box shows its text -----------------------------------------------------------
 // The query object, as JavaScript.
 // A list of plain values stays on one line.
-function showQuery(q) {
+function showQuery(q, width = 70) {
   const lit = v => typeof v === 'string' ? `'${v}'` : String(v);
   const flat = v => Array.isArray(v) ? `[${v.map(flat).join(', ')}]` : v && typeof v === 'object'
     ? `{ ${Object.entries(v).map(([k, x]) => `${k}: ${flat(x)}`).join(', ')} }` : lit(v);
   const show = (v, ind) => {
-    if (flat(v).length + ind.length <= 70) return flat(v);
+    if (!v || typeof v !== 'object' || flat(v).length + ind.length <= width) return flat(v);
     const inner = ind + '  ';
     if (Array.isArray(v)) return `[\n${v.map(x => inner + show(x, inner)).join(',\n')}\n${ind}]`;
     return `{\n${Object.entries(v).map(([k, x]) => `${inner}${k}: ${show(x, inner)}`).join(',\n')}\n${ind}}`;
@@ -376,7 +351,7 @@ const fmt = (v, d = 0) => v == null ? '–' : Number(v).toLocaleString(undefined
 function showModel(q) {
   const metrics = new Map((OSSIE.metrics || []).map(m => [m.name, m]));
   const datasets = new Map((OSSIE.datasets || []).map(d => [d.name, d]));
-  $('modelCounts').textContent = `${OSSIE.datasets.length} datasets · ${OSSIE.relationships.length} relationships · ${OSSIE.metrics.length} metrics in DAX`;
+  $('modelCounts').textContent = `The whole model: ${OSSIE.datasets.length} datasets, ${OSSIE.relationships.length} relationships, ${OSSIE.metrics.length} metrics in DAX.`;
   const names = Object.values(q.select).filter(f => typeof f === 'string' && metrics.has(f));
   $('measures').innerHTML = names.map(n => {
     const m = metrics.get(n), dax = m.expression.dialects.find(d => d.dialect === 'DAX')?.expression;
@@ -387,7 +362,7 @@ function showModel(q) {
   walk(q.select); walk(q.where); walk(q.totals);
   $('columns').innerHTML = [...cols].map(c => {
     const [t, f] = c.split('.'), field = datasets.get(t)?.fields.find(x => x.name === f);
-    return `<div><code>${esc(c)}</code> <span class="meta">${esc(field?.datatype ?? '')}</span></div>`;
+    return `<div><code>${esc(c)}</code> <span class="here">${esc(field?.datatype ?? '')}</span></div>`;
   }).join('');
   return `${names.length} measures`;
 }
@@ -403,7 +378,7 @@ async function showCatalog(sql) {
   $('catalog').innerHTML = defs.map(d => {
     const over = [...new Set([...d.sql.matchAll(/\bFROM\s+"?(\w+)"?\."?(?:main"?\."?)?(\w+)"?/gi)].map(m => `${m[1]}.${m[2]}`))];
     const files = [...new Set(over.map(o => attached.get(o.split('.')[0])).filter(Boolean))];
-    return `<dt><code>${esc(d.view_name.replace(/^v_/, ''))}</code></dt><dd>view <code>${esc(d.view_name)}</code> over ${over.map(o => `<code>${esc(o)}</code>`).join(', ')}${files.length ? ` · in ${files.map(f => `<code>${esc(f)}</code>`).join(', ')}` : ''}</dd>`;
+    return `<dt><code>${esc(d.view_name.replace(/^v_/, ''))}</code></dt><dd>view <code>${esc(d.view_name)}</code> over ${over.map(o => `<code>${esc(o)}</code>`).join(', ')}${files.length ? `, in ${files.map(f => `<code>${esc(f)}</code>`).join(', ')}` : ''}</dd>`;
   }).join('');
   return `${views.length} tables`;
 }
@@ -412,8 +387,8 @@ function showFiles() {
   const attaches = perf.events.filter(e => e.kind === 'attach');
   $('files').innerHTML = files.map(f => {
     const a = attaches.find(x => x.what.includes(f.what));
-    return `<dt><code>${esc(f.what)}</code></dt><dd>${kb(f.bytes)}, ${esc(f.status)}${a ? ` · <code>${esc(a.what)}</code>` : ''}</dd>`;
-  }).join('') + `<dt>what</dt><dd>copies of the <code>mart</code> Iceberg tables, refreshed hourly</dd>`;
+    return `<dt><code>${esc(f.what)}</code></dt><dd>${kb(f.bytes)}, ${esc(f.status)}${a ? `, attached as <code>${esc(a.what.split(' AS ').pop())}</code>` : ''}</dd>`;
+  }).join('') + `<dt>refreshed</dt><dd>every hour, from the Iceberg tables</dd>`;
   const bytes = files.reduce((s, f) => s + (f.bytes || 0), 0);
   return `${files.length} files · ${kb(bytes)}`;
 }
@@ -429,64 +404,30 @@ function drawBars(rows, region) {
     + (total ? `<span class="total">Total ${fmt(total.mw)} MW${total.charging ? ` · charging ${fmt(total.charging)} MW` : ''}</span>` : '');
 }
 
-// --- The cards: added one by one; one open, the others folded to their summary -------------
+// --- The cards: added one by one into their place --------------------------------------------
 const cards = [...document.querySelectorAll('.card[data-step]')];
-const zones = [$('engineZone'), $('storageZone')];
-let openAt = -1;
-const shownCards = () => cards.filter(c => !c.hidden);
-function open(card) {
-  cards.forEach(c => c.classList.toggle('open', c === card));
-  zones.forEach(z => z.classList.toggle('has-open', z.contains(card)));
-  $('storageEmpty').hidden = cards.some(c => !c.hidden && $('storageZone').contains(c));
-  openAt = shownCards().indexOf(card);
-}
+const byStep = n => cards.find(c => c.dataset.step === String(n));
+// How many characters of code fit across a box (monospace, about 0.55em a character).
+const fits = el => Math.max(28, Math.floor((el.clientWidth - 26) / (parseFloat(getComputedStyle(el).fontSize) * 0.55)));
 function reveal(card) {
   card.hidden = false;
-  open(card);
   document.querySelectorAll('.on').forEach(e => e.classList.remove('on'));
   card.classList.add('on');
-}
-const byStep = n => cards.find(c => c.dataset.step === String(n));
-cards.forEach(c => c.addEventListener('click', () => { if (!c.classList.contains('open')) open(c); }));
-document.addEventListener('keydown', e => {
-  const list = shownCards();
-  if (!list.length || (e.target.closest('button') && e.key === ' ')) return;
-  if (['ArrowRight', 'PageDown', ' '].includes(e.key)) { open(list[Math.min(openAt + 1, list.length - 1)]); e.preventDefault(); }
-  if (['ArrowLeft', 'PageUp'].includes(e.key)) { open(list[Math.max(openAt - 1, 0)]); e.preventDefault(); }
-});
-
-// --- The two parts and the contract: the strip switches the view ------------------------------
-function view(name) {
-  for (const v of ['engineering', 'catalog', 'analytics']) $(`view-${v}`).hidden = v !== name;
-  document.querySelectorAll('.part').forEach(b => b.classList.toggle('active', b.dataset.view === name));
-  if (name === 'engineering' && !$('dag').src) $('dag').src = '../dag/#!/overview?g_v=1';
-}
-document.querySelector('.strip').onclick = e => { const b = e.target.closest('.part'); if (b) view(b.dataset.view); };
-// The contract as the model and the engine both see it: each dataset of the model, the mart
-// table it names, and the columns the engine's catalog has for it.
-async function showContract() {
-  const cols = new Map(rowsOf(await source.query(
-    "SELECT table_name, count(*) AS n FROM duckdb_columns() WHERE starts_with(table_name, 'v_') GROUP BY 1")).map(r => [r.table_name, r.n]));
-  $('contract').innerHTML = OSSIE.datasets.map(d => `<div><code>${esc(d.source)}</code><br><span>${d.fields.length} fields in the model · ${
-    cols.has(`v_${d.name}`) ? `${cols.get(`v_${d.name}`)} columns here` : 'not copied here'}</span></div>`).join('');
 }
 
 let newestAt = null, seq = 0;
 async function show(region) {
   const me = ++seq, step = ms => sleep(ms).then(() => me === seq);
   document.querySelectorAll('.regions button').forEach(b => b.classList.toggle('active', b.dataset.region === (region ?? '')));
-  cards.forEach(c => { c.hidden = true; c.classList.remove('open', 'on'); });
-  zones.forEach(z => z.classList.remove('has-open'));
-  $('storageEmpty').hidden = false;
+  cards.forEach(c => { c.hidden = true; c.classList.remove('on'); });
   $('back').classList.remove('shown');
   $('report').classList.add('on');
   if (!await step(500)) return;
 
   const q = queries.nowByFuel(newestAt, region);
-  $('vq').innerHTML = showQuery(q);
   $('sum2').textContent = `${Object.keys(q.select).length} fields · ${q.where.length} filters`;
-  $('report').classList.remove('on');
-  reveal(byStep(2)); if (!await step(1300)) return;
+  reveal(byStep(2));
+  $('vq').innerHTML = showQuery(q, fits($('vq'))); if (!await step(1300)) return;
 
   $('sum3').textContent = showModel(q);
   reveal(byStep(3)); if (!await step(1500)) return;
@@ -494,8 +435,8 @@ async function show(region) {
   let t = performance.now();
   const dax = data.toDax(q);
   $('sum4').textContent = `${(performance.now() - t).toFixed(1)} ms`;
-  $('dax').innerHTML = highlightDax(prettyDax(dax));
-  reveal(byStep(4)); if (!await step(1500)) return;
+  reveal(byStep(4));
+  $('dax').innerHTML = highlightDax(prettyDax(dax, fits($('dax')))); if (!await step(1500)) return;
 
   t = performance.now();
   const sql = data.toSQL(dax);
@@ -503,7 +444,7 @@ async function show(region) {
   $('sql').innerHTML = highlightSql(prettySql(sql));
   reveal(byStep(5)); if (!await step(1500)) return;
 
-  $('sum6').textContent = 'running…'; $('engine').innerHTML = ''; $('rows').innerHTML = '';
+  $('sum6').textContent = 'running…'; $('rows').innerHTML = '';
   reveal(byStep(6));
   const rows = await run(q);
   if (me !== seq) return;
@@ -519,10 +460,9 @@ async function show(region) {
   reveal(byStep(8)); if (!await step(1300)) return;
 
   $('sum6').textContent = `${ms} ms · ${rows.length} rows`;
-  $('engine').innerHTML = `<dt>ran</dt><dd>${ms} ms, ${rows.length} rows</dd>`;
-  const cols = Object.keys(rows[0] ?? {});
+  const cols = Object.keys(rows[0] ?? {}).filter(c => c !== 'all');
   $('rows').innerHTML = `<table class="rows"><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr>${rows.map(r =>
-    `<tr>${cols.map(c => `<td>${typeof r[c] === 'number' ? fmt(r[c], c === 'share' ? 2 : 0) : esc(r[c] ?? '')}</td>`).join('')}</tr>`).join('')}</table>`;
+    `<tr>${cols.map(c => `<td>${c === 'fuel' && r.all ? '<b>total</b>' : typeof r[c] === 'number' ? fmt(r[c], c === 'share' ? 1 : 0) : esc(r[c] ?? '')}</td>`).join('')}</tr>`).join('')}</table>`;
   reveal(byStep(6)); if (!await step(1100)) return;
 
   $('backText').innerHTML = `<b>${rows.length} rows</b> back to the report, which redraws`;
@@ -545,7 +485,6 @@ try {
     .map(([v, l]) => `<button data-region="${esc(v)}">${esc(l)}</button>`).join('');
   $('regions').onclick = e => { const b = e.target.closest('button'); if (b) show(b.dataset.region || null); };
   status('Click a region: a card is added for each step.');
-  showContract().catch(e => { $('contract').textContent = String(e.message || e); });
   const asked = new URLSearchParams(location.search).get('region');
   await show(asked && regions.includes(asked) ? asked : null);
 } catch (e) {
