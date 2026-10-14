@@ -61,12 +61,11 @@
 
     /* Analytics: the report on the left, the cards in two rows. */
     .stage { flex: 1; min-height: 0; display: grid; gap: 0.5rem 0.6rem;
-      grid-template-columns: clamp(230px, 19vw, 290px) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1.3fr);
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1.3fr);
       grid-template-rows: auto minmax(0, 1fr) auto minmax(0, 1fr); }
-    .rowlabel { grid-column: 2 / -1; display: flex; gap: 0.55rem; align-items: baseline; padding: 0 0.2rem; min-width: 0; }
+    .rowlabel { grid-column: 1 / -1; display: flex; gap: 0.55rem; align-items: baseline; padding: 0 0.2rem; min-width: 0; }
     .rowlabel b { font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; }
     .rowlabel span { color: var(--muted); font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .report { grid-column: 1; grid-row: 1 / -1; }
     .slot { border: 1px dashed var(--border); border-radius: var(--radius); min-height: 0; min-width: 0; display: flex; }
     .card { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--border);
       border-radius: var(--radius); padding: 0.75rem 0.9rem; overflow: hidden; transition: border-color .25s, box-shadow .25s; }
@@ -88,8 +87,11 @@
     .here b { color: var(--muted); font-weight: 600; }
     .k { color: var(--code-key); } .s { color: var(--code-str); } .kw { color: var(--code-kw); font-weight: 600; }
 
-    /* The report. */
-    .regions { display: flex; gap: 0.35rem; flex-wrap: wrap; margin: 0.7rem 0; flex: none; }
+    /* The slicer, and the visual it drives. */
+    .slicer { flex: none; display: flex; align-items: center; gap: 0.45rem 0.9rem; flex-wrap: wrap; background: var(--card);
+      border: 1px solid var(--border); border-radius: var(--radius); padding: 0.55rem 0.9rem; transition: border-color .25s, box-shadow .25s; }
+    .slicer > b { font-size: 0.9rem; }
+    .regions { display: flex; gap: 0.35rem; flex-wrap: wrap; flex: none; }
     .regions button { padding: 0.33rem 0.75rem; border-radius: 999px; border: 1px solid var(--border); background: var(--raised);
       color: var(--text); font: inherit; font-weight: 600; font-size: 0.82rem; cursor: pointer; }
     .regions button:hover { border-color: var(--muted); }
@@ -99,7 +101,9 @@
     .bars .bar { height: 12px; border-radius: 3px; background: var(--muted); transition: width .5s ease; min-width: 1px; }
     .bars .v { font-variant-numeric: tabular-nums; color: var(--muted); text-align: right; }
     .bars .total { grid-column: 1 / -1; color: var(--muted); border-top: 1px solid var(--hairline); padding-top: 0.3rem; margin-top: 0.15rem; }
-    #status { color: var(--muted); font-size: 0.82rem; flex: none; margin-top: 0.5rem; }
+    #status { color: var(--muted); font-size: 0.82rem; }
+    #bars { font-size: 0.86rem; gap: 0.32rem 0.7rem; }
+    #bars .bar { height: 14px; }
 
     .facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 0.8rem; font-size: 0.84rem; align-content: start; }
     .facts dt { color: var(--muted); }
@@ -135,7 +139,7 @@
     @media (max-width: 900px), (max-height: 520px) {
       body { overflow: auto; height: auto; }
       .stage { display: flex; flex-direction: column; }
-      .slot, .report { min-height: 220px; }
+      .slot { min-height: 220px; }
       .slot:has(.card[hidden]) { display: none; }
       .card .body { max-height: 60vh; }
       .panel iframe { min-height: 70vh; }
@@ -166,26 +170,22 @@
   </div>
 
   <div class="view" id="view-analytics">
+    <div class="slicer" id="slicer">
+      <b>Region</b>
+      <div class="regions" id="regions"></div>
+      <span id="status">Loading DuckDB and today's data…</span>
+    </div>
     <div class="stage">
-      <section class="card report" id="report">
-        <div class="head"><span class="n">1</span><span class="title">Report</span></div>
-        <div class="meta">the client: generation by fuel, the newest 5 minutes</div>
-        <div class="regions" id="regions"></div>
-        <div class="chart-title" id="chartTitle"></div>
-        <div class="bars scroll" id="bars"></div>
-        <div id="status">Loading DuckDB and today's data…</div>
-      </section>
-
       <div class="rowlabel" style="grid-row:1"><b>Engine</b><span>here: dax-sql and DuckDB, in this tab · in Power BI: the Power BI engine</span></div>
 
-      <div class="slot" style="grid-row:2"><section class="card" data-step="2" hidden>
-        <div class="head"><span class="n">2</span><span class="title">Visual query</span><span class="sum" id="sum2"></span></div>
+      <div class="slot" style="grid-row:2"><section class="card" data-step="1" hidden>
+        <div class="head"><span class="n">1</span><span class="title">Visual query</span><span class="sum" id="sum1"></span></div>
         <div class="meta">received: fields and filters, no query language yet</div>
         <div class="body"><pre id="vq"></pre></div>
       </section></div>
 
-      <div class="slot" style="grid-row:2"><section class="card model" data-step="3" hidden>
-        <div class="head"><span class="n">3</span><span class="title">Semantic model</span><span class="sum" id="sum3"></span></div>
+      <div class="slot" style="grid-row:2"><section class="card model" data-step="2" hidden>
+        <div class="head"><span class="n">2</span><span class="title">Semantic model</span><span class="sum" id="sum2"></span></div>
         <div class="meta"><span class="tag">Apache Ossie</span> read: tables, relationships, measures</div>
         <div class="body"><div class="scroll">
           <p class="meta" id="modelCounts" style="margin:0"></p>
@@ -195,45 +195,43 @@
           <p class="here"><b>Here:</b> <code>semantic_model/ossie.yaml</code>. Power BI runs the same file as <code>model.bim</code> (TMSL).</p></div>
       </section></div>
 
-      <div class="slot" style="grid-row:2"><section class="card" data-step="4" hidden>
-        <div class="head"><span class="n">4</span><span class="title">DAX</span><span class="sum" id="sum4"></span></div>
+      <div class="slot" style="grid-row:2"><section class="card" data-step="3" hidden>
+        <div class="head"><span class="n">3</span><span class="title">DAX</span><span class="sum" id="sum3"></span></div>
         <div class="meta">written from the visual query, checked against the model</div>
         <div class="body"><pre id="dax"></pre>
           <p class="here"><b>Here:</b> <code>toDax()</code> in semantic/query.js.</p></div>
       </section></div>
 
-      <div class="slot" style="grid-row:2"><section class="card" data-step="5" hidden>
-        <div class="head"><span class="n">5</span><span class="title">Plan</span><span class="sum" id="sum5"></span></div>
+      <div class="slot" style="grid-row:2"><section class="card" data-step="4" hidden>
+        <div class="head"><span class="n">4</span><span class="title">Plan</span><span class="sum" id="sum4"></span></div>
         <div class="meta">how the engine will run the DAX: filter context, relationships, measures</div>
         <div class="body"><pre id="sql"></pre>
           <p class="here"><b>Here:</b> SQL, compiled by dax-sql. Another engine plans in its own terms.</p></div>
       </section></div>
 
-      <div class="rowlabel" style="grid-row:3"><b>Execute &amp; storage</b><span>the engine runs the plan over the tables the catalog points to</span></div>
+      <div class="rowlabel" style="grid-row:3"><b>Storage &rarr; result</b><span>the plan runs over the tables the catalog points to, and the visual draws what comes back</span></div>
 
-      <div class="slot" style="grid-row:4"><section class="card" data-step="6" hidden>
-        <div class="head"><span class="n">6</span><span class="title">Execute</span><span class="sum" id="sum6"></span></div>
-        <div class="meta">scan the columns, aggregate, return a table</div>
-        <div class="body"><div class="scroll" id="rows"></div>
-          <p class="here"><b>Here:</b> DuckDB compiled to WebAssembly, one thread, in this tab: no server.</p></div>
-      </section></div>
-
-      <div class="slot" style="grid-row:4"><section class="card" data-step="7" hidden>
-        <div class="head"><span class="n">7</span><span class="title">Catalog</span><span class="sum" id="sum7"></span></div>
+      <div class="slot" style="grid-row:4"><section class="card" data-step="5" hidden>
+        <div class="head"><span class="n">5</span><span class="title">Catalog</span><span class="sum" id="sum5"></span></div>
         <div class="meta">which files hold each table</div>
         <div class="body"><dl class="facts scroll" id="catalog"></dl>
           <p class="here"><b>Here:</b> DuckDB's catalog, a view per table. In a lakehouse: the Iceberg or Delta catalog.</p></div>
       </section></div>
 
-      <div class="slot" style="grid-row:4; grid-column: span 2"><section class="card" data-step="8" hidden>
-        <div class="head"><span class="n">8</span><span class="title">Files</span><span class="sum" id="sum8"></span></div>
+      <div class="slot" style="grid-row:4"><section class="card" data-step="6" hidden>
+        <div class="head"><span class="n">6</span><span class="title">Files</span><span class="sum" id="sum6"></span></div>
         <div class="meta">the data itself</div>
         <div class="body"><dl class="facts scroll" id="files"></dl>
           <p class="here"><b>Here:</b> .duckdb copies of the <code>mart</code> Iceberg tables, kept in the browser (OPFS). In a lakehouse: parquet files and their metadata.</p></div>
       </section></div>
 
+      <div class="slot" style="grid-row:4; grid-column: span 2"><section class="card" data-step="7" hidden>
+        <div class="head"><span class="n">7</span><span class="title">Visual</span><span class="sum" id="sum7"></span></div>
+        <div class="meta" id="chartTitle"></div>
+        <div class="body"><div class="bars scroll" id="bars"></div>
+          <p class="here" id="ran"></p></div>
+      </section></div>
     </div>
-    <div class="back" id="back"><span class="line"></span><span id="backText"></span></div>
   </div>
 
 <script type="module">
@@ -398,7 +396,7 @@ function drawBars(rows, region) {
   const fuels = rows.filter(r => !r.all).sort((a, b) => (b.mw ?? 0) - (a.mw ?? 0));
   const total = rows.find(r => r.all);
   const max = Math.max(...fuels.map(r => r.mw ?? 0), 1);
-  $('chartTitle').textContent = `${region ? region.replace(/1$/, '') : 'All regions'} · ${newestAt.date} ${String(newestAt.time).padStart(4, '0').replace(/(\d\d)(\d\d)/, '$1:$2')}`;
+  $('chartTitle').textContent = `Generation by fuel, ${region ? region.replace(/1$/, '') : 'all regions'}, ${newestAt.date} ${String(newestAt.time).padStart(4, '0').replace(/(\d\d)(\d\d)/, '$1:$2')}`;
   $('bars').innerHTML = fuels.map(r =>
     `<span>${esc(r.fuel ?? 'Unknown')}</span><div class="bar" style="width:${Math.max(0, (r.mw ?? 0) / max * 100)}%"></div><span class="v">${fmt(r.mw)} MW</span>`).join('')
     + (total ? `<span class="total">Total ${fmt(total.mw)} MW${total.charging ? ` · charging ${fmt(total.charging)} MW` : ''}</span>` : '');
@@ -420,59 +418,51 @@ async function show(region) {
   const me = ++seq, step = ms => sleep(ms).then(() => me === seq);
   document.querySelectorAll('.regions button').forEach(b => b.classList.toggle('active', b.dataset.region === (region ?? '')));
   cards.forEach(c => { c.hidden = true; c.classList.remove('on'); });
-  $('back').classList.remove('shown');
-  $('report').classList.add('on');
+  $('slicer').classList.add('on');
   if (!await step(500)) return;
 
   const q = queries.nowByFuel(newestAt, region);
-  $('sum2').textContent = `${Object.keys(q.select).length} fields · ${q.where.length} filters`;
-  reveal(byStep(2));
-  $('vq').innerHTML = showQuery(q, fits($('vq'))); if (!await step(1300)) return;
+  $('sum1').textContent = `${Object.keys(q.select).length} fields · ${q.where.length} filters`;
+  $('slicer').classList.remove('on');
+  reveal(byStep(1));
+  $('vq').innerHTML = showQuery(q, fits($('vq')));
+  if (!await step(1300)) return;
 
-  $('sum3').textContent = showModel(q);
-  reveal(byStep(3)); if (!await step(1500)) return;
+  $('sum2').textContent = showModel(q);
+  reveal(byStep(2)); if (!await step(1500)) return;
 
   let t = performance.now();
   const dax = data.toDax(q);
-  $('sum4').textContent = `${(performance.now() - t).toFixed(1)} ms`;
-  reveal(byStep(4));
-  $('dax').innerHTML = highlightDax(prettyDax(dax, fits($('dax')))); if (!await step(1500)) return;
+  $('sum3').textContent = `${(performance.now() - t).toFixed(1)} ms`;
+  reveal(byStep(3));
+  $('dax').innerHTML = highlightDax(prettyDax(dax, fits($('dax'))));
+  if (!await step(1500)) return;
 
   t = performance.now();
   const sql = data.toSQL(dax);
-  $('sum5').textContent = `${(performance.now() - t).toFixed(1)} ms`;
+  $('sum4').textContent = `${(performance.now() - t).toFixed(1)} ms`;
   $('sql').innerHTML = highlightSql(prettySql(sql));
-  reveal(byStep(5)); if (!await step(1500)) return;
-
-  $('sum6').textContent = 'running…'; $('rows').innerHTML = '';
-  reveal(byStep(6));
+  reveal(byStep(4));
   const rows = await run(q);
-  if (me !== seq) return;
+  if (!await step(1500)) return;
   const ev = [...perf.events].reverse().find(e => e.kind === 'query' && e.dax);
   const ms = ev?.ms?.toFixed(0) ?? '?';
-  if (!await step(700)) return;
 
-  $('sum7').textContent = await showCatalog(sql);
+  $('sum5').textContent = await showCatalog(sql);
   if (me !== seq) return;
-  reveal(byStep(7)); if (!await step(1400)) return;
+  reveal(byStep(5)); if (!await step(1400)) return;
 
-  $('sum8').textContent = showFiles();
-  reveal(byStep(8)); if (!await step(1300)) return;
+  $('sum6').textContent = showFiles();
+  reveal(byStep(6)); if (!await step(1300)) return;
 
-  $('sum6').textContent = `${ms} ms · ${rows.length} rows`;
-  const cols = Object.keys(rows[0] ?? {}).filter(c => c !== 'all');
-  $('rows').innerHTML = `<table class="rows"><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr>${rows.map(r =>
-    `<tr>${cols.map(c => `<td>${c === 'fuel' && r.all ? '<b>total</b>' : typeof r[c] === 'number' ? fmt(r[c], c === 'share' ? 1 : 0) : esc(r[c] ?? '')}</td>`).join('')}</tr>`).join('')}</table>`;
-  reveal(byStep(6)); if (!await step(1100)) return;
-
-  $('backText').innerHTML = `<b>${rows.length} rows</b> back to the report, which redraws`;
-  $('back').classList.add('shown');
-  if (!await step(700)) return;
+  $('sum7').textContent = `${ms} ms · ${rows.length} rows`;
+  $('ran').innerHTML = `<b>Ran</b> in ${ms} ms, ${rows.length} rows, on DuckDB compiled to WebAssembly, in this tab: no server.`;
+  $('bars').innerHTML = '';
+  reveal(byStep(7));
+  await sleep(200);
   drawBars(rows, region);
-  byStep(6).classList.remove('on');
-  $('report').classList.add('on');
-  if (!await step(1400)) return;
-  $('report').classList.remove('on');
+  if (!await step(1800)) return;
+  byStep(7).classList.remove('on');
 }
 
 try {
@@ -484,7 +474,7 @@ try {
   $('regions').innerHTML = [['', 'All'], ...regions.map(r => [r, r.replace(/1$/, '')])]
     .map(([v, l]) => `<button data-region="${esc(v)}">${esc(l)}</button>`).join('');
   $('regions').onclick = e => { const b = e.target.closest('button'); if (b) show(b.dataset.region || null); };
-  status('Click a region: a card is added for each step.');
+  status('← a slicer: pick a value and watch what runs');
   const asked = new URLSearchParams(location.search).get('region');
   await show(asked && regions.includes(asked) ? asked : null);
 } catch (e) {
