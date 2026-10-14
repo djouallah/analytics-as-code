@@ -92,6 +92,12 @@
     .slicer { flex: none; display: flex; align-items: center; gap: 0.45rem 0.9rem; flex-wrap: wrap; background: var(--card);
       border: 1px solid var(--border); border-radius: var(--radius); padding: 0.55rem 0.9rem; transition: border-color .25s, box-shadow .25s; }
     .slicer > b { font-size: 0.9rem; }
+    .stepper { margin-left: auto; display: flex; align-items: center; gap: 0.5rem; }
+    .stepper button { font: inherit; font-weight: 600; font-size: 0.88rem; padding: 0.38rem 0.9rem; border-radius: 999px; cursor: pointer;
+      border: 1px solid var(--border); background: var(--raised); color: var(--text); }
+    .stepper button.primary { background: var(--live); border-color: var(--live); color: #fff; }
+    .stepper button:disabled { opacity: 0.35; cursor: default; }
+    .stepper #count { color: var(--muted); font-size: 0.82rem; font-variant-numeric: tabular-nums; min-width: 3.2rem; text-align: center; }
     .regions { display: flex; gap: 0.35rem; flex-wrap: wrap; flex: none; }
     .regions button { padding: 0.33rem 0.75rem; border-radius: 999px; border: 1px solid var(--border); background: var(--raised);
       color: var(--text); font: inherit; font-weight: 600; font-size: 0.82rem; cursor: pointer; }
@@ -213,7 +219,7 @@
       <button data-view="analytics" class="active" title="How a BI engine answers a click">
         <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1.5" y="8" width="3" height="6.5" rx="0.6"/><rect x="6.5" y="3" width="3" height="11.5" rx="0.6"/><rect x="11.5" y="6" width="3" height="8.5" rx="0.6"/></svg>Analytics</button>
     </nav>
-    <p id="tagline">How a BI engine answers a click: the names change from tool to tool, the steps don't. Each card is what this page just ran, in your browser.</p>
+    <p id="tagline">How a BI engine answers a click: the names change from tool to tool, the steps don't. Each card is what this page ran, in your browser.</p>
     <a href="../">← dashboard</a>
   </header>
 
@@ -232,6 +238,11 @@
       <b>Region</b>
       <div class="regions" id="regions"></div>
       <span id="status">Loading the engine and today's data…</span>
+      <div class="stepper">
+        <button id="prev" disabled aria-label="Previous step">◀</button>
+        <span id="count"></span>
+        <button id="next" class="primary" disabled>Next ▶</button>
+      </div>
     </div>
     <div class="stage">
       <div class="rowlabel" style="grid-row:1"><b>Engine</b><span>a typical BI engine (Power BI, Tableau, Looker…)</span></div>
@@ -521,58 +532,81 @@ $('dlg').addEventListener('click', e => { if (e.target === $('dlg')) $('dlg').cl
 document.querySelectorAll('.card[data-open]').forEach(c => c.addEventListener('click', () => openCard(c.dataset.open)));
 
 let newestAt = null, seq = 0;
-async function show(region) {
-  const me = ++seq, step = ms => sleep(ms).then(() => me === seq);
+// A pick on the slicer: the query runs at once (the plan, the profile and the catalog with
+// it), and the cards wait. Next shows them one at a time, Back hides the last; the arrow
+// keys, space and a presenter's clicker (PageUp, PageDown) do the same.
+let run_ = null, at = 0;
+const STEPS = 7;
+function choose(region) {
+  const me = ++seq;
   document.querySelectorAll('.regions button').forEach(b => b.classList.toggle('active', b.dataset.region === (region ?? '')));
   cards.forEach(c => { c.hidden = true; c.classList.remove('on'); });
+  at = 0;
+  run_ = prepare(region).then(r => (me === seq ? r : null));
+  run_.catch(e => status(`Could not run: ${e.message || e}`));
   $('slicer').classList.add('on');
-  if (!await step(500)) return;
-
+  status('the query is ready: Next shows what the engine did, a step at a time');
+  stepper();
+}
+async function prepare(region) {
   const q = queries.nowByFuel(newestAt, region);
-  $('sum1').textContent = `${Object.keys(q.select).length} fields · ${q.where.length} filters`;
-  $('slicer').classList.remove('on');
-  reveal(byStep(1));
-  $('vq').innerHTML = showQuery(q, fits($('vq')));
-  if (!await step(1300)) return;
-
-  $('sum2').textContent = showModel(q);
-  reveal(byStep(2)); if (!await step(1500)) return;
-
   let t = performance.now();
   const dax = data.toDax(q);
-  $('sum3').textContent = `${(performance.now() - t).toFixed(1)} ms`;
-  reveal(byStep(3));
-  $('dax').innerHTML = highlightDax(prettyDax(dax, fits($('dax'))));
-  if (!await step(1500)) return;
-
+  const daxMs = performance.now() - t;
   t = performance.now();
   const sql = data.toSQL(dax);
+  const sqlMs = performance.now() - t;
   lastSql = sql;
-  $('sum4').textContent = `${(performance.now() - t).toFixed(1)} ms`;
-  $('sql').innerHTML = highlightSql(prettySql(sql));
-  reveal(byStep(4));
   const rows = await run(q);
-  if (!await step(1500)) return;
   const ev = [...perf.events].reverse().find(e => e.kind === 'query' && e.dax);
-  const ms = ev?.ms?.toFixed(0) ?? '?';
-
-  $('sum5').textContent = await showCatalog(sql);
-  if (me !== seq) return;
-  reveal(byStep(5)); if (!await step(1400)) return;
-
-  $('sum6').textContent = await showScan(sql);
-  if (me !== seq) return;
-  reveal(byStep(6)); if (!await step(1300)) return;
-
-  $('sum7').textContent = `${ms} ms · ${rows.length} rows`;
-  $('ran').innerHTML = `<b>Ran</b> in ${ms} ms, ${rows.length} rows.`;
-  $('bars').innerHTML = '';
-  reveal(byStep(7));
-  await sleep(200);
-  drawBars(rows, region);
-  if (!await step(1800)) return;
-  byStep(7).classList.remove('on');
+  const catalog = await showCatalog(sql);
+  const scan = await showScan(sql);
+  return { region, q, dax, daxMs, sql, sqlMs, rows, ms: ev?.ms?.toFixed(0) ?? '?', catalog, scan };
 }
+// Each step shows its card and writes what it holds (the code to the card's width, so once
+// it is shown).
+const show = [
+  r => { reveal(byStep(1)); $('sum1').textContent = `${Object.keys(r.q.select).length} fields · ${r.q.where.length} filters`; $('vq').innerHTML = showQuery(r.q, fits($('vq'))); },
+  r => { reveal(byStep(2)); $('sum2').textContent = showModel(r.q); },
+  r => { reveal(byStep(3)); $('sum3').textContent = `${r.daxMs.toFixed(1)} ms`; $('dax').innerHTML = highlightDax(prettyDax(r.dax, fits($('dax')))); },
+  r => { reveal(byStep(4)); $('sum4').textContent = `${r.sqlMs.toFixed(1)} ms`; $('sql').innerHTML = highlightSql(prettySql(r.sql)); },
+  r => { reveal(byStep(5)); $('sum5').textContent = r.catalog; },
+  r => { reveal(byStep(6)); $('sum6').textContent = r.scan; },
+  r => {
+    reveal(byStep(7)); $('sum7').textContent = `${r.ms} ms · ${r.rows.length} rows`;
+    $('ran').innerHTML = `<b>Ran</b> in ${r.ms} ms, ${r.rows.length} rows.`;
+    $('bars').innerHTML = ''; setTimeout(() => drawBars(r.rows, r.region), 200);
+  },
+];
+function stepper() {
+  $('prev').disabled = !run_ || at === 0;
+  $('next').disabled = !run_ || at === STEPS;
+  $('count').textContent = run_ ? `${at} / ${STEPS}` : '';
+}
+async function next() {
+  if (!run_ || at === STEPS) return;
+  const r = await run_;
+  if (!r) return;
+  $('slicer').classList.remove('on');
+  show[at](r); at++;
+  if (at === STEPS) status('the visual redrew from the rows that came back: pick another value to run it again');
+  stepper();
+}
+function back() {
+  if (!at) return;
+  at--;
+  byStep(at + 1).hidden = true; byStep(at + 1).classList.remove('on');
+  document.querySelectorAll('.on').forEach(e => e.classList.remove('on'));
+  if (at) byStep(at).classList.add('on'); else $('slicer').classList.add('on');
+  stepper();
+}
+$('next').onclick = next;
+$('prev').onclick = back;
+document.addEventListener('keydown', e => {
+  if ($('dlg').open || $('view-analytics').hidden) return;
+  if (['ArrowRight', 'PageDown', ' ', 'Enter'].includes(e.key) && !e.target.closest?.('.regions')) { next(); e.preventDefault(); }
+  if (['ArrowLeft', 'PageUp'].includes(e.key)) { back(); e.preventDefault(); }
+});
 
 try {
   await data.init({ base: '../' });
@@ -582,10 +616,10 @@ try {
   const regions = (await run(queries.regions)).map(r => r.Region);
   $('regions').innerHTML = [['', 'All'], ...regions.map(r => [r, r.replace(/1$/, '')])]
     .map(([v, l]) => `<button data-region="${esc(v)}">${esc(l)}</button>`).join('');
-  $('regions').onclick = e => { const b = e.target.closest('button'); if (b) show(b.dataset.region || null); };
-  status('← a slicer: pick a value and watch what runs');
+  $('regions').onclick = e => { const b = e.target.closest('button'); if (b) choose(b.dataset.region || null); };
+  status('← a slicer: pick a value, then Next to see what runs');
   const asked = new URLSearchParams(location.search).get('region');
-  await show(asked && regions.includes(asked) ? asked : null);
+  if (asked && regions.includes(asked)) choose(asked);
 } catch (e) {
   status(`Could not load: ${e.message || e}`);
   throw e;
