@@ -10,9 +10,9 @@
 {# Check if there are new DUIDs not in the existing table #}
 {%- set check_new_duids_query -%}
   SELECT count(*) as cnt FROM (
-    SELECT DUID FROM read_csv({{ source('duid_reference', 'registration') }}, all_varchar = true) WHERE length(DUID) > 2
+    SELECT regexp_replace(DUID, '\s', '', 'g') AS DUID FROM read_csv({{ source('duid_reference', 'registration') }}, all_varchar = true) WHERE length(DUID) > 2
     UNION
-    SELECT DUID FROM read_csv({{ source('duid_reference', 'duid_unregistered') }}, all_varchar = true) WHERE length(DUID) > 2
+    SELECT regexp_replace(DUID, '\s', '', 'g') FROM read_csv({{ source('duid_reference', 'duid_unregistered') }}, all_varchar = true) WHERE length(DUID) > 2
     UNION
     SELECT "Facility Code" AS DUID FROM read_csv_auto({{ source('duid_reference', 'facilities') }})
     UNION
@@ -76,7 +76,9 @@ WITH
   -- source for. Classification is the list's own (Scheduled, Semi-Scheduled, Non-Scheduled),
   -- without the footnote stars some rows carry.
   duid_aemo_ranked AS (
-    SELECT DUID, Region, "Fuel Source - Descriptor" AS fuel, Participant,
+    -- A DUID has no whitespace in it; the list's has two that end in a newline (HASTING1,
+    -- HASTING2), which no fact's DUID would match.
+    SELECT regexp_replace(DUID, '\s', '', 'g') AS DUID, Region, "Fuel Source - Descriptor" AS fuel, Participant,
            "Station Name" AS StationName,
            "Technology Type - Descriptor" AS TechnologyType,
            TRY_CAST("Reg Cap generation (MW)" AS DOUBLE) AS RegCapMW,
@@ -87,7 +89,7 @@ WITH
     FROM read_csv({{ source('duid_reference', 'registration') }}, all_varchar = true)
     WHERE length(DUID) > 2
     UNION ALL
-    SELECT DUID, Region, "Fuel Source - Descriptor", Participant,
+    SELECT regexp_replace(DUID, '\s', '', 'g'), Region, "Fuel Source - Descriptor", Participant,
            "Station Name" AS StationName,
            NULL AS TechnologyType,
            TRY_CAST("Reg Cap generation (MW)" AS DOUBLE) AS RegCapMW,
