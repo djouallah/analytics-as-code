@@ -270,9 +270,9 @@
         <div class="body"><pre id="dax"></pre></div>
       </section></div>
 
-      <div class="slot" style="grid-row:2"><section class="card" data-step="4" data-open="plan" hidden>
-        <div class="head"><span class="n">4</span><span class="title">Plan</span><span class="sum" id="sum4"></span></div>
-        <div class="meta">how the engine will run the DAX: filter context, relationships, measures · <span class="opens">the plan tree ↗</span></div>
+      <div class="slot" style="grid-row:2"><section class="card" data-step="4" hidden>
+        <div class="head"><span class="n">4</span><span class="title">Compile to SQL</span><span class="sum" id="sum4"></span></div>
+        <div class="meta">the DAX as SQL: filter context, relationships and measures resolved</div>
         <div class="body"><pre id="sql"></pre></div>
       </section></div>
 
@@ -284,9 +284,9 @@
         <div class="body"><dl class="facts scroll" id="catalog"></dl></div>
       </section></div>
 
-      <div class="slot" style="grid-row:4"><section class="card" data-step="6" hidden>
+      <div class="slot" style="grid-row:4"><section class="card" data-step="6" data-open="plan" hidden>
         <div class="head"><span class="n">6</span><span class="title">Scan &amp; aggregate</span><span class="sum" id="sum6"></span></div>
-        <div class="meta">read only the columns needed, filter the rows, group them</div>
+        <div class="meta">the SQL as it ran: read only the columns needed, filter, group · <span class="opens">the query plan ↗</span></div>
         <div class="body"><dl class="facts scroll" id="scan"></dl></div>
       </section></div>
 
@@ -514,7 +514,7 @@ async function openCard(what) {
     dlg.showModal();
     await renderModel();
   } else {
-    $('dlgTitle').textContent = 'The plan';
+    $('dlgTitle').textContent = 'The query plan';
     $('dlgSub').textContent = 'as the engine ran it, with the time and rows of each step (EXPLAIN ANALYZE)';
     dlg.showModal();
     if (!lastSql) return;
