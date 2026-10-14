@@ -1,12 +1,16 @@
 """Install the whole project into one Fabric workspace: the lakehouse, the hourly dbt run, the
 semantic model and the report.
 
-    WS_ID=<workspace id> python scripts/deploy_fabric.py [data] [model] [report]
+    WS_ID=<workspace id> python scripts/deploy_fabric.py [data] [model] [report] [schedule|noschedule]
 
-The arguments are the parts to deploy (all when none is named), deploy_fabric.yml's ticks:
-  data    steps 1-3 and 5: the lakehouse, the notebook, the pipeline, its run and schedule
-  model   step 4: the semantic model, on the lakehouse already there
-  report  step 4: the Power BI report, on the model already there
+The arguments are the parts to deploy (data, model and report when none is named),
+deploy_fabric.yml's ticks:
+  data        steps 1-3: the lakehouse, the notebook, the pipeline and its run
+  model       step 4: the semantic model, on the lakehouse already there
+  report      step 4: the Power BI report, on the model already there
+  schedule    step 5: the pipeline runs hourly
+  noschedule  step 5: the pipeline's schedules are turned off (a test workspace's pipeline
+              spends that capacity's CU every hour)
 
 deploy_fabric.yml runs it, then deploys the front end (the VertiPaq Fabric app) into the same
 workspace. The mechanism is the sibling repo's (fabric-medallion-dbt, .github/scripts/deploy.py):
@@ -21,7 +25,7 @@ workspace. The mechanism is the sibling repo's (fabric-medallion-dbt, .github/sc
      first run creates, and the run is what proves the notebook works.
   4. THE MODEL AND THE REPORT are published by deploy_model.py, the same publish as the
      `power` workspace's, with this workspace's lakehouse.
-  5. AN HOURLY SCHEDULE on the pipeline, process_data.yml's cadence, if it has none.
+  5. THE SCHEDULE, when asked: hourly, process_data.yml's cadence, or off.
 
 Nothing here touches what runs from GitHub: the catalog of process_data.yml is the lakehouse
 of WS_ID/LH_ID in the repository variables, and this installs a second, independent one.
@@ -136,10 +140,23 @@ def run_and_wait(pipeline, lakehouse):
         raise SystemExit(f"{PIPELINE} {status}: {json.dumps(body.get('failureReason'))}")
 
 
-def schedule(pipeline):
+def schedule(pipeline, on):
+    """The pipeline hourly (`on`), or every schedule of it turned off."""
     path = f"/items/{pipeline}/jobs/Pipeline/schedules"
-    if fabric("GET", path)[2].get("value"):
-        print(f"{PIPELINE} already has a schedule")
+    schedules = fabric("GET", path)[2].get("value") or []
+    if not on:
+        for s in schedules:
+            if s.get("enabled"):
+                fabric("PATCH", f"{path}/{s['id']}", {"enabled": False, "configuration": s["configuration"]})
+        print(f"{PIPELINE}: {len([s for s in schedules if s.get('enabled')])} schedule(s) turned off")
+        return
+    if any(s.get("enabled") for s in schedules):
+        print(f"{PIPELINE} already runs on a schedule")
+        return
+    if schedules:
+        s = schedules[0]
+        fabric("PATCH", f"{path}/{s['id']}", {"enabled": True, "configuration": s["configuration"]})
+        print(f"{PIPELINE}: its schedule turned back on")
         return
     now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     fabric("POST", path, {"enabled": True, "configuration": {
@@ -150,9 +167,13 @@ def schedule(pipeline):
 
 
 def main():
-    parts = set(sys.argv[1:]) or {"data", "model", "report"}
-    if parts - {"data", "model", "report"}:
-        raise SystemExit(f"usage: deploy_fabric.py [data] [model] [report], not {' '.join(sys.argv[1:])}")
+    args = set(sys.argv[1:])
+    if args - {"data", "model", "report", "schedule", "noschedule"} or {"schedule", "noschedule"} <= args:
+        raise SystemExit("usage: deploy_fabric.py [data] [model] [report] [schedule|noschedule], "
+                         f"not {' '.join(sys.argv[1:])}")
+    scheduling = args & {"schedule", "noschedule"}
+    parts = (args - scheduling) or (set() if scheduling else {"data", "model", "report"})
+    pipeline = None
     if "data" in parts:
         publish()
         pipeline = item("items?type=DataPipeline", PIPELINE)
@@ -166,8 +187,8 @@ def main():
         import deploy_model
         deploy_model.main(published)
         print(f"published {', '.join(published)}")
-    if "data" in parts:
-        schedule(pipeline)
+    if scheduling:
+        schedule(pipeline or item("items?type=DataPipeline", PIPELINE), "schedule" in scheduling)
 
 
 if __name__ == "__main__":

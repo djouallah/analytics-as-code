@@ -19,9 +19,13 @@ on:
         description: 'Workspace to install into'
         required: true
       data:
-        description: 'Data: lakehouse, notebook, pipeline (runs it once, schedules it hourly)'
+        description: 'Data: lakehouse, notebook, pipeline (runs it once)'
         type: boolean
         default: true
+      schedule:
+        description: 'Run the pipeline hourly (off: its schedules are turned off; a test workspace spends CU every run)'
+        type: boolean
+        default: false
       semantic_model:
         description: 'Semantic model (on the tables a pipeline run made)'
         type: boolean
@@ -70,12 +74,10 @@ jobs:
           submodules: true  # dax-sql/, the compiler
 
       - uses: actions/setup-python@v5
-        if: inputs.data || inputs.semantic_model || inputs.powerbi_report
         with:
           python-version: "3.11"
       # deploy_model.yml's fabric-cicd; the Azure SDK deploy_fabric.py uploads the project with.
-      - if: inputs.data || inputs.semantic_model || inputs.powerbi_report
-        run: pip install -q "fabric-cicd==1.3.0" "azure-identity==1.26.0" "azure-storage-file-datalake==12.26.0"
+      - run: pip install -q "fabric-cicd==1.3.0" "azure-identity==1.26.0" "azure-storage-file-datalake==12.26.0"
 
       - name: Azure federated login
         uses: azure/login@v2
@@ -98,11 +100,12 @@ jobs:
             dashboard/fabric_app/wasm/rayfin/functions/package-lock.json
       - run: npm ci --prefix scripts --no-audit --no-fund
 
-      - name: Data, semantic model, Power BI report
-        if: inputs.data || inputs.semantic_model || inputs.powerbi_report
+      - name: Data, semantic model, Power BI report, the schedule
+        # Always runs: the schedule is set, on or off, whatever else is ticked.
         run: >-
           python scripts/deploy_fabric.py ${{ inputs.data && 'data' || '' }}
           ${{ inputs.semantic_model && 'model' || '' }} ${{ inputs.powerbi_report && 'report' || '' }}
+          ${{ inputs.schedule && 'schedule' || 'noschedule' }}
 
       # The Fabric apps (Rayfin). Only an item's owner can deploy to it, so CI deploys into
       # items of its own: `vertipaq` and `nemtracker` (the laptop's `wasm` refuses this login).

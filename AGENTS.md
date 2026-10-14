@@ -626,7 +626,7 @@ To check a deploy, open the Logs tab: the build stamp, each fetch, attach and qu
 ### The whole stack in one workspace
 `deploy_fabric.yml` (dispatch: `tenant_id`, `workspace_id`, and a tick per part, all on by
 default: `data`, `semantic_model`, `powerbi_report`, `fabric_app_vertipaq`,
-`fabric_app_wasm`) installs the project into one
+`fabric_app_wasm`; and `schedule`, off by default) installs the project into one
 Fabric workspace, independent of everything GitHub runs: the mechanism of the sibling
 `fabric-medallion-dbt` (`.github/scripts/deploy.py`), ported. `scripts/deploy_fabric.py`:
 - publishes `fabric_items/` with fabric-cicd: the lakehouse `nem` (schema-enabled), the
@@ -634,7 +634,14 @@ Fabric workspace, independent of everything GitHub runs: the mechanism of the si
 - uploads the dbt project (`git archive HEAD`) to `nem/Files/project`, with a `COMMIT` file;
 - runs the pipeline once and waits: the model names tables a first run creates;
 - publishes the model and the report with `deploy_model.main()`, on that lakehouse;
-- schedules the pipeline hourly, if it has no schedule.
+- with `schedule`, runs the pipeline hourly; without it, turns its schedules off (the test
+  workspace, `dax-conformance-oracle` in fabriccat, must not spend CU every hour). A run with
+  no part ticked only sets the schedule.
+- the notebook takes 10 files per feed per run (`download_limit`, `process_limit`), and
+  writes its log to `nem/Files/logs/run.log` too, whose end the deploy prints when the
+  pipeline fails (the notebook's output stays in Fabric). nemweb answers 403 to most
+  downloads from Fabric (2026-10-14), so such a lakehouse holds little data; a fact with no
+  file is created empty, and the MMSDM dimensions build without their files.
 Then the workflow deploys `dashboard/fabric_app/vertipaq/` (item `vertipaq`), its connector
 naming the model `nem` of the same workspace, and `dashboard/fabric_app/wasm/` (item
 `nemtracker`, CI's own: the laptop's `wasm` refuses another owner), which reads the
