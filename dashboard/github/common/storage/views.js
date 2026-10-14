@@ -78,8 +78,12 @@ export function withViews(data) {
     }
     const changed = statements.filter(([name, s]) => _sent.get(name) !== s);
     if (changed.length) await data.query(changed.map(([, s]) => s).join(';\n'));
+    // Whether a view that existed now reads other rows. A new view changes no cached result:
+    // a query that named it before it existed failed, and a failed query is not kept.
+    const replaced = changed.some(([name]) => _sent.has(name));
     for (const [name, s] of changed) _sent.set(name, s);
     _views = views;
+    return replaced;
   });
 
   return {
@@ -90,9 +94,11 @@ export function withViews(data) {
       await compile();
       return res;
     },
+    // True if a view that existed reads other rows: results the caller cached are stale.
+    // The aggregates are tables of their own, so attaching them only adds views.
     async attachAgg() {
       await data.attachAgg();
-      await compile();
+      return compile();
     },
     // True if more history was attached: results the caller cached are stale. A range that
     // starts inside the days `today` holds is read from it alone, so nothing is attached for

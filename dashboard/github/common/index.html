@@ -956,7 +956,7 @@
     function loadDailyAggDatabase() {
       // Not a render's: a newer render must not drop it (runQuery's `keep`).
       return _aggLoading ??= data.attachAgg().then(
-        async () => { viewsChanged(); await queries.readWholeDays(q => runQuery(q, data.query, { keep: true })); aggLoaded = true; },
+        async replaced => { if (replaced !== false) viewsChanged(); await queries.readWholeDays(q => runQuery(q, data.query, { keep: true })); aggLoaded = true; },
         e => { _aggLoading = null; throw e; });
     }
 
@@ -3109,7 +3109,6 @@
         crossFilter.hover = { region: null, fuel: null };
         crossFilter.duids = [];
         updateDuidTrigger();
-        clearQueryCache();
         clearAnalyzePreview();
 
         renderAll();
