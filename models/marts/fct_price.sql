@@ -20,7 +20,8 @@
 
 {%- if execute and flags.WHICH in ('run', 'build', 'retry') -%}
   {%- set files_result = run_query(check_files_query) -%}
-  {%- set has_files = files_result and files_result.rows[0][0] > 0 -%}
+  {#- A first build reads what there is, nothing included: the table has to exist. -#}
+  {%- set has_files = (files_result and files_result.rows[0][0] > 0) or load_relation(this) is none -%}
 {%- else -%}
   {%- set has_files = true -%}
 {%- endif -%}

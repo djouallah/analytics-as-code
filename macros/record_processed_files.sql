@@ -4,12 +4,12 @@
      fact stores (parse_filename). Run outside the model's transaction
      (post_hook={"sql": ..., "transaction": false}): the MERGE has committed by then, and
      if this INSERT fails the files stay pending and the next run re-reads them, which the
-     insert-only MERGE dedupes. With nothing in the batch (['']) it issues no INSERT, so a
-     run with no new file commits nothing to this table. --#}
+     insert-only MERGE dedupes. With nothing in the batch (no_archive_file(), a first build
+     with no file) it issues no INSERT, so a run with no new file commits nothing here. --#}
 {% macro record_processed_files(var_name) -%}
 {%- if execute -%}
   {%- set paths = run_query("SELECT unnest(getvariable('" ~ var_name ~ "'))").columns[0].values() -%}
-  {%- set files = paths | reject('equalto', '') | list -%}
+  {%- set files = paths | reject('equalto', '') | reject('equalto', no_archive_file()) | list -%}
   {%- if files | length > 0 -%}
 INSERT INTO {{ ref('processed_files') }} (model, csv_filename, processed_at)
 SELECT '{{ this.identifier }}', {{ parse_filename('p') }}, now()

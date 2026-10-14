@@ -42,9 +42,17 @@ WHERE l.source_type IN ('{{ source_types | join("', '") }}')
   )
 {%- endmacro %}
 
+{#-- The batch of a fact's first build when its log has no file yet (a new lakehouse, a source
+     that could not be reached): an empty file, as read_csv refuses an empty list ("needs at
+     least one file", duckdb 2.0.0.dev2610011535). The facts give read_csv every column and
+     detect nothing, so it reads no rows and the table is created, empty, with its columns,
+     for the models built on it. record_processed_files leaves it out. --#}
+{% macro no_archive_file() -%}/tmp/iceberg_as_code_no_files.csv{%- endmacro %}
+
 {% macro set_pending_archive_paths(var_name, log_relation, source_type) -%}
+COPY (SELECT NULL AS x WHERE FALSE) TO '{{ no_archive_file() }}' (HEADER false);
 SET VARIABLE {{ var_name }} = (
-  SELECT COALESCE(NULLIF(list('{{ get_csv_archive_path() }}' || archive_path), []), [''])
+  SELECT COALESCE(list('{{ get_csv_archive_path() }}' || archive_path), ['{{ no_archive_file() }}'])
   FROM (
     SELECT DISTINCT l.archive_path
     {{ pending_archive_filter(log_relation, source_type) }}
