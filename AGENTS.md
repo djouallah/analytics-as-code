@@ -768,8 +768,11 @@ in `landing` are what these tables are built from.
   `deploy_model.py` copies the two to the same places relative to each other. No `.pbip`:
   the model's lakehouse ids are placeholders here, so Desktop could not open it. Nothing in
   CI sees a chart draw: a change to a visual is checked by opening the report.
-- `deploy_model.yml` (dispatch only) publishes the model and the report into the catalog's
-  workspace with `scripts/deploy_model.py` (fabric-cicd, not duckrun) and runs
+- `deploy_model.yml` (dispatch only) publishes the model and the report into a workspace,
+  by default the test one (`tenant_id`/`workspace_id` empty: fabriccat's
+  `dax-conformance-oracle`, repository variable `TEST_WS_ID`; tests never spend `power`'s
+  capacity), on that workspace's lakehouse `nem`, with `scripts/deploy_model.py`
+  (fabric-cicd, not duckrun) and runs
   `scripts/check_model.py`: a refresh, then a row count per table and each measure per day
   for the newest week (the measures of the tables by month per month: a date does not
   filter those tables), then that the report is there and reads the model; with
