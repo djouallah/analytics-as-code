@@ -156,6 +156,19 @@
     .dlg-model { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: var(--gap); }
     .dlg-model .model-diagram svg { height: 100%; min-width: 0; }
     .dlg-model .model-panel { max-height: none; }
+    .dlg-ai { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 0.9rem; max-width: 980px; margin: 0 auto; width: 100%; }
+    .ai-ask, .ai-say { display: flex; gap: 0.7rem; align-items: baseline; flex-wrap: wrap; }
+    .ai-you, .ai-bot { flex: none; font-weight: 700; font-size: 0.78rem; padding: 0.15rem 0.6rem; border-radius: 999px; background: var(--raised); border: 1px solid var(--border); }
+    .ai-bot { background: linear-gradient(90deg, #7c3aed, #db2777); color: #fff; border: none; }
+    .ai-say pre { flex-basis: 100%; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 0.8rem 1rem; white-space: pre-wrap; font-size: 13px; min-height: 7.5em; }
+    #aiThink { color: var(--muted); font-style: italic; }
+    .ai-verdict { font-size: 1.35rem; font-weight: 800; letter-spacing: -0.01em; }
+    .ai-verdict.wrong { color: #e5484d; } .ai-verdict.lucky { color: #30a46c; }
+    .ai-table td.diff { color: #e5484d; font-weight: 700; }
+    .ai-table tr.total td { border-top: 2px solid var(--border); font-weight: 700; }
+    .ai-why { color: var(--muted); max-width: 70rem; }
+    .ai-why code { color: var(--text); }
+    .here.tools { font-style: italic; }
     .dlg-plan { flex: 1; width: 100%; border: 1px solid var(--border); border-radius: 10px; background: #fff; }
     .model-diagram, .model-panel { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); overflow: auto; }
     .model-diagram { padding: 0.8rem; display: flex; }
@@ -219,7 +232,7 @@
       <button data-view="analytics" class="active" title="How a BI engine answers a click">
         <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1.5" y="8" width="3" height="6.5" rx="0.6"/><rect x="6.5" y="3" width="3" height="11.5" rx="0.6"/><rect x="11.5" y="6" width="3" height="8.5" rx="0.6"/></svg>Analytics</button>
     </nav>
-    <p id="tagline">How a BI engine answers a click: the names change from tool to tool, the steps don't. Each card is what this page ran, in your browser.</p>
+    <p id="tagline">Every BI tool answers a click with these steps. The names change from tool to tool; what really differs is performance and complexity. Each card is what this page ran, in your browser.</p>
     <a href="../">← dashboard</a>
   </header>
 
@@ -261,18 +274,19 @@
           <h3>Measures the query names</h3><div id="measures"></div>
           <h3>Columns the query names</h3><div id="columns" class="cols"></div>
         </div>
-          <p class="here"><b>Here:</b> <code>semantic_model/ossie.yaml</code>. Power BI runs the same file as <code>model.bim</code> (TMSL).</p></div>
+          <p class="here tools">Ossie here · TMSL/TMDL in Power BI · LookML in Looker · Tableau's data model · MetricFlow YAML in dbt</p></div>
       </section></div>
 
       <div class="slot" style="grid-row:2"><section class="card" data-step="3" hidden>
-        <div class="head"><span class="n">3</span><span class="title">DAX</span><span class="sum" id="sum3"></span></div>
+        <div class="head"><span class="n">3</span><span class="title">Query language</span><span class="sum" id="sum3"></span></div>
         <div class="meta">written from the visual query, checked against the model</div>
-        <div class="body"><pre id="dax"></pre></div>
+        <div class="body"><pre id="dax"></pre>
+          <p class="here tools">DAX here and in Power BI · VizQL in Tableau · a query on an Explore in Looker · Malloy</p></div>
       </section></div>
 
-      <div class="slot" style="grid-row:2"><section class="card" data-step="4" hidden>
+      <div class="slot" style="grid-row:2"><section class="card" data-step="4" data-open="ai" hidden>
         <div class="head"><span class="n">4</span><span class="title">Compile to SQL</span><span class="sum" id="sum4"></span></div>
-        <div class="meta">the DAX as SQL: one query that does it all (here), or several simpler queries whose results the engine then combines</div>
+        <div class="meta">the DAX as SQL: one query that does it all (here), or several simpler queries whose results the engine then combines · <span class="opens">✨ or let an AI write it ↗</span></div>
         <div class="body"><pre id="sql"></pre></div>
       </section></div>
 
@@ -307,6 +321,15 @@
         <aside class="model-panel" id="modelPanel"></aside>
       </div>
       <iframe class="dlg-plan" id="dlgPlan" title="Query plan" hidden></iframe>
+      <div class="dlg-ai" id="dlgAi" hidden>
+        <div class="ai-ask"><span class="ai-you">You</span> generation by fuel for <b id="aiWhere"></b>, please</div>
+        <div class="ai-say"><span class="ai-bot">✨ AI</span> <span id="aiThink"></span><pre id="aiSql"></pre></div>
+        <div class="ai-result" id="aiResult" hidden>
+          <div class="ai-verdict" id="aiVerdict"></div>
+          <table class="rows ai-table" id="aiTable"></table>
+          <p class="ai-why" id="aiWhy"></p>
+        </div>
+      </div>
     </div>
   </dialog>
 
@@ -508,6 +531,8 @@ async function openCard(what) {
   const dlg = $('dlg');
   $('dlgModel').hidden = what !== 'model';
   $('dlgPlan').hidden = what !== 'plan';
+  $('dlgAi').hidden = what !== 'ai';
+  if (what === 'ai') return askAi();
   if (what === 'model') {
     $('dlgTitle').textContent = 'The semantic model';
     $('dlgSub').textContent = 'semantic_model/ossie.yaml, Apache Ossie: click a table for its columns, measures and relationships';
@@ -526,6 +551,57 @@ async function openCard(what) {
     $('dlgPlan').onload = () => { const w = $('dlgPlan').contentWindow, d = w.document.documentElement; w.scrollTo((d.scrollWidth - d.clientWidth) / 2, 0); };
     $('dlgPlan').srcdoc = plans.get(lastSql).replace('</head>', '<style>body { zoom: 0.72; margin: 16px; }</style></head>');
   }
+}
+// The joke, with real numbers: the SQL you typically get when you ask for "generation by
+// fuel" (scripted: no AI is called), run on the same engine and the same rows as the
+// compiler's, row by row. It nets a charging battery against generation; the model's
+// Generation MW counts output only (MAX(mw, 0)), so wherever a battery charges it is off.
+let lastRun = null, aiSeq = 0;
+async function askAi() {
+  const me = ++aiSeq, r = lastRun;
+  $('dlgTitle').textContent = 'Or let an AI write the SQL';
+  $('dlgSub').textContent = "the SQL you typically get when you ask for 'generation by fuel': it runs, it looks right";
+  $('dlg').showModal();
+  $('aiResult').hidden = true; $('aiSql').textContent = '';
+  if (!r) { $('aiThink').textContent = 'pick a region first'; return; }
+  const where = r.region ? r.region.replace(/1$/, '') : 'all regions';
+  $('aiWhere').textContent = `${where}, ${r.when}`;
+  const sql = `SELECT d.FuelSourceDescriptor AS fuel,
+       SUM(f.mw) AS mw
+FROM v_fct_summary f
+JOIN v_dim_duid d ON d.DUID = f.DUID
+WHERE f.date = DATE '${newestAt.date}'
+  AND f.time = ${newestAt.time}${r.region ? `\n  AND d.Region = '${r.region}'` : ''}
+GROUP BY 1
+ORDER BY 2 DESC;`;
+  for (const t of ['Thinking…', 'Reading your schema…', 'Writing optimal SQL…']) {
+    $('aiThink').textContent = t; await sleep(650); if (me !== aiSeq) return;
+  }
+  $('aiThink').textContent = 'Here you go! This query is correct and efficient. 🚀';
+  for (let i = 0; i < sql.length; i += 3) {
+    $('aiSql').innerHTML = highlightSql(sql.slice(0, i)); await sleep(12); if (me !== aiSeq) return;
+  }
+  $('aiSql').innerHTML = highlightSql(sql);
+  // As typed; the MW read back as a number (a DECIMAL reaches the browser unscaled).
+  const ai = rowsOf(await source.query(`SELECT fuel, CAST(mw AS DOUBLE) AS mw FROM (${sql.replace(/;$/, '')})`));
+  if (me !== aiSeq) return;
+  const model = new Map(r.rows.filter(x => !x.all).map(x => [x.fuel ?? '', x.mw ?? 0]));
+  const fuels = [...new Set([...model.keys(), ...ai.map(x => x.fuel ?? '')])];
+  const aiOf = new Map(ai.map(x => [x.fuel ?? '', x.mw ?? 0]));
+  const mwOf = v => fmt(Math.round(v) || 0);
+  const cell = (a, m) => `<td class="${Math.round(a) !== Math.round(m) ? 'diff' : ''}">${mwOf(a)}</td>`;
+  const sum = m => [...m.values()].reduce((s, v) => s + v, 0);
+  const totAi = sum(aiOf), totModel = sum(model), off = totModel - totAi;
+  $('aiTable').innerHTML = `<tr><th>fuel</th><th>AI's SQL, MW</th><th>the model, MW</th></tr>`
+    + fuels.map(f => `<tr><td>${esc(f || 'Unknown')}</td>${cell(aiOf.get(f) ?? 0, model.get(f) ?? 0)}<td>${mwOf(model.get(f) ?? 0)}</td></tr>`).join('')
+    + `<tr class="total"><td>total</td>${cell(totAi, totModel)}<td>${mwOf(totModel)}</td></tr>`;
+  const wrong = Math.round(off) !== 0;
+  $('aiVerdict').className = `ai-verdict ${wrong ? 'wrong' : 'lucky'}`;
+  $('aiVerdict').textContent = wrong ? `Fast. Confident. Off by ${fmt(Math.abs(off))} MW.` : 'Lucky this time: no battery was charging.';
+  $('aiWhy').innerHTML = `Why: the model's <code>Generation MW</code> is <code>SUMX(fct_summary, MAX(fct_summary[mw], 0))</code>.
+    A battery charging is not negative generation; its charging is <code>Charging MW</code>, a measure of its own. The AI's SQL nets the two.
+    That rule lives once, in the semantic model, and the compiler applies it to every query. Nobody has to remember it.`;
+  $('aiResult').hidden = false;
 }
 $('dlgClose').onclick = () => $('dlg').close();
 $('dlg').addEventListener('click', e => { if (e.target === $('dlg')) $('dlg').close(); });
@@ -561,7 +637,8 @@ async function prepare(region, q) {
   const ev = [...perf.events].reverse().find(e => e.kind === 'query' && e.dax);
   const catalog = await showCatalog(sql);
   const scan = await showScan(sql);
-  return { region, q, dax, daxMs, sql, sqlMs, rows, ms: ev?.ms?.toFixed(0) ?? '?', catalog, scan };
+  const when = `${newestAt.date} ${String(newestAt.time).padStart(4, '0').replace(/(\d\d)(\d\d)/, '$1:$2')}`;
+  return { region, when, q, dax, daxMs, sql, sqlMs, rows, ms: ev?.ms?.toFixed(0) ?? '?', catalog, scan };
 }
 // Each step shows its card and writes what it holds (the code to the card's width, so once
 // it is shown).
@@ -587,6 +664,7 @@ async function next() {
   if (!run_ || at === STEPS) return;
   const r = await run_;
   if (!r) return;
+  lastRun = r;
   show[at](r); at++;
   if (at === STEPS) status('the visual redrew from the rows that came back: pick another value to run it again');
   stepper();
