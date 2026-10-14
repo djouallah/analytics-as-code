@@ -169,6 +169,21 @@
     .ai-why { color: var(--muted); max-width: 70rem; }
     .ai-why code { color: var(--text); }
     .here.tools { font-style: italic; }
+    .dlg-fe { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 1rem; }
+    .fe-cols { flex: none; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: var(--gap); }
+    .fe-col { display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
+    .fe-col h3 { margin: 0; font-size: 0.95rem; }
+    .fe-col pre { margin: 0; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 0.8rem 1rem;
+      font-size: 12.5px; max-height: 34vh; overflow: auto; white-space: pre-wrap; }
+    .fe-col .cap { color: var(--muted); font-size: 0.85rem; }
+    .fe-col .cap b { color: var(--text); }
+    .fe-notes { flex: none; display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
+    .fe-notes section { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 0.8rem 1rem; }
+    .fe-notes h4 { margin: 0 0 0.4rem; font-size: 0.9rem; }
+    .fe-notes p, .fe-notes li { color: var(--muted); font-size: 0.86rem; line-height: 1.5; margin: 0.25rem 0; }
+    .fe-notes ul { margin: 0; padding-left: 1.1rem; }
+    .fe-notes b { color: var(--text); }
+    @media (max-width: 900px) { .fe-cols, .fe-notes { grid-template-columns: 1fr; } }
     .dlg-plan { flex: 1; width: 100%; border: 1px solid var(--border); border-radius: 10px; background: #fff; }
     .model-diagram, .model-panel { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); overflow: auto; }
     .model-diagram { padding: 0.8rem; display: flex; }
@@ -260,9 +275,9 @@
     <div class="stage">
       <div class="rowlabel" style="grid-row:1"><b>Engine</b><span>a typical BI engine (Power BI, Tableau, Looker…)</span></div>
 
-      <div class="slot" style="grid-row:2"><section class="card" data-step="1" hidden>
+      <div class="slot" style="grid-row:2"><section class="card" data-step="1" data-open="fe" hidden>
         <div class="head"><span class="n">1</span><span class="title">Visual query</span><span class="sum" id="sum1"></span></div>
-        <div class="meta">received: fields and filters, no query language yet</div>
+        <div class="meta">received: fields and filters, no query language yet · <span class="opens">the other way: SQL in the front end ↗</span></div>
         <div class="body"><pre id="vq"></pre></div>
       </section></div>
 
@@ -321,6 +336,24 @@
         <aside class="model-panel" id="modelPanel"></aside>
       </div>
       <iframe class="dlg-plan" id="dlgPlan" title="Query plan" hidden></iframe>
+      <div class="dlg-fe" id="dlgFe" hidden>
+        <div class="fe-cols">
+          <div class="fe-col"><h3>This page: the visual sends fields</h3><pre id="feQuery"></pre><div class="cap" id="feQueryCap"></div></div>
+          <div class="fe-col"><h3>The other way: the visual writes SQL</h3><pre id="feSql"></pre><div class="cap" id="feSqlCap"></div></div>
+        </div>
+        <div class="fe-notes">
+          <section><h4>We learned this the hard way</h4>
+            <p>Until 13 October 2026 this site's SQL page had charts that each held their own SQL, written by hand over the tables.
+              Every rule the model learned had to be copied into it, and it fell behind: <b>84 of 683</b> checked questions gave a different number
+              (trailing spaces in text, how a fixed decimal average rounds, the type of an IF).
+              Since then both pages ask the model, and <b>0 of 683</b> differ.</p></section>
+          <section><h4>My take (a personal opinion)</h4><ul>
+            <li>With AI in the loop it gets worse: an agent fixes a wrong number where it sees it, in the query, so the rule is copied once more, a little differently each time.</li>
+            <li>A small surface means fewer errors. A visual here can only name fields and filters; a lint refuses arithmetic in the page.</li>
+            <li>The cost: a new figure is a new measure in the model, not a quick line of SQL in the chart.</li>
+            <li>SQL in the front end still has its place for exploration: the dashboard's Analyze tab takes any SQL.</li></ul></section>
+        </div>
+      </div>
       <div class="dlg-ai" id="dlgAi" hidden>
         <div class="ai-ask"><span class="ai-you">You</span> generation by fuel for <b id="aiWhere"></b>, please</div>
         <div class="ai-say"><span class="ai-bot">✨ AI</span> <span id="aiThink"></span><pre id="aiSql"></pre></div>
@@ -532,7 +565,9 @@ async function openCard(what) {
   $('dlgModel').hidden = what !== 'model';
   $('dlgPlan').hidden = what !== 'plan';
   $('dlgAi').hidden = what !== 'ai';
+  $('dlgFe').hidden = what !== 'fe';
   if (what === 'ai') return askAi();
+  if (what === 'fe') return otherWay();
   if (what === 'model') {
     $('dlgTitle').textContent = 'The semantic model';
     $('dlgSub').textContent = 'semantic_model/ossie.yaml, Apache Ossie: click a table for its columns, measures and relationships';
@@ -556,6 +591,22 @@ async function openCard(what) {
 // fuel" (scripted: no AI is called), run on the same engine and the same rows as the
 // compiler's, row by row. It nets a charging battery against generation; the model's
 // Generation MW counts output only (MAX(mw, 0)), so wherever a battery charges it is off.
+// The other way: the visual holds its SQL. The same pick, as the fields this page sends and
+// as the SQL it takes to get the same rows (the compiler's), side by side.
+async function otherWay() {
+  $('dlgTitle').textContent = 'The other way: the visual writes SQL';
+  $('dlgSub').textContent = 'some front ends skip the semantic model: each visual holds its own SQL';
+  $('dlg').showModal();
+  const r = run_ && await run_;
+  if (!r) { $('feQuery').textContent = $('feSql').textContent = 'pick a region first'; return; }
+  const q = showQuery(r.q, 56), sql = prettySql(r.sql);
+  const lines = t => t.split('\n').length;
+  $('feQuery').innerHTML = q;
+  $('feSql').innerHTML = highlightSql(sql);
+  $('feQueryCap').innerHTML = `<b>${lines(q)} lines</b>: names only. No join, no formula, no rule.`;
+  $('feSqlCap').innerHTML = `<b>${lines(sql)} lines</b> for the same rows: every join and every rule of the model, written into this visual, and the next one, and the next.`;
+}
+
 let lastRun = null, aiSeq = 0;
 async function askAi() {
   const me = ++aiSeq, r = lastRun;
