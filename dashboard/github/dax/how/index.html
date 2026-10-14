@@ -231,10 +231,10 @@
     <div class="slicer" id="slicer">
       <b>Region</b>
       <div class="regions" id="regions"></div>
-      <span id="status">Loading DuckDB and today's data…</span>
+      <span id="status">Loading the engine and today's data…</span>
     </div>
     <div class="stage">
-      <div class="rowlabel" style="grid-row:1"><b>Engine</b><span>a typical BI engine (Power BI, Tableau, Looker…) · here: dax-sql and DuckDB, in this tab</span></div>
+      <div class="rowlabel" style="grid-row:1"><b>Engine</b><span>a typical BI engine (Power BI, Tableau, Looker…)</span></div>
 
       <div class="slot" style="grid-row:2"><section class="card" data-step="1" hidden>
         <div class="head"><span class="n">1</span><span class="title">Visual query</span><span class="sum" id="sum1"></span></div>
@@ -256,15 +256,13 @@
       <div class="slot" style="grid-row:2"><section class="card" data-step="3" hidden>
         <div class="head"><span class="n">3</span><span class="title">DAX</span><span class="sum" id="sum3"></span></div>
         <div class="meta">written from the visual query, checked against the model</div>
-        <div class="body"><pre id="dax"></pre>
-          <p class="here"><b>Here:</b> <code>toDax()</code> in semantic/query.js.</p></div>
+        <div class="body"><pre id="dax"></pre></div>
       </section></div>
 
       <div class="slot" style="grid-row:2"><section class="card" data-step="4" data-open="plan" hidden>
         <div class="head"><span class="n">4</span><span class="title">Plan</span><span class="sum" id="sum4"></span></div>
         <div class="meta">how the engine will run the DAX: filter context, relationships, measures · <span class="opens">the plan tree ↗</span></div>
-        <div class="body"><pre id="sql"></pre>
-          <p class="here"><b>Here:</b> SQL, compiled by dax-sql. Another engine plans in its own terms.</p></div>
+        <div class="body"><pre id="sql"></pre></div>
       </section></div>
 
       <div class="rowlabel" style="grid-row:3"><b>Storage &rarr; result</b><span>the plan runs over the tables the catalog points to, and the visual draws what comes back</span></div>
@@ -272,15 +270,13 @@
       <div class="slot" style="grid-row:4"><section class="card" data-step="5" hidden>
         <div class="head"><span class="n">5</span><span class="title">Catalog</span><span class="sum" id="sum5"></span></div>
         <div class="meta">where each table the plan reads is stored</div>
-        <div class="body"><dl class="facts scroll" id="catalog"></dl>
-          <p class="here"><b>Here:</b> the engine's catalog, a view per table of the model. In a lakehouse: the Iceberg or Delta catalog.</p></div>
+        <div class="body"><dl class="facts scroll" id="catalog"></dl></div>
       </section></div>
 
       <div class="slot" style="grid-row:4"><section class="card" data-step="6" hidden>
         <div class="head"><span class="n">6</span><span class="title">Scan &amp; aggregate</span><span class="sum" id="sum6"></span></div>
         <div class="meta">read only the columns needed, filter the rows, group them</div>
-        <div class="body"><dl class="facts scroll" id="scan"></dl>
-          <p class="here"><b>Here:</b> the engine's own profile of this run (EXPLAIN ANALYZE). VertiPaq does the same over its compressed columns.</p></div>
+        <div class="body"><dl class="facts scroll" id="scan"></dl></div>
       </section></div>
 
       <div class="slot" style="grid-row:4; grid-column: span 2"><section class="card" data-step="7" hidden>
@@ -569,7 +565,7 @@ async function show(region) {
   reveal(byStep(6)); if (!await step(1300)) return;
 
   $('sum7').textContent = `${ms} ms · ${rows.length} rows`;
-  $('ran').innerHTML = `<b>Ran</b> in ${ms} ms, ${rows.length} rows, on DuckDB compiled to WebAssembly, in this tab: no server.`;
+  $('ran').innerHTML = `<b>Ran</b> in ${ms} ms, ${rows.length} rows.`;
   $('bars').innerHTML = '';
   reveal(byStep(7));
   await sleep(200);
