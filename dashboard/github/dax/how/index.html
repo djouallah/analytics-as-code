@@ -3,14 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>How a click becomes a query · NEM dashboard</title>
+  <title>How it works · NEM dashboard</title>
   <!--
-    The dashboard's own layers, live: a click on a region runs the "Right now" query of the
-    Dashboard tab (nowByFuel in ../frontend/queries.js) the way the page runs it, and each box
-    shows what that step really produced: the query object, the DAX (toDax), the SQL
-    (dax-sql), the run on DuckDB-WASM and the files it read. Documentation, not the
-    dashboard: it reads the same modules and files and changes nothing of them. Only the DAX
-    page has it (dashboard/github/dax/), at the site's how/.
+    How a BI tool answers a click, shown with this dashboard's own engine, live: a click on a
+    region runs the "Right now" query of the Dashboard tab (nowByFuel in ../frontend/queries.js)
+    the way the page runs it, and a card is added for each step with what that step really
+    produced. Three zones, as in any BI tool: the client (the report), the engine (here
+    query.js, dax-sql and DuckDB-WASM; in Power BI, the Power BI engine) and the storage
+    (here the .duckdb copies of the Iceberg tables, found through DuckDB's catalog). One
+    screen, no scrolling: the newest card is open, the others fold to a strip with their
+    summary; a click or the arrow keys open another. Documentation, not the dashboard: it reads
+    the same modules and files and changes nothing of them. Only the DAX page has it
+    (dashboard/github/dax/), at the site's how/.
   -->
   <script>
     try {
@@ -21,162 +25,249 @@
   <style>
     :root {
       color-scheme: dark;
-      --bg: #0a0c10; --card: #12151c; --raised: #181c25; --border: #262b36;
+      --bg: #0a0c10; --card: #12151c; --raised: #181c25; --border: #262b36; --zone: #0e1117;
       --text: #f2f4f8; --muted: #9aa3b2; --faint: #6b7483;
       --accent: #f2f4f8; --on-accent: #0a0c10; --hairline: rgba(255,255,255,0.07);
-      --live: #f0a33e; --model: #6ea8fe; --model-bg: rgba(110,168,254,0.08);
+      --live: #f0a33e; --live-glow: rgba(240,163,62,0.18); --model: #6ea8fe; --model-bg: #111a2b;
       --code-key: #9ecbff; --code-str: #f0a33e; --code-kw: #ff7b72;
       --radius: 14px;
     }
     :root[data-theme="light"] {
       color-scheme: light;
-      --bg: #f4f3ef; --card: #ffffff; --raised: #faf9f6; --border: #dcdad2;
+      --bg: #f4f3ef; --card: #ffffff; --raised: #faf9f6; --border: #dcdad2; --zone: #ecebe6;
       --text: #14161a; --muted: #5c6068; --faint: #82858c;
       --accent: #14161a; --on-accent: #ffffff; --hairline: rgba(20,22,26,0.09);
-      --live: #c25e00; --model: #2563eb; --model-bg: #eff6ff;
+      --live: #c25e00; --live-glow: rgba(194,94,0,0.14); --model: #2563eb; --model-bg: #eff6ff;
       --code-key: #1e3a8a; --code-str: #b54708; --code-kw: #7a2e0e;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { background: var(--bg); color: var(--text); }
+    html, body { background: var(--bg); color: var(--text); height: 100%; }
     body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 15px; line-height: 1.45;
-      max-width: 1480px; margin: 0 auto; padding: 1.2rem 1.6rem 3rem; -webkit-font-smoothing: antialiased; }
+      display: flex; flex-direction: column; padding: 0.9rem 1.1rem 0.7rem; gap: 0.65rem; overflow: hidden; -webkit-font-smoothing: antialiased; }
     a { color: inherit; }
     code, pre { font-family: Consolas, "JetBrains Mono", Menlo, monospace; font-size: 12.5px; }
-    header { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.2rem; }
-    header h1 { font-size: 1.5rem; letter-spacing: -0.02em; }
-    header p { color: var(--muted); }
-    header a { margin-left: auto; color: var(--muted); font-size: 0.9rem; }
-    #status { color: var(--muted); font-size: 0.85rem; min-height: 1.2em; margin: -0.6rem 0 1rem; }
 
-    .layout { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 1.4rem; align-items: start; }
-    @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
+    header { display: flex; align-items: baseline; gap: 0.3rem 1rem; flex-wrap: wrap; flex: none; }
+    header h1 { font-size: 1.4rem; letter-spacing: -0.02em; }
+    header p { color: var(--muted); font-size: 0.92rem; }
+    header .right { margin-left: auto; display: flex; gap: 1rem; align-items: baseline; color: var(--muted); font-size: 0.85rem; }
+    kbd { font-family: inherit; font-size: 0.78rem; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 0.3rem; }
 
-    /* The pipeline: one card per step, a rail on the left that lights up as each step runs. */
-    .steps { position: relative; padding-left: 2.6rem; }
-    .steps::before { content: ""; position: absolute; left: 0.95rem; top: 0.6rem; bottom: 0.6rem; width: 2px; background: var(--border); }
-    .step { position: relative; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
-      padding: 0.9rem 1.1rem; margin-bottom: 0.9rem; transition: border-color .25s, opacity .25s, box-shadow .25s; }
-    .step .n { position: absolute; left: -2.6rem; top: 0.85rem; width: 1.9rem; height: 1.9rem; border-radius: 50%;
-      display: grid; place-items: center; font-weight: 700; font-size: 0.85rem; background: var(--raised); border: 2px solid var(--border); color: var(--muted); transition: all .25s; }
-    .step h2 { font-size: 1.02rem; display: flex; gap: 0.6rem; align-items: baseline; flex-wrap: wrap; }
-    .step h2 .meta { font-weight: 400; color: var(--muted); font-size: 0.85rem; }
-    .step h2 .ms { margin-left: auto; font-weight: 600; font-size: 0.85rem; color: var(--live); font-variant-numeric: tabular-nums; }
-    .step .pbi { color: var(--faint); font-size: 0.82rem; margin-top: 0.55rem; }
-    .step .pbi b { color: var(--muted); font-weight: 600; }
-    .step pre { margin-top: 0.6rem; background: var(--raised); border: 1px solid var(--hairline); border-radius: 8px; padding: 0.7rem 0.85rem;
-      white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow: auto; }
-    .step pre:empty, .facts:empty { display: none; }
-    .running .step.wait { opacity: 0.38; }
-    .step.on { border-color: var(--live); box-shadow: 0 0 0 1px var(--live), 0 0 22px rgba(240,163,62,0.18); }
-    .step.on .n, .step.done .n { background: var(--live); border-color: var(--live); color: #fff; }
+    /* The two parts and their contract: the page's navigation. */
+    .strip { flex: none; display: flex; align-items: stretch; gap: 0.5rem; }
+    .part { flex: 1; text-align: left; font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 0.5rem 0.85rem; cursor: pointer; display: flex; flex-direction: column; gap: 0.1rem; transition: border-color .2s, background .2s; }
+    .part:hover { border-color: var(--muted); }
+    .part b { font-size: 0.92rem; }
+    .part span { color: var(--muted); font-size: 0.8rem; }
+    .part.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+    .part.contract { flex: 0.8; background: var(--model-bg); border-color: var(--model); }
+    .part.contract b { color: var(--model); }
+    .part.contract.active { box-shadow: 0 0 0 1px var(--model); }
+    .strip .arrow { align-self: center; color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
+    .view { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+    .view[hidden] { display: none; }
+    .panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.6rem; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.9rem 1.1rem; }
+    .panel > p { color: var(--muted); max-width: 70rem; flex: none; }
+    .panel iframe { flex: 1; min-height: 0; width: 100%; border: 1px solid var(--border); border-radius: 10px; background: #fff; }
+    .contract-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.5rem; align-content: start; overflow: auto; flex: 1; min-height: 0; }
+    .contract-grid div { border: 1px solid var(--border); border-radius: 10px; padding: 0.45rem 0.7rem; background: var(--raised); font-size: 0.84rem; }
+    .contract-grid code { font-weight: 600; }
+    .contract-grid span { color: var(--muted); }
 
+    /* Three zones: the client, the engine, the storage. The zone with the open card grows. */
+    main { flex: 1; min-height: 0; display: flex; gap: 0.6rem; }
+    .zone { flex: 0 0 auto; min-width: 0; display: flex; flex-direction: column; gap: 0.5rem; background: var(--zone);
+      border: 1px solid var(--border); border-radius: 18px; padding: 0.55rem 0.6rem 0.6rem; transition: flex-grow .45s ease; }
+    .zone.has-open { flex: 1 1 0; }
+    .zone.client { flex: 0 0 clamp(230px, 19vw, 290px); }
+    .zone:not(.has-open):not(.client) > .label span { display: none; }
+    .zone > .label { flex: none; display: flex; gap: 0.5rem; align-items: baseline; padding: 0 0.3rem; min-width: 0; }
+    .zone > .label b { font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; }
+    .zone > .label span { color: var(--muted); font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .track { flex: 1; min-height: 0; display: flex; gap: 0.5rem; }
+    .empty { flex: 0 0 90px; border: 1px dashed var(--border); border-radius: var(--radius); }
+
+    .card { flex: 0 0 96px; min-width: 0; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 0.75rem 0.7rem; cursor: pointer; overflow: hidden;
+      transition: flex-basis .45s ease, flex-grow .45s ease, border-color .25s, box-shadow .25s; animation: enter .45s ease both; }
+    .card[hidden] { display: none; }
+    .card.open { flex: 1 1 0; cursor: default; padding: 0.85rem 1.05rem; }
+    .report { flex: 1; cursor: default; }
+    @keyframes enter { from { opacity: 0; transform: translateX(28px); } }
+    .on { border-color: var(--live) !important; box-shadow: 0 0 0 1px var(--live), 0 0 24px var(--live-glow); }
+
+    .head { display: flex; flex-direction: column; gap: 0.35rem; flex: none; }
+    .card.open .head, .report .head { flex-direction: row; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
+    .n { width: 1.7rem; height: 1.7rem; border-radius: 50%; display: grid; place-items: center; flex: none; align-self: flex-start;
+      font-weight: 700; font-size: 0.8rem; background: var(--live); color: #fff; }
+    .card.open .n, .report .n { align-self: center; }
+    .title { font-weight: 700; font-size: 0.98rem; line-height: 1.2; }
+    .meta { color: var(--muted); font-size: 0.85rem; }
+    .sum { color: var(--live); font-weight: 600; font-size: 0.82rem; font-variant-numeric: tabular-nums; line-height: 1.3; }
+    .card.open .sum { margin-left: auto; }
+    .card:not(.open):not(.report) .meta, .card:not(.open):not(.report) .body { display: none; }
+    .body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.55rem; margin-top: 0.6rem; }
+    .body pre, .scroll { flex: 1; min-height: 0; overflow: auto; }
+    .body pre { background: var(--raised); border: 1px solid var(--hairline); border-radius: 8px; padding: 0.7rem 0.85rem; white-space: pre-wrap; word-break: break-word; }
+    .here { flex: none; color: var(--faint); font-size: 0.82rem; border-top: 1px solid var(--hairline); padding-top: 0.45rem; }
+    .here b { color: var(--muted); font-weight: 600; }
     .k { color: var(--code-key); } .s { color: var(--code-str); } .kw { color: var(--code-kw); font-weight: 600; }
 
-    /* Step 1: the report visual. */
-    .regions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin: 0.7rem 0 0.8rem; }
-    .regions button { padding: 0.4rem 0.95rem; border-radius: 999px; border: 1px solid var(--border); background: var(--raised);
-      color: var(--text); font: inherit; font-weight: 600; font-size: 0.85rem; cursor: pointer; }
+    /* The report. */
+    .regions { display: flex; gap: 0.35rem; flex-wrap: wrap; margin: 0.7rem 0; flex: none; }
+    .regions button { padding: 0.33rem 0.75rem; border-radius: 999px; border: 1px solid var(--border); background: var(--raised);
+      color: var(--text); font: inherit; font-weight: 600; font-size: 0.82rem; cursor: pointer; }
     .regions button:hover { border-color: var(--muted); }
     .regions button.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
-    .bars { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; gap: 0.3rem 0.7rem; align-items: center; font-size: 0.85rem; }
-    .bars .bar { height: 14px; border-radius: 3px; background: var(--muted); transition: width .5s ease; min-width: 1px; }
+    .chart-title { font-size: 0.82rem; color: var(--muted); margin-bottom: 0.45rem; flex: none; }
+    .bars { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; gap: 0.28rem 0.5rem; align-items: center; font-size: 0.8rem; align-content: start; }
+    .bars .bar { height: 12px; border-radius: 3px; background: var(--muted); transition: width .5s ease; min-width: 1px; }
     .bars .v { font-variant-numeric: tabular-nums; color: var(--muted); text-align: right; }
-    .bars .total { grid-column: 1 / -1; color: var(--muted); border-top: 1px solid var(--hairline); padding-top: 0.35rem; margin-top: 0.15rem; }
-    .chart-title { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.4rem; }
+    .bars .total { grid-column: 1 / -1; color: var(--muted); border-top: 1px solid var(--hairline); padding-top: 0.3rem; margin-top: 0.15rem; }
+    #status { color: var(--muted); font-size: 0.82rem; flex: none; margin-top: 0.5rem; }
 
-    .facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin-top: 0.6rem; font-size: 0.88rem; }
+    .facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 0.9rem; font-size: 0.88rem; align-content: start; }
     .facts dt { color: var(--muted); }
-    .facts dd code { font-size: 12px; }
-    table.rows { border-collapse: collapse; margin-top: 0.6rem; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
-    table.rows th, table.rows td { padding: 0.2rem 0.8rem 0.2rem 0; text-align: left; border-bottom: 1px solid var(--hairline); }
-    table.rows th { color: var(--muted); font-weight: 600; }
+    .facts code { font-size: 12px; }
+    table.rows { border-collapse: collapse; font-size: 0.84rem; font-variant-numeric: tabular-nums; }
+    table.rows th, table.rows td { padding: 0.18rem 0.85rem 0.18rem 0; text-align: left; border-bottom: 1px solid var(--hairline); white-space: nowrap; }
+    table.rows th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--card); }
 
     /* The model: the part Apache Ossie describes. */
-    .model { position: sticky; top: 1rem; background: var(--model-bg); border: 2px solid var(--model); border-radius: var(--radius); padding: 1rem 1.1rem; }
-    .model .tag { display: inline-block; background: var(--model); color: #fff; font-weight: 700; font-size: 0.82rem; padding: 0.2rem 0.75rem; border-radius: 999px; margin-bottom: 0.6rem; }
-    .model h2 { font-size: 1.05rem; color: var(--model); }
-    .model .sub { color: var(--muted); font-size: 0.85rem; margin: 0.15rem 0 0.7rem; }
-    .model h3 { font-size: 0.85rem; margin: 0.9rem 0 0.3rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
-    .model .measure { margin-bottom: 0.7rem; }
-    .model .measure b { font-size: 0.92rem; }
-    .model .measure pre { margin-top: 0.3rem; background: var(--card); border: 1px solid var(--hairline); border-radius: 8px; padding: 0.55rem 0.7rem; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; font-size: 11.5px; }
-    .model .used { font-size: 0.85rem; }
-    .model .used code { font-size: 12px; }
-    .model.on { box-shadow: 0 0 0 1px var(--model), 0 0 22px rgba(110,168,254,0.25); }
+    .card.model { background: var(--model-bg); border-color: var(--model); border-width: 2px; }
+    .card.model .n { background: var(--model); }
+    .card.model .sum { color: var(--model); }
+    .tag { background: var(--model); color: #fff; font-weight: 700; font-size: 0.75rem; padding: 0.12rem 0.6rem; border-radius: 999px; white-space: nowrap; }
+    .card:not(.open) .tag { white-space: normal; align-self: flex-start; }
+    .model .measure b { font-size: 0.9rem; }
+    .model .measure pre { margin-top: 0.25rem; background: var(--card); border: 1px solid var(--hairline); border-radius: 8px; padding: 0.5rem 0.7rem; white-space: pre-wrap; word-break: break-word; font-size: 11.5px; }
+    .model h3 { font-size: 0.75rem; margin: 0.7rem 0 0.3rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+    .model .measure { margin-bottom: 0.55rem; }
+
+    /* The way back: under the zones, from the engine to the report. */
+    .back { flex: none; height: 28px; display: flex; align-items: center; gap: 0.6rem; color: var(--muted); font-size: 0.85rem; opacity: 0; transition: opacity .4s; }
+    .back.shown { opacity: 1; }
+    .back .line { flex: 1; height: 0; border-top: 2px dashed var(--live); position: relative; }
+    .back .line::before { content: ""; position: absolute; left: -2px; top: -7px; border: 6px solid transparent; border-right: 9px solid var(--live); border-left: 0; }
+    .back b { color: var(--live); }
+
+    /* A narrow window: one under the other, and the page scrolls. */
+    @media (max-width: 900px), (max-height: 520px) {
+      body { overflow: auto; height: auto; }
+      main, .track { flex-direction: column; }
+      .zone, .zone.client, .card, .card.open { flex: none; }
+      .card .body { max-height: 60vh; }
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>How a click becomes a query</h1>
-    <p>Live: every box below is what this page just ran, in your browser.</p>
-    <a href="../">← back to the dashboard</a>
+    <h1>How it works</h1>
+    <p>Two parts, and the catalog between them as the contract. Each card is what this page just ran, in your browser.</p>
+    <span class="right"><span><kbd>←</kbd> <kbd>→</kbd> step through</span><a href="../">← dashboard</a></span>
   </header>
-  <div id="status">Loading DuckDB and today's data…</div>
 
-  <div class="layout">
-    <div class="steps" id="steps">
-      <section class="step" data-step="1">
-        <span class="n">1</span>
-        <h2>Report <span class="meta">Right now: generation by fuel, the newest 5 minutes</span></h2>
-        <div class="regions" id="regions"></div>
-        <div class="chart-title" id="chartTitle"></div>
-        <div class="bars" id="bars"></div>
-        <p class="pbi"><b>In Power BI:</b> a report visual; the click is a filter on Region.</p>
-      </section>
+  <nav class="strip">
+    <button class="part" data-view="engineering"><b>Data engineering</b><span>dbt: nemweb files → landing → mart, every hour</span></button>
+    <span class="arrow">writes →</span>
+    <button class="part contract" data-view="catalog"><b>Catalog · the contract</b><span>the mart tables, in Iceberg</span></button>
+    <span class="arrow">→ reads</span>
+    <button class="part active" data-view="analytics"><b>Analytics</b><span>a BI engine answers a click: the names change from tool to tool, the steps don't</span></button>
+  </nav>
 
-      <section class="step" data-step="2">
-        <span class="n">2</span>
-        <h2>Visual query <span class="meta">fields and filters, as the chart asks: no DAX, no SQL</span></h2>
-        <pre id="vq"></pre>
-        <p class="pbi"><b>In Power BI:</b> the visual's query (its fields and the filters on it), sent to the engine.</p>
-      </section>
+  <div class="view" id="view-engineering" hidden>
+    <section class="panel">
+      <p>dbt-duckdb, run every hour by GitHub Actions: it downloads AEMO's files, loads them as they are published into
+        <code>landing</code>, and builds the <code>mart</code> tables (dimensions, facts, daily and monthly aggregates)
+        that it writes as Iceberg tables to OneLake, through the catalog. Everything a report reads is a <code>mart</code> table.
+        <a href="../dag/#!/overview?g_v=1" target="_blank" rel="noopener">Open the dbt docs</a></p>
+      <iframe id="dag" title="dbt lineage" loading="lazy"></iframe>
+    </section>
+  </div>
 
-      <section class="step" data-step="3">
-        <span class="n">3</span>
-        <h2>DAX <span class="meta">written from the visual query by <code>toDax()</code>, checked against the model</span><span class="ms" id="daxMs"></span></h2>
-        <pre id="dax"></pre>
-        <p class="pbi"><b>In Power BI:</b> the Power BI engine writes the DAX query.</p>
-      </section>
+  <div class="view" id="view-catalog" hidden>
+    <section class="panel">
+      <p>The contract between the two parts: the <code>mart</code> tables, their columns and their types, in an Iceberg
+        catalog (OneLake). Data engineering writes them and knows nothing of the reports; every client reads them and knows
+        nothing of dbt: Power BI in Direct Lake, this page through copies of the same tables. The semantic model is built on
+        this contract: one dataset per table.</p>
+      <div class="contract-grid" id="contract"></div>
+    </section>
+  </div>
 
-      <section class="step" data-step="4">
-        <span class="n">4</span>
-        <h2>SQL <span class="meta">the DAX compiled by dax-sql: filter context, relationships, the measures</span><span class="ms" id="sqlMs"></span></h2>
-        <pre id="sql"></pre>
-        <p class="pbi"><b>In Power BI:</b> the formula engine plans the DAX and sends storage engine queries (xmSQL) to VertiPaq.</p>
-      </section>
+  <div class="view" id="view-analytics">
+  <main>
+    <section class="zone client">
+      <div class="label"><b>Client</b><span>the report</span></div>
+      <div class="track">
+        <section class="card report" id="report">
+          <div class="head"><span class="n">1</span><span class="title">Report</span><span class="meta">generation by fuel, the newest 5 minutes</span></div>
+          <div class="regions" id="regions"></div>
+          <div class="chart-title" id="chartTitle"></div>
+          <div class="bars scroll" id="bars"></div>
+          <div id="status">Loading DuckDB and today's data…</div>
+        </section>
+      </div>
+    </section>
 
-      <section class="step" data-step="5">
-        <span class="n">5</span>
-        <h2>Engine <span class="meta">DuckDB-WASM, in this browser tab</span><span class="ms" id="runMs"></span></h2>
-        <dl class="facts" id="engine"></dl>
-        <p class="pbi"><b>In Power BI:</b> VertiPaq scans its in-memory columns.</p>
-      </section>
+    <section class="zone" id="engineZone">
+      <div class="label"><b>Engine</b><span>here: dax-sql and DuckDB, in this tab · in Power BI: the Power BI engine</span></div>
+      <div class="track">
+        <section class="card" data-step="2" hidden>
+          <div class="head"><span class="n">2</span><span class="title">Visual query</span><span class="meta">received: fields and filters, no query language yet</span><span class="sum" id="sum2"></span></div>
+          <div class="body"><pre id="vq"></pre></div>
+        </section>
 
-      <section class="step" data-step="6">
-        <span class="n">6</span>
-        <h2>Storage <span class="meta">the files, and the views the SQL reads</span></h2>
-        <dl class="facts" id="storage"></dl>
-        <p class="pbi"><b>In Power BI:</b> Direct Lake loads the columns from OneLake: parquet + metadata (Iceberg or Delta), found through the catalog.</p>
-      </section>
+        <section class="card model" data-step="3" hidden>
+          <div class="head"><span class="n">3</span><span class="title">Semantic model</span><span class="tag">Apache Ossie</span><span class="sum" id="sum3"></span></div>
+          <div class="body"><div class="scroll">
+            <p class="meta">Read: the tables, their relationships, the measures. Here <code>semantic_model/ossie.yaml</code>, the one model: Power BI runs the same file as <code>model.bim</code> (TMSL).</p>
+            <p class="meta" id="modelCounts" style="margin-top:0.3rem"></p>
+            <h3>Measures the query names</h3><div id="measures"></div>
+            <h3>Columns the query names</h3><div id="columns"></div>
+          </div></div>
+        </section>
 
-      <section class="step" data-step="7">
-        <span class="n">7</span>
-        <h2>Result <span class="meta">the rows go back and the report redraws</span></h2>
-        <div id="rows"></div>
-        <p class="pbi"><b>In Power BI:</b> the result table goes back to the visual.</p>
-      </section>
-    </div>
+        <section class="card" data-step="4" hidden>
+          <div class="head"><span class="n">4</span><span class="title">DAX</span><span class="meta">written from the visual query, checked against the model</span><span class="sum" id="sum4"></span></div>
+          <div class="body"><pre id="dax"></pre>
+            <p class="here"><b>Here:</b> <code>toDax()</code> in semantic/query.js.</p></div>
+        </section>
 
-    <aside class="model" id="model">
-      <span class="tag">Apache Ossie</span>
-      <h2>Semantic model</h2>
-      <p class="sub"><code>semantic_model/ossie.yaml</code>: the one model. Power BI runs it as <code>model.bim</code> (TMSL), written from this file; this page compiles it with dax-sql.</p>
-      <div id="modelCounts" class="used"></div>
-      <h3>Measures this query names</h3>
-      <div id="measures"></div>
-      <h3>Columns this query names</h3>
-      <div id="columns" class="used"></div>
-    </aside>
+        <section class="card" data-step="5" hidden>
+          <div class="head"><span class="n">5</span><span class="title">Plan</span><span class="meta">how the engine will run the DAX: filter context, relationships, measures</span><span class="sum" id="sum5"></span></div>
+          <div class="body"><pre id="sql"></pre>
+            <p class="here"><b>Here:</b> the plan is SQL, compiled by dax-sql. Another engine plans in its own terms.</p></div>
+        </section>
+
+        <section class="card" data-step="6" hidden>
+          <div class="head"><span class="n">6</span><span class="title">Execute</span><span class="meta">scan the columns, aggregate, return a table</span><span class="sum" id="sum6"></span></div>
+          <div class="body"><dl class="facts" id="engine" style="flex:none"></dl><div class="scroll" id="rows"></div>
+            <p class="here"><b>Here:</b> DuckDB compiled to WebAssembly, one thread, in this browser tab: no server.</p></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="zone" id="storageZone">
+      <div class="label"><b>Storage</b><span>here: copies of the Iceberg tables</span></div>
+      <div class="track">
+        <section class="card" data-step="7" hidden>
+          <div class="head"><span class="n">7</span><span class="title">Catalog</span><span class="meta">the contract: which files hold each table</span><span class="sum" id="sum7"></span></div>
+          <div class="body"><dl class="facts scroll" id="catalog"></dl>
+            <p class="here"><b>Here:</b> DuckDB's own catalog: a view per table of the model over the attached files. In a lakehouse: the Iceberg or Delta catalog.</p></div>
+        </section>
+
+        <section class="card" data-step="8" hidden>
+          <div class="head"><span class="n">8</span><span class="title">Files</span><span class="meta">the data itself</span><span class="sum" id="sum8"></span></div>
+          <div class="body"><dl class="facts scroll" id="files"></dl>
+            <p class="here"><b>Here:</b> .duckdb files, downloaded once and kept in the browser (OPFS). In a lakehouse: parquet files and their metadata.</p></div>
+        </section>
+        <div class="empty" id="storageEmpty"></div>
+      </div>
+    </section>
+  </main>
+  <div class="back" id="back"><span class="line"></span><span id="backText"></span></div>
   </div>
 
 <script type="module">
@@ -197,7 +288,8 @@ const page = {
   region: () => null, fuel: () => null, picked: () => [], newestDate: () => newest,
 };
 const queries = createQueries(page);
-const data = connect(createDataSource({ onStatus: status }));
+const source = createDataSource({ onStatus: status });
+const data = connect(source);
 const OSSIE = await (await fetch(new URL('../semantic/ossie.json' + new URL(import.meta.url).search, import.meta.url))).json();
 
 // Arrow table to plain rows (BigInt to number), as the dashboard's fetchRows does.
@@ -284,7 +376,7 @@ const fmt = (v, d = 0) => v == null ? '–' : Number(v).toLocaleString(undefined
 function showModel(q) {
   const metrics = new Map((OSSIE.metrics || []).map(m => [m.name, m]));
   const datasets = new Map((OSSIE.datasets || []).map(d => [d.name, d]));
-  $('modelCounts').innerHTML = `${OSSIE.datasets.length} datasets · ${OSSIE.relationships.length} relationships · ${OSSIE.metrics.length} metrics (DAX)`;
+  $('modelCounts').textContent = `${OSSIE.datasets.length} datasets · ${OSSIE.relationships.length} relationships · ${OSSIE.metrics.length} metrics in DAX`;
   const names = Object.values(q.select).filter(f => typeof f === 'string' && metrics.has(f));
   $('measures').innerHTML = names.map(n => {
     const m = metrics.get(n), dax = m.expression.dialects.find(d => d.dialect === 'DAX')?.expression;
@@ -295,8 +387,35 @@ function showModel(q) {
   walk(q.select); walk(q.where); walk(q.totals);
   $('columns').innerHTML = [...cols].map(c => {
     const [t, f] = c.split('.'), field = datasets.get(t)?.fields.find(x => x.name === f);
-    return `<div><code>${esc(c)}</code> <span style="color:var(--muted)">${esc(field?.datatype ?? '')}</span></div>`;
+    return `<div><code>${esc(c)}</code> <span class="meta">${esc(field?.datatype ?? '')}</span></div>`;
   }).join('');
+  return `${names.length} measures`;
+}
+
+// --- The catalog: the views the plan reads, what each one is over, and the files -----------
+// Asked of DuckDB's own catalog (duckdb_views()), as an engine asks its catalog.
+async function showCatalog(sql) {
+  const views = [...new Set(sql.match(/\bv_\w+/g) || [])];
+  const list = views.map(v => `'${v}'`).join(', ');
+  const defs = rowsOf(await source.query(`SELECT view_name, sql FROM duckdb_views() WHERE view_name IN (${list})`));
+  const attached = new Map(perf.events.filter(e => e.kind === 'attach')
+    .map(e => e.what.match(/ATTACH (\S+) AS (\w+)/)).filter(Boolean).map(m => [m[2], m[1]]));
+  $('catalog').innerHTML = defs.map(d => {
+    const over = [...new Set([...d.sql.matchAll(/\bFROM\s+"?(\w+)"?\."?(?:main"?\."?)?(\w+)"?/gi)].map(m => `${m[1]}.${m[2]}`))];
+    const files = [...new Set(over.map(o => attached.get(o.split('.')[0])).filter(Boolean))];
+    return `<dt><code>${esc(d.view_name.replace(/^v_/, ''))}</code></dt><dd>view <code>${esc(d.view_name)}</code> over ${over.map(o => `<code>${esc(o)}</code>`).join(', ')}${files.length ? ` · in ${files.map(f => `<code>${esc(f)}</code>`).join(', ')}` : ''}</dd>`;
+  }).join('');
+  return `${views.length} tables`;
+}
+function showFiles() {
+  const files = perf.events.filter(e => e.kind === 'fetch');
+  const attaches = perf.events.filter(e => e.kind === 'attach');
+  $('files').innerHTML = files.map(f => {
+    const a = attaches.find(x => x.what.includes(f.what));
+    return `<dt><code>${esc(f.what)}</code></dt><dd>${kb(f.bytes)}, ${esc(f.status)}${a ? ` · <code>${esc(a.what)}</code>` : ''}</dd>`;
+  }).join('') + `<dt>what</dt><dd>copies of the <code>mart</code> Iceberg tables, refreshed hourly</dd>`;
+  const bytes = files.reduce((s, f) => s + (f.bytes || 0), 0);
+  return `${files.length} files · ${kb(bytes)}`;
 }
 
 // --- The report: bars of the result --------------------------------------------------------
@@ -310,68 +429,110 @@ function drawBars(rows, region) {
     + (total ? `<span class="total">Total ${fmt(total.mw)} MW${total.charging ? ` · charging ${fmt(total.charging)} MW` : ''}</span>` : '');
 }
 
-// --- One click, step by step -----------------------------------------------------------------
-const steps = [...document.querySelectorAll('.step')];
-const light = n => steps.forEach(s => {
-  const k = Number(s.dataset.step);
-  s.classList.toggle('on', k === n); s.classList.toggle('done', k < n); s.classList.toggle('wait', k > n);
+// --- The cards: added one by one; one open, the others folded to their summary -------------
+const cards = [...document.querySelectorAll('.card[data-step]')];
+const zones = [$('engineZone'), $('storageZone')];
+let openAt = -1;
+const shownCards = () => cards.filter(c => !c.hidden);
+function open(card) {
+  cards.forEach(c => c.classList.toggle('open', c === card));
+  zones.forEach(z => z.classList.toggle('has-open', z.contains(card)));
+  $('storageEmpty').hidden = cards.some(c => !c.hidden && $('storageZone').contains(c));
+  openAt = shownCards().indexOf(card);
+}
+function reveal(card) {
+  card.hidden = false;
+  open(card);
+  document.querySelectorAll('.on').forEach(e => e.classList.remove('on'));
+  card.classList.add('on');
+}
+const byStep = n => cards.find(c => c.dataset.step === String(n));
+cards.forEach(c => c.addEventListener('click', () => { if (!c.classList.contains('open')) open(c); }));
+document.addEventListener('keydown', e => {
+  const list = shownCards();
+  if (!list.length || (e.target.closest('button') && e.key === ' ')) return;
+  if (['ArrowRight', 'PageDown', ' '].includes(e.key)) { open(list[Math.min(openAt + 1, list.length - 1)]); e.preventDefault(); }
+  if (['ArrowLeft', 'PageUp'].includes(e.key)) { open(list[Math.max(openAt - 1, 0)]); e.preventDefault(); }
 });
-let newestAt = null, seq = 0;
 
+// --- The two parts and the contract: the strip switches the view ------------------------------
+function view(name) {
+  for (const v of ['engineering', 'catalog', 'analytics']) $(`view-${v}`).hidden = v !== name;
+  document.querySelectorAll('.part').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+  if (name === 'engineering' && !$('dag').src) $('dag').src = '../dag/#!/overview?g_v=1';
+}
+document.querySelector('.strip').onclick = e => { const b = e.target.closest('.part'); if (b) view(b.dataset.view); };
+// The contract as the model and the engine both see it: each dataset of the model, the mart
+// table it names, and the columns the engine's catalog has for it.
+async function showContract() {
+  const cols = new Map(rowsOf(await source.query(
+    "SELECT table_name, count(*) AS n FROM duckdb_columns() WHERE starts_with(table_name, 'v_') GROUP BY 1")).map(r => [r.table_name, r.n]));
+  $('contract').innerHTML = OSSIE.datasets.map(d => `<div><code>${esc(d.source)}</code><br><span>${d.fields.length} fields in the model · ${
+    cols.has(`v_${d.name}`) ? `${cols.get(`v_${d.name}`)} columns here` : 'not copied here'}</span></div>`).join('');
+}
+
+let newestAt = null, seq = 0;
 async function show(region) {
-  const me = ++seq;
+  const me = ++seq, step = ms => sleep(ms).then(() => me === seq);
   document.querySelectorAll('.regions button').forEach(b => b.classList.toggle('active', b.dataset.region === (region ?? '')));
-  $('steps').classList.add('running');
-  for (const id of ['vq', 'dax', 'sql', 'daxMs', 'sqlMs', 'runMs', 'engine', 'storage', 'rows']) $(id).innerHTML = '';
-  light(1); await sleep(350); if (me !== seq) return;
+  cards.forEach(c => { c.hidden = true; c.classList.remove('open', 'on'); });
+  zones.forEach(z => z.classList.remove('has-open'));
+  $('storageEmpty').hidden = false;
+  $('back').classList.remove('shown');
+  $('report').classList.add('on');
+  if (!await step(500)) return;
 
   const q = queries.nowByFuel(newestAt, region);
-  light(2); $('vq').innerHTML = showQuery(q); showModel(q);
-  $('model').classList.add('on'); await sleep(550); if (me !== seq) return;
+  $('vq').innerHTML = showQuery(q);
+  $('sum2').textContent = `${Object.keys(q.select).length} fields · ${q.where.length} filters`;
+  $('report').classList.remove('on');
+  reveal(byStep(2)); if (!await step(1300)) return;
+
+  $('sum3').textContent = showModel(q);
+  reveal(byStep(3)); if (!await step(1500)) return;
 
   let t = performance.now();
   const dax = data.toDax(q);
-  $('daxMs').textContent = `${(performance.now() - t).toFixed(1)} ms`;
-  light(3); $('dax').innerHTML = highlightDax(prettyDax(dax)); await sleep(650); if (me !== seq) return;
+  $('sum4').textContent = `${(performance.now() - t).toFixed(1)} ms`;
+  $('dax').innerHTML = highlightDax(prettyDax(dax));
+  reveal(byStep(4)); if (!await step(1500)) return;
 
   t = performance.now();
   const sql = data.toSQL(dax);
-  $('sqlMs').textContent = `${(performance.now() - t).toFixed(1)} ms`;
-  light(4); $('sql').innerHTML = highlightSql(prettySql(sql)); await sleep(650); if (me !== seq) return;
-  $('model').classList.remove('on');
+  $('sum5').textContent = `${(performance.now() - t).toFixed(1)} ms`;
+  $('sql').innerHTML = highlightSql(prettySql(sql));
+  reveal(byStep(5)); if (!await step(1500)) return;
 
-  light(5); $('runMs').textContent = 'running…';
+  $('sum6').textContent = 'running…'; $('engine').innerHTML = ''; $('rows').innerHTML = '';
+  reveal(byStep(6));
   const rows = await run(q);
   if (me !== seq) return;
   const ev = [...perf.events].reverse().find(e => e.kind === 'query' && e.dax);
-  $('runMs').textContent = `${ev?.ms?.toFixed(0) ?? '?'} ms`;
-  $('engine').innerHTML = `
-    <dt>engine</dt><dd>DuckDB 1.5 compiled to WebAssembly (duckdb-wasm 1.33.1-dev65.0), one thread, in this tab</dd>
-    <dt>ran</dt><dd>${ev?.ms?.toFixed(0) ?? '?'} ms, ${rows.length} rows</dd>
-    <dt>no server</dt><dd>nothing is sent anywhere: the files are already in the browser</dd>`;
-  await sleep(450); if (me !== seq) return;
+  const ms = ev?.ms?.toFixed(0) ?? '?';
+  if (!await step(700)) return;
 
-  light(6);
-  const views = [...new Set(sql.match(/\bv_\w+/g) || [])];
-  const files = perf.events.filter(e => e.kind === 'fetch');
-  const attaches = perf.events.filter(e => e.kind === 'attach');
-  $('storage').innerHTML = `
-    <dt>views read</dt><dd>${views.map(v => `<code>${esc(v)}</code>`).join(', ')}: one per table of the model (storage/views.js)</dd>
-    ${files.map(f => {
-      const a = attaches.find(x => x.what.includes(f.what));
-      return `<dt><code>${esc(f.what)}</code></dt><dd>${kb(f.bytes)}, ${esc(f.status)}${a ? `, <code>${esc(a.what)}</code>` : ''}</dd>`;
-    }).join('')}
-    <dt>where</dt><dd>copies of the <code>mart</code> Iceberg tables, refreshed hourly, cached in the browser (OPFS)</dd>`;
-  await sleep(550); if (me !== seq) return;
+  $('sum7').textContent = await showCatalog(sql);
+  if (me !== seq) return;
+  reveal(byStep(7)); if (!await step(1400)) return;
 
-  light(7);
+  $('sum8').textContent = showFiles();
+  reveal(byStep(8)); if (!await step(1300)) return;
+
+  $('sum6').textContent = `${ms} ms · ${rows.length} rows`;
+  $('engine').innerHTML = `<dt>ran</dt><dd>${ms} ms, ${rows.length} rows</dd>`;
   const cols = Object.keys(rows[0] ?? {});
   $('rows').innerHTML = `<table class="rows"><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr>${rows.map(r =>
-    `<tr>${cols.map(c => `<td>${typeof r[c] === 'number' ? fmt(r[c], c === 'share' ? 3 : 0) : esc(r[c] ?? '')}</td>`).join('')}</tr>`).join('')}</table>`;
-  await sleep(450); if (me !== seq) return;
-  light(1); drawBars(rows, region);
-  steps.forEach(s => { s.classList.remove('on'); s.classList.add('done'); });
-  $('steps').classList.remove('running');
+    `<tr>${cols.map(c => `<td>${typeof r[c] === 'number' ? fmt(r[c], c === 'share' ? 2 : 0) : esc(r[c] ?? '')}</td>`).join('')}</tr>`).join('')}</table>`;
+  reveal(byStep(6)); if (!await step(1100)) return;
+
+  $('backText').innerHTML = `<b>${rows.length} rows</b> back to the report, which redraws`;
+  $('back').classList.add('shown');
+  if (!await step(700)) return;
+  drawBars(rows, region);
+  byStep(6).classList.remove('on');
+  $('report').classList.add('on');
+  if (!await step(1400)) return;
+  $('report').classList.remove('on');
 }
 
 try {
@@ -383,7 +544,8 @@ try {
   $('regions').innerHTML = [['', 'All'], ...regions.map(r => [r, r.replace(/1$/, '')])]
     .map(([v, l]) => `<button data-region="${esc(v)}">${esc(l)}</button>`).join('');
   $('regions').onclick = e => { const b = e.target.closest('button'); if (b) show(b.dataset.region || null); };
-  status('Click a region: the page runs the query again and shows each step.');
+  status('Click a region: a card is added for each step.');
+  showContract().catch(e => { $('contract').textContent = String(e.message || e); });
   const asked = new URLSearchParams(location.search).get('region');
   await show(asked && regions.includes(asked) ? asked : null);
 } catch (e) {
