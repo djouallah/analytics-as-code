@@ -88,15 +88,20 @@ def publish():
     ))
 
 
-def upload(lakehouse):
+def onelake():
+    """The workspace's OneLake, as a file system."""
     from azure.storage.filedatalake import DataLakeServiceClient
+    return DataLakeServiceClient("https://onelake.dfs.fabric.microsoft.com",
+                                 credential=credential()).get_file_system_client(WS)
+
+
+def upload(lakehouse):
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, check=True,
                             capture_output=True, text=True).stdout.strip()
     archive = zipfile.ZipFile(io.BytesIO(subprocess.run(
         ["git", "archive", "--format=zip", "HEAD", "--", *UPLOADED], cwd=REPO, check=True,
         capture_output=True).stdout))
-    workspace = DataLakeServiceClient("https://onelake.dfs.fabric.microsoft.com",
-                                      credential=credential()).get_file_system_client(WS)
+    workspace = onelake()
     folder = workspace.get_directory_client(f"{lakehouse}/{PROJECT}")
     if folder.exists():
         folder.delete_directory()
@@ -107,7 +112,7 @@ def upload(lakehouse):
     print(f"uploaded {len(files)} files of {commit} to {LAKEHOUSE}/{PROJECT}")
 
 
-def run_and_wait(pipeline):
+def run_and_wait(pipeline, lakehouse):
     _, headers, _ = fabric("POST", f"/items/{pipeline}/jobs/instances?jobType=Pipeline")
     job = headers["Location"].split(f"/workspaces/{WS}", 1)[1]
     print(f"{PIPELINE} started: {job}")
@@ -121,8 +126,14 @@ def run_and_wait(pipeline):
         if status in ("Completed", "Failed", "Cancelled", "Deduped"):
             break
     if status != "Completed":
-        raise SystemExit(f"{PIPELINE} {status}: {json.dumps(body.get('failureReason'))} "
-                         "(the dbt log is in the notebook run, in the pipeline's run history)")
+        # The notebook's output stays in Fabric; it writes its log to Files/logs/run.log too.
+        try:
+            log = onelake().get_file_client(f"{lakehouse}/Files/logs/run.log").download_file().readall()
+            print(f"--- the end of {LAKEHOUSE}/Files/logs/run.log ---")
+            print("\n".join(log.decode(errors="replace").splitlines()[-80:]))
+        except Exception as e:  # the log is an aid: its absence must not hide the failure
+            print(f"no run log ({type(e).__name__}: {e})")
+        raise SystemExit(f"{PIPELINE} {status}: {json.dumps(body.get('failureReason'))}")
 
 
 def schedule(pipeline):
@@ -145,8 +156,9 @@ def main():
     if "data" in parts:
         publish()
         pipeline = item("items?type=DataPipeline", PIPELINE)
-        upload(item("lakehouses", LAKEHOUSE))
-        run_and_wait(pipeline)
+        lakehouse = item("lakehouses", LAKEHOUSE)
+        upload(lakehouse)
+        run_and_wait(pipeline, lakehouse)
     published = [t for p, t in (("model", "SemanticModel"), ("report", "Report")) if p in parts]
     if published:
         os.environ["LH_ID"] = item("lakehouses", LAKEHOUSE)
