@@ -29,7 +29,7 @@
       --accent: #f2f4f8; --on-accent: #0a0c10; --hairline: rgba(255,255,255,0.07);
       --live: #f0a33e; --live-glow: rgba(240,163,62,0.18); --model: #6ea8fe; --model-bg: #111a2b;
       --code-key: #9ecbff; --code-str: #f0a33e; --code-kw: #ff7b72;
-      --radius: 14px;
+      --radius: 14px; --radius-sm: 8px; --input-bg: #0e1116; --row-line: #1c212b; --gap: 1rem;
     }
     :root[data-theme="light"] {
       color-scheme: light;
@@ -38,6 +38,7 @@
       --accent: #14161a; --on-accent: #ffffff; --hairline: rgba(20,22,26,0.09);
       --live: #c25e00; --live-glow: rgba(194,94,0,0.14); --model: #2563eb; --model-bg: #eff6ff;
       --code-key: #1e3a8a; --code-str: #b54708; --code-kw: #7a2e0e;
+      --input-bg: #ffffff; --row-line: #ecebe5;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { background: var(--bg); color: var(--text); height: 100%; }
@@ -107,6 +108,7 @@
 
     .facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 0.8rem; font-size: 0.84rem; align-content: start; }
     .facts dt { color: var(--muted); }
+    .facts dd { min-width: 0; overflow-wrap: anywhere; }
     .facts code { font-size: 11.5px; }
     table.rows { border-collapse: collapse; font-size: 0.8rem; font-variant-numeric: tabular-nums; }
     table.rows th, table.rows td { padding: 0.12rem 0.7rem 0.12rem 0; text-align: left; border-bottom: 1px solid var(--hairline); white-space: nowrap; }
@@ -129,6 +131,62 @@
     .back .line { flex: 1; height: 0; border-top: 2px dashed var(--live); position: relative; }
     .back .line::before { content: ""; position: absolute; left: -2px; top: -7px; border: 6px solid transparent; border-right: 9px solid var(--live); border-left: 0; }
     .back b { color: var(--live); }
+
+    /* A card that opens: the whole model, the plan. */
+    .card[data-open] { cursor: pointer; }
+    .card[data-open]:hover { border-color: var(--muted); }
+    .opens { color: var(--live); font-weight: 600; white-space: nowrap; }
+    .card.model .opens { color: var(--model); }
+    dialog { margin: auto; width: min(1400px, 94vw); height: min(860px, 90vh); border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--bg); color: var(--text); padding: 0; }
+    dialog::backdrop { background: rgba(0,0,0,0.55); }
+    dialog[open] { display: flex; flex-direction: column; }
+    .dlg-head { flex: none; display: flex; align-items: baseline; gap: 0.8rem; padding: 0.8rem 1.1rem; border-bottom: 1px solid var(--border); }
+    .dlg-head b { font-size: 1.05rem; }
+    .dlg-head span { color: var(--muted); font-size: 0.85rem; }
+    .dlg-head button { margin-left: auto; font: inherit; font-size: 1.2rem; line-height: 1; background: none; border: none; color: var(--muted); cursor: pointer; }
+    .dlg-body { flex: 1; min-height: 0; padding: 0.8rem 1.1rem 1rem; display: flex; }
+    .dlg-body > [hidden] { display: none !important; }
+    .dlg-model { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: var(--gap); }
+    .dlg-model .model-diagram svg { height: 100%; min-width: 0; }
+    .dlg-model .model-panel { max-height: none; }
+    .dlg-plan { flex: 1; width: 100%; border: 1px solid var(--border); border-radius: 10px; background: #fff; }
+    .model-diagram, .model-panel { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); overflow: auto; }
+    .model-diagram { padding: 0.8rem; display: flex; }
+    .model-diagram svg { display: block; flex: none; width: 100%; min-width: 640px; height: auto; margin: auto; font-family: inherit; }
+    .model-panel { padding: 0.9rem 1rem; font-size: 0.82rem; max-height: 75vh; }
+    .model-panel h3 { font-size: 1rem; font-weight: 700; margin: 0 0 0.3rem; display: flex; align-items: center; gap: 0.5rem; }
+    .model-panel h4 { font-size: 0.7rem; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; margin: 1.1rem 0 0.4rem; }
+    .model-panel p { color: var(--muted); line-height: 1.5; margin: 0.35rem 0; }
+    .model-panel .m-src { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.75rem; color: var(--faint); }
+    .model-panel .m-hint { color: var(--faint); }
+    .model-panel a { color: var(--text); }
+    .m-tag { font-size: 0.66rem; font-weight: 600; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 0.45rem; margin-left: 0.4rem; white-space: nowrap; vertical-align: 1px; }
+    .model-panel h3 .m-tag { margin-left: 0; }
+    .m-rels { list-style: none; margin: 0; padding: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.76rem; }
+    .m-rels li { padding: 0.2rem 0; border-bottom: 1px solid var(--row-line); }
+    .m-cols td { vertical-align: top; }
+    .m-desc { color: var(--faint); font-size: 0.74rem; line-height: 1.4; margin-top: 0.15rem; }
+    .m-measure { border-bottom: 1px solid var(--row-line); padding: 0.35rem 0; }
+    .m-measure summary { cursor: pointer; font-weight: 600; }
+    .m-fmt { float: right; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.72rem; font-weight: 400; color: var(--faint); }
+    .m-measure pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.74rem; line-height: 1.5; background: var(--input-bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.5rem 0.65rem; margin: 0.45rem 0 0.3rem; overflow-x: auto; white-space: pre; }
+    .m-card { cursor: pointer; outline: none; transition: opacity 0.15s; }
+    .m-box { fill: var(--card); stroke: var(--border); stroke-width: 1; transition: stroke 0.15s; }
+    .m-card.dim .m-box { fill: var(--raised); }
+    .m-card.m-on .m-box, .m-card:focus-visible .m-box { stroke: var(--muted); }
+    .m-card.m-sel .m-box { stroke: var(--accent); stroke-width: 2; }
+    .m-name { fill: var(--text); font-size: 13px; font-weight: 700; }
+    .m-cap { fill: var(--faint); font-size: 10.5px; }
+    .m-key { fill: var(--muted); font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .m-sep { stroke: var(--hairline); }
+    .m-rel { transition: opacity 0.15s; }
+    .m-edge { fill: none; stroke: var(--faint); stroke-opacity: 0.6; stroke-width: 1.3; }
+    .m-edge.m-inactive { stroke-dasharray: 4 3; }
+    .m-rel.m-on .m-edge { stroke: var(--accent); stroke-opacity: 1; stroke-width: 2; }
+    .m-mark { fill: var(--faint); font-size: 11px; font-weight: 700; }
+    .m-rel.m-on .m-mark { fill: var(--text); }
+    .m-card.m-off, .m-rel.m-off { opacity: 0.2; }
 
     /* dbt. */
     .panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.6rem; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.9rem 1.1rem; }
@@ -184,9 +242,9 @@
         <div class="body"><pre id="vq"></pre></div>
       </section></div>
 
-      <div class="slot" style="grid-row:2"><section class="card model" data-step="2" hidden>
+      <div class="slot" style="grid-row:2"><section class="card model" data-step="2" data-open="model" hidden>
         <div class="head"><span class="n">2</span><span class="title">Semantic model</span><span class="sum" id="sum2"></span></div>
-        <div class="meta"><span class="tag">Apache Ossie</span> read: tables, relationships, measures</div>
+        <div class="meta"><span class="tag">Apache Ossie</span> read: tables, relationships, measures · <span class="opens">the whole model ↗</span></div>
         <div class="body"><div class="scroll">
           <p class="meta" id="modelCounts" style="margin:0"></p>
           <h3>Measures the query names</h3><div id="measures"></div>
@@ -202,9 +260,9 @@
           <p class="here"><b>Here:</b> <code>toDax()</code> in semantic/query.js.</p></div>
       </section></div>
 
-      <div class="slot" style="grid-row:2"><section class="card" data-step="4" hidden>
+      <div class="slot" style="grid-row:2"><section class="card" data-step="4" data-open="plan" hidden>
         <div class="head"><span class="n">4</span><span class="title">Plan</span><span class="sum" id="sum4"></span></div>
-        <div class="meta">how the engine will run the DAX: filter context, relationships, measures</div>
+        <div class="meta">how the engine will run the DAX: filter context, relationships, measures · <span class="opens">the plan tree ↗</span></div>
         <div class="body"><pre id="sql"></pre>
           <p class="here"><b>Here:</b> SQL, compiled by dax-sql. Another engine plans in its own terms.</p></div>
       </section></div>
@@ -213,16 +271,16 @@
 
       <div class="slot" style="grid-row:4"><section class="card" data-step="5" hidden>
         <div class="head"><span class="n">5</span><span class="title">Catalog</span><span class="sum" id="sum5"></span></div>
-        <div class="meta">which files hold each table</div>
+        <div class="meta">where each table the plan reads is stored</div>
         <div class="body"><dl class="facts scroll" id="catalog"></dl>
-          <p class="here"><b>Here:</b> DuckDB's catalog, a view per table. In a lakehouse: the Iceberg or Delta catalog.</p></div>
+          <p class="here"><b>Here:</b> the engine's catalog, a view per table of the model. In a lakehouse: the Iceberg or Delta catalog.</p></div>
       </section></div>
 
       <div class="slot" style="grid-row:4"><section class="card" data-step="6" hidden>
-        <div class="head"><span class="n">6</span><span class="title">Files</span><span class="sum" id="sum6"></span></div>
-        <div class="meta">the data itself</div>
-        <div class="body"><dl class="facts scroll" id="files"></dl>
-          <p class="here"><b>Here:</b> .duckdb copies of the <code>mart</code> Iceberg tables, kept in the browser (OPFS). In a lakehouse: parquet files and their metadata.</p></div>
+        <div class="head"><span class="n">6</span><span class="title">Scan &amp; aggregate</span><span class="sum" id="sum6"></span></div>
+        <div class="meta">read only the columns needed, filter the rows, group them</div>
+        <div class="body"><dl class="facts scroll" id="scan"></dl>
+          <p class="here"><b>Here:</b> the engine's own profile of this run (EXPLAIN ANALYZE). VertiPaq does the same over its compressed columns.</p></div>
       </section></div>
 
       <div class="slot" style="grid-row:4; grid-column: span 2"><section class="card" data-step="7" hidden>
@@ -234,10 +292,22 @@
     </div>
   </div>
 
+  <dialog id="dlg">
+    <div class="dlg-head"><b id="dlgTitle"></b><span id="dlgSub"></span><button id="dlgClose" aria-label="Close">✕</button></div>
+    <div class="dlg-body">
+      <div class="dlg-model" id="dlgModel" hidden>
+        <div class="model-diagram"><svg id="modelSvg" role="img" aria-label="The tables of the semantic model and their relationships"></svg></div>
+        <aside class="model-panel" id="modelPanel"></aside>
+      </div>
+      <iframe class="dlg-plan" id="dlgPlan" title="Query plan" hidden></iframe>
+    </div>
+  </dialog>
+
 <script type="module">
 import { createDataSource } from '../storage/data.js';
 import { connect, createQueries } from '../frontend/queries.js';
 import { perf } from '../frontend/perflog.js';
+import { renderModel } from '../frontend/model.js';
 
 const $ = id => document.getElementById(id);
 const esc = t => String(t ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
@@ -371,24 +441,35 @@ async function showCatalog(sql) {
   const views = [...new Set(sql.match(/\bv_\w+/g) || [])];
   const list = views.map(v => `'${v}'`).join(', ');
   const defs = rowsOf(await source.query(`SELECT view_name, sql FROM duckdb_views() WHERE view_name IN (${list})`));
-  const attached = new Map(perf.events.filter(e => e.kind === 'attach')
-    .map(e => e.what.match(/ATTACH (\S+) AS (\w+)/)).filter(Boolean).map(m => [m[2], m[1]]));
   $('catalog').innerHTML = defs.map(d => {
     const over = [...new Set([...d.sql.matchAll(/\bFROM\s+"?(\w+)"?\."?(?:main"?\."?)?(\w+)"?/gi)].map(m => `${m[1]}.${m[2]}`))];
-    const files = [...new Set(over.map(o => attached.get(o.split('.')[0])).filter(Boolean))];
-    return `<dt><code>${esc(d.view_name.replace(/^v_/, ''))}</code></dt><dd>view <code>${esc(d.view_name)}</code> over ${over.map(o => `<code>${esc(o)}</code>`).join(', ')}${files.length ? `, in ${files.map(f => `<code>${esc(f)}</code>`).join(', ')}` : ''}</dd>`;
+    return `<dt><code>${esc(d.view_name.replace(/^v_/, ''))}</code></dt><dd>view <code>${esc(d.view_name)}</code> over ${over.map(o => `<code>${esc(o)}</code>`).join(', ')}</dd>`;
   }).join('');
   return `${views.length} tables`;
 }
-function showFiles() {
-  const files = perf.events.filter(e => e.kind === 'fetch');
-  const attaches = perf.events.filter(e => e.kind === 'attach');
-  $('files').innerHTML = files.map(f => {
-    const a = attaches.find(x => x.what.includes(f.what));
-    return `<dt><code>${esc(f.what)}</code></dt><dd>${kb(f.bytes)}, ${esc(f.status)}${a ? `, attached as <code>${esc(a.what.split(' AS ').pop())}</code>` : ''}</dd>`;
-  }).join('') + `<dt>refreshed</dt><dd>every hour, from the Iceberg tables</dd>`;
-  const bytes = files.reduce((s, f) => s + (f.bytes || 0), 0);
-  return `${files.length} files · ${kb(bytes)}`;
+// What the run did, from the engine's profile of it (EXPLAIN ANALYZE, as JSON): each table
+// it scanned (the columns read, the rows read and kept) and each grouping (the groups out).
+async function showScan(sql) {
+  const [row] = rowsOf(await source.query(`EXPLAIN (ANALYZE, FORMAT json) ${sql}`));
+  const prof = JSON.parse(Object.values(row).at(-1));
+  const ops = [];
+  const walk = n => { if (n.operator_type) ops.push(n); (n.children || []).forEach(walk); };
+  walk(prof);
+  const list = v => Array.isArray(v) ? v : String(v ?? '').split('\n').filter(Boolean);
+  const scans = ops.filter(o => /SCAN/.test(o.operator_type) && o.extra_info?.Table);
+  const groups = ops.filter(o => /GROUP_BY|AGGREGATE/.test(o.operator_type));
+  const byTable = new Map();
+  for (const o of scans) {
+    const t = byTable.get(o.extra_info.Table) ?? { cols: new Set(), read: 0, kept: 0 };
+    list(o.extra_info.Projections).forEach(c => t.cols.add(c));
+    t.read += o.operator_rows_scanned || 0; t.kept += o.operator_cardinality || 0;
+    byTable.set(o.extra_info.Table, t);
+  }
+  $('scan').innerHTML = [...byTable].map(([t, v]) =>
+    `<dt>scan</dt><dd><code>${esc(t.replace('.main.', '.'))}</code>: ${fmt(v.read)} rows read, ${fmt(v.kept)} kept; ${v.cols.size} columns: ${[...v.cols].map(c => `<code>${esc(c)}</code>`).join(', ')}</dd>`).join('')
+    + groups.map(g => `<dt>${g.operator_type === 'UNGROUPED_AGGREGATE' ? 'total' : 'group'}</dt><dd>${fmt(g.operator_cardinality)} ${g.operator_cardinality === 1 ? 'row' : 'rows'}</dd>`).join('')
+    + `<dt>in all</dt><dd>${fmt(prof.cumulative_rows_scanned)} rows read, ${kb(prof.total_bytes_read)} read from storage</dd>`;
+  return `${fmt(prof.cumulative_rows_scanned)} rows read`;
 }
 
 // --- The report: bars of the result --------------------------------------------------------
@@ -412,6 +493,36 @@ function reveal(card) {
   document.querySelectorAll('.on').forEach(e => e.classList.remove('on'));
   card.classList.add('on');
 }
+
+// --- The cards that open: the whole model, and the plan as the engine draws it ------------
+let lastSql = null;
+const plans = new Map();
+async function openCard(what) {
+  const dlg = $('dlg');
+  $('dlgModel').hidden = what !== 'model';
+  $('dlgPlan').hidden = what !== 'plan';
+  if (what === 'model') {
+    $('dlgTitle').textContent = 'The semantic model';
+    $('dlgSub').textContent = 'semantic_model/ossie.yaml, Apache Ossie: click a table for its columns, measures and relationships';
+    dlg.showModal();
+    await renderModel();
+  } else {
+    $('dlgTitle').textContent = 'The plan';
+    $('dlgSub').textContent = 'as the engine ran it, with the time and rows of each step (EXPLAIN ANALYZE)';
+    dlg.showModal();
+    if (!lastSql) return;
+    if (!plans.has(lastSql)) {
+      const [row] = rowsOf(await source.query(`EXPLAIN (ANALYZE, FORMAT html) ${lastSql}`));
+      plans.set(lastSql, String(Object.values(row).at(-1)));
+    }
+    // DuckDB's tree is drawn large: smaller, and scrolled to its middle, where it starts.
+    $('dlgPlan').onload = () => { const w = $('dlgPlan').contentWindow, d = w.document.documentElement; w.scrollTo((d.scrollWidth - d.clientWidth) / 2, 0); };
+    $('dlgPlan').srcdoc = plans.get(lastSql).replace('</head>', '<style>body { zoom: 0.72; margin: 16px; }</style></head>');
+  }
+}
+$('dlgClose').onclick = () => $('dlg').close();
+$('dlg').addEventListener('click', e => { if (e.target === $('dlg')) $('dlg').close(); });
+document.querySelectorAll('.card[data-open]').forEach(c => c.addEventListener('click', () => openCard(c.dataset.open)));
 
 let newestAt = null, seq = 0;
 async function show(region) {
@@ -440,6 +551,7 @@ async function show(region) {
 
   t = performance.now();
   const sql = data.toSQL(dax);
+  lastSql = sql;
   $('sum4').textContent = `${(performance.now() - t).toFixed(1)} ms`;
   $('sql').innerHTML = highlightSql(prettySql(sql));
   reveal(byStep(4));
@@ -452,7 +564,8 @@ async function show(region) {
   if (me !== seq) return;
   reveal(byStep(5)); if (!await step(1400)) return;
 
-  $('sum6').textContent = showFiles();
+  $('sum6').textContent = await showScan(sql);
+  if (me !== seq) return;
   reveal(byStep(6)); if (!await step(1300)) return;
 
   $('sum7').textContent = `${ms} ms · ${rows.length} rows`;
