@@ -185,6 +185,10 @@ The ids live in repository **variables** (public identifiers, not secrets):
   `deploy_fabric.yml` into a fabriccat workspace (the catalog's tenant gets
   `AZURE_CLIENT_ID`). The app's federated credential for this repo has the subject
   `repo:djouallah/analytics-as-code:ref:refs/heads/main`.
+- `TEST_WS_ID`: fabriccat's `dax-conformance-oracle`, where everything but the data pipeline
+  is tested (`deploy_model.yml` and `deploy_fabric.yml` by default, dax-sql's Oracle). The
+  data pipeline (`process_data.yml`, `table_maintenance.yml`, `import_data.yml`) is the only
+  thing on `power` (`WS_ID`/`LH_ID`, the owner's tenant).
 - `FABRIC_APP_WORKSPACE_ID` (workspace `app`), `ONELAKE_FILES_URL` (the lakehouse's Files
   folder, where the wasm app's function signs its SAS).
 Env contract consumed by profiles.yml, the models and the scripts: `ONELAKE_ENDPOINT`,
@@ -624,7 +628,8 @@ Rules of the Fabric host that are easy to break:
 To check a deploy, open the Logs tab: the build stamp, each fetch, attach and query.
 
 ### The whole stack in one workspace
-`deploy_fabric.yml` (dispatch: `tenant_id`, `workspace_id`, and a tick per part, all on by
+`deploy_fabric.yml` (dispatch: `tenant_id`, `workspace_id`, empty for the fabriccat test
+workspace, `TEST_WS_ID`; and a tick per part, all on by
 default: `data`, `semantic_model`, `powerbi_report`, `fabric_app_vertipaq`,
 `fabric_app_wasm`; and `schedule`, off by default) installs the project into one
 Fabric workspace, independent of everything GitHub runs: the mechanism of the sibling
