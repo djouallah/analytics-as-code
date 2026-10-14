@@ -541,15 +541,15 @@ function choose(region) {
   const me = ++seq;
   document.querySelectorAll('.regions button').forEach(b => b.classList.toggle('active', b.dataset.region === (region ?? '')));
   cards.forEach(c => { c.hidden = true; c.classList.remove('on'); });
-  at = 0;
-  run_ = prepare(region).then(r => (me === seq ? r : null));
+  // The click is the visual query: card 1 shows at once; the rest wait for Next.
+  const q = queries.nowByFuel(newestAt, region);
+  run_ = prepare(region, q).then(r => (me === seq ? r : null));
   run_.catch(e => status(`Could not run: ${e.message || e}`));
-  $('slicer').classList.add('on');
-  status('the query is ready: Next shows what the engine did, a step at a time');
+  show[0]({ q }); at = 1;
+  status('Next: what the engine does with it, a step at a time');
   stepper();
 }
-async function prepare(region) {
-  const q = queries.nowByFuel(newestAt, region);
+async function prepare(region, q) {
   let t = performance.now();
   const dax = data.toDax(q);
   const daxMs = performance.now() - t;
@@ -579,7 +579,7 @@ const show = [
   },
 ];
 function stepper() {
-  $('prev').disabled = !run_ || at === 0;
+  $('prev').disabled = !run_ || at <= 1;
   $('next').disabled = !run_ || at === STEPS;
   $('count').textContent = run_ ? `${at} / ${STEPS}` : '';
 }
@@ -587,17 +587,16 @@ async function next() {
   if (!run_ || at === STEPS) return;
   const r = await run_;
   if (!r) return;
-  $('slicer').classList.remove('on');
   show[at](r); at++;
   if (at === STEPS) status('the visual redrew from the rows that came back: pick another value to run it again');
   stepper();
 }
 function back() {
-  if (!at) return;
+  if (at <= 1) return;
   at--;
   byStep(at + 1).hidden = true; byStep(at + 1).classList.remove('on');
   document.querySelectorAll('.on').forEach(e => e.classList.remove('on'));
-  if (at) byStep(at).classList.add('on'); else $('slicer').classList.add('on');
+  if (at) byStep(at).classList.add('on');
   stepper();
 }
 $('next').onclick = next;
