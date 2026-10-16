@@ -225,7 +225,7 @@
     .analyze-table tr:hover td { background: var(--hover-soft); }
     /* Analyze, Model: the star (an SVG, model.js) and the table picked. */
     .model-page { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: var(--gap); padding: var(--gap) var(--gutter) 1.5rem; }
-    .model-page[hidden], .analyze-sql-page[hidden] { display: none; }
+    .model-page[hidden], .analyze-sql-page[hidden], .explore-page[hidden] { display: none; }
     .model-diagram, .model-panel { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); overflow: auto; }
     .model-diagram { padding: 0.8rem; display: flex; }
     .model-diagram svg { display: block; flex: none; width: 100%; min-width: 640px; height: auto; margin: auto; font-family: inherit; }
@@ -262,6 +262,71 @@
     .m-mark { fill: var(--faint); font-size: 11px; font-weight: 700; }
     .m-rel.m-on .m-mark { fill: var(--text); }
     .m-card.m-off, .m-rel.m-off { opacity: 0.2; }
+    /* Analyze, Explore: fields on the left, shelves, the controls and the view (explore.js). */
+    .explore-page { padding: var(--gap) var(--gutter) 1.5rem; }
+    .ex { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: var(--gap); min-height: 70vh; }
+    .ex-fields, .ex-main { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); min-height: 0; }
+    .ex-fields { display: flex; flex-direction: column; padding: 0.6rem; max-height: 80vh; }
+    .ex-search, .ex-pop input[type=search], .ex-pop input[type=number], .ex-pop input[type=date], .ex-pop select, .ex-tools select {
+      font-size: 0.8rem; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.32rem 0.55rem; }
+    .ex-search { width: 100%; margin-bottom: 0.5rem; }
+    .ex-list { overflow: auto; flex: 1 1 0; min-height: 0; }
+    .ex-table-group summary { cursor: pointer; font-size: 0.78rem; font-weight: 700; padding: 0.35rem 0.2rem; display: flex; align-items: baseline; gap: 0.4rem; }
+    .ex-kind { font-size: 0.66rem; font-weight: 500; color: var(--faint); }
+    .ex-field { display: flex; align-items: center; gap: 0.45rem; width: 100%; text-align: left; font-size: 0.78rem; color: var(--text); background: none; border: none; border-radius: var(--radius-sm); padding: 0.2rem 0.4rem 0.2rem 0.9rem; cursor: grab; }
+    .ex-field:hover { background: var(--hover); }
+    .ex-field.ex-used { color: var(--muted); }
+    .ex-icon { flex: none; width: 1.8rem; font-size: 0.64rem; font-weight: 700; color: var(--faint); text-align: center; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .ex-icon.ex-measure { color: var(--text); }
+    .ex-main { display: flex; flex-direction: column; padding: 0.6rem 0.8rem; gap: 0.5rem; min-width: 0; }
+    .ex-shelves { display: grid; gap: 0.3rem; }
+    .ex-shelf { display: grid; grid-template-columns: 4.6rem minmax(0, 1fr); align-items: center; gap: 0.5rem; }
+    .ex-shelf-name { font-size: 0.7rem; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+    .ex-drop { display: flex; flex-wrap: wrap; gap: 0.3rem; min-height: 2rem; padding: 0.22rem; border: 1px dashed var(--border); border-radius: var(--radius-sm); align-items: center; transition: border-color 0.15s, background 0.15s; }
+    .ex-drop.ex-over { border-color: var(--muted); background: var(--hover-soft); }
+    .ex-hint { font-size: 0.74rem; color: var(--faint); padding: 0 0.3rem; }
+    .ex-chip { display: inline-flex; align-items: center; border: 1px solid var(--border); background: var(--raised); border-radius: 999px; font-size: 0.76rem; cursor: grab; }
+    .ex-chip.ex-measure { border-color: var(--muted); }
+    .ex-chip.ex-missing { opacity: 0.5; text-decoration: line-through; }
+    .ex-chip button { background: none; border: none; color: var(--text); font: inherit; cursor: pointer; }
+    .ex-chip-name { padding: 0.18rem 0.2rem 0.18rem 0.65rem; }
+    .ex-chip .ex-x { padding: 0.18rem 0.55rem 0.18rem 0.3rem; color: var(--faint); }
+    .ex-chip .ex-x:hover { color: var(--text); }
+    .ex-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; }
+    .ex-tools .btn-analyze { padding: 0.28rem 0.75rem; font-size: 0.76rem; }
+    .ex-marks { display: flex; flex-wrap: wrap; gap: 0.1rem; padding: 0.15rem; border: 1px solid var(--hairline); border-radius: 999px; }
+    .ex-mark { padding: 0.22rem 0.6rem; font-size: 0.74rem; font-weight: 600; color: var(--muted); background: none; border: 1px solid transparent; border-radius: 999px; cursor: pointer; }
+    .ex-mark:hover { color: var(--text); }
+    .ex-mark.active { color: var(--on-accent); background: var(--accent); }
+    .ex-mark.ex-auto { border-color: var(--muted); color: var(--text); }
+    .ex-check { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; color: var(--muted); }
+    .ex-info { font-size: 0.76rem; color: var(--muted); margin-left: auto; }
+    .ex-error { color: var(--bad); font-size: 0.8rem; }
+    .ex-out { flex: 1 1 auto; min-height: 340px; display: flex; flex-direction: column; }
+    .ex-table { overflow: auto; flex: 1 1 0; min-height: 0; max-height: 65vh; }
+    .ex-chart { flex: 1 1 0; min-height: 340px; }
+    .ex-table[hidden], .ex-chart[hidden] { display: none; }
+    .ex-empty { color: var(--faint); font-size: 0.85rem; padding: 3rem 1rem; text-align: center; }
+    .ex-pivot th, .ex-pivot td { white-space: nowrap; }
+    .ex-pivot tbody th { text-align: left; font-weight: 500; color: var(--text); padding: 0.35rem 0.7rem; border-bottom: 1px solid var(--row-line); position: static; background: none; font-size: 0.8rem; }
+    .ex-pivot tbody th.ex-repeat { color: transparent; }
+    .ex-pivot .ex-num { text-align: right; }
+    .ex-pivot .ex-colhead { text-align: center; border-left: 1px solid var(--row-line); }
+    .ex-pivot thead th { position: static; }
+    .ex-pivot thead { position: sticky; top: 0; z-index: 1; background: var(--card); }
+    .ex-pivot tr.ex-total td, .ex-pivot tr.ex-total th { font-weight: 700; border-top: 1px solid var(--border); }
+    .ex-dax summary { cursor: pointer; font-size: 0.74rem; color: var(--faint); }
+    .ex-dax pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.72rem; line-height: 1.5; white-space: pre-wrap; color: var(--muted); max-height: 20vh; overflow: auto; margin-top: 0.3rem; }
+    .ex-pop { position: fixed; z-index: 950; width: 300px; background: var(--raised); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 0.7rem; font-size: 0.8rem; display: flex; flex-direction: column; gap: 0.5rem; }
+    .ex-pop-head { font-weight: 700; font-size: 0.78rem; }
+    .ex-pop-body, .ex-pop-body > div { display: flex; flex-direction: column; gap: 0.45rem; }
+    .ex-pop label { display: flex; align-items: center; gap: 0.45rem; color: var(--muted); }
+    .ex-pop label input[type=number], .ex-pop label input[type=date] { flex: 1; min-width: 0; }
+    .ex-pop .ex-values { max-height: 240px; overflow: auto; gap: 0.1rem; }
+    .ex-values label { color: var(--text); }
+    .ex-pop .ex-row { flex-direction: row; align-items: center; }
+    .ex-row .btn-analyze, .ex-pop-foot .btn-analyze { padding: 0.25rem 0.7rem; font-size: 0.74rem; }
+    .ex-pop-foot { display: flex; justify-content: flex-end; gap: 0.4rem; }
 
     /* --- Flows page --- */
     .flows-bar { display: flex; align-items: center; gap: 0.8rem; padding: var(--gap) var(--gutter) 0.2rem; flex-wrap: wrap; }
@@ -311,7 +376,8 @@
       .kpi-row.records { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
     @media (max-width: 900px) {
-      .charts, .flows-main, .model-page { grid-template-columns: 1fr; }
+      .charts, .flows-main, .model-page, .ex { grid-template-columns: 1fr; }
+      .ex-fields { max-height: 40vh; }
       .filter-bar { position: static; }
       .top-actions { margin-left: 0; }
     }
@@ -402,6 +468,12 @@
       .model-page:not([hidden]) { flex: 1 1 0; min-height: 0; grid-template-rows: minmax(0, 1fr); }
       .model-panel { max-height: none; }
       .model-diagram svg { height: 100%; }
+      .explore-page:not([hidden]) { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+      .ex { flex: 1 1 0; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+      .ex-fields { max-height: none; }
+      .ex-out { min-height: 0; }
+      .ex-table { max-height: none; }
+      .ex-chart { min-height: 0; }
     }
     /* Short screens (a laptop, or a 1080p screen scaled up): the hero is one band with the
        regions as a list, the KPIs are smaller, and the Dashboard's three charts sit side by side. */
@@ -706,6 +778,7 @@
       <div class="subtabs" role="tablist" aria-label="Analyze pages">
         <button type="button" class="subtab active" data-apage="model" role="tab" aria-selected="true">Model</button>
         <button type="button" class="subtab" data-apage="sql" role="tab" aria-selected="false" tabindex="-1">SQL</button>
+        <button type="button" class="subtab" data-apage="explore" role="tab" aria-selected="false" tabindex="-1">Explore</button>
       </div>
     </div>
     <!-- The semantic model (ossie.yaml) as a star, and what it says of the table picked (model.js fills it). -->
@@ -713,6 +786,8 @@
       <div class="model-diagram"><svg id="modelSvg" role="img" aria-label="The tables of the semantic model and their relationships"></svg></div>
       <aside class="model-panel" id="modelPanel"></aside>
     </div>
+    <!-- The model's fields dragged onto shelves, drawn as a pivot or a chart (explore.js builds it). -->
+    <div class="explore-page" id="analyze-explore" hidden></div>
     <div class="analyze-sql-page" id="analyze-sql-page" hidden>
     <div class="analyze-controls">
       <button class="btn-analyze" id="analyzePreview" type="button">Preview</button>
@@ -752,7 +827,8 @@
   <script type="module">
     import { createDataSource } from "./storage/data.js";
     import { renderLogs } from "./frontend/logs.js";
-    import { renderModel } from "./frontend/model.js";
+    import { renderModel, loadModel } from "./frontend/model.js";
+    import { createExplorer } from "./frontend/explore.js";
     import { createQueries, connect } from "./frontend/queries.js";
     import { largestBy, smallestBy, orderBy, cycle, pick, hashIndex, clampIndex, axisClip, percentiles, daysApart, dayCount,
       shiftDate, formatTime, dayAhead, playStep, playDelay, renderCost, round1, round2, kLabel, mwhAxis, fmtGwh, fmtMwh,
@@ -1120,6 +1196,7 @@
       syncThemeToggle();
       for (const id of Object.keys(charts)) { charts[id].dispose(); delete charts[id]; }
       renderAll();
+      explorer?.redraw();
     });
     // A chart follows its box, not the window: on one screen a cell changes size when the
     // header wraps or a tab's layout changes, with the window as it was.
@@ -2896,7 +2973,54 @@
         }
         document.getElementById('analyze-model').hidden = btn.dataset.apage !== 'model';
         document.getElementById('analyze-sql-page').hidden = btn.dataset.apage !== 'sql';
+        document.getElementById('analyze-explore').hidden = btn.dataset.apage !== 'explore';
         if (btn.dataset.apage === 'model') renderModel();
+        if (btn.dataset.apage === 'explore') openExplorer();
+      });
+    }
+
+    // --- Analyze: Explore (frontend/explore.js) ---
+    // A pivot of the model, asked as the page's queries are (objects of the model's fields).
+    // What it needs of this host: the files a query reads, attached first. A 5-minute query
+    // takes the dates of its own date filter, or the header's range when it has none.
+    function whereDates(where = []) {
+      const isDate = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+      const between = where.find(c => Array.isArray(c) && c[1] === 'between' && isDate(c[2]));
+      const bound = op => where.find(c => Array.isArray(c) && c[1] === op && isDate(c[2]))?.[2];
+      const from = between?.[2] ?? bound('>='), to = between?.[3] ?? bound('<=');
+      if (!from && !to) return getDateRange();
+      return { from: from ?? document.getElementById('dateFrom').min, to: to ?? document.getElementById('dateTo').max };
+    }
+    // A view of a table not attached yet is one of the aggregates' (they load in the
+    // background after the first render): wait for them, then ask what else it needs.
+    async function ensureExploreData(sql, where) {
+      if (data.needs(sql).agg || (sql.match(/\bv_\w+/g) ?? []).some(v => !data.has(v))) await loadDailyAggDatabase();
+      if (data.needs(sql).history) {
+        const { from, to } = whereDates(where);
+        await ensureHistory(from, to, "Downloading detailed data...");
+      }
+    }
+    let explorer = null;
+    function openExplorer() {
+      explorer ??= createExplorer(document.getElementById('analyze-explore'), {
+        model: loadModel,
+        toDax: q => data.toDax(q),
+        run: async q => {
+          await ensureExploreData(data.toSQL(data.toDax(q)), q.where);
+          const rows = await runQuery(q, data.query, { keep: true });
+          setConnected();
+          return rows;
+        },
+        csv: async q => {
+          const sql = data.toSQL(data.toDax(q));
+          await ensureExploreData(sql, q.where);
+          const n = await downloadCSVDirect(`SELECT COLUMNS(*)::VARCHAR FROM (\n${sql}\n) LIMIT 1000000`, 'explore.csv');
+          setStatus(`Exported ${n.toLocaleString()} rows`, "connected");
+        },
+        chart: el => getChart(el.id),
+        palette,
+        css: cssVar,
+        storageKey: 'explore',
       });
     }
 

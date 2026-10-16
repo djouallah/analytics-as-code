@@ -83,6 +83,32 @@ export const fmtTonnes = t => t >= 1e6 ? `${(t / 1e6).toFixed(1)} Mt` : `${Math.
 // A MW figure without its sign (the direction is said in words), to the MW, half away from zero.
 export const fmtMwAbs = v => Math.round(Math.abs(v)).toLocaleString();
 
+// A value written as a model's format string says (Power BI's: `#,##0`, `0.0`, `$#,##0.00`):
+// the decimals after the point, grouping with a comma, a leading currency sign. Text, dates
+// and a format it does not read are written as they are.
+export function formatValue(v, format) {
+  if (v == null || v === '') return '';
+  if (typeof v !== 'number') return String(v);
+  const m = /^([$€£]?)([#,]*0)(?:\.(0+))?$/.exec(format ?? '');
+  const digits = m ? (m[3]?.length ?? 0) : Number.isInteger(v) ? 0 : 2;
+  const text = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits,
+    useGrouping: m ? m[2].includes(',') : false });
+  return `${v < 0 ? '-' : ''}${m?.[1] ?? ''}${text}`;
+}
+// Explore's highlight table: how strong a cell's tint is, 6% to 60% of the colour, between the
+// smallest and the largest value shown.
+export const shade = (v, min, max) => v == null || !(max > min) ? 0 : Math.round(6 + 54 * (v - min) / (max - min));
+export const extent = values => {
+  const xs = values.filter(v => typeof v === 'number' && Number.isFinite(v));
+  return xs.length ? [Math.min(...xs), Math.max(...xs)] : [0, 0];
+};
+// Explore's small multiples: n plot areas one above the other, in percent of the chart below
+// `top`, each under a line for its title.
+export const stackedGrids = (n, top = 0) => Array.from({ length: n }, (_, i) => {
+  const at = top + i * (100 - top) / n;
+  return { title: `${at + 0.5}%`, grid: { left: 4, right: 16, containLabel: true, top: `${at + 5}%`, height: `${(100 - top) / n - 11}%` } };
+});
+
 // --- The CSV of Analyze ---
 // The rows of a SQL query written out as a CSV file, batch by batch as the engine sends them,
 // every value as it is stored (a date as a date, a timestamp without its zone). Returns the

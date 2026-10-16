@@ -195,6 +195,46 @@ test("Analyze: a SELECT over the model, through the page's compiler", { skip }, 
   await assert.rejects(() => model.query('SELECT * FROM v_dim_duid'), /SELECTs over the model/);
 });
 
+// Explore (frontend/explore.js): the shelves as a query in the page's words, through the
+// page's compiler, and its rows laid out as a pivot. Its totals are the model's.
+test('Explore: shelves to a query, a query to a pivot', { skip }, async () => {
+  const { modelFields, buildQuery, pivot, autoMark } = await import(pathToFileURL(join(staged, 'frontend/explore.js')).href);
+  const fields = modelFields(bim.model);
+  assert.ok(fields.byId.has('dim_duid.FuelSourceDescriptor') && fields.byId.has('Generation MWh'));
+  assert.ok(!fields.byId.has('Reads 5 minutes'), 'hidden measures are left out');
+  const run = async q => rows(page.toSQL(page.toDax(q)));
+  const base = { rows: [], cols: [], values: [], filters: [], mark: 'auto', totals: true, sort: 'fields' };
+  const states = {
+    pivot: { rows: ['dim_duid.FuelSourceDescriptor'], cols: ['dim_region.Region'], values: ['Generation MWh'] },
+    twoMeasures: { rows: ['dim_calendar.date'], values: ['Generation MWh', 'Average price'],
+      filters: [{ field: 'dim_calendar.date', op: 'last', n: 3 }] },
+    picked: { rows: ['dim_region.Region'], values: ['Average price'], sort: 'desc',
+      filters: [{ field: 'dim_duid.FuelSourceDescriptor', op: 'notIn', values: ['Wind'] }, { field: 'dim_calendar.date', op: 'range', min: '2026-10-01', max: '' }] },
+    columnsOnly: { rows: ['dim_duid.FuelSourceDescriptor'], cols: ['dim_duid.Storage'] },
+    measuresOnly: { values: ['Generation MWh', 'Units'] },
+    fiveMinutes: { rows: ['fct_summary.time'], cols: ['dim_duid.FuelSourceDescriptor'], values: ['Generation MW'],
+      filters: [{ field: 'fct_summary.date', op: 'range', min: '2026-10-05', max: '2026-10-06' }] },
+  };
+  for (const [name, s] of Object.entries(states)) {
+    const state = { ...base, ...s };
+    const q = buildQuery(state, { today: '2026-10-07' });
+    const got = await run(q).catch(e => { throw new Error(`${name}: ${e.message}\n${page.toDax(q)}`); });
+    assert.ok(got.length > 0, `${name}: rows`);
+    const p = pivot(got, state);
+    assert.ok(p.rowKeys.length > 0, `${name}: row keys`);
+    assert.ok(autoMark(state, fields));
+    if (name === 'pivot') {
+      // The grand total is the measure with no group, as the model computes it.
+      const [all] = await run({ select: { v: 'Generation MWh' } });
+      assert.equal(p.cell(null, null)['Generation MWh'], all.v);
+      assert.ok(p.hasRowTotal && p.hasColTotal);
+    }
+  }
+  assert.throws(() => buildQuery({ ...base, rows: ['dim_duid.Region'], cols: ['dim_region.Region'] }), /two fields are named Region/);
+  assert.equal(buildQuery(base), null);
+  assert.equal(buildQuery({ ...base, ...states.pivot }, { cap: 0 }).top, undefined);
+});
+
 // semantic_model/ossie.yaml is read whole: written back from the TMSL it stands for, it is
 // itself, so no property of it is one dax-sql's reader passes over (Power BI's model.bim is
 // written from that TMSL, scripts/ossie_to_bim.mjs).
