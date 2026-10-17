@@ -15,10 +15,11 @@
 - **Keep the source as raw as possible; transform in the next layer.** A source table holds
   what the feed published, as published. Combining, interpolating, filling in and reshaping
   for reporting happen in a derived table built from it, never in the source.
-- **Writes are insert-only merges** (`WHEN MATCHED DO NOTHING`): the OneLake catalog accepts
-  one add-snapshot per commit and rejects a commit mixing delete files + data files
-  (BadRequest 400). A `DELETE` in a commit of its own works. Same pattern as the sibling
-  repo (dbt-fabric). `dim_calendar` is a plain
+- **Writes are insert-only merges** (`WHEN MATCHED DO NOTHING`), from when the OneLake
+  catalog rejected a commit mixing delete files + data files (BadRequest 400). It no longer
+  does: a `MERGE` that updates and deletes, an `UPDATE` and a `DELETE` now commit (see
+  "Row-replacing writes"), so insert-only is now a choice per model, not a constraint. Same
+  pattern as the sibling repo (dbt-fabric). `dim_calendar` is a plain
   `append` — its NOT-IN filter keeps existing dates out; it runs to `current_date + 2 years`.
 
 ## The sibling repo
@@ -153,27 +154,25 @@ Four deliberate local differences, all of which must survive a port:
    compaction that has stopped working only shows in the job's log. Both scripts read their
    table list from `scripts/iceberg_tables.py`; a new model gets added there once.
 
-## DELETE works, in a commit of its own
-On OneLake a commit may carry only one add-snapshot, so a commit that mixes delete files with
-data files is rejected (`BadRequest 400`): an `UPDATE`, a `MERGE` that updates or deletes, a
-`DELETE` and an `INSERT` in one transaction. A fix is expected upstream; until then the merges
-are insert-only. A `DELETE` in a commit of its own works, so replacing rows is two commits,
-the `DELETE` and then the `INSERT`. They are not atomic: a reader between the two sees the
-rows gone, and a run that fails after the `DELETE` leaves them gone until the next run
-writes them.
-That may no longer hold. On 2026-10-17, fabriccat's catalog (the test lakehouse `nem`)
-accepted all of these from duckdb `2.0.0.dev2610161340` (duckdb-iceberg `10eafd0b`): a
-`MERGE` that updates and inserts, one with `WHEN NOT MATCHED BY SOURCE ... THEN DELETE` too
-(one snapshot each: duckdb-iceberg#1581, #1584), an `UPDATE`, and a `DELETE` and an `INSERT`
-in one transaction (two snapshots in one commit). The previous build, `dev2610011535`, was
-accepted too, except the `MERGE` with two update/delete actions, which duckdb refused itself.
-`power`'s catalog (another region) has not been probed; the merges stay insert-only until it
-has.
+## Row-replacing writes
+Until October 2026 the OneLake catalog rejected a commit that mixed delete files with data
+files (`BadRequest 400`): an `UPDATE`, a `MERGE` that updates or deletes, a `DELETE` and an
+`INSERT` in one transaction. Hence the insert-only merges, and replacing rows as two commits
+(`fct_curtailment_region`'s pre-hook `DELETE`, then its merge), which are not atomic.
+On 2026-10-17 `power`'s catalog accepted all of them from duckdb `2.0.0.dev2610161340`
+(duckdb-iceberg `10eafd0b`), the right rows each time (`probe_catalog.yml`, run
+38993625254): a `MERGE` that updates and inserts, one that also deletes
+(`WHEN NOT MATCHED BY SOURCE ... THEN DELETE`), an `UPDATE` and a `DELETE`, one snapshot each
+(duckdb-iceberg#1581, #1584), and a `DELETE` and an `INSERT` in one transaction (two
+snapshots, one commit). fabriccat's catalog gives the same. The first attempt of that run
+timed out on the commit of the deleting `MERGE` (HTTP POST timeout) and the re-run passed:
+one transient so far, but watch for it. The previous build, `dev2610011535`, cannot run a
+`MERGE` with two update/delete actions at all (duckdb refuses it). Re-run
+`probe_catalog.yml` after the duckdb pin moves.
 
-The catalog capability probe (CREATE/INSERT/DELETE/UPDATE/MERGE/DROP against a freshly
-created table) lives in the user's **separate repo**, not here. Its matrix is the standing
-evidence for what this catalog actually does; ask for it before relying on any claim here,
-and ask for a re-run after the catalog or the duckdb pin moves.
+The full catalog capability probe (CREATE/INSERT/DELETE/UPDATE/MERGE/DROP and the rest, per
+engine) lives in the user's **separate repo**; `probe_catalog.yml` here covers only the
+row-replacing writes, with this repo's pin, on `power`.
 
 ## Auth (GitHub Actions) — no secrets
 OIDC only: `azure/login@v2` with a federated credential, then each job mints a short-lived
