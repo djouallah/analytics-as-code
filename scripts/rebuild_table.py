@@ -91,7 +91,7 @@ def listed(schema, tbl):
             "SELECT count(*) FROM duckdb_tables() "
             "WHERE database_name = 'catalog' AND schema_name = ? AND table_name = ?",
             [schema, tbl],
-        ).fetchone()[0] > 0
+        ).fetchall()[0][0] > 0
     finally:
         con.close()
 
@@ -113,7 +113,7 @@ def main():
 
     con = connect()
     try:
-        before = f"{con.execute(f'SELECT count(*) FROM {fq}').fetchone()[0]:,} rows"
+        before = f"{con.execute(f'SELECT count(*) FROM {fq}').fetchall()[0][0]:,} rows"
     except Exception as e:
         before = "unreadable"
         print(f"::warning::{fq} cannot be read before the drop: {oneline(e)}")

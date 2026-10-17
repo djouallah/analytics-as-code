@@ -24,7 +24,7 @@ def model(dbt, session):
     # =========================================================================
     log_exists = session.sql(
         f"SELECT count(*) FROM glob('{csv_log_path}')"
-    ).fetchone()[0]
+    ).fetchall()[0][0]
 
     if log_exists > 0:
         # Check if csv_filename column exists in existing parquet
@@ -58,7 +58,7 @@ def model(dbt, session):
             )
         """)
     # What the log held when loaded: the end of the run saves it only if this has changed.
-    log_state = session.sql("SELECT count(*), max(archived_at) FROM _csv_archive_log").fetchone()
+    log_state = session.sql("SELECT count(*), max(archived_at) FROM _csv_archive_log").fetchall()[0]
 
     # =========================================================================
     # Helper: download ZIP, extract CSVs to temp dir
@@ -232,7 +232,7 @@ def model(dbt, session):
     newest_daily = session.sql("""
         SELECT max(substr(source_filename, 14, 8)) FROM _csv_archive_log
         WHERE source_type = 'daily' AND source_filename LIKE 'PUBLIC_DAILY_%'
-    """).fetchone()[0]
+    """).fetchall()[0][0]
     yesterday = (datetime.now(timezone(timedelta(hours=10))) - timedelta(days=1)).strftime("%Y%m%d")
     if newest_daily and newest_daily >= yesterday:
         print(f"  daily: the log has the file of {newest_daily}, nothing new before the next one; not listed")
@@ -245,7 +245,7 @@ def model(dbt, session):
     # Check if AEMO has enough new files before hitting GitHub
     aemo_new = session.sql(f"""
         SELECT count(*) FROM daily_files_web w WHERE {not_archived('daily')}
-    """).fetchone()[0]
+    """).fetchall()[0][0]
     # The backfills below wait for the daily feed to have caught up; a listing that failed,
     # or that was not needed, says nothing about that, so they wait for the next run too.
     caught_up = daily_listed and aemo_new < download_limit
@@ -407,7 +407,7 @@ def model(dbt, session):
         return session.sql(f"""
             SELECT count(*) > 0 FROM _csv_archive_log
             WHERE source_type = '{source_type}' AND archived_at > now() - INTERVAL 24 HOUR
-        """).fetchone()[0]
+        """).fetchall()[0][0]
 
     def log_duid(source_type, source_filename, url, csv_filename):
         session.execute("DELETE FROM _csv_archive_log WHERE source_type = ?", [source_type])
@@ -526,7 +526,7 @@ def model(dbt, session):
     # =========================================================================
     # Only when this run changed it: process_downloads saves after each batch already, and
     # a run that fetched nothing has nothing to write over the durable log.
-    if session.sql("SELECT count(*), max(archived_at) FROM _csv_archive_log").fetchone() != log_state:
+    if session.sql("SELECT count(*), max(archived_at) FROM _csv_archive_log").fetchall()[0] != log_state:
         save_log()
 
     # The parquet above is the durable log; the Iceberg table is a materialization of it
@@ -549,7 +549,7 @@ def model(dbt, session):
                   AND t.csv_filename = l.csv_filename
             )
         """)
-        n = session.sql("SELECT count(*) FROM _log_delta").fetchone()[0]
+        n = session.sql("SELECT count(*) FROM _log_delta").fetchall()[0][0]
         print(f"  {n} log rows not yet in {dbt.this}, appending")
         return session.sql("SELECT * FROM _log_delta")
 

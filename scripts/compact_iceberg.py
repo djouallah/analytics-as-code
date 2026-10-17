@@ -128,7 +128,7 @@ def has_rewrite_function(con):
         con.execute(
             "SELECT count(*) FROM duckdb_functions() "
             "WHERE function_name = 'iceberg_rewrite_data_files'"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         > 0
     )
 
@@ -138,12 +138,13 @@ def compact(con, table):
     fq = f"catalog.{table}"
 
     try:
-        row = con.execute(
+        rows = con.execute(
             f"SELECT rewritten_data_files, added_data_files, rewritten_bytes "
             f"FROM iceberg_rewrite_data_files('{fq}', "
             f"target_file_size_bytes => '{TARGET_FILE_SIZE}', "
             f"min_input_files => {MIN_INPUT_FILES})"
-        ).fetchone()
+        ).fetchall()
+        row = rows[0] if rows else None
     except Exception as e:
         # Keep it to one line — the full multi-line duckdb error is already on stdout above.
         return (table, f"ERROR: {type(e).__name__}: {oneline(e)}")

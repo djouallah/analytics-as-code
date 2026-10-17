@@ -106,7 +106,7 @@ def export(group):
     con = connect_iceberg()
     for table in GROUPS[group]:
         con.execute(f"COPY (SELECT * FROM catalog.mart.{table} {where}) TO '{parquet(group, table)}' (FORMAT PARQUET)")
-        rows = con.execute(f"SELECT count(*) FROM '{parquet(group, table)}'").fetchone()[0]
+        rows = con.execute(f"SELECT count(*) FROM '{parquet(group, table)}'").fetchall()[0][0]
         print(f"exported {table}: {rows:,} rows")
     con.close()
 
