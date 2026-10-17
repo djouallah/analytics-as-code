@@ -297,7 +297,7 @@ def model(dbt, session):
     # INTRADAY SCADA
     # =========================================================================
 
-    list_nemweb('intraday_scada_web', 'http://nemweb.com.au/Reports/Current/Dispatch_SCADA/',
+    list_nemweb('intraday_scada_web', 'https://nemweb.com.au/Reports/Current/Dispatch_SCADA/',
                 '%PUBLIC_DISPATCHSCADA%', limit=500)
 
     scada_to_download = to_download('intraday_scada_web', 'scada_today')
@@ -309,7 +309,7 @@ def model(dbt, session):
     # INTRADAY PRICE
     # =========================================================================
 
-    list_nemweb('intraday_price_web', 'http://nemweb.com.au/Reports/Current/DispatchIS_Reports/',
+    list_nemweb('intraday_price_web', 'https://nemweb.com.au/Reports/Current/DispatchIS_Reports/',
                 '%PUBLIC_DISPATCHIS_%.zip%', limit=500)
 
     price_to_download = to_download('intraday_price_web', 'price_today')
