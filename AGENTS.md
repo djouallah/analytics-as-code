@@ -161,6 +161,14 @@ are insert-only. A `DELETE` in a commit of its own works, so replacing rows is t
 the `DELETE` and then the `INSERT`. They are not atomic: a reader between the two sees the
 rows gone, and a run that fails after the `DELETE` leaves them gone until the next run
 writes them.
+That may no longer hold. On 2026-10-17, fabriccat's catalog (the test lakehouse `nem`)
+accepted all of these from duckdb `2.0.0.dev2610161340` (duckdb-iceberg `10eafd0b`): a
+`MERGE` that updates and inserts, one with `WHEN NOT MATCHED BY SOURCE ... THEN DELETE` too
+(one snapshot each: duckdb-iceberg#1581, #1584), an `UPDATE`, and a `DELETE` and an `INSERT`
+in one transaction (two snapshots in one commit). The previous build, `dev2610011535`, was
+accepted too, except the `MERGE` with two update/delete actions, which duckdb refused itself.
+`power`'s catalog (another region) has not been probed; the merges stay insert-only until it
+has.
 
 The catalog capability probe (CREATE/INSERT/DELETE/UPDATE/MERGE/DROP against a freshly
 created table) lives in the user's **separate repo**, not here. Its matrix is the standing
@@ -899,7 +907,7 @@ Every duckdb, dbt, pyiceberg and duckdb-wasm version is pinned exactly — none 
 "latest". Not pinned: the GitHub actions (by major tag), the runner image, and the packages
 those pins pull in.
 - **`process_data.yml`, `build.yml`, `table_maintenance.yml` and `import_data.yml`'s read venv
-  pin `duckdb==2.0.0.dev2610011535`** (dbt via `requirements.txt`, which also pins
+  pin `duckdb==2.0.0.dev2610161340`** (dbt via `requirements.txt`, which also pins
   `dbt-core`/`dbt-duckdb` exactly — the insert-only merges lean on adapter internals, and
   `macros/nothing_to_do.sql` is a copy of dbt-duckdb's incremental materialization). The
   1.6 line became **DuckDB 2.0.0** (stable due 2026-10-21); its pre-releases are published as
