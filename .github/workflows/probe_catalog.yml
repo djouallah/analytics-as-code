@@ -1,0 +1,45 @@
+name: Probe Catalog Writes
+
+# Dispatch only. Which row-replacing writes (MERGE that updates or deletes, UPDATE, DELETE,
+# DELETE + INSERT in one transaction) the `power` catalog accepts from the pinned duckdb:
+# scripts/probe_catalog_writes.py, on throwaway tables in namespace _write_probe. Re-run it
+# after the duckdb pin moves, before relying on a write the merges don't use yet.
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ONELAKE_ENDPOINT: https://onelake.table.fabric.microsoft.com/iceberg
+      WAREHOUSE_PATH: ${{ vars.WS_ID }}/${{ vars.LH_ID }}
+      AZURE_TRANSPORT_OPTION_TYPE: curl
+      CURL_CA_INFO: /etc/ssl/certs/ca-certificates.crt
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Azure federated login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Mint OneLake token
+        run: |
+          TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
+          echo "::add-mask::$TOKEN"
+          echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+      - run: python scripts/probe_catalog_writes.py
