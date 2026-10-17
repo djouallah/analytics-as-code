@@ -80,7 +80,7 @@ Four deliberate local differences, all of which must survive a port:
    is generated, not typed, from AEMO's MMSDM registration history (`DUDETAILSUMMARY`,
    `DUALLOC`, `GENUNITS`, `STATION`, `PARTICIPANT`); its commits say how, and some small loads
    AEMO gives no energy source for have a region and no fuel. It is a snapshot: a unit that
-   leaves the list later stays in `dim_duid` (insert-only), but a `rebuild=dim_duid` loses it
+   leaves the list later stays in `dim_duid` (the merge deletes nothing), but a `rebuild=dim_duid` loses it
    until the file is regenerated. **Missing or wrong units are fixed in that file, never in
    dbt** — `dim_duid` has no fallback.
    The same refresh keeps three tables of the newest MMSDM month (`genunits.csv`,
@@ -158,7 +158,8 @@ Four deliberate local differences, all of which must survive a port:
 Until October 2026 the OneLake catalog rejected a commit that mixed delete files with data
 files (`BadRequest 400`): an `UPDATE`, a `MERGE` that updates or deletes, a `DELETE` and an
 `INSERT` in one transaction. Hence the insert-only merges, and replacing rows as two commits
-(`fct_curtailment_region`'s pre-hook `DELETE`, then its merge), which are not atomic.
+(`fct_curtailment_region`'s pre-hook `DELETE`, then its merge, until 2026-10-17), which
+were not atomic.
 On 2026-10-17 `power`'s catalog accepted all of them from duckdb `2.0.0.dev2610161340`
 (duckdb-iceberg `10eafd0b`), the right rows each time (`probe_catalog.yml`, run
 38993625254): a `MERGE` that updates and inserts, one that also deletes
@@ -805,7 +806,7 @@ in `landing` are what these tables are built from.
 | stg_csv_archive_log | landing | incremental append (Python) — only rows missing from the target; the durable log is `Files/csv_archive_log.parquet` |
 | processed_files | landing | incremental append — the files each landing fact has loaded (`model, csv_filename, processed_at`), appended by the facts' post-hooks; the pending check is the log minus this table. A `rebuild=<fact>` appends a reset row (`csv_filename` NULL); the first build seeds it from the facts' `file` columns |
 | dim_calendar | mart | incremental append (the NOT-IN filter keeps existing dates out; runs 2 years ahead; a run sends nothing once it reaches that far) |
-| dim_duid | mart | incremental insert-only merge on DUID; NEM units from the registration list, then `duid_unregistered.csv`; registered capacity (RegCapMW etc.); `Renewable` — **the list of renewable fuels lives in this model** (an inline CTE next to `states`), nowhere else; `Classification` from the list (Scheduled / Semi-Scheduled / Non-Scheduled, stars stripped; NULL off the list): curtailment is measured on Semi-Scheduled, not on a fuel, because HPR1 (a battery) is registered with fuel "Wind"; `CO2eFactor` (t CO2-e/MWh) from MMSDM `GENUNITS` through `DUALLOC`, for registered and unregistered units alike, NULL for loads, AEMO's dummy units and the gensets "On Exclusion List" (Colongra, Jeeralang, Braemar 3 and 6), which `[Emissions t]` therefore leaves out; `Storage` (a battery, the fuel "Grid": the one place that rule lives), `Plant` (the station, or the unit when it has none: what the page groups units by) and `Owner` (the participant, rooftop's five units "Rooftop solar (AEMO estimate)"); one spelling per name, case-insensitively, for StationName, Participant and TechnologyType (VertiPaq stores text case-insensitively). A new column or a changed rule reaches the existing rows with a `rebuild=dim_duid` |
+| dim_duid | mart | incremental merge on DUID that inserts new units and updates a unit whose row differs (nothing deleted; skipped when nothing differs); NEM units from the registration list, then `duid_unregistered.csv`; registered capacity (RegCapMW etc.); `Renewable` — **the list of renewable fuels lives in this model** (an inline CTE next to `states`), nowhere else; `Classification` from the list (Scheduled / Semi-Scheduled / Non-Scheduled, stars stripped; NULL off the list): curtailment is measured on Semi-Scheduled, not on a fuel, because HPR1 (a battery) is registered with fuel "Wind"; `CO2eFactor` (t CO2-e/MWh) from MMSDM `GENUNITS` through `DUALLOC`, for registered and unregistered units alike, NULL for loads, AEMO's dummy units and the gensets "On Exclusion List" (Colongra, Jeeralang, Braemar 3 and 6), which `[Emissions t]` therefore leaves out; `Storage` (a battery, the fuel "Grid": the one place that rule lives), `Plant` (the station, or the unit when it has none: what the page groups units by) and `Owner` (the participant, rooftop's five units "Rooftop solar (AEMO estimate)"); one spelling per name, case-insensitively, for StationName, Participant and TechnologyType (VertiPaq stores text case-insensitively). A changed rule or file reaches the existing rows on the next run; a new column still goes out with a `rebuild=dim_duid` (see below) |
 | fct_scada, fct_price | landing | incremental insert-only merge (by file) |
 | fct_scada_today, fct_price_today | landing | incremental insert-only merge (by file) |
 | fct_interconnector_today | landing | incremental insert-only merge (by file) — the INTERCONNECTORRES rows of the same archived DispatchIS files as fct_price_today **and, despite the name, the whole history**: AEMO's monthly MMSDM archive of the same record, 2018-01 → 2026-08 (source_type `interconnector_monthly`, a finite backfill; read with `strict_mode = false`, which the files from 2024-08 need). August 2026 is in both sources, so `fct_interconnector` takes one row per interval (`MAX … GROUP BY`); the Flows page plays any range ≤ 30 days |
@@ -814,7 +815,7 @@ in `landing` are what these tables are built from.
 | fct_region | mart | incremental insert-only merge on (REGIONID, date, time) — for Power BI: price, demand, net interchange and the regional semi-scheduled wind and solar. The intraday record where `fct_price_today` and `fct_regionsum_today` both have the interval, else `fct_price`'s. Every run recomputes from six days before `fct_price`'s newest date on (from the manifests, a literal on all three sources); the merge adds what is missing. A first build reads them whole |
 | fct_rooftop | mart | incremental insert-only merge on (REGIONID, date, time) — the source `fct_summary`'s rooftop units are built from (not a table of the semantic model): the `MEASUREMENT` estimate per region and half hour as published (zeros kept, blanks out), with the half hour's average price from `fct_region`; written once its six prices exist |
 | fct_interconnector | mart | incremental insert-only merge on (interconnector, date, time) — for Power BI: `MWFLOW` and the two limits, the pricing run, one row per interval |
-| fct_curtailment_region | mart | incremental insert-only merge on (REGIONID, date, fuel) — for Power BI and the curtailment chart: curtailed and available MWh per region, day and fuel (Wind, Solar), `source` `farms` (`fct_curtailment` added up by the unit's region and fuel) or `aemo` (`fct_region`'s regional semi-scheduled figures, the days after the farms' newest). Each run a pre-hook DELETEs the `aemo` rows in a commit of its own, then the merge adds the missing farm days and the current `aemo` days |
+| fct_curtailment_region | mart | incremental merge on (REGIONID, date, fuel), the one mart table whose rows are revised — for Power BI and the curtailment chart: curtailed and available MWh per region, day and fuel (Wind, Solar), `source` `farms` (`fct_curtailment` added up by the unit's region and fuel) or `aemo` (`fct_region`'s regional semi-scheduled figures, the days after the farms' newest). Each run one MERGE, one commit: updates a row whose figures or source changed (an `aemo` day filling, or becoming `farms`), inserts the new ones, deletes the `aemo` rows the run no longer gives |
 | fct_curtailment | mart | incremental insert-only merge on (DUID, date) — for Power BI: curtailed and available MWh per semi-scheduled unit and day. A day is written once `fct_scada` holds its 288 intervals: the days after the newest one here, and in a refill `process_limit` days below the oldest, newest first (`macros/whole_days.sql`) |
 | dim_region | mart | incremental insert-only merge on Region — for Power BI: the regions of `dim_duid`, the one filter that reaches the units and the regional data |
 | dim_interconnector | mart | incremental insert-only merge on interconnector — the links between regions of `dim_region` (from MMSDM `INTERCONNECTOR`): `from_region`/`to_region` (a positive `mw` flows from the first to the second) and AEMO's `description`. The Flows page names a link by its id on the map and by the description on its board; only the bend of each arc is typed there (`LINK_CURVES`) |
@@ -838,8 +839,8 @@ will be removed in a later release in favour of `ROOFTOP_PV_ACTUAL_PRED`/`_RUN` 
 neither published yet: when the current folder stops updating, that is the replacement to
 move to.
 
-`dim_duid`'s insert-only merge means attribute changes (region/fuel/geo) never update in
-place. **Rebuilding a table = dispatch `process_data.yml` with `rebuild=<table>`**: it runs
+`dim_duid`'s merge updates a unit whose attributes changed (region/fuel/geo) in place.
+**Rebuilding a table = dispatch `process_data.yml` with `rebuild=<table>`**: it runs
 `scripts/rebuild_table.py` (DROP, names checked against `scripts/iceberg_tables.py`) and the
 dbt run that follows recreates the table with a plain CTAS, refilling at `process_limit`
 files per run (for a landing fact the script also appends the reset row to

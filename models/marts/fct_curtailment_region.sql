@@ -7,19 +7,26 @@
 --   * source 'aemo': AEMO's regional semi-scheduled figures (fct_region: available MW, and
 --     available less cleared), for the days after the farms' newest. The farms add up to them
 --     (checked 2026-10-03). The newest day is still filling.
--- A day moves from 'aemo' to 'farms' once its next-day file lands, which is a replacement, so
--- each run first DELETEs the 'aemo' rows in a commit of its own (the pre-hook: OneLake refuses
--- a commit that mixes delete files and data files, a DELETE alone works), then the
--- insert-only merge adds the farm days it lacks and the 'aemo' days as they are now. The two
--- commits are not atomic: between them the newest days are missing, and a run that fails
--- after the DELETE leaves them missing until the next run. Small (a row per region, day and
--- fuel), so every run recomputes all of it.
+-- A day moves from 'aemo' to 'farms' once its next-day file lands, and an 'aemo' day changes
+-- while it fills, so this is the one mart table whose rows are revised: one MERGE, one commit,
+-- updates a row whose figures or source changed, inserts a new one, and deletes an 'aemo' row
+-- the run no longer gives (until 2026-10-17 a pre-hook DELETE in a commit of its own, then an
+-- insert-only merge: OneLake refused delete files and data files in one commit). Small (a row
+-- per region, day and fuel), so every run recomputes all of it.
 {{ config(
     materialized='incremental',
     incremental_strategy='merge',
     unique_key=['REGIONID', 'date', 'fuel'],
-    merge_clauses={'when_matched': [{'action': 'do_nothing'}]},
-    pre_hook={"sql": "{% if is_incremental() %}DELETE FROM {{ this }} WHERE source = 'aemo'{% else %}SELECT 1{% endif %}", "transaction": false},
+    merge_clauses={
+      'when_matched': [{
+        'condition': ['DBT_INTERNAL_DEST.curtailed_mwh IS DISTINCT FROM DBT_INTERNAL_SOURCE.curtailed_mwh'
+                      ~ ' OR DBT_INTERNAL_DEST.available_mwh IS DISTINCT FROM DBT_INTERNAL_SOURCE.available_mwh'
+                      ~ ' OR DBT_INTERNAL_DEST.source IS DISTINCT FROM DBT_INTERNAL_SOURCE.source'],
+        'action': 'update', 'mode': 'by_name'}],
+      'when_not_matched': [
+        {'action': 'insert', 'mode': 'by_name'},
+        {'by': 'source', 'condition': "DBT_INTERNAL_DEST.source = 'aemo'", 'action': 'delete'}]
+    },
     schema='mart',
     tags=['powerbi']
 ) }}

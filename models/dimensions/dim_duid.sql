@@ -7,46 +7,37 @@
     derived reporting row, not a registered unit, so that fct_summary can carry rooftop as
     units of the fuel "Rooftop solar" and every filter on the units reaches it. -#}
 
-{# Check if there are new DUIDs not in the existing table #}
-{%- set check_new_duids_query -%}
-  SELECT count(*) as cnt FROM (
-    SELECT regexp_replace(DUID, '\s', '', 'g') AS DUID FROM read_csv({{ source('duid_reference', 'registration') }}, all_varchar = true) WHERE length(DUID) > 2
-    UNION
-    SELECT regexp_replace(DUID, '\s', '', 'g') FROM read_csv({{ source('duid_reference', 'duid_unregistered') }}, all_varchar = true) WHERE length(DUID) > 2
-    UNION
-    SELECT "Facility Code" AS DUID FROM read_csv_auto({{ source('duid_reference', 'facilities') }})
-    UNION
-    SELECT 'ROOFTOP_' || unnest(['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1'])
-  ) source_duids
-  WHERE DUID NOT IN (SELECT DUID FROM {{ this }})
-{%- endset -%}
+{#- The columns of the table, in the order the SELECT below writes them: what the check
+    compares and what the merge's update condition looks at. -#}
+{%- set columns = ['DUID', 'Region', 'FuelSourceDescriptor', 'Participant', 'State', 'latitude',
+                   'longitude', 'StationName', 'TechnologyType', 'RegCapMW', 'MaxCapMW',
+                   'StorageMWh', 'Renewable', 'Classification', 'CO2eFactor', 'Storage', 'Plant',
+                   'Owner'] -%}
+{%- set changed = [] -%}
+{%- for c in columns if c != 'DUID' -%}
+  {%- do changed.append('DBT_INTERNAL_DEST.' ~ c ~ ' IS DISTINCT FROM DBT_INTERNAL_SOURCE.' ~ c) -%}
+{%- endfor -%}
 
-{%- if execute and is_incremental() and flags.WHICH in ('run', 'build', 'retry') -%}
-  {%- set result = run_query(check_new_duids_query) -%}
-  {%- set has_new_duids = result and result.rows[0][0] > 0 -%}
-{%- else -%}
-  {%- set has_new_duids = true -%}
-{%- endif -%}
-
--- Insert-only merge on DUID (WHEN MATCHED DO NOTHING), same pattern as the facts:
--- new DUIDs are inserted, existing ones are never touched — so a run that sees a
--- stale/empty view of the table can at worst re-insert nothing that survives the
--- merge, instead of the old wipe-and-reload appending a full duplicate copy.
--- Consequence: attribute changes (region/fuel/geo) never update in place;
--- dispatching process_data.yml with rebuild=dim_duid is the reconciliation lever
--- (not --full-refresh: its RENAME step is untested on this catalog).
+-- A merge on DUID that inserts a new unit and updates one whose attributes changed (a region,
+-- a fuel, a station's spelling, a new column, a changed rule), only where a value differs. A
+-- unit that leaves the files stays as it was: nothing is deleted. Until 2026-10-17 this was
+-- insert-only (OneLake refused delete files and data files in one commit), and a change
+-- reached the existing rows only with rebuild=dim_duid.
 {{ config(
     materialized='incremental',
     incremental_strategy='merge',
     unique_key=['DUID'],
-    merge_clauses={'when_matched': [{'action': 'do_nothing'}]},
+    merge_clauses={
+      'when_matched': [{'condition': [changed | join(' OR ')], 'action': 'update', 'mode': 'by_name'}],
+      'when_not_matched': [{'action': 'insert', 'mode': 'by_name'}]
+    },
     on_schema_change='sync_all_columns'
 ) }}
 
 -- Ensure the download runs first
 -- depends_on: {{ ref('stg_csv_archive_log') }}
 
-{% if has_new_duids %}
+{% set units_sql %}
 WITH
   -- Deliberately an inline CTE, not a seed: 6 static rows aren't worth a
   -- materialized Iceberg table + a `dbt seed` step in every runner.
@@ -62,7 +53,7 @@ WITH
   -- The fuels that count as renewable, by the names AEMO's list gives them. This is the one
   -- place the rule lives: the dashboard reads the Renewable column. Batteries ("Grid") are
   -- storage, not on the list. Inline for the same reason as states; a change to the list
-  -- reaches the rows already in the table with a rebuild=dim_duid.
+  -- reaches the rows already in the table on the next run (the merge updates them).
   renewable_fuels AS (
     SELECT unnest(['Solar', 'Wind', 'Water', 'Bagasse', 'Biogas - sludge',
                    'Landfill methane / landfill gas', 'Sewerage / waste water',
@@ -256,8 +247,7 @@ GROUP BY a.DUID
 -- different units of them (WEST KIEWA POWER STATION and West Kiewa Power Station), and
 -- VertiPaq stores text case-insensitively, so Power BI showed one of them for both while
 -- DuckDB grouped them apart. The spelling kept is the greatest, which is the one with lower
--- case in it. The rows already in the table keep the spelling they were written with until
--- a rebuild=dim_duid.
+-- case in it.
 SELECT * REPLACE (
   max(StationName) OVER (PARTITION BY lower(StationName)) AS StationName,
   max(Participant) OVER (PARTITION BY lower(Participant)) AS Participant,
@@ -277,7 +267,21 @@ FROM (SELECT * REPLACE (
   nullif(regexp_replace(Participant, '^[\s\x{00A0}]+|[\s\x{00A0}]+$', '', 'g'), '') AS Participant,
   nullif(regexp_replace(TechnologyType, '^[\s\x{00A0}]+|[\s\x{00A0}]+$', '', 'g'), '') AS TechnologyType)
   FROM units) AS units
+{%- endset %}
+
+{#- Anything to write: a unit that is new or whose row differs from the table's. Small (the
+    reference files and ~600 rows), and a run with nothing to write then sends nothing. -#}
+{%- if execute and is_incremental() and flags.WHICH in ('run', 'build', 'retry') -%}
+  {%- set result = run_query(
+        'SELECT count(*) FROM (SELECT ' ~ columns | join(', ') ~ ' FROM (' ~ units_sql ~ ')'
+        ~ ' EXCEPT SELECT ' ~ columns | join(', ') ~ ' FROM ' ~ this ~ ')') -%}
+  {%- set has_changes = result and result.rows[0][0] > 0 -%}
+{%- else -%}
+  {%- set has_changes = true -%}
+{%- endif -%}
+
+{% if has_changes %}
+{{ units_sql }}
 {% else %}
--- No new DUIDs found, return empty result to keep existing data
 {{ nothing_to_do() }}
 {% endif %}
