@@ -5,10 +5,9 @@ incremental merge (OneLake accepts one add-snapshot per commit) — so the small
 up with ~24 tiny data files a day and nothing ever folds them back together. This runs
 iceberg_rewrite_data_files() over each table, consolidating files below the target size.
 
-iceberg_rewrite_data_files landed in duckdb/duckdb-iceberg#1035 and is not in a stable
-duckdb release yet; it first ships stable with duckdb 2.0.0. The workflow pins the
-pre-release duckdb==2.0.0.dev2610161340, and the iceberg extension binary is keyed to the duckdb
-build, so pinning duckdb pins the extension too.
+iceberg_rewrite_data_files landed in duckdb/duckdb-iceberg#1035 and first shipped stable
+with duckdb 2.0.0. The workflow pins duckdb==2.0.0, and the iceberg extension binary is
+keyed to the duckdb build, so pinning duckdb pins the extension too.
 
 This is the OneLake edition of the R2 original (both live in this repo's git history; the
 copy the old sibling repo had went with that repo). Two things differ from the R2 era:
@@ -71,11 +70,9 @@ AZURE_TRANSPORT = os.environ.get("AZURE_TRANSPORT_OPTION_TYPE", "default")
 
 def connect():
     con = duckdb.connect(":memory:")
-    # Plain install first. The pinned 2.0 pre-release (and the 1.6.0.dev builds before it)
-    # identify as v2.0.0-alpha*, and nightly-extensions.duckdb.org has no iceberg build
-    # under that version — asking
-    # core_nightly first just buys a 404 and a scary log line. The core extension for
-    # this build does carry iceberg_rewrite_data_files.
+    # Plain install first: the core extension for the pinned build carries
+    # iceberg_rewrite_data_files, and core_nightly is only the fallback (the 2.0
+    # pre-releases identified as v2.0.0-alpha*, which nightly had no iceberg build for).
     try:
         con.install_extension("iceberg")
     except Exception as e:

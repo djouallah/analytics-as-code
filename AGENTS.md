@@ -907,18 +907,17 @@ Every duckdb, dbt, pyiceberg and duckdb-wasm version is pinned exactly — none 
 "latest". Not pinned: the GitHub actions (by major tag), the runner image, and the packages
 those pins pull in.
 - **`process_data.yml`, `build.yml`, `table_maintenance.yml` and `import_data.yml`'s read venv
-  pin `duckdb==2.0.0.dev2610161340`** (dbt via `requirements.txt`, which also pins
+  pin `duckdb==2.0.0`** (dbt via `requirements.txt`, which also pins
   `dbt-core`/`dbt-duckdb` exactly — the insert-only merges lean on adapter internals, and
-  `macros/nothing_to_do.sql` is a copy of dbt-duckdb's incremental materialization). The
-  1.6 line became **DuckDB 2.0.0** (stable due 2026-10-21); its pre-releases are published as
-  `2.0.0.devYYMMDDHHMM`. The pre-release is required, not incidental:
-  `iceberg_rewrite_data_files()` (duckdb-iceberg#1035) isn't in a stable release yet, and the
-  compaction job needs it. Pinning the same build everywhere means the catalog is only ever
-  touched by one known duckdb. The `iceberg` extension is installed from `core` first
-  (`compact_iceberg.py` falls back to `core_nightly`) and its binary is keyed to the duckdb
-  build, so pinning duckdb pins the extension too. Move every pin to `duckdb==2.0.0` once it
-  ships. duckdb-iceberg has no `expire_snapshots` yet (duckdb-iceberg#1341 is open), so
-  pyiceberg stays until that merges.
+  `macros/nothing_to_do.sql` is a copy of dbt-duckdb's incremental materialization). 2.0
+  is the floor: `iceberg_rewrite_data_files()` (duckdb-iceberg#1035), which the compaction
+  job needs, first shipped stable in 2.0.0 (2026-10-21; until then the pin was the
+  pre-release `2.0.0.dev2610161340`). Pinning the same build everywhere means the catalog
+  is only ever touched by one known duckdb. The `iceberg` extension is installed from
+  `core` first (`compact_iceberg.py` falls back to `core_nightly`) and its binary is keyed
+  to the duckdb build, so pinning duckdb pins the extension too. duckdb-iceberg has no
+  `expire_snapshots` yet (duckdb-iceberg#1341 is open), so pyiceberg stays until that
+  merges.
 - **pyiceberg is pinned to a commit**, `4adf237` (snapshot expiry and orphan files,
   `table_maintenance.yml` only): apache/iceberg-python PR #3361 on main after 0.12.0, built
   on the runner from `djouallah/iceberg-python` (tag `orphan-files-4adf237` keeps the commit
