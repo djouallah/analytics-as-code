@@ -6,8 +6,8 @@ up with ~24 tiny data files a day and nothing ever folds them back together. Thi
 iceberg_rewrite_data_files() over each table, consolidating files below the target size.
 
 iceberg_rewrite_data_files landed in duckdb/duckdb-iceberg#1035 and first shipped stable
-with duckdb 2.0.0. The workflow pins duckdb==2.0.0, and the iceberg extension binary is
-keyed to the duckdb build, so pinning duckdb pins the extension too.
+with duckdb 2.0.0. The workflow takes duckdb>=2.0.0, and the iceberg extension binary is
+keyed to the duckdb build, so the extension follows duckdb.
 
 This is the OneLake edition of the R2 original (both live in this repo's git history; the
 copy the old sibling repo had went with that repo). Two things differ from the R2 era:

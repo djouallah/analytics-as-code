@@ -169,7 +169,7 @@ snapshots, one commit). fabriccat's catalog gives the same. The first attempt of
 timed out on the commit of the deleting `MERGE` (HTTP POST timeout) and the re-run passed:
 one transient so far, but watch for it. The previous build, `dev2610011535`, cannot run a
 `MERGE` with two update/delete actions at all (duckdb refuses it). Re-run
-`probe_catalog.yml` after the duckdb pin moves.
+`probe_catalog.yml` after a new duckdb release.
 
 The full catalog capability probe (CREATE/INSERT/DELETE/UPDATE/MERGE/DROP and the rest, per
 engine) lives in the user's **separate repo**; `probe_catalog.yml` here covers only the
@@ -903,21 +903,23 @@ never been probed either.
 - Dev/prod targets attach the OneLake Iceberg REST catalog via `database: iceberg_catalog`
 
 ## DuckDB version policy
-Every duckdb, dbt, pyiceberg and duckdb-wasm version is pinned exactly — none floats on
-"latest". Not pinned: the GitHub actions (by major tag), the runner image, and the packages
-those pins pull in.
+Every dbt, pyiceberg and duckdb-wasm version is pinned exactly, and duckdb's 1.5 write venv;
+the Python duckdb that touches the catalog is `>=2.0.0`, the newest stable release (pip
+takes no pre-release on its own). Not pinned: the GitHub actions (by major tag), the runner
+image, and the packages those pins pull in.
 - **`process_data.yml`, `build.yml`, `table_maintenance.yml` and `import_data.yml`'s read venv
-  pin `duckdb==2.0.0`** (dbt via `requirements.txt`, which also pins
-  `dbt-core`/`dbt-duckdb` exactly — the insert-only merges lean on adapter internals, and
+  take `duckdb>=2.0.0`** (dbt via `requirements.txt`, which pins `dbt-core`/`dbt-duckdb`
+  exactly — the insert-only merges lean on adapter internals, and
   `macros/nothing_to_do.sql` is a copy of dbt-duckdb's incremental materialization). 2.0
   is the floor: `iceberg_rewrite_data_files()` (duckdb-iceberg#1035), which the compaction
   job needs, first shipped stable in 2.0.0 (2026-10-21; until then the pin was the
-  pre-release `2.0.0.dev2610161340`). Pinning the same build everywhere means the catalog
-  is only ever touched by one known duckdb. The `iceberg` extension is installed from
-  `core` first (`compact_iceberg.py` falls back to `core_nightly`) and its binary is keyed
-  to the duckdb build, so pinning duckdb pins the extension too. duckdb-iceberg has no
-  `expire_snapshots` yet (duckdb-iceberg#1341 is open), so pyiceberg stays until that
-  merges.
+  pre-release `2.0.0.dev2610161340`). Every job installs the same newest release, so a new
+  duckdb reaches the catalog on the next run, unannounced: a failure right after a duckdb
+  release is the first thing to check against it, and `probe_catalog.yml` is re-run then.
+  The `iceberg` extension is installed from `core` first (`compact_iceberg.py` falls back
+  to `core_nightly`); its binary is keyed to the duckdb build, in a folder per version, so
+  the extension follows duckdb. duckdb-iceberg has no `expire_snapshots` yet
+  (duckdb-iceberg#1341 is open), so pyiceberg stays until that merges.
 - **pyiceberg is pinned to a commit**, `4adf237` (snapshot expiry and orphan files,
   `table_maintenance.yml` only): apache/iceberg-python PR #3361 on main after 0.12.0, built
   on the runner from `djouallah/iceberg-python` (tag `orphan-files-4adf237` keeps the commit
