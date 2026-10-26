@@ -24,7 +24,8 @@ workspace. The mechanism is the sibling repo's (fabric-medallion-dbt, .github/sc
   3. THE PIPELINE RUNS ONCE, and the deploy waits for it: the model names tables that a
      first run creates, and the run is what proves the notebook works.
   4. THE MODEL AND THE REPORT are published by deploy_model.py, the same publish as the
-     `power` workspace's, with this workspace's lakehouse.
+     `power` workspace's, with this workspace's lakehouse. With the model, its source,
+     HEAD's semantic_model/ossie.yaml, goes to nem/Files/semantic_model/ossie.yaml.
   5. THE SCHEDULE, when asked: hourly, process_data.yml's cadence, or off.
 
 Nothing here touches what runs from GitHub: the catalog of process_data.yml is the lakehouse
@@ -51,6 +52,7 @@ LAKEHOUSE, PIPELINE = "nem", "run_pipeline"
 PROJECT = "Files/project"
 # What the `run` notebook needs of the repo: the dbt project and the pins it installs.
 UPLOADED = ["dbt_project.yml", "profiles.yml", "models", "macros", "tests", "requirements.txt"]
+MODEL = "semantic_model/ossie.yaml"
 
 WS = os.environ["WS_ID"]
 
@@ -114,6 +116,14 @@ def upload(lakehouse):
     for name, data in files.items():
         workspace.get_file_client(f"{lakehouse}/{PROJECT}/{name}").upload_data(data, overwrite=True)
     print(f"uploaded {len(files)} files of {commit} to {LAKEHOUSE}/{PROJECT}")
+
+
+def upload_model(lakehouse):
+    """The semantic model's source, HEAD's ossie.yaml, next to the model it was published as."""
+    data = subprocess.run(["git", "show", f"HEAD:{MODEL}"], cwd=REPO, check=True,
+                          capture_output=True).stdout
+    onelake().get_file_client(f"{lakehouse}/Files/{MODEL}").upload_data(data, overwrite=True)
+    print(f"uploaded {MODEL} to {LAKEHOUSE}/Files/{MODEL}")
 
 
 def run_and_wait(pipeline, lakehouse):
@@ -182,11 +192,13 @@ def main():
         run_and_wait(pipeline, lakehouse)
     published = [t for p, t in (("model", "SemanticModel"), ("report", "Report")) if p in parts]
     if published:
-        os.environ["LH_ID"] = item("lakehouses", LAKEHOUSE)
+        lakehouse = os.environ["LH_ID"] = item("lakehouses", LAKEHOUSE)
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import deploy_model
         deploy_model.main(published)
         print(f"published {', '.join(published)}")
+        if "model" in parts:
+            upload_model(lakehouse)
     if scheduling:
         schedule(pipeline or item("items?type=DataPipeline", PIPELINE), "schedule" in scheduling)
 

@@ -646,7 +646,9 @@ Fabric workspace, independent of everything GitHub runs: the mechanism of the si
   Python notebook `run` and the pipeline `run_pipeline` that calls it;
 - uploads the dbt project (`git archive HEAD`) to `nem/Files/project`, with a `COMMIT` file;
 - runs the pipeline once and waits: the model names tables a first run creates;
-- publishes the model and the report with `deploy_model.main()`, on that lakehouse;
+- publishes the model and the report with `deploy_model.main()`, on that lakehouse, and with
+  the model uploads its source, HEAD's `semantic_model/ossie.yaml`, to
+  `nem/Files/semantic_model/ossie.yaml`;
 - with `schedule`, runs the pipeline hourly; without it, turns its schedules off (the test
   workspace, `dax-conformance-oracle` in fabriccat, must not spend CU every hour). A run with
   no part ticked only sets the schedule.
