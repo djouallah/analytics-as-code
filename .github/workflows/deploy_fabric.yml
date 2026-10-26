@@ -36,6 +36,10 @@ on:
         description: 'Power BI report (on the semantic model)'
         type: boolean
         default: true
+      ossie:
+        description: 'Copy semantic_model/ossie.yaml to nem/Files/semantic_model (a file copy, no Power BI)'
+        type: boolean
+        default: true
       fabric_app_vertipaq:
         description: 'Fabric app on VertiPaq (on the semantic model)'
         type: boolean
@@ -107,6 +111,7 @@ jobs:
         run: >-
           python scripts/deploy_fabric.py ${{ inputs.data && 'data' || '' }}
           ${{ inputs.semantic_model && 'model' || '' }} ${{ inputs.powerbi_report && 'report' || '' }}
+          ${{ inputs.ossie && 'ossie' || '' }}
           ${{ inputs.schedule && 'schedule' || 'noschedule' }}
 
       # The Fabric apps (Rayfin). Only an item's owner can deploy to it, so CI deploys into

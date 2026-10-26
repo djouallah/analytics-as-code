@@ -1,16 +1,16 @@
 """Install the whole project into one Fabric workspace: the lakehouse, the hourly dbt run, the
 semantic model and the report.
 
-    WS_ID=<workspace id> python scripts/deploy_fabric.py [data] [model] [report] [schedule|noschedule]
+    WS_ID=<workspace id> python scripts/deploy_fabric.py [data] [model] [report] [ossie] [schedule|noschedule]
 
-The arguments are the parts to deploy (data, model and report when none is named),
-deploy_fabric.yml's ticks:
+The arguments are the parts to deploy (all four when none is named), deploy_fabric.yml's ticks:
   data        steps 1-3: the lakehouse, the notebook, the pipeline and its run
   model       step 4: the semantic model, on the lakehouse already there
   report      step 4: the Power BI report, on the model already there
-  schedule    step 5: the pipeline runs hourly
-  noschedule  step 5: the pipeline's schedules are turned off (a test workspace's pipeline
-              spends that capacity's CU every hour)
+  ossie       step 5: ossie.yaml copied to the lakehouse already there
+  schedule    step 6: the pipeline runs hourly
+  noschedule  step 6: the pipeline's schedules are turned off (a test workspace's pipeline
+              spends that capacity's CU every hour; nothing to do where there is none)
 
 deploy_fabric.yml runs it, then deploys the front end (the VertiPaq Fabric app) into the same
 workspace. The mechanism is the sibling repo's (fabric-medallion-dbt, .github/scripts/deploy.py):
@@ -24,9 +24,10 @@ workspace. The mechanism is the sibling repo's (fabric-medallion-dbt, .github/sc
   3. THE PIPELINE RUNS ONCE, and the deploy waits for it: the model names tables that a
      first run creates, and the run is what proves the notebook works.
   4. THE MODEL AND THE REPORT are published by deploy_model.py, the same publish as the
-     `power` workspace's, with this workspace's lakehouse. With the model, its source,
-     HEAD's semantic_model/ossie.yaml, goes to nem/Files/semantic_model/ossie.yaml.
-  5. THE SCHEDULE, when asked: hourly, process_data.yml's cadence, or off.
+     `power` workspace's, with this workspace's lakehouse.
+  5. OSSIE: HEAD's semantic_model/ossie.yaml is copied to nem/Files/semantic_model/ossie.yaml.
+     A copy, nothing else: no Power BI.
+  6. THE SCHEDULE, when asked: hourly, process_data.yml's cadence, or off.
 
 Nothing here touches what runs from GitHub: the catalog of process_data.yml is the lakehouse
 of WS_ID/LH_ID in the repository variables, and this installs a second, independent one.
@@ -178,11 +179,11 @@ def schedule(pipeline, on):
 
 def main():
     args = set(sys.argv[1:])
-    if args - {"data", "model", "report", "schedule", "noschedule"} or {"schedule", "noschedule"} <= args:
-        raise SystemExit("usage: deploy_fabric.py [data] [model] [report] [schedule|noschedule], "
+    if args - {"data", "model", "report", "ossie", "schedule", "noschedule"} or {"schedule", "noschedule"} <= args:
+        raise SystemExit("usage: deploy_fabric.py [data] [model] [report] [ossie] [schedule|noschedule], "
                          f"not {' '.join(sys.argv[1:])}")
     scheduling = args & {"schedule", "noschedule"}
-    parts = (args - scheduling) or (set() if scheduling else {"data", "model", "report"})
+    parts = (args - scheduling) or (set() if scheduling else {"data", "model", "report", "ossie"})
     pipeline = None
     if "data" in parts:
         publish()
@@ -192,14 +193,17 @@ def main():
         run_and_wait(pipeline, lakehouse)
     published = [t for p, t in (("model", "SemanticModel"), ("report", "Report")) if p in parts]
     if published:
-        lakehouse = os.environ["LH_ID"] = item("lakehouses", LAKEHOUSE)
+        os.environ["LH_ID"] = item("lakehouses", LAKEHOUSE)
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import deploy_model
         deploy_model.main(published)
         print(f"published {', '.join(published)}")
-        if "model" in parts:
-            upload_model(lakehouse)
-    if scheduling:
+    if "ossie" in parts:
+        upload_model(item("lakehouses", LAKEHOUSE))
+    if "noschedule" in scheduling and not pipeline and not [
+            i for i in fabric("GET", "/items?type=DataPipeline")[2]["value"] if i["displayName"] == PIPELINE]:
+        print(f"no {PIPELINE} in the workspace: no schedule to turn off")
+    elif scheduling:
         schedule(pipeline or item("items?type=DataPipeline", PIPELINE), "schedule" in scheduling)
 
 
