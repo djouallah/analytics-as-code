@@ -647,8 +647,9 @@ Fabric workspace, independent of everything GitHub runs: the mechanism of the si
 - uploads the dbt project (`git archive HEAD`) to `nem/Files/project`, with a `COMMIT` file;
 - runs the pipeline once and waits: the model names tables a first run creates;
 - publishes the model and the report with `deploy_model.main()`, on that lakehouse;
-- copies HEAD's `semantic_model/ossie.yaml` to `nem/Files/semantic_model/ossie.yaml` (its own
-  tick, `ossie`: a file copy, no Power BI);
+- copies HEAD's `semantic_model/ossie.yaml` to `nem/Files/semantic_model/ossie.yaml`, its
+  `{WS_ID}`/`{LH_ID}` replaced by the workspace's and lakehouse's ids (its own tick, `ossie`:
+  a file copy, no Power BI);
 - with `schedule`, runs the pipeline hourly; without it, turns its schedules off (the test
   workspace, `dax-conformance-oracle` in fabriccat, must not spend CU every hour). A run with
   no part ticked only sets the schedule.

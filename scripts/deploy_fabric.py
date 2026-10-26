@@ -25,8 +25,8 @@ workspace. The mechanism is the sibling repo's (fabric-medallion-dbt, .github/sc
      first run creates, and the run is what proves the notebook works.
   4. THE MODEL AND THE REPORT are published by deploy_model.py, the same publish as the
      `power` workspace's, with this workspace's lakehouse.
-  5. OSSIE: HEAD's semantic_model/ossie.yaml is copied to nem/Files/semantic_model/ossie.yaml.
-     A copy, nothing else: no Power BI.
+  5. OSSIE: HEAD's semantic_model/ossie.yaml is copied to nem/Files/semantic_model/ossie.yaml,
+     its {WS_ID}/{LH_ID} replaced by this workspace's and lakehouse's ids. A copy, no Power BI.
   6. THE SCHEDULE, when asked: hourly, process_data.yml's cadence, or off.
 
 Nothing here touches what runs from GitHub: the catalog of process_data.yml is the lakehouse
@@ -120,11 +120,16 @@ def upload(lakehouse):
 
 
 def upload_model(lakehouse):
-    """The semantic model's source, HEAD's ossie.yaml, next to the model it was published as."""
+    """HEAD's ossie.yaml, with this workspace and lakehouse in its OneLake address, as
+    deploy_model.py fills them in."""
     data = subprocess.run(["git", "show", f"HEAD:{MODEL}"], cwd=REPO, check=True,
                           capture_output=True).stdout
+    data = data.replace(b"{WS_ID}", WS.encode()).replace(b"{LH_ID}", lakehouse.encode())
+    address = f"onelake.dfs.fabric.microsoft.com/{WS}/{lakehouse}".encode()
+    if address not in data:
+        raise SystemExit(f"{MODEL}: no {address.decode()} after filling in the ids")
     onelake().get_file_client(f"{lakehouse}/Files/{MODEL}").upload_data(data, overwrite=True)
-    print(f"uploaded {MODEL} to {LAKEHOUSE}/Files/{MODEL}")
+    print(f"uploaded {MODEL} to {LAKEHOUSE}/Files/{MODEL}, naming {address.decode()}")
 
 
 def run_and_wait(pipeline, lakehouse):
