@@ -10,7 +10,7 @@ services:
       - http://localhost:5173
       - http://127.0.0.1:5173
       - https://sonic-bay-be8d87ef81-eastus.webapp.fabricapps.net
-      - https://risen-shore-fd99a26e62-australiasoutheast.webapp.fabricapps.net
+      - https://rocky-knoll-c08f726642-australiasoutheast.webapp.fabricapps.net
   data:
     enabled: false
   staticHosting:

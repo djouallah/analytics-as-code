@@ -703,9 +703,9 @@ relative import; `query.js` passes its own on to `ossie.json`. The project is th
 directory of `build.mjs` (`rayfin.yml`'s `buildCommand`, `node ../common/build.mjs`).
 
 **It is deployed from the owner's laptop**, under their own login, into two workspaces, each
-its own item `iceberg` reading that workspace's lakehouse `nem`: fabriccat's
-`conformance-oracle` (East US, little data) and `power` (the owner's tenant, Australia
-Southeast, the full data; since 2026-10-27). `.deployments.json` keeps both, `active` the last
+item reading that workspace's lakehouse `nem`: fabriccat's `conformance-oracle` (item
+`iceberg`, East US, little data) and `power` (item `nem`, `--item-name nem`; the owner's
+tenant, Australia Southeast, the full data; since 2026-10-27). `.deployments.json` keeps both, `active` the last
 deployed: `--workspace-id` picks the other.
 ```
 cd dashboard/fabric_app && npm ci && npm ci --prefix ../../scripts
