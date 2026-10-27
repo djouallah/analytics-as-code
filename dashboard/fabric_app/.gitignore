@@ -1,8 +1,6 @@
-# Dependencies and build output (one node_modules here, for both apps; each app's dist/, and
-# vendor/, what an app's build fetches: the Iceberg app's DuckDB-Wasm)
+# Dependencies and build output (one node_modules here, for both apps; each app's dist/)
 node_modules
 dist
-vendor
 *.tsbuildinfo
 
 # Rayfin, in each app's rayfin/: generated or secret-bearing files. `.env*` covers .env and

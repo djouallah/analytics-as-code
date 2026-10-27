@@ -165,9 +165,6 @@ jobs:
       - name: "Iceberg app: deploy"
         if: ${{ !cancelled() && inputs.fabric_app_iceberg }}
         working-directory: dashboard/fabric_app/iceberg
-        # The build fetches DuckDB-Wasm 2.0 from CI artifacts of other repositories (duckdb.mjs).
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: npx rayfin up --item-name iceberg --workspace-id "$WS_ID" --yes --output json
 
       - name: "Iceberg app: CATALOG_URL, on a new item"
