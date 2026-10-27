@@ -1,0 +1,2 @@
+# Rewritten by `rayfin up` on every deploy, with LF endings: kept LF so a deploy leaves git clean.
+dashboard/fabric_app/*/rayfin/functions/src/secrets.generated.ts text eol=lf
