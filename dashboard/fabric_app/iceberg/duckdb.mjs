@@ -10,7 +10,8 @@
 //     (the 2.0 port; the community build predates it, duckdb/community-extensions#3393).
 // The CI build calls itself d54cbbe3df (the v2.0.0 commit) where the extensions say v2.0.0, so
 // each extension's footer is relabelled, which voids its signature: data.js opens DuckDB with
-// unsigned extensions allowed and installs them from the app's own ext/ repository.
+// unsigned extensions allowed and installs them from the app's own repository, ext-<hash of the
+// pins>/ (pins.json names it).
 // The threaded build cannot be used: every wasm_threads extension published (DuckDB's bucket,
 // azure_wasm's CI) imports unshared memory, which a threaded engine refuses.
 //
@@ -21,6 +22,7 @@ import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 
 const PINS = {
   // duckdb/duckdb-wasm main 1f85a503, run "Main" (its artifacts expire after 90 days: pin a newer run then)
@@ -36,7 +38,10 @@ const PINS = {
 const OUT = "vendor/duckdb";
 const ENGINE = ["duckdb-browser.mjs", "duckdb-browser-base.worker.js", "duckdb-base.wasm"];
 
-const pins = JSON.stringify(PINS, null, 1);
+// The extensions' folder is named after the pins: its files then never change under one path,
+// so the worker keeps them for good (site/storage/blockcache.js) and a new pin is a new path.
+const EXT = `ext-${createHash("sha256").update(JSON.stringify(PINS)).digest("hex").slice(0, 10)}`;
+const pins = JSON.stringify({ ...PINS, ext: EXT }, null, 1);
 if (existsSync(join(OUT, "pins.json")) && await readFile(join(OUT, "pins.json"), "utf8") === pins) process.exit(0);
 
 const gh = (...args) => execFileSync("gh", args, { stdio: ["ignore", "ignore", "inherit"] });
@@ -45,7 +50,7 @@ const unzip = (zip, dir) => process.platform === "win32"
   ? execFileSync(join(process.env.SystemRoot, "System32", "tar.exe"), ["-xf", zip, "-C", dir])
   : execFileSync("unzip", ["-q", "-o", zip, "-d", dir]);
 const tmp = join(tmpdir(), `duckdb-wasm-${process.pid}`);
-const ext = join(OUT, "ext", PINS.label, PINS.platform);
+const ext = join(OUT, EXT, PINS.label, PINS.platform);
 await rm(OUT, { recursive: true, force: true });
 await mkdir(ext, { recursive: true });
 await mkdir(tmp, { recursive: true });

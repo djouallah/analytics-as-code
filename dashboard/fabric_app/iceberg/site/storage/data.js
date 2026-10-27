@@ -66,17 +66,25 @@ const lit = s => `'${String(s).replace(/'/g, "''")}'`;
 // abfss://<ws>@onelake.dfs.fabric.microsoft.com/<lh>/... -> https://onelake.dfs.fabric.microsoft.com/<ws>/<lh>/...
 const https = (abfss, sas) => `${abfss.replace(/^abfss:\/\/([^@/]+)@([^/]+)\//, 'https://$2/$1/')}?${sas}`;
 
+// The engine's pins (../../duckdb.mjs), with the extensions' folder, ext-<hash of the pins>: its
+// files never change, so the worker keeps them in OPFS for good (blockcache.js).
+const PINS = fetch(`${ENGINE}pins.json`).then(r => r.json());
+PINS.catch(() => {});   // awaited by init, which reports it
 // DuckDB downloads its extensions one at a time, ~11 MB served uncompressed (13 s live on
-// 2026-10-27). The page fetches them all at once at the start, while the sign-in and the
-// function run, into the browser's cache, where DuckDB's own request finds them (Rayfin's
-// hosting has it revalidate: one round trip each, no body). Their folder is in pins.json
-// (../../duckdb.mjs).
+// 2026-10-27). On a browser's first load the page fetches them all at once at the start, while
+// the sign-in and the function run, into the browser's cache, where DuckDB's own request finds
+// them. After that the worker answers DuckDB from OPFS, and the page fetches nothing (the
+// folder it loaded is remembered in localStorage).
+const EXT_KEY = 'duckdb_extensions';
 function warmExtensions() {
   const t0 = performance.now();
-  fetch(`${ENGINE}pins.json`).then(r => r.json()).then(p => Promise.all([...EXTENSIONS, 'parquet'].map(e =>
-    fetch(`${ENGINE}ext/${p.label}/${p.platform}/${e}.duckdb_extension.wasm`).then(r => r.arrayBuffer()))))
-    .then(f => perf.log('fetch', `prefetch extensions: ${f.length} files`, { ms: performance.now() - t0 }),
-          e => perf.log('info', `prefetch extensions: ${e?.message || e}`));
+  PINS.then(p => {
+    let known = null; try { known = localStorage.getItem(EXT_KEY); } catch (e) {}
+    if (known === p.ext) return;
+    return Promise.all([...EXTENSIONS, 'parquet'].map(e =>
+      fetch(`${ENGINE}${p.ext}/${p.label}/${p.platform}/${e}.duckdb_extension.wasm`).then(r => r.arrayBuffer())))
+      .then(f => perf.log('fetch', `prefetch extensions: ${f.length} files`, { ms: performance.now() - t0 }));
+  }).catch(e => perf.log('info', `prefetch extensions: ${e?.message || e}`));
 }
 
 export function createDataSource({ onStatus = () => {} } = {}) {
@@ -185,10 +193,12 @@ importScripts("${ENGINE}duckdb-browser-base.worker.js");`], { type: "text/javasc
     // From the app's own repository (installing needs a home directory). azure_wasm is loaded
     // before the first scan: it claims abfss://, or DuckDB tries to autoload the official azure
     // extension, which has no WASM build. icu is the time zones.
+    const pins = await PINS, repo = ENGINE + pins.ext;
     await perf.time('attach', `LOAD ${EXTENSIONS.join(', ')}`, () =>
-      q(`SET home_directory = '/tmp'; SET custom_extension_repository = ${lit(ENGINE + 'ext')};
-         SET autoinstall_extension_repository = ${lit(ENGINE + 'ext')};
+      q(`SET home_directory = '/tmp'; SET custom_extension_repository = ${lit(repo)};
+         SET autoinstall_extension_repository = ${lit(repo)};
          ${EXTENSIONS.map(e => `INSTALL ${e}; LOAD ${e};`).join(' ')}`));
+    try { localStorage.setItem(EXT_KEY, pins.ext); } catch (e) {}
     // Iceberg's files never change once written: what DuckDB learnt of one (its size, its
     // Parquet footer) holds for the session. A setting this build lacks is left as it is.
     for (const s of ['SET enable_http_metadata_cache = true', 'SET parquet_metadata_cache = true',

@@ -604,8 +604,12 @@ else: no import, no file written for it.
   repository. The CI artifacts expire after 90 days: a new pin then, and back to npm and the
   signed extensions once duckdb-wasm 2.0 ships. The `.wasm` is 33.7 MB, served uncompressed
   (Rayfin's hosting compresses nothing); it loads while the function is called. The
-  extensions (~11 MB) are fetched all at once at the start (`warmExtensions`), so DuckDB, which
-  downloads them one at a time (13 s live), only revalidates them.
+  extensions (~11 MB) sit in `ext-<hash of the pins>/` (named in `pins.json`), so a file there
+  never changes: the worker keeps them in OPFS (`blockcache.js`) and answers DuckDB from there
+  after a browser's first load (1-11 ms each instead of 1.5-2.8 s; Rayfin's hosting
+  revalidates every file, `max-age=0`). On that first load the page fetches them all at once
+  at the start (`warmExtensions`), as DuckDB downloads them one at a time (13 s live), and
+  remembers in `localStorage` the folder it has loaded.
 - **2.0 sends every ranged read with `If-Match`**, even with `unsafe_disable_etag_checks`,
   and the browser's cache answers no request that carries it: every table's
   `metadata.json` went back to OneLake (~0.9 s each). The worker drops the header

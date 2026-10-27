@@ -12,6 +12,8 @@
 // lacks are fetched, in one request. Only what queries read is kept: the column chunks of the
 // row groups they scan, not whole files. An Iceberg file is never rewritten in place, so a
 // block is never checked again. A HEAD of a file whose size is known is answered too.
+// DuckDB's extensions are kept the same way, whole: their folder is named after the engine's
+// pins (ext-<hash>/, iceberg/duckdb.mjs), so a file there never changes either.
 //
 // Two OPFS files, in blockcache/: blocks.bin (the blocks, appended) and index.jsonl (where
 // each block is, and each file's size and validators), read back at start. Over CAP_BYTES the
@@ -36,7 +38,8 @@
   const enc = new TextEncoder();
 
   const pathOf = u => String(u).split('?')[0];
-  const cacheable = (m, u) => (m === 'GET' || m === 'HEAD') && /\.parquet$/i.test(pathOf(u));
+  const isExtension = u => /\/ext-[0-9a-f]+\/[^?]*\.duckdb_extension\.wasm$/i.test(pathOf(u));
+  const cacheable = (m, u) => (m === 'GET' || m === 'HEAD') && (/\.parquet$/i.test(pathOf(u)) || isExtension(u));
 
   function log(entry) {
     const b = enc.encode(JSON.stringify(entry) + '\n');
@@ -109,7 +112,13 @@
     const size = x.status === 200 ? body.length
       : Number((x.getResponseHeader('Content-Range') || '').split('/')[1]) || known?.size;
     if (!size) return false;
-    if (!known) {
+    keep(x, path, body, start, size);
+    return true;
+  }
+
+  // Keeps the bytes `body`, from offset `start` of a file of `size` bytes, as blocks.
+  function keep(x, path, body, start, size) {
+    if (!files.has(path)) {
       const f = { size, etag: x.getResponseHeader('ETag'), lastModified: x.getResponseHeader('Last-Modified') };
       files.set(path, f);
       log({ f: path, s: f.size, e: f.etag, m: f.lastModified });
@@ -125,7 +134,6 @@
       end += len;
     }
     blocks.flush(); index.flush();
-    return true;
   }
 
   P.open = function (m, u, ...r) {
@@ -147,6 +155,11 @@
                                                   ETag: f.etag, 'Last-Modified': f.lastModified });
         } else {
           const r = /^bytes=(\d+)-(\d*)$/.exec(this.__bcR || '');
+          if (!r && f) {
+            const out = fromStore(path, 0, f.size - 1);
+            if (out) return answer(this, 200, out.buffer, { 'Content-Length': out.length, 'Accept-Ranges': 'bytes',
+                                                            ETag: f.etag, 'Last-Modified': f.lastModified });
+          }
           if (r) {
             const a = Number(r[1]);
             const b = r[2] === '' ? (f ? f.size - 1 : NaN) : (f ? Math.min(Number(r[2]), f.size - 1) : Number(r[2]));
@@ -169,6 +182,14 @@
       }
     } catch (e) { /* the store failed: the request goes to OneLake as it is */ }
     const r = send.call(this, body);
+    // A whole file that went to OneLake or the app's hosting (an extension): kept, all of it.
+    try {
+      if (blocks && this.__bcM === 'GET' && !this.__bcR && cacheable(this.__bcM, this.__bcU) && this.status === 200
+          && this.response && this.response.byteLength) {
+        const bytes = new Uint8Array(this.response);
+        keep(this, pathOf(this.__bcU), bytes, 0, bytes.length);
+      }
+    } catch (e) {}
     // A HEAD that went to OneLake teaches the store the file's size, for the reads that follow.
     try {
       if (blocks && this.__bcM === 'HEAD' && cacheable(this.__bcM, this.__bcU) && this.status === 200) {
