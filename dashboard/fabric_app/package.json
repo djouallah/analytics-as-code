@@ -1,0 +1,10 @@
+{
+  "name": "nemtracker-fabric",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "The Fabric apps (Rayfin): the page of ../github on one engine each, iceberg/ (DuckDB-WASM over the Iceberg catalog) and vertipaq/ (the semantic model). The Rayfin CLI for both: run it in an app's folder.",
+  "devDependencies": {
+    "@microsoft/rayfin-cli": "^1.36.1"
+  }
+}

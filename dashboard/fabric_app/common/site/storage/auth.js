@@ -14,7 +14,7 @@
 //                            config. The default is a RayfinClient (functions); the VertiPaq
 //                            app builds one with its connector.
 //   ready()                  true when the app already holds what it needs and can start
-//                            without a session (this app: a OneLake SAS that is still valid).
+//                            without a session (no app uses it now: both need one at start).
 // =============================================================================
 
 // Keep these on the same version: jsDelivr resolves their shared deps (rayfin-auth, rayfin-lib)
@@ -87,8 +87,8 @@ function createRayfinAuth({ client = (rayfin, config) => new rayfin.RayfinClient
     }
   }
 
-  // The client with a session: a re-sign after the cached SAS ran out (sas.js) needs one as
-  // much as the first did, and the gate is down by then.
+  // The client with a session: a call made after the start (a function, a connector query)
+  // needs one as much as the first did, and the gate is down by then.
   async function signedClient() {
     await init();
     if (!_client.auth.getSession()?.isAuthenticated && !await ensureSession(false))

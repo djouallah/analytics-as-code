@@ -3,7 +3,7 @@
 //   - every measure of the model, compiled and run in five filter contexts;
 //   - some of them checked against SQL written by hand;
 //   - every query the page sends, in six page states, through the page's compiler
-//     (dashboard/github/common/semantic/query.js: its DAX, and this package's SQL with the
+//     (dashboard/page/semantic/query.js: its DAX, and this package's SQL with the
 //     page's options), runs;
 //   - the SQL page's queries (SELECTs over the model) against the DAX page's, in the same
 //     states: the same rows;
@@ -27,7 +27,7 @@ import { fetchFiles } from './page_states.mjs';
 
 const root = new URL('../../', import.meta.url);
 const path = p => new URL(p, root);
-const present = ['semantic_model/ossie.yaml', 'dashboard/github/common/index.html', 'dashboard/github/common/semantic/query.js'].every(p => fs.existsSync(path(p)));
+const present = ['semantic_model/ossie.yaml', 'dashboard/page/index.html', 'dashboard/page/semantic/query.js'].every(p => fs.existsSync(path(p)));
 const skip = present ? false : 'the repository files are not here';
 
 let con, dax, page, doc, bim, staged, createQueries, sqlPage;

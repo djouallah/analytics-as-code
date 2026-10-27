@@ -12,13 +12,13 @@ describes the version in use, not the product.
 
 | Source Data | → | dbt-duckdb | → | Iceberg Catalog | → | Semantic model | → | Clients |
 |:-----------:|---|:----------:|---|:---------------:|---|:------:|---|:---------:|
-| *external*  |   | *ephemeral, in-memory* | | *persistent, only state* | | *one Apache Ossie model (`ossie.yaml`): tables, relationships, measures in DAX* | | *one page on two hosts (DuckDB-WASM), and a Power BI report* |
+| *external*  |   | *ephemeral, in-memory* | | *persistent, only state* | | *one Apache Ossie model (`ossie.yaml`): tables, relationships, measures in DAX* | | *one page, on three engines* |
 
 - **dbt-duckdb** — transformation engine that runs entirely in-memory. No database server, no cluster. A Python model handles data ingestion; SQL models handle transformation.
 - **Iceberg REST catalog** — the single persistent layer. All warehouse state lives here as Iceberg tables, and the gzipped source CSVs are archived next to them in object storage, so nothing depends on the ephemeral CI runner's disk.
 - **GitHub Actions** — orchestrates everything. Scheduled workflows replace traditional schedulers (Airflow, Dagster, etc.). Auth is OIDC, no secrets.
 - **One semantic model** — an [Apache Ossie](https://github.com/apache/ossie) model (`semantic_model/ossie.yaml`) over the Iceberg tables, its measures in DAX (Power BI gets the `model.bim` it stands for, written at deploy): what a table is, how tables relate, and every measure, in DAX. Every client reads the data through it.
-- **The clients** — a static HTML page that queries a cached copy of the tables in the browser (DuckDB-WASM, no backend API), deployed to GitHub Pages (public) and as a Microsoft Fabric app (sign-in, data in a lakehouse), and a Power BI report on the same model in Direct Lake. See [The clients](#the-clients).
+- **The clients** — one static HTML page, run by three engines: DuckDB-WASM in the browser on a cached copy of the tables (GitHub Pages, public), DuckDB-WASM reading the Iceberg tables straight from the catalog (a Microsoft Fabric app, sign-in), and the semantic model itself in Direct Lake (a second Fabric app). See [The clients](#the-clients).
 
 ## Design Principles
 
@@ -56,28 +56,28 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 
 One semantic model (`semantic_model/ossie.yaml`), its clients under `dashboard/`:
 
-- `github/` and `fabric_app/wasm/` are one page (`dashboard/github/common/index.html`) on two hosts. A
-  host only decides where the data files live and how the browser gets them
-  (`storage/data.js`), so a chart is written once and reaches both.
-- `powerbi_report/` is a Power BI report (`nem.Report`, as JSON) on the model as deployed to Fabric,
-  which reads the Iceberg tables in Direct Lake. `deploy_model.yml` publishes the two together.
-- `fabric_app/vertipaq/` is the page as a Fabric app with the deployed model as its engine,
-  its queries run by Power BI. `deploy_fabric.yml` installs it with the rest of the project
-  (lakehouse, `fabric_items/` notebook and pipeline, model, report) into one workspace. The
-  two Fabric apps share `fabric_app/common/` (the build and the sign-in), as the GitHub
-  page's two ways of asking share `github/common/`.
+- `page/` is the page, written once (`dashboard/page/index.html`). A host only decides how
+  the browser reaches the data (its `site/storage/data.js`, staged over the page), so a chart
+  is written once and reaches every engine.
+- `github/` is GitHub Pages: DuckDB-WASM over `.duckdb` copies of the tables.
+- `fabric_app/iceberg/` is a Fabric app: DuckDB-WASM over the Iceberg catalog, reading the
+  tables in place.
+- `fabric_app/vertipaq/` is a Fabric app with the deployed model as its engine, its queries
+  run by Power BI. `deploy_fabric.yml` installs it with the rest of the project (lakehouse,
+  `fabric_items/` notebook and pipeline, model) into one workspace. The two Fabric apps share
+  `fabric_app/common/` (the build and the sign-in) and the Rayfin CLI (`fabric_app/package.json`).
 
 A measure is written once, in the model, and reaches every client.
 
-| | GitHub Pages | Fabric app, DuckDB-WASM | Power BI report |
+| | GitHub Pages | Fabric app, Iceberg | Fabric app, VertiPaq |
 |---|---|---|---|
-| Live at | [nemtracker.github.io](https://nemtracker.github.io/) | inside a Fabric workspace | the model's Fabric workspace |
-| Who can open it | anyone | people the app is shared with, after Fabric sign-in | people with access to the report |
+| Live at | [nemtracker.github.io](https://nemtracker.github.io/) | inside a Fabric workspace | inside a Fabric workspace |
+| Who can open it | anyone | people the app is shared with, after Fabric sign-in | people the app is shared with, after Fabric sign-in |
 | Engine | DuckDB-WASM, in the browser | DuckDB-WASM, in the browser | VertiPaq, in Fabric |
-| Data | `.duckdb` files next to the page | the same files in a lakehouse, under `Files/data` | the `mart` Iceberg tables, Direct Lake, no copy |
-| 5-minute history | one file per half-year, downloaded | the same files, downloaded as parallel range requests | — |
-| Host code | `dashboard/github/common/storage/data.js` | `dashboard/fabric_app/wasm/site/storage/` | — |
-| Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `dashboard/fabric_app/wasm/` (page); data not refreshed since 2026-10-09 | `deploy_model.yml` |
+| Data | `.duckdb` files next to the page | the `mart` Iceberg tables, read in place with a read-only SAS | the `mart` Iceberg tables, Direct Lake, no copy |
+| 5-minute history | one file per half-year, downloaded | the tables as they are | the tables as they are |
+| Host code | `dashboard/github/site/storage/` | `dashboard/fabric_app/iceberg/site/storage/` | `dashboard/fabric_app/vertipaq/site/storage/` |
+| Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `dashboard/fabric_app/iceberg/`, or `deploy_fabric.yml` | `deploy_fabric.yml` |
 
 ### The layers of the dashboard
 
@@ -86,12 +86,12 @@ on purpose: the point is the layers, not their maturity.
 
 | Layer | Here | In a real product |
 |---|---|---|
-| Consumer | `dashboard/github/common/index.html` | the BI tool |
+| Consumer | `dashboard/page/index.html` | the BI tool |
 | Query language | a query of the model's fields (`frontend/queries.js`), which the compiler writes as DAX | DAX, MDX, VizQL, Malloy, a metrics request |
 | Semantic model | `semantic_model/ossie.yaml`, Apache Ossie with DAX measures (the TMSL in its `POWER_BI` extensions) | a Tabular model (TMSL, TMDL), LookML, MetricFlow YAML |
 | Compiler | `dax-sql` | MetricFlow, Cube's schema compiler, Malloy's compiler, Looker's SQL generator, Power BI's formula engine, Tableau's VizQL |
 | Engine | DuckDB-WASM | the warehouse, VertiPaq, Hyper |
-| Storage | `dashboard/github/common/storage/` | the lakehouse or warehouse connection |
+| Storage | `dashboard/page/storage/` | the lakehouse or warehouse connection |
 
 - **The semantic model** describes the tables, their relationships and the measures, each
   with a description. It is an Apache Ossie model (`ossie.yaml`), its measures in DAX, and
@@ -112,7 +112,7 @@ on purpose: the point is the layers, not their maturity.
   compiler turns into the DAX it stands for and then SQL, so its figures are the model's
   measures; any other SQL runs as written over the views. Its CSV export is the rows of that
   SQL.
-- **The same page asking in SQL** is `dashboard/github/sql/`, at `sql/` on the site: the
+- **The same page asking in SQL** is `dashboard/page/sql/`, at `sql/` on the site: the
   same `index.html`, storage and model, and its own `frontend/queries.js`, each query a
   SELECT over the model (`SELECT dim_calendar.date, AGG("Generation MWh") FROM model ...`).
   dax-sql reads it into the same syntax tree a DAX query is, so the compiler builds one plan
@@ -130,13 +130,13 @@ on purpose: the point is the layers, not their maturity.
   green run.
 - `scripts/parity/sql_page.mjs`: the SQL page's rows against the DAX page's, in the same
   states.
-- `scripts/check_model.py` (every model deploy): a refresh, row counts, each measure per day
-  for the newest week, and that the report reads the model.
+- `scripts/check_model.py` (every model deploy): a refresh, row counts, and each measure per
+  day for the newest week.
 
 ### How a Power BI report asks
 
 A Power BI report holds no DAX. Each visual is a description: which columns and measures,
-grouped how, filtered by what (the `visual.json` files of `nem.Report`).
+grouped how, filtered by what.
 
 - The browser sends that description, a *semantic query*, to the Power BI service.
 - The service turns it into DAX, using the model, and the engine (VertiPaq) runs it.
@@ -152,12 +152,8 @@ of those queries.
 ### The Fabric app
 
 Built with [Rayfin](https://www.npmjs.com/package/@microsoft/rayfin-cli). Fabric hosts the
-page and signs you in, and the page reads its data directly from OneLake: no backend to run,
-no query service.
-
-![The dashboard as a Fabric app](../dashboard/fabric_app/wasm/screenshots.png)
-
-![Architecture of the Fabric app](../dashboard/fabric_app/wasm/architecture.svg)
+page and signs you in, and the page reads the Iceberg tables directly from OneLake: no
+backend to run, no query service, no copy of the data.
 
 - **Hosting:** `rayfin up` deploys the page to Fabric static hosting.
 - **Sign-in:** Fabric single sign-on. Inside the Fabric portal there is no extra login; in
@@ -180,15 +176,15 @@ no query service.
 ├── scripts/              # The cache (Iceberg → DuckDB files), table maintenance, deploys, parity/
 ├── semantic_model/       # The one semantic model (ossie.yaml): what every client reads; the deploy writes the Fabric item from it
 ├── dashboard/            # Its clients
-│   ├── github/           # The page on GitHub Pages, and its two ways of asking
+│   ├── page/             # The page, written once, and its two ways of asking
 │   │   ├── common/       # index.html, frontend/ (draws, Logs tab), storage/ (the host, the tables as views), semantic/ (the model's queries), dag/ (dbt docs)
 │   │   ├── dax/          # the queries as objects of the model's fields: frontend/queries.js; served at /
 │   │   └── sql/          # the queries as SELECTs over the model: frontend/queries.js; served at sql/
-│   ├── fabric_app/       # The same page as a Fabric app, and its two backends
+│   ├── github/           # GitHub Pages: its data source (site/storage/), DuckDB-WASM over .duckdb copies
+│   ├── fabric_app/       # The page as Fabric apps, one per engine; package.json (the Rayfin CLI) for both
 │   │   ├── common/       # build.mjs and the Fabric sign-in (site/storage/auth.js)
-│   │   ├── wasm/         # DuckDB-WASM over a copy of the tables: its host code and the Rayfin project (deployed)
+│   │   ├── iceberg/      # DuckDB-WASM over the Iceberg catalog: its data source and the Rayfin project (function openCatalog)
 │   │   └── vertipaq/     # the deployed model as the engine: its host code and the Rayfin project (deploy_fabric.yml)
-│   └── powerbi_report/   # A report over the deployed model
 ├── fabric_items/         # The lakehouse, notebook and pipeline deploy_fabric.yml installs into a workspace
 ├── doc/                  # This file and the architecture diagram
 ├── tests/                # dbt data tests
@@ -221,7 +217,6 @@ no query service.
   not land, `dim_duid` changes only through a rebuild, and `fct_summary` keeps the intraday
   value of an interval where the next-day files have another.
 - **Maintenance failures show only in the job's log.** There is no alert.
-- **No CI sees a chart of the Power BI report draw**; a visual is checked by opening it.
 
 The Fabric app has limits of its own:
 
@@ -308,7 +303,7 @@ The catalog is the **OneLake Iceberg REST catalog** (a Microsoft Fabric lakehous
 values come from GitHub repository **variables** (`WS_ID`, `LH_ID`, `AZURE_TENANT_ID`,
 `AZURE_CLIENT_ID` — public identifiers, no secrets) plus a per-run token minted after an OIDC
 federated `azure/login`. The Fabric app's deploys add `LAKE_TENANT_ID`,
-`LAKE_CLIENT_ID`, `FABRIC_APP_WORKSPACE_ID` and `ONELAKE_FILES_URL`.
+and `LAKE_CLIENT_ID`.
 
 | Variable | Description |
 |----------|-------------|
@@ -358,16 +353,15 @@ Everything else is Rayfin — see the
 [Rayfin documentation](https://learn.microsoft.com/fabric/embedded/rayfin/overview):
 
 ```bash
-cd dashboard/fabric_app/wasm
-npm ci && npm ci --prefix rayfin/functions
+cd dashboard/fabric_app && npm ci && npm ci --prefix ../../scripts
+cd iceberg && npm ci --prefix rayfin/functions
 npx rayfin login      # sign in to Fabric
 npx rayfin up         # build + deploy to Fabric static hosting; prints the hosting URL
 
-# once, after the first deploy: where the app's function signs read access
-echo https://onelake.dfs.fabric.microsoft.com/<workspace>/<lakehouse>.Lakehouse/Files \
-  | npx rayfin secret set ONELAKE_FILES_URL --stdin
+# once, after the first deploy: the catalog the app reads (an app setting, no credential)
+echo -n https://onelake.table.fabric.microsoft.com/iceberg/<workspace id>/<lakehouse id> \
+  | npx rayfin secret set CATALOG_URL --stdin
 ```
 
-The lakehouse's `Files/data/` must hold the `.duckdb` files and `latest.json` (see
-AGENTS.md). No workflow writes them since the daily copy was removed on 2026-10-09. Then open
+The tables are the ones the semantic model names, read from that catalog as they are. Then open
 the app in the Fabric portal or in its own tab.

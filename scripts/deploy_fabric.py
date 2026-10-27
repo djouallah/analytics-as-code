@@ -1,18 +1,17 @@
 """Install the whole project into one Fabric workspace: the lakehouse, the hourly dbt run, the
-semantic model and the report.
+semantic model.
 
-    WS_ID=<workspace id> python scripts/deploy_fabric.py [data] [model] [report] [ossie] [schedule|noschedule]
+    WS_ID=<workspace id> python scripts/deploy_fabric.py [data] [model] [ossie] [schedule|noschedule]
 
-The arguments are the parts to deploy (all four when none is named), deploy_fabric.yml's ticks:
+The arguments are the parts to deploy (all three when none is named), deploy_fabric.yml's ticks:
   data        steps 1-3: the lakehouse, the notebook, the pipeline and its run
   model       step 4: the semantic model, on the lakehouse already there
-  report      step 4: the Power BI report, on the model already there
   ossie       step 5: ossie.yaml copied to the lakehouse already there
   schedule    step 6: the pipeline runs hourly
   noschedule  step 6: the pipeline's schedules are turned off (a test workspace's pipeline
               spends that capacity's CU every hour; nothing to do where there is none)
 
-deploy_fabric.yml runs it, then deploys the front end (the VertiPaq Fabric app) into the same
+deploy_fabric.yml runs it, then deploys the front end (the Fabric apps) into the same
 workspace. The mechanism is the sibling repo's (fabric-medallion-dbt, .github/scripts/deploy.py):
 
   1. THE ITEMS in fabric_items/ are published with fabric-cicd: the lakehouse `nem`
@@ -23,7 +22,7 @@ workspace. The mechanism is the sibling repo's (fabric-medallion-dbt, .github/sc
      The folder is deleted first: a model removed from the repo must not survive there.
   3. THE PIPELINE RUNS ONCE, and the deploy waits for it: the model names tables that a
      first run creates, and the run is what proves the notebook works.
-  4. THE MODEL AND THE REPORT are published by deploy_model.py, the same publish as the
+  4. THE MODEL is published by deploy_model.py, the same publish as the
      `power` workspace's, with this workspace's lakehouse.
   5. OSSIE: HEAD's semantic_model/ossie.yaml is copied to nem/Files/semantic_model/ossie.yaml,
      its {WS_ID}/{LH_ID} replaced by this workspace's and lakehouse's ids. A copy, no Power BI.
@@ -184,11 +183,11 @@ def schedule(pipeline, on):
 
 def main():
     args = set(sys.argv[1:])
-    if args - {"data", "model", "report", "ossie", "schedule", "noschedule"} or {"schedule", "noschedule"} <= args:
-        raise SystemExit("usage: deploy_fabric.py [data] [model] [report] [ossie] [schedule|noschedule], "
+    if args - {"data", "model", "ossie", "schedule", "noschedule"} or {"schedule", "noschedule"} <= args:
+        raise SystemExit("usage: deploy_fabric.py [data] [model] [ossie] [schedule|noschedule], "
                          f"not {' '.join(sys.argv[1:])}")
     scheduling = args & {"schedule", "noschedule"}
-    parts = (args - scheduling) or (set() if scheduling else {"data", "model", "report", "ossie"})
+    parts = (args - scheduling) or (set() if scheduling else {"data", "model", "ossie"})
     pipeline = None
     if "data" in parts:
         publish()
@@ -196,13 +195,12 @@ def main():
         lakehouse = item("lakehouses", LAKEHOUSE)
         upload(lakehouse)
         run_and_wait(pipeline, lakehouse)
-    published = [t for p, t in (("model", "SemanticModel"), ("report", "Report")) if p in parts]
-    if published:
+    if "model" in parts:
         os.environ["LH_ID"] = item("lakehouses", LAKEHOUSE)
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import deploy_model
-        deploy_model.main(published)
-        print(f"published {', '.join(published)}")
+        deploy_model.main()
+        print("published the semantic model")
     if "ossie" in parts:
         upload_model(item("lakehouses", LAKEHOUSE))
     if "noschedule" in scheduling and not pipeline and not [

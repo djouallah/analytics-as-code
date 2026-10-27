@@ -17,7 +17,7 @@ services:
   staticHosting:
     enabled: true
     folder: dist
-    buildCommand: npm run build:fabric
+    buildCommand: node ../common/build.mjs
     indexDocument: index.html
     assetAccess: public
   storage:

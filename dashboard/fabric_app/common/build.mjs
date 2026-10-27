@@ -1,6 +1,6 @@
-// Static "build" of a Fabric app, run by both (`npm run build:fabric` in wasm/ or vertipaq/):
+// Static "build" of a Fabric app, run by both (rayfin.yml's buildCommand in iceberg/ or vertipaq/):
 // the project is the working directory, and its dist/ is
-//   the DAX page (../../github: common/ with dax/ over it, the repo's semantic_model/ossie.yaml
+//   the DAX page (../../page with its dax/ over it, the repo's semantic_model/ossie.yaml
 //     and dax-sql
 //     next to the compiler; ../../../scripts/stage_pages.mjs, which stages the Pages site too)
 //   + what both Fabric apps share (this folder's site/: the Fabric sign-in, storage/auth.js)
@@ -23,15 +23,15 @@ const dist = project("./dist/");
 const git = (cmd) => { try { return execSync(`git ${cmd}`, { encoding: "utf8", cwd: here("./") }).trim(); } catch { return ""; } };
 const sha = git("rev-parse --short HEAD") || "unknown";
 // Only what goes into dist/: a deploy regenerates files under rayfin/ before this runs.
-const dirty = git(`status --porcelain -- "${project("./site")}" . ../../github ../../../semantic_model ../../../dax-sql`) ? "-dirty" : "";
+const dirty = git(`status --porcelain -- "${project("./site")}" . ../../page ../../../semantic_model ../../../dax-sql`) ? "-dirty" : "";
 // URL-safe (it is the ?v= cache-buster): <sha>.<yyyymmdd-hhmm UTC>
 const BUILD = `${sha}${dirty}.${new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 13)}`;
 
 await rm(dist, { recursive: true, force: true });
-await stagePage("dax", dist);
+await stagePage("dax", dist, undefined, null);
 await cp(here("./site/"), dist, { recursive: true });
 await cp(project("./site/"), dist, { recursive: true });
 await stampBuild(dist, BUILD);
 // After the stamping, which must not touch them.
 await cp(DAG, dist + "dag", { recursive: true });
-console.log(`Published ../../github (common + dax) + fabric_app/common/site + site/ -> ${dist} (build ${BUILD})`);
+console.log(`Published ../../page (+ dax) + fabric_app/common/site + site/ -> ${dist} (build ${BUILD})`);

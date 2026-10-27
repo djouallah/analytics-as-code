@@ -1,6 +1,6 @@
 // =============================================================================
-// sql_page.mjs — the page asking in SQL (dashboard/github/sql: SELECTs over the model)
-// against the page asking in query objects (dashboard/github/dax): the same questions, the
+// sql_page.mjs — the page asking in SQL (dashboard/page/sql: SELECTs over the model)
+// against the page asking in query objects (dashboard/page/dax): the same questions, the
 // same rows
 // =============================================================================
 //   cd scripts/parity && npm ci && node sql_page.mjs <data dir> [out.json]

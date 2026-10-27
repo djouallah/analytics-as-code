@@ -9,29 +9,30 @@ market (AEMO).
 - **dbt + DuckDB** on GitHub Actions load the data into **Iceberg** tables, every hour.
 - **One Power BI semantic model** ([`semantic_model/`](semantic_model/)) describes those
   tables: their relationships and the measures, in DAX.
-- **Its clients** ([`dashboard/`](dashboard/)):
+- **One page** ([`dashboard/page/`](dashboard/page/)), the dashboard, written once, and
+  the engines that run it ([`dashboard/`](dashboard/)); a host adds only how it reaches the
+  data:
   - **GitHub Pages** ([live](https://nemtracker.github.io/), public,
-    [`dashboard/github/`](dashboard/github/)) and a **Microsoft Fabric app** (Fabric
-    sign-in, [`dashboard/fabric_app/wasm/`](dashboard/fabric_app/wasm/)): the same page. No
-    server: the browser runs the queries itself (DuckDB-WASM) on a cached copy of the tables.
-  - a **Power BI report** ([`dashboard/powerbi_report/`](dashboard/powerbi_report/)), on
-    the same model, run by VertiPaq over the Iceberg tables (Direct Lake).
-  - a second backend of the Fabric app, the page with VertiPaq as its engine and no copy of
-    the data ([`dashboard/fabric_app/vertipaq/`](dashboard/fabric_app/vertipaq/)),
-    installed with the whole stack (lakehouse, dbt notebook and pipeline, model, report)
-    into one Fabric workspace by `deploy_fabric.yml`.
-- **One page, two ways of asking** ([`dashboard/github/`](dashboard/github/)): `common/` is
-  the page (the charts, the data files, the Logs tab), and only what it asks with differs.
-  - [`dax/`](dashboard/github/dax/) asks the semantic model: a chart names the model's
-    columns and measures, and [`query.js`](dashboard/github/common/semantic/query.js)
+    [`dashboard/github/`](dashboard/github/)): DuckDB-WASM in the browser, on a cached copy
+    of the tables.
+  - **Microsoft Fabric apps** (Fabric sign-in, [`dashboard/fabric_app/`](dashboard/fabric_app/)):
+    [`iceberg/`](dashboard/fabric_app/iceberg/), DuckDB-WASM reading the Iceberg tables
+    straight from the catalog, no copy; and [`vertipaq/`](dashboard/fabric_app/vertipaq/),
+    the deployed semantic model as the engine (Power BI, Direct Lake), installed with the
+    whole stack (lakehouse, dbt notebook and pipeline, model) into one Fabric workspace by
+    `deploy_fabric.yml`.
+- **Two ways of asking** ([`dashboard/page/`](dashboard/page/)): the page (the charts, the
+  Logs tab) is the same, and only what it asks with differs.
+  - [`dax/`](dashboard/page/dax/) asks the semantic model: a chart names the model's
+    columns and measures, and [`query.js`](dashboard/page/semantic/query.js)
     writes that as DAX, and the DAX as SQL. Served at
     [nemtracker.github.io](https://nemtracker.github.io/).
-  - [`sql/`](dashboard/github/sql/) asks the same model in SQL: each query a
+  - [`sql/`](dashboard/page/sql/) asks the same model in SQL: each query a
     `SELECT … AGG("measure") … FROM model`, which the compiler reads into the same plan as
     a DAX query. Served at [nemtracker.github.io/sql](https://nemtracker.github.io/sql/). Its
     rows are checked against the DAX page's, question by question.
 - **The compiler** is what lets the page read a Power BI model without Power BI: the page's
-  queries become DAX ([`query.js`](dashboard/github/common/semantic/query.js)), and the
+  queries become DAX ([`query.js`](dashboard/page/semantic/query.js)), and the
   DAX becomes SQL in [`dax-sql`](https://github.com/djouallah/dax-sql) (a submodule here), a general-purpose DAX
   compiler (by N.S. Devaraj): any Tabular model, DAX's filter context, context transition
   and relationships, with nothing written for this model or this page. Its SQL is checked

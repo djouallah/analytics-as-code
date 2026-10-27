@@ -1,11 +1,10 @@
 name: Deploy Semantic Model
 
 # Publishes semantic_model/ossie.yaml, as the model.bim it stands for (a Direct Lake model over the catalog's
-# Iceberg tables) and the Power BI report on it (dashboard/powerbi_report/nem.Report) to the
-# workspace that holds the lakehouse, then refreshes the model and asks it, in DAX over
+# Iceberg tables) to the workspace that holds the lakehouse, then refreshes the model and asks it, in DAX over
 # XMLA, a row count per table and its measures (scripts/check_model.py).
 #
-# Manual only: it creates or updates two Fabric items. It touches no table and no dashboard
+# Manual only: it creates or updates a Fabric item. It touches no table and no dashboard
 # file. The identity is the catalog's (the same OIDC login as Process Data), so the model
 # is owned by it and reads OneLake as it.
 
@@ -115,7 +114,7 @@ jobs:
             echo "::notice::no semantic model $name in the workspace: publishing it"
             echo "PUBLISH=true" >> "$GITHUB_ENV"
           fi
-      - name: Publish the model and the report
+      - name: Publish the model
         if: inputs.publish || env.PUBLISH == 'true'
         run: python scripts/deploy_model.py
       - name: Mint Power BI token
@@ -168,8 +167,8 @@ jobs:
           fi
           python scripts/parity_model.py "$RUNNER_TEMP/parity.json" "${since[@]}"
       - name: The SQL page against the page through the model
-        # scripts/parity/sql_page.mjs: every question of the SQL page (dashboard/github/sql)
-        # against the same question of the DAX page (dashboard/github/dax), over the
+        # scripts/parity/sql_page.mjs: every question of the SQL page (dashboard/page/sql)
+        # against the same question of the DAX page (dashboard/page/dax), over the
         # dashboard's files: the same rows. The parity holds the DAX page's to the model, so
         # this holds the SQL page's to it too. A changed measure that the SQL page does not
         # follow fails here. It asks the model nothing, so it always runs.

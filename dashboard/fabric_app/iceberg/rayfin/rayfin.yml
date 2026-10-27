@@ -1,0 +1,30 @@
+id: iceberg
+name: iceberg
+version: 1.0.0
+services:
+  auth:
+    enabled: true
+    fabric:
+      enabled: true
+    allowedRedirectUris:
+      - http://localhost:5173
+      - http://127.0.0.1:5173
+      - https://sonic-bay-be8d87ef81-eastus.webapp.fabricapps.net
+  data:
+    enabled: false
+  staticHosting:
+    enabled: true
+    folder: dist
+    buildCommand: node ../common/build.mjs
+    indexDocument: index.html
+    assetAccess: public
+  storage:
+    enabled: false
+  functions:
+    enabled: true
+    buildCommand: npm run build
+    auth:
+      type: application
+secrets:
+  - name: CATALOG_URL
+    description: The OneLake Iceberg catalog the app reads, https://onelake.table.fabric.microsoft.com/iceberg/<workspace id>/<lakehouse id>; its tables are the ones the model names

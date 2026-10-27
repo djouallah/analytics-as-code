@@ -105,7 +105,7 @@ jobs:
       - name: The page works out no figure
         # scripts/parity/page_lint.mjs: no arithmetic in the page's script or its queries; a
         # figure is a measure of semantic_model/ossie.yaml. How the page draws (scales, sizes,
-        # text) is in dashboard/github/common/frontend/draw.js, which a review reads. The
+        # text) is in dashboard/page/frontend/draw.js, which a review reads. The
         # scripts' own yaml is installed here too: the site's staging, below, reads the model.
         run: npm ci --prefix scripts --no-audit --no-fund && cd scripts/parity && npm ci --no-audit --no-fund && node page_lint.mjs
       - uses: actions/setup-python@v5
@@ -129,13 +129,13 @@ jobs:
         run: |
           dbt build --target ci --profiles-dir .
           dbt docs generate --target ci --profiles-dir . --empty-catalog
-          mkdir -p dashboard/github/common/dag
-          cp target/index.html dashboard/github/common/dag/
+          mkdir -p dashboard/page/dag
+          cp target/index.html dashboard/page/dag/
           # A docs file is copied only when it says something new: dbt stamps each run into
           # the metadata and every node's created_at, so a plain copy changed both files on
           # every push (192 "Update dbt docs" commits in the week to 2026-10-08).
           for f in manifest.json catalog.json; do
-            if python - "target/$f" "dashboard/github/common/dag/$f" <<'PY'
+            if python - "target/$f" "dashboard/page/dag/$f" <<'PY'
           import json, os, sys
           STAMPS = {"created_at", "generated_at", "invocation_id", "invocation_started_at", "user_id"}
           def strip(x):
@@ -146,14 +146,14 @@ jobs:
           same = os.path.exists(old) and strip(json.load(open(new))) == strip(json.load(open(old)))
           sys.exit(1 if same else 0)
           PY
-            then cp "target/$f" dashboard/github/common/dag/; fi
+            then cp "target/$f" dashboard/page/dag/; fi
           done
       - name: Commit dbt docs
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add dashboard/github/common/dag/
+          git add dashboard/page/dag/
           # A run checks out the commit that triggered it, so the previous run's docs commit
           # can land on main after it: both rewrite the same generated files and the rebase
           # conflicts. Runs are queued in push order, so this run's files are the newer ones:

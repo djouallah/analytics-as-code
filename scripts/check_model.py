@@ -8,9 +8,7 @@ whole chain works: the model was published, OneLake shows it the Iceberg tables,
 columns it names are there with the types it expects. Then every measure, per day, over the
 newest week of fct_summary, a query each (the measures of the tables by month: per month,
 over the newest three). Then the whole history by year and fuel, timed, from the daily table
-and from the 5-minute one: what the measures' switch between them is worth. Last, the report
-on it (dashboard/powerbi_report): that it is in the workspace and reads this model. Nothing here
-sees a chart draw.
+and from the 5-minute one: what the measures' switch between them is worth.
 
 THE QUERIES GO OVER XMLA (ADOMD.NET, loaded through pythonnet), not the REST executeQueries
 call: that call answers 401 PowerBINotAuthorizedException to a service principal on this
@@ -56,8 +54,6 @@ def power_bi(o):
 
 
 MEASURES = [(m["name"], power_bi(m).get("table") in MONTHLY) for m in MODEL.get("metrics", [])]
-REPORT = json.loads((ITEM.parent / "dashboard" / "powerbi_report" / "nem.Report" / ".platform")
-                    .read_text(encoding="utf-8"))["metadata"]["displayName"]
 
 
 def call(method, path, body=None):
@@ -198,13 +194,6 @@ def main():
                 print(f"FAILED {dax}\n  {(str(e).strip().splitlines() or [type(e).__name__])[0][:600]}")
                 break
 
-    status, body = call("GET", f"/groups/{WORKSPACE}/reports")
-    report = next((r for r in (body or {}).get("value", []) if r["name"] == REPORT), None) if status == 200 else None
-    if report and report.get("datasetId") == model["id"]:
-        print(f"report {REPORT} {report['id']} reads the model: {report.get('webUrl')}")
-    else:
-        bad += 1
-        print(f"FAILED no report named {REPORT} on model {model['id']} ({status}): {report or body}")
     return 1 if bad else 0
 
 
