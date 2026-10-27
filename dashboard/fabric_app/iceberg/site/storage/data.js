@@ -41,6 +41,8 @@ import { perf, HTTP_TRACE_SHIM } from "../frontend/perflog.js";
 const MODEL = new URL('../semantic/ossie.json' + new URL(import.meta.url).search, import.meta.url);
 const SMALL_BYTES = 32 * 1024 * 1024;   // a table up to this much Parquet is copied into memory
 const ENGINE = new URL('../duckdb/', import.meta.url).href;
+// The extensions DuckDB installs, in that order (iceberg loads parquet itself).
+const EXTENSIONS = ['httpfs', 'avro', 'iceberg', 'azure_wasm', 'icu'];
 // DuckDB 2.0 sends every ranged read with If-Match (the ETag of its HEAD), even with
 // unsafe_disable_etag_checks, and the browser's cache answers no request that carries it: each
 // table's metadata.json went to OneLake again, ~0.9 s each, after the page had fetched it. The
@@ -70,6 +72,19 @@ const ident = s => `"${String(s).replace(/"/g, '""')}"`;
 const lit = s => `'${String(s).replace(/'/g, "''")}'`;
 // abfss://<ws>@onelake.dfs.fabric.microsoft.com/<lh>/... -> https://onelake.dfs.fabric.microsoft.com/<ws>/<lh>/...
 const https = (abfss, sas) => `${abfss.replace(/^abfss:\/\/([^@/]+)@([^/]+)\//, 'https://$2/$1/')}?${sas}`;
+
+// DuckDB downloads its extensions one at a time, ~11 MB served uncompressed (13 s live on
+// 2026-10-27). The page fetches them all at once at the start, while the sign-in and the
+// function run, into the browser's cache, where DuckDB's own request finds them (Rayfin's
+// hosting has it revalidate: one round trip each, no body). Their folder is in pins.json
+// (../../duckdb.mjs).
+function warmExtensions() {
+  const t0 = performance.now();
+  fetch(`${ENGINE}pins.json`).then(r => r.json()).then(p => Promise.all([...EXTENSIONS, 'parquet'].map(e =>
+    fetch(`${ENGINE}ext/${p.label}/${p.platform}/${e}.duckdb_extension.wasm`).then(r => r.arrayBuffer()))))
+    .then(f => perf.log('fetch', `prefetch extensions: ${f.length} files`, { ms: performance.now() - t0 }),
+          e => perf.log('info', `prefetch extensions: ${e?.message || e}`));
+}
 
 export function createDataSource({ onStatus = () => {} } = {}) {
   const catalog = createCatalog(() => auth.client());
@@ -139,6 +154,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   }
 
   async function init() {
+    warmExtensions();
     await auth.signIn();
     onStatus("Loading DuckDB WASM...");
     // The model, the function's answer, the tables' sizes and their prefetch, while DuckDB's
@@ -164,11 +180,10 @@ importScripts("${ENGINE}duckdb-browser-base.worker.js");`], { type: "text/javasc
     // From the app's own repository (installing needs a home directory). azure_wasm is loaded
     // before the first scan: it claims abfss://, or DuckDB tries to autoload the official azure
     // extension, which has no WASM build. icu is the time zones.
-    await perf.time('attach', 'LOAD httpfs, avro, iceberg, azure_wasm, icu', () =>
+    await perf.time('attach', `LOAD ${EXTENSIONS.join(', ')}`, () =>
       q(`SET home_directory = '/tmp'; SET custom_extension_repository = ${lit(ENGINE + 'ext')};
          SET autoinstall_extension_repository = ${lit(ENGINE + 'ext')};
-         INSTALL httpfs; LOAD httpfs; INSTALL avro; LOAD avro; INSTALL iceberg; LOAD iceberg;
-         INSTALL azure_wasm; LOAD azure_wasm; INSTALL icu; LOAD icu;`));
+         ${EXTENSIONS.map(e => `INSTALL ${e}; LOAD ${e};`).join(' ')}`));
     // Iceberg's files never change once written: what DuckDB learnt of one (its size, its
     // Parquet footer) holds for the session. A setting this build lacks is left as it is.
     for (const s of ['SET enable_http_metadata_cache = true', 'SET parquet_metadata_cache = true',

@@ -603,7 +603,9 @@ else: no import, no file written for it.
   opens DuckDB with unsigned extensions allowed and installs them from the app's own `ext/`
   repository. The CI artifacts expire after 90 days: a new pin then, and back to npm and the
   signed extensions once duckdb-wasm 2.0 ships. The `.wasm` is 33.7 MB, served uncompressed
-  (Rayfin's hosting compresses nothing); it loads while the function is called.
+  (Rayfin's hosting compresses nothing); it loads while the function is called. The
+  extensions (~11 MB) are fetched all at once at the start (`warmExtensions`), so DuckDB, which
+  downloads them one at a time (13 s live), only revalidates them.
 - **2.0 sends every ranged read with `If-Match`**, even with `unsafe_disable_etag_checks`,
   and the browser's cache answers no request that carries it: every table's
   `metadata.json` went back to OneLake (~0.9 s each). The worker drops the header
