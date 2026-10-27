@@ -21,8 +21,20 @@
 //
 // Two OPFS files, in blockcache/: blocks.bin (the blocks, appended) and index.jsonl (where
 // each block is, and each file's size and validators), read back at start. Over CAP_BYTES the
-// store starts over. A second tab cannot open them (an OPFS access handle is exclusive): its
-// reads go to OneLake as before. Until the store is open, likewise.
+// store starts over. One tab writes them (an OPFS access handle is exclusive); another tab
+// opens them read-only: it answers from what the writer has kept, reads the index again on a
+// miss (both files only grow), and what it fetches itself it does not keep. Until the store
+// is open, reads go to OneLake as before.
+//
+// What a miss fetches, in one round trip (a request costs ~0.5 s whatever its size):
+//   - a file of WHOLE_BYTES or less: the whole file (a dimension, a small table's files);
+//   - a read of READ_MIN or more: READAHEAD from its start, forward (DuckDB scans a file in
+//     reads of ~2 MB, one after the other: a 100 MB file was 50 requests);
+//   - a read in the last TAIL of a file: the whole tail (the 8 bytes before the footer, then
+//     the footer, then the column index: one request instead of three);
+//   - else its own blocks.
+// The page tells the worker each file's size as it opens a table (BroadcastChannel
+// 'blockcache', { sizes }), so a HEAD is answered without a request and the tail is known.
 //
 // Also: no If-Match. DuckDB 2.0 sends every ranged read with it (the ETag of its HEAD), and the
 // browser's cache answers no request that carries it; an Iceberg file never changes, so the
@@ -32,21 +44,21 @@
 (() => {
   const BLOCK = 256 * 1024;
   const CAP_BYTES = 2 * 1024 * 1024 * 1024;
-  // Read-ahead: DuckDB scans a Parquet file in reads of about 2 MB, one after the other, and
-  // OneLake answers a request in ~0.5 s whatever its size (a 100 MB file, 50 requests, 25 s).
-  // So a read of READ_MIN or more that misses fetches READAHEAD from its start, forward, at
-  // one round trip: the reads that follow are hits. A small read (the footer, the 8 bytes
-  // before it) fetches only its own blocks.
   const READ_MIN = 1024 * 1024;
   const READAHEAD = 16 * 1024 * 1024;
+  const WHOLE_BYTES = 4 * 1024 * 1024;
+  const TAIL = 1024 * 1024;
   const VERSION = 1;
 
   const P = XMLHttpRequest.prototype, open = P.open, set = P.setRequestHeader, send = P.send;
   let blocks = null, index = null;   // OPFS access handles, once open
+  let writable = false;              // this tab keeps what it fetches; a read-only tab does not
+  let indexRead = 0;                 // bytes of index.jsonl applied (a read-only tab reads on)
   const where = new Map();           // `${path}#${n}` -> [offset, length] in blocks.bin
   const files = new Map();           // path -> { size, etag, lastModified }
   let end = 0;                       // bytes in blocks.bin
   const enc = new TextEncoder();
+  const dec = new TextDecoder();
 
   const pathOf = u => String(u).split('?')[0];
   const isExtension = u => /\/ext-[0-9a-f]+\/[^?]*\.duckdb_extension\.wasm$/i.test(pathOf(u));
@@ -54,36 +66,73 @@
   const cacheable = (m, u) => (m === 'GET' || m === 'HEAD') && (isIceberg(u) || isExtension(u));
 
   function log(entry) {
+    if (!writable) return;
     const b = enc.encode(JSON.stringify(entry) + '\n');
     index.write(b, { at: index.getSize() });
+    indexRead = index.getSize();
   }
   function reset() {
-    blocks.truncate(0); index.truncate(0); where.clear(); files.clear(); end = 0;
+    blocks.truncate(0); index.truncate(0); where.clear(); files.clear(); end = 0; indexRead = 0;
     log({ v: VERSION, block: BLOCK });
+  }
+  // The index's lines not applied yet: all of them at start, and for a read-only tab what the
+  // writer added since. The first line is the store's version; a store of another version is
+  // reset by its writer, and a read-only tab leaves it alone and holds nothing.
+  function applyIndex() {
+    const size = index.getSize();
+    if (size <= indexRead) return true;
+    const buf = new Uint8Array(size - indexRead);
+    index.read(buf, { at: indexRead });
+    const text = dec.decode(buf);
+    const cut = text.lastIndexOf('\n');   // a line the writer has not finished
+    if (cut < 0) return true;
+    const lines = text.slice(0, cut).split('\n').filter(Boolean);
+    indexRead += enc.encode(text.slice(0, cut + 1)).length;
+    end = blocks.getSize();   // a block the writer has indexed but not flushed yet is not taken
+    for (const l of lines) {
+      let e; try { e = JSON.parse(l); } catch (x) { continue; }
+      if (e.v !== undefined) { if (e.v !== VERSION || e.block !== BLOCK) return false; }
+      else if (e.k) { if (e.o + e.l <= end) where.set(e.k, [e.o, e.l]); }
+      else if (e.f && !files.has(e.f)) files.set(e.f, { size: e.s, etag: e.e, lastModified: e.m });
+    }
+    return true;
   }
 
   (async () => {
+    let dir;
+    try { dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('blockcache', { create: true }); }
+    catch (e) { return; }   // no OPFS: reads go to OneLake
+    const bh = await dir.getFileHandle('blocks.bin', { create: true });
+    const ih = await dir.getFileHandle('index.jsonl', { create: true });
     try {
-      const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('blockcache', { create: true });
-      const b = await (await dir.getFileHandle('blocks.bin', { create: true })).createSyncAccessHandle();
-      const i = await (await dir.getFileHandle('index.jsonl', { create: true })).createSyncAccessHandle();
-      const buf = new Uint8Array(i.getSize());
-      i.read(buf, { at: 0 });
-      blocks = b; index = i; end = b.getSize();
-      const lines = new TextDecoder().decode(buf).split('\n').filter(Boolean);
-      let ok = false;
+      const b = await bh.createSyncAccessHandle();
+      const i = await ih.createSyncAccessHandle();
+      blocks = b; index = i; writable = true; end = b.getSize();
+      if (!applyIndex() || index.getSize() === 0 || end > CAP_BYTES) reset();
+    } catch (e) {
+      // Another tab writes the store: read it (Chrome 121+; an older browser throws here too,
+      // and this tab reads OneLake).
       try {
-        const head = JSON.parse(lines[0] || '{}');
-        ok = head.v === VERSION && head.block === BLOCK;
-        if (ok) for (const l of lines.slice(1)) {
-          const e = JSON.parse(l);
-          if (e.k) where.set(e.k, [e.o, e.l]);
-          else if (e.f) files.set(e.f, { size: e.s, etag: e.e, lastModified: e.m });
-        }
-      } catch (e) { ok = false; }
-      if (!ok || end > CAP_BYTES) reset();
-    } catch (e) { blocks = index = null; }   // a second tab, or no OPFS: reads go to OneLake
+        const b = await bh.createSyncAccessHandle({ mode: 'read-only' });
+        const i = await ih.createSyncAccessHandle({ mode: 'read-only' });
+        blocks = b; index = i; writable = false; end = b.getSize();
+        if (!applyIndex()) { blocks = index = null; }
+      } catch (x) { blocks = index = null; }
+    }
   })();
+
+  // The sizes the page knows (its snapshot records), so a HEAD is answered without a request
+  // and a read in a file's tail fetches the whole tail.
+  try {
+    new BroadcastChannel('blockcache').onmessage = e => {
+      for (const [path, size] of Object.entries(e.data?.sizes ?? {})) {
+        if (files.has(path) || !(size > 0)) continue;
+        files.set(path, { size, etag: null, lastModified: null });
+        log({ f: path, s: size, e: null, m: null });
+      }
+      if (writable && index) index.flush();
+    };
+  } catch (e) {}
 
   // A response DuckDB reads as if it came from OneLake: status, bytes and the few headers it asks.
   function answer(xhr, status, body, headers) {
@@ -128,13 +177,15 @@
     return true;
   }
 
-  // Keeps the bytes `body`, from offset `start` of a file of `size` bytes, as blocks.
+  // Keeps the bytes `body`, from offset `start` of a file of `size` bytes, as blocks. A
+  // read-only tab keeps nothing: it only learns the file's size, for the HEADs that follow.
   function keep(x, path, body, start, size) {
     if (!files.has(path)) {
       const f = { size, etag: x.getResponseHeader('ETag'), lastModified: x.getResponseHeader('Last-Modified') };
       files.set(path, f);
       log({ f: path, s: f.size, e: f.etag, m: f.lastModified });
     }
+    if (!writable) return;
     if (end > CAP_BYTES) reset();
     for (let n = Math.floor(start / BLOCK); n * BLOCK < start + body.length; n++) {
       const key = `${path}#${n}`;
@@ -177,16 +228,16 @@
             const b = r[2] === '' ? (f ? f.size - 1 : NaN) : (f ? Math.min(Number(r[2]), f.size - 1) : Number(r[2]));
             if (Number.isFinite(b) && b >= a) {
               let out = fromStore(path, a, b);
+              if (!out && !writable && applyIndex()) out = fromStore(path, a, b);   // the writer may have it by now
               if (!out) {
                 let first = Math.floor(a / BLOCK), last = Math.floor(b / BLOCK);
+                const blocksOf = g => Math.ceil(g.size / BLOCK) - 1;
+                if (f && f.size <= WHOLE_BYTES) { first = 0; last = blocksOf(f); }
+                else if (b - a + 1 >= READ_MIN) last = Math.max(last, f ? Math.min(first + READAHEAD / BLOCK - 1, blocksOf(f)) : first + READAHEAD / BLOCK - 1);
+                else if (f && b >= f.size - TAIL) { first = Math.min(first, Math.max(0, Math.floor((f.size - TAIL) / BLOCK))); last = blocksOf(f); }
                 while (first <= last && where.has(`${path}#${first}`)) first++;
-                if (b - a + 1 >= READ_MIN) {
-                  let ahead = first + READAHEAD / BLOCK - 1;
-                  if (f) ahead = Math.min(ahead, Math.ceil(f.size / BLOCK) - 1);
-                  last = Math.max(last, ahead);
-                }
                 while (last >= first && where.has(`${path}#${last}`)) last--;
-                if (fetchBlocks(this.__bcU, path, first, last)) out = fromStore(path, a, Math.min(b, files.get(path).size - 1));
+                if (writable && fetchBlocks(this.__bcU, path, first, last)) out = fromStore(path, a, Math.min(b, files.get(path).size - 1));
               }
               if (out) {
                 const g = files.get(path);

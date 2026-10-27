@@ -131,7 +131,8 @@ export function createDataSource({ onStatus = () => {} } = {}) {
       FROM iceberg_metadata(${lit(t.location)}) WHERE status <> 'DELETED'`)).toArray();
     return {
       location: t.location, bytes: t.bytes,
-      deletes: !rows.length || !rows.every(r => r.content === 'DATA' && r.file_format === 'PARQUET'),
+      // iceberg_metadata says 'DATA' and 'parquet' (lower case) for a data file.
+      deletes: !rows.length || !rows.every(r => String(r.content).toUpperCase() === 'DATA' && String(r.file_format).toLowerCase() === 'parquet'),
       files: [...new Set(rows.map(r => r.file_path))].map(path => ({ path, size: null })),
       manifests: [...new Set(rows.map(r => r.manifest_path))],
     };
@@ -167,6 +168,13 @@ export function createDataSource({ onStatus = () => {} } = {}) {
       }
     })().catch(e => { opened.delete(name); throw e; })).get(name);
   }
+  // The worker's store answers a HEAD of a file whose size it knows, and reads a file's tail
+  // whole: the sizes of the record's files, sent before the view binds.
+  const channel = (() => { try { return new BroadcastChannel('blockcache'); } catch (e) { return null; } })();
+  function tellSizes(record) {
+    const sizes = Object.fromEntries(record.files.filter(f => f.size).map(f => [f.path.replace(/^abfss:\/\/([^@/]+)@([^/]+)\//, 'https://$2/$1/'), f.size]));
+    if (channel && Object.keys(sizes).length) channel.postMessage({ sizes });
+  }
   async function openWith(name, t, record) {
     const mb = t.bytes == null ? '?' : (t.bytes / 1048576).toFixed(1);
     const small = t.bytes != null && t.bytes <= SMALL_BYTES;
@@ -183,6 +191,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
       snapshots.put(name, record);
       t.record = record;
     }
+    tellSizes(record);
     const from = record.deletes ? `iceberg_scan(${lit(t.location)})`
       : `read_parquet([${record.files.map(f => lit(f.path)).join(', ')}])`;
     const how = record.deletes ? 'iceberg_scan: delete files' : `${record.files.length} Parquet files`;

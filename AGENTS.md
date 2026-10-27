@@ -619,15 +619,19 @@ else: no import, no file written for it.
   (`site/storage/blockcache.js`, a classic script loaded into DuckDB's worker before the
   engine): what `cache_httpfs` does for `httpfs`, which has no WASM build. Each ranged read
   is cut into 256 KB blocks, kept under the file's path without the SAS (so a new SAS keeps
-  them), and only the blocks a read lacks are fetched, in one request, with a 16 MB read-ahead
-  for a read of 1 MB or more (DuckDB scans a file in ~2 MB reads, one after the other, and a
-  request costs ~0.5 s whatever its size); a HEAD of a known file is answered too. Only what
-  queries read is kept (column chunks of the row groups scanned, plus the read-ahead).
+  them), and a miss is one request sized for what follows (a request costs ~0.5 s whatever
+  its size): a file of 4 MB or less whole, a read of 1 MB or more with 16 MB of read-ahead
+  (DuckDB scans a file in ~2 MB reads, one after the other), a read in a file's last 1 MB the
+  whole tail (the footer's three reads in one), else its own blocks. A HEAD of a known file is
+  answered without a request: the page sends the worker the sizes of a table's files as it
+  opens it (`BroadcastChannel('blockcache')`). Only what queries read is kept, plus that.
   Every file of an Iceberg table is immutable (a commit writes a new `metadata.json`, a new
   manifest list and new manifests, and touches no old one), so the store keeps `.parquet`,
   `.avro` and `.metadata.json` alike: planning a table reads its old manifests from OPFS.
-  `blockcache/blocks.bin` and `index.jsonl` in OPFS; over 2 GB the store starts over; a second
-  tab cannot open it and reads OneLake. On `power`'s full data, a returning visit (new SAS):
+  `blockcache/blocks.bin` and `index.jsonl` in OPFS; over 2 GB the store starts over. One tab
+  writes it; another opens it read-only (Chrome 121+): it answers from what the writer kept,
+  re-reads the index on a miss, and keeps nothing itself. On `power`'s full data, a returning
+  visit (new SAS):
   Parquet reads 0.15 s in all instead of 85 s, charts drawn in 25 s instead of 138 s. The
   first visit still pays for the scans of a big table's whole history: `MAX(fct_summary[date])`
   reads the `date` column of all 27 files of the 1.3 GB table, one request at a time (66 s of

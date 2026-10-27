@@ -17,16 +17,17 @@
 // =============================================================================
 
 const KEY = 'iceberg_snapshots';
+const VERSION = 2;   // a record of another version is not used (2: `deletes` read right)
 
 export function createSnapshots() {
   const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } };
   const save = all => { try { localStorage.setItem(KEY, JSON.stringify(all)); } catch (e) {} };
   return {
     // The table's record if it is of this location, else null.
-    get(name, location) { const r = load()[name]; return r?.location === location && Array.isArray(r.files) ? r : null; },
+    get(name, location) { const r = load()[name]; return r?.v === VERSION && r.location === location && Array.isArray(r.files) ? r : null; },
     // The table's record whatever its location (the manifests and files already seen).
     previous(name) { return load()[name] ?? null; },
-    put(name, record) { const all = load(); all[name] = { ...record, savedAt: new Date().toISOString() }; save(all); },
+    put(name, record) { const all = load(); all[name] = { ...record, v: VERSION, savedAt: new Date().toISOString() }; save(all); },
     drop(name) { const all = load(); delete all[name]; save(all); },
   };
 }
