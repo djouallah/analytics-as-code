@@ -115,12 +115,14 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
   // them (then the view stays over iceberg_scan, which applies them), and the manifests read.
   // The record snapshots.js keeps.
   async function plan(t) {
-    const rows = (await conn.query(`SELECT manifest_path, file_path, content, file_format
+    const rows = (await conn.query(`SELECT manifest_path, file_path, manifest_content, file_format
       FROM iceberg_metadata(${lit(t.location)}) WHERE status <> 'DELETED'`)).toArray();
     return {
       location: t.location, bytes: t.bytes,
-      // iceberg_metadata says 'DATA' and 'parquet' (lower case) for a data file.
-      deletes: !rows.length || !rows.every(r => String(r.content).toUpperCase() === 'DATA' && String(r.file_format).toLowerCase() === 'parquet'),
+      // A delete file is listed by a manifest of deletes: manifest_content says which, 'DATA'
+      // or 'DELETES', on every DuckDB (its `content` is 'EXISTING' for a data file on 1.5 and
+      // 'DATA' on 2.0). file_format is 'parquet', lower case.
+      deletes: !rows.length || !rows.every(r => String(r.manifest_content).toUpperCase() === 'DATA' && String(r.file_format).toLowerCase() === 'parquet'),
       files: [...new Set(rows.map(r => r.file_path))].map(path => ({ path, size: null })),
       manifests: [...new Set(rows.map(r => r.manifest_path))],
     };

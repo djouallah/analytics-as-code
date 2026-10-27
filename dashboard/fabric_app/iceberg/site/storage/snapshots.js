@@ -17,7 +17,7 @@
 // =============================================================================
 
 const KEY = 'iceberg_snapshots';
-const VERSION = 2;   // a record of another version is not used (2: `deletes` read right)
+const VERSION = 3;   // a record of another version is not used (3: `deletes` from manifest_content)
 
 export function createSnapshots() {
   const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } };
