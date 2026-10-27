@@ -12,8 +12,8 @@
 //                                                the half-years a 5-minute range needs
 // The page knows none of this: it reads a view per table, v_<table>, which views.js builds
 // over the attached databases after every attach (they are found in the engine's catalog).
-// This file, history.js and views.js are GitHub Pages' alone (dashboard/github/site/, staged
-// over the page, dashboard/page/). Every other host has its own data.js with the same members
+// This file, history.js and views.js are GitHub Pages' alone (dashboard/github/, staged
+// into the page's storage/, dashboard/page/). Every other host has its own data.js with the same members
 // (dashboard/fabric_app/<engine>/site/storage/).
 //
 // DOM-free: progress is reported through the injected `onStatus` callback, and what is

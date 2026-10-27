@@ -4,9 +4,10 @@
 //   asking, one over the other:
 //   dax/     frontend/queries.js: the page's queries as objects of the model's fields
 //   sql/     frontend/queries.js: the page's queries as SELECTs over the model
-// A host adds only its storage/data.js (and what that imports), in its site/: GitHub Pages'
-// in dashboard/github/site/, each Fabric app's in dashboard/fabric_app/<engine>/site/.
-// A page is page/ with one of the two ways of asking copied over it, a host's site/ over that,
+// A host adds only its storage/data.js (and what that imports): GitHub Pages' are the files of
+// dashboard/github/, staged into storage/; each Fabric app's are its site/, copied over the page
+// (dashboard/fabric_app/<engine>/site/storage/, next to the app's rayfin/).
+// A page is page/ with one of the two ways of asking copied over it, a host's files over that,
 // and next to semantic/query.js the model (semantic_model/ossie.yaml as semantic/ossie.json:
 // the browser reads no YAML), the compiler (dax-sql/src as semantic/dax-sql/) and its readers
 // (dax-sql/formats as semantic/formats/). The repo tree is not the served tree: everything
@@ -30,7 +31,7 @@ export async function readOssie(root = REPO) {
   return parse(await readFile(join(root, "semantic_model", "ossie.yaml"), "utf8"));
 }
 
-// The page (without the dbt docs), the way of asking over it and the host's site/ over that,
+// The page (without the dbt docs), the way of asking over it and the host's files over that,
 // into <dir>. `host`: "github" (the default: GitHub Pages' data source, which the parity
 // scripts run too), or null for a Fabric app, whose build copies its own site/ over the page.
 // `root`: another checkout to take them from (the parity's `since`, the A/B's `before`).
@@ -41,7 +42,7 @@ export async function stagePage(variant, dir, root = REPO, host = "github") {
     const skip = ["dag", "dax", "sql"].map(d => join(page, d));
     await cp(page, dir, { recursive: true, filter: src => !skip.some(s => src === s || src.startsWith(s + "\\") || src.startsWith(s + "/")) });
     await cp(join(page, variant), dir, { recursive: true });
-    if (host) await cp(join(root, "dashboard", host, "site"), dir, { recursive: true });
+    if (host) await cp(join(root, "dashboard", host), join(dir, "storage"), { recursive: true });
   } else {
     // A checkout from before 2026-10-27, when the page and GitHub Pages' storage/ were
     // dashboard/github/common/, with dax/ and sql/ next to it.

@@ -57,7 +57,7 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 One semantic model (`semantic_model/ossie.yaml`), its clients under `dashboard/`:
 
 - `page/` is the page, written once (`dashboard/page/index.html`). A host only decides how
-  the browser reaches the data (its `site/storage/data.js`, staged over the page), so a chart
+  the browser reaches the data (its `storage/data.js`, staged over the page), so a chart
   is written once and reaches every engine.
 - `github/` is GitHub Pages: DuckDB-WASM over `.duckdb` copies of the tables.
 - `fabric_app/iceberg/` is a Fabric app: DuckDB-WASM over the Iceberg catalog, reading the
@@ -76,7 +76,7 @@ A measure is written once, in the model, and reaches every client.
 | Engine | DuckDB-WASM, in the browser | DuckDB-WASM, in the browser | VertiPaq, in Fabric |
 | Data | `.duckdb` files next to the page | the `mart` Iceberg tables, read in place with a read-only SAS | the `mart` Iceberg tables, Direct Lake, no copy |
 | 5-minute history | one file per half-year, downloaded | the tables as they are | the tables as they are |
-| Host code | `dashboard/github/site/storage/` | `dashboard/fabric_app/iceberg/site/storage/` | `dashboard/fabric_app/vertipaq/site/storage/` |
+| Host code | `dashboard/github/` | `dashboard/fabric_app/iceberg/site/storage/` | `dashboard/fabric_app/vertipaq/site/storage/` |
 | Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `dashboard/fabric_app/iceberg/`, or `deploy_fabric.yml` | `deploy_fabric.yml` |
 
 ### The layers of the dashboard
@@ -180,7 +180,7 @@ backend to run, no query service, no copy of the data.
 │   │   ├── common/       # index.html, frontend/ (draws, Logs tab), storage/ (the host, the tables as views), semantic/ (the model's queries), dag/ (dbt docs)
 │   │   ├── dax/          # the queries as objects of the model's fields: frontend/queries.js; served at /
 │   │   └── sql/          # the queries as SELECTs over the model: frontend/queries.js; served at sql/
-│   ├── github/           # GitHub Pages: its data source (site/storage/), DuckDB-WASM over .duckdb copies
+│   ├── github/           # GitHub Pages: its data source (data.js, history.js, views.js), DuckDB-WASM over .duckdb copies
 │   ├── fabric_app/       # The page as Fabric apps, one per engine; package.json (the Rayfin CLI) for both
 │   │   ├── common/       # build.mjs and the Fabric sign-in (site/storage/auth.js)
 │   │   ├── iceberg/      # DuckDB-WASM over the Iceberg catalog: its data source and the Rayfin project (function openCatalog)

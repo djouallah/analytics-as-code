@@ -208,9 +208,9 @@ transport fails the OneLake TLS handshake).
 **The layout says who reads the model:** `semantic_model/` at the top of the repo is the one
 semantic model, and `dashboard/` holds its one client, the page, and the hosts that run it.
 **The page is written once, `dashboard/page/`**, and a host adds only how it reaches the
-data, its `site/storage/data.js` (staged over the page, `scripts/stage_pages.mjs`):
+data, its `storage/data.js` (staged over the page, `scripts/stage_pages.mjs`):
 - `dashboard/github/`: GitHub Pages, DuckDB-WASM over the `.duckdb` copies of the tables
-  (`site/storage/`: `data.js`, `history.js`, `views.js`).
+  (`data.js`, `history.js`, `views.js`, staged into the page's `storage/`).
 - `dashboard/fabric_app/`: the Fabric apps (Rayfin), one per engine. `iceberg/` is
   DuckDB-WASM over the Iceberg catalog (see "The Fabric app on the Iceberg catalog").
   `vertipaq/` is the deployed model as the engine, installed by `deploy_fabric.yml` (see
@@ -227,7 +227,7 @@ model in dax-sql's SQL, `... AGG("measure") ... FROM model`). The compiler build
 plan from either, as Spark's SQL and DataFrames build one logical plan: the same measures,
 the same rows. No figure is written in SQL by hand any more (until 2026-10-13 the SQL page
 was hand-written SQL over the views, and fell behind every rule the compiler learned). A page
-is `page/` with one of the two copied over it, then a host's `site/`, and the model and the
+is `page/` with one of the two copied over it, then a host's data source, and the model and the
 compiler next to `semantic/query.js` (`scripts/stage_pages.mjs`, `stagePage`). The DAX page is served at the
 site's root, the default, the SQL page at `sql/`, which reads the site's `data/` (`connect`
 in its `queries.js` passes `base: '../'` to `data.js`'s `init`). The SQL page is held to the
@@ -386,7 +386,7 @@ How the check runs:
 
 `index.html` is the one file at the top of the staged page: it is the site's URL, and `data.js`
 finds `data/` from the page's URL. **The repo tree is not the served tree**: a page is staged
-(`scripts/stage_pages.mjs`: `page/`, the variant over it, the host's `site/`, and for the DAX page
+(`scripts/stage_pages.mjs`: `page/`, the variant over it, the host's data source, and for the DAX page
 `semantic_model/ossie.yaml`, as `semantic/ossie.json`, next to the compiler and its readers,
 `dax-sql/formats` as `semantic/formats/`), and everything that serves
 or imports the page stages it first: the site (`build.yml`, `import_data.yml`), the Fabric
@@ -435,7 +435,7 @@ import is of the staged tree (`semantic/query.js` imports `./dax-sql/index.js`, 
   It holds DAX only: nothing in it is written for DuckDB, and no SQL goes into it. The
   browser reads no YAML: staging writes it as `semantic/ossie.json`. Reading it needs
   `yaml` (`npm ci --prefix scripts`). `repo.test.mjs` checks it reads back as itself.
-- `dashboard/github/site/storage/views.js` (`withViews(data)`, which every `data.js`
+- `dashboard/github/views.js` (`withViews(data)`, which every `data.js`
   returns itself wrapped in) is the tables as views: a view `v_<table>` per table attached,
   over the files (the table whole in `dim` or `agg`, or split by date over `today` and the
   half-years: `today` has the days it holds, cut at a literal date; the files are stacked by
@@ -476,7 +476,7 @@ import is of the staged tree (`semantic/query.js` imports `./dax-sql/index.js`, 
   size. Both DuckDB hosts set the session to Brisbane time, on purpose: the tables carry
   `date` and `time`, no TIMESTAMPTZ, and the only thing the zone decides is that
   `CURRENT_DATE` is the NEM's day.
-- `dashboard/github/site/storage/history.js` is GitHub Pages' about the half-year history
+- `dashboard/github/history.js` is GitHub Pages' about the half-year history
   files: `periodsForRange` (which ones a date range needs) and `attachCached` (ATTACH from
   OPFS in place, into memory if a second tab holds the file).
 - `dashboard/page/storage/queue.js` is how both DuckDB `data.js` send queries: one
@@ -946,7 +946,7 @@ image, and the packages those pins pull in.
 - **The dashboard pins `@duckdb/duckdb-wasm@1.33.1-dev65.0`** (DuckDB 1.5.x line), a dev build
   because nothing stable has shipped since 1.33.0. Don't take npm's `latest` tag: it points
   at `1.33.1-dev57.0`, which the DuckDB blog says breaks OPFS. The dev build lets
-  `attachCached` (`dashboard/github/site/storage/history.js`) read the OPFS-cached files in place
+  `attachCached` (`dashboard/github/history.js`) read the OPFS-cached files in place
   (`registerFileHandle` + `BROWSER_FSACCESS`) instead of copying each one into the WASM heap.
   Register the plain filename, not `opfs://`: an `opfs://` ATTACH also opens `<file>.wal`,
   which is never registered, so the ATTACH fails. The handle is exclusive, so a second tab
