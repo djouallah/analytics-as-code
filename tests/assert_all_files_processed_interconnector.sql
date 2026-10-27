@@ -11,6 +11,6 @@ FROM {{ ref('stg_csv_archive_log') }} l
 WHERE l.source_type IN ('price_today', 'interconnector_monthly')
   AND NOT EXISTS (
     SELECT 1
-    FROM {{ ref('fct_interconnector_today') }} f
+    FROM (SELECT DISTINCT file FROM {{ ref('fct_interconnector_today') }}) f
     WHERE f.file = l.csv_filename
   )

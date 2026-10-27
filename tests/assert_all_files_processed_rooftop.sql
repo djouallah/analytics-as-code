@@ -12,6 +12,6 @@ FROM {{ ref('stg_csv_archive_log') }} l
 WHERE l.source_type IN ('rooftop_today', 'rooftop_weekly', 'rooftop_monthly')
   AND NOT EXISTS (
     SELECT 1
-    FROM {{ ref('fct_rooftop_pv') }} f
+    FROM (SELECT DISTINCT file FROM {{ ref('fct_rooftop_pv') }}) f
     WHERE f.file = l.csv_filename
   )

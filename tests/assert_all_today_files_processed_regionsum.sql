@@ -11,6 +11,6 @@ FROM {{ ref('stg_csv_archive_log') }} l
 WHERE l.source_type = 'price_today'
   AND NOT EXISTS (
     SELECT 1
-    FROM {{ ref('fct_regionsum_today') }} f
+    FROM (SELECT DISTINCT file FROM {{ ref('fct_regionsum_today') }}) f
     WHERE f.file = l.csv_filename
   )
