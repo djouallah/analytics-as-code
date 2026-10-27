@@ -588,17 +588,43 @@ else: no import, no file written for it.
   storage token, where each of the model's tables is now (`loadTable`, all at once:
   `metadata-location`). It then signs a read-only user-delegation SAS on the lakehouse's
   `Tables/` (`sp=r`, about 55 minutes). It returns those two and nothing else.
-- `site/storage/data.js` creates a view `v_<table>` per table over `iceberg_scan` of that
-  metadata, which the compiler reads as on the other hosts. DuckDB-WASM reads the metadata,
-  manifests and data files from OneLake with the `iceberg` extension and the community
-  extension `azure_wasm`. That one turns `abfss://` into `https://…?<SAS>`, because the
-  official `azure` extension has no WASM build; it is loaded before the first scan, or
-  DuckDB tries to autoload `azure`.
-- Nothing is stored: every page load reads what it needs again, about a minute cold for 15
-  tables (most of it opening the views, a few requests each).
-- `catalog.js` calls the function. The pinned duckdb-wasm (1.5.6) loads the signed
-  extensions; its 2.0 builds cannot yet (their extensions are keyed by commit, and the
-  published `azure_wasm` for 2.0 predates its `GetFileSize` fix).
+- `site/storage/data.js` gives each table a view `v_<table>`, which the compiler reads as on
+  the other hosts. DuckDB-WASM reads the metadata, manifests and data files from OneLake with
+  the `iceberg` extension and the community extension `azure_wasm`. That one turns
+  `abfss://` into `https://…?<SAS>`, because the official `azure` extension has no WASM
+  build; it is loaded before the first scan, or DuckDB tries to autoload `azure`.
+- **A table is opened when a query first names its view**, so the first paint pays only for
+  the tables it reads. The rest are opened after the first paint, in the background, at the
+  back of the queue (`attachAgg`, not awaited).
+- **A small table is copied into memory.** Its size is the current snapshot's
+  `total-files-size`, read from its `metadata.json`. Up to `SMALL_BYTES` (32 MB), the table
+  is copied into DuckDB's memory once and its view reads that. Above it, the view is over
+  `iceberg_scan`, read in place. `has()` and `views()` answer from the model's columns,
+  with no table opened.
+- **The browser's HTTP cache is the prefetch** (`prefetch.js`):
+  - DuckDB-WASM reads one request at a time, and OneLake answers each in about 0.6 s.
+  - At start the page fetches every table's `metadata.json`, manifest list and manifests,
+    six at a time (OneLake is HTTP/1.1). For a small table it also fetches the data files,
+    after every table's metadata. The manifests are Avro, deflate blocks, read with
+    `DecompressionStream`.
+  - DuckDB's HEAD and Range requests then come from the cache: OneLake sends
+    `Last-Modified` and no `Cache-Control`.
+  - Fetching data files only when their table opened was slower, because tables open one
+    at a time.
+- **DuckDB's own caches are on** (`enable_http_metadata_cache`, `parquet_metadata_cache`):
+  Iceberg files never change once written.
+- **Timings, cold, conformance-oracle's small `nem`, function call excluded:** charts drawn
+  in 15 to 17 s. It was 48 s with lazy opening alone, and 70 to 79 s when every view was
+  created up front.
+- **The function's answer is kept for about 55 minutes** (`catalog.js`), in that viewer's
+  `localStorage`. A reload within it calls no function, starts without a session, reads the
+  same snapshots, and gets cache hits (same URLs). A tab open longer gets a new SAS before
+  the old one expires; its views stay on their snapshots. A new SAS changes every URL, so
+  the browser cache starts over.
+- Nothing is stored between visits beyond the browser's HTTP cache.
+- The pinned duckdb-wasm (1.5.6) loads the signed extensions. Its 2.0 builds cannot yet:
+  their extensions are keyed by commit, and the published `azure_wasm` for 2.0 predates its
+  `GetFileSize` fix.
 `dashboard/fabric_app/common/build.mjs` assembles a project's `dist/`: the DAX page staged
 (`stagePage('dax')`: `page/`, `dax/` and the model, `semantic_model/ossie.yaml` as
 `ossie.json`; it needs `npm ci --prefix scripts` first) and the dbt docs, with
