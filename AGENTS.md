@@ -653,8 +653,11 @@ them (here `storage/data.js` and `storage/catalog.js`), and `?v=<build>` added t
 relative import; `query.js` passes its own on to `ossie.json`. The project is the working
 directory of `build.mjs` (`rayfin.yml`'s `buildCommand`, `node ../common/build.mjs`).
 
-**It is deployed from the owner's laptop**, under their own login, into fabriccat's
-`conformance-oracle` (item `iceberg`, its catalog that workspace's lakehouse `nem`):
+**It is deployed from the owner's laptop**, under their own login, into two workspaces, each
+its own item `iceberg` reading that workspace's lakehouse `nem`: fabriccat's
+`conformance-oracle` (East US, little data) and `power` (the owner's tenant, Australia
+Southeast, the full data; since 2026-10-27). `.deployments.json` keeps both, `active` the last
+deployed: `--workspace-id` picks the other.
 ```
 cd dashboard/fabric_app && npm ci && npm ci --prefix ../../scripts
 cd iceberg && npm ci --prefix rayfin/functions
@@ -664,7 +667,7 @@ npx rayfin up --yes --output json
 `dashboard/fabric_app/iceberg/rayfin/.deployments.json` (untracked) records the item, and
 its URL is in `rayfin/rayfin.yml` (`allowedRedirectUris`; the deploy adds it). On a machine
 without that record, add `--workspace-id <workspace>`. A new item needs its catalog once,
-then one more deploy:
+then the function deployed again (`npx rayfin up functions deploy`):
 `echo -n <catalog url> | npx rayfin secret set CATALOG_URL --stdin`.
 
 **Rayfin lets only the owner of an app item deploy to it**, and the owner is whoever created
@@ -735,9 +738,9 @@ Direct Lake over the `mart` tables, no DuckDB, no copy of the data). Its
 query's DAX (`toDax`) to it as it is, with no views and no SQL; with no `needs`, the page
 leaves out Analyze. The route to the model is a Rayfin connector of type
 `fabric-semanticmodel` (`executeQuery`, delegated): the app's backend runs the query on the
-model as the signed-in user, so the browser holds no Power BI token. Not in `power`: its
-capacity is in Australia Southeast, where Fabric refuses an app item
-(`403 The feature is not available`, microsoft/rayfin#8).
+model as the signed-in user, so the browser holds no Power BI token. Not deployed in
+`power` yet: Fabric answered `403 The feature is not available` there (microsoft/rayfin#8)
+until the tenant's admin setting for Fabric apps was turned on (2026-10-27).
 
 A table or a column the page asks for and a deployed file lacks reads as "no data" where
 the page checks (`data.has`), so a new page can go out before its data; a new table goes
