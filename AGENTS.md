@@ -619,8 +619,10 @@ else: no import, no file written for it.
   (`site/storage/blockcache.js`, a classic script loaded into DuckDB's worker before the
   engine): what `cache_httpfs` does for `httpfs`, which has no WASM build. Each ranged read
   is cut into 256 KB blocks, kept under the file's path without the SAS (so a new SAS keeps
-  them), and only the blocks a read lacks are fetched, in one request; a HEAD of a known file
-  is answered too. Only what queries read is kept (column chunks of the row groups scanned).
+  them), and only the blocks a read lacks are fetched, in one request, with a 16 MB read-ahead
+  for a read of 1 MB or more (DuckDB scans a file in ~2 MB reads, one after the other, and a
+  request costs ~0.5 s whatever its size); a HEAD of a known file is answered too. Only what
+  queries read is kept (column chunks of the row groups scanned, plus the read-ahead).
   Every file of an Iceberg table is immutable (a commit writes a new `metadata.json`, a new
   manifest list and new manifests, and touches no old one), so the store keeps `.parquet`,
   `.avro` and `.metadata.json` alike: planning a table reads its old manifests from OPFS.

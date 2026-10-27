@@ -32,6 +32,13 @@
 (() => {
   const BLOCK = 256 * 1024;
   const CAP_BYTES = 2 * 1024 * 1024 * 1024;
+  // Read-ahead: DuckDB scans a Parquet file in reads of about 2 MB, one after the other, and
+  // OneLake answers a request in ~0.5 s whatever its size (a 100 MB file, 50 requests, 25 s).
+  // So a read of READ_MIN or more that misses fetches READAHEAD from its start, forward, at
+  // one round trip: the reads that follow are hits. A small read (the footer, the 8 bytes
+  // before it) fetches only its own blocks.
+  const READ_MIN = 1024 * 1024;
+  const READAHEAD = 16 * 1024 * 1024;
   const VERSION = 1;
 
   const P = XMLHttpRequest.prototype, open = P.open, set = P.setRequestHeader, send = P.send;
@@ -173,6 +180,11 @@
               if (!out) {
                 let first = Math.floor(a / BLOCK), last = Math.floor(b / BLOCK);
                 while (first <= last && where.has(`${path}#${first}`)) first++;
+                if (b - a + 1 >= READ_MIN) {
+                  let ahead = first + READAHEAD / BLOCK - 1;
+                  if (f) ahead = Math.min(ahead, Math.ceil(f.size / BLOCK) - 1);
+                  last = Math.max(last, ahead);
+                }
                 while (last >= first && where.has(`${path}#${last}`)) last--;
                 if (fetchBlocks(this.__bcU, path, first, last)) out = fromStore(path, a, Math.min(b, files.get(path).size - 1));
               }
