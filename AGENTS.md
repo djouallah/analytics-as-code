@@ -620,8 +620,9 @@ else: no import, no file written for it.
   `blockcache/blocks.bin` and `index.jsonl` in OPFS; over 2 GB the store starts over; a second
   tab cannot open it and reads OneLake. On `power`'s full data, a returning visit (new SAS):
   Parquet reads 0.15 s in all instead of 85 s, charts drawn in 25 s instead of 138 s. The
-  first visit still pays: `MAX(fct_summary[date])` reads the `date` column of all 27 files of
-  the 1.3 GB table one request at a time (66 s). `httpfs`'s `force_download` does not reach
+  first visit still pays for the scans of a big table's whole history: `MAX(fct_summary[date])`
+  reads the footer and the `date` column of all 27 files of the 1.3 GB table, one request at
+  a time (66 s of a cold 120 s), and `fct_region`'s `REGIONID` list 11 s. `httpfs`'s `force_download` does not reach
   duckdb-wasm's file system.
 - **Threads are not possible yet**: every `wasm_threads` extension published (DuckDB's
   bucket, `azure_wasm`'s CI) imports unshared memory, which the threaded engine refuses
@@ -645,9 +646,12 @@ else: no import, no file written for it.
     `Last-Modified` and no `Cache-Control`.
   - Fetching data files only when their table opened was slower, because tables open one
     at a time.
-  - Smallest table first: the queue is first come, first served, and on `power` the first
-    query waited 30 s for `dim_region`'s three files behind the large tables' manifests. A
-    manifest also names files later removed (404), which are skipped.
+  - Served table by table: the table a query is about to open first (`prioritize`, from
+    `open`), then the others smallest first; within a table, manifests before data files.
+    First come, first served across tables, the first query on `power` waited 35 s for
+    `dim_region`'s three files behind the large tables' hundreds of manifests (one per
+    hourly commit); now it runs at 7 s. A manifest also names files later removed (404),
+    which are skipped.
 - **DuckDB's own caches are on** (`enable_http_metadata_cache`, `parquet_metadata_cache`):
   Iceberg files never change once written.
 - **Timings, cold, conformance-oracle's small `nem`, function call excluded:** charts drawn

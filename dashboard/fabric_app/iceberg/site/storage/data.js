@@ -35,7 +35,7 @@ import * as duckdb from "../duckdb/duckdb-browser.mjs";
 import { serialQueue } from "./queue.js";
 import { createAuth } from "./auth.js";
 import { createCatalog } from "./catalog.js";
-import { prefetchTable } from "./prefetch.js";
+import { prefetchTable, prioritize } from "./prefetch.js";
 import { perf, HTTP_TRACE_SHIM } from "../frontend/perflog.js";
 
 const MODEL = new URL('../semantic/ossie.json' + new URL(import.meta.url).search, import.meta.url);
@@ -110,6 +110,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   function open(name) {
     const t = located.get(name);
     return opened.get(name) ?? opened.set(name, (async () => {
+      prioritize(name);
       await t.prefetch;
       const scan = `iceberg_scan(${lit(t.location)})`;
       const small = t.bytes != null && t.bytes <= SMALL_BYTES;
@@ -121,7 +122,9 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   }
   // The tables a query names (v_<table>) that are not open yet, opened first.
   async function openFor(sql) {
-    for (const [, name] of sql.matchAll(/\bv_(\w+)\b/g)) if (located.has(name)) await open(name);
+    const names = [...new Set([...sql.matchAll(/\bv_(\w+)\b/g)].map(m => m[1]))].filter(n => located.has(n));
+    prioritize(...names.filter(n => !opened.has(n)));   // their files first, in the prefetch
+    for (const name of names) await open(name);
   }
 
   // Each table's size, from its metadata.json, all at once (the page's own requests, in
@@ -141,12 +144,12 @@ export function createDataSource({ onStatus = () => {} } = {}) {
         return { name, location, m: null, bytes: null };
       }
     }));
-    // Smallest first: the prefetch's queue is first come, first served, and a small table's few
-    // files would otherwise wait behind a large one's manifests (on power's full data the first
-    // query waited 30 s for dim_region's three files).
+    // Smallest first: the prefetch's queues are first come, first served, and a small table's
+    // few files would otherwise wait behind a large one's manifests (on power's full data the
+    // first query waited 30 s for dim_region's three files).
     for (const t of metas.filter(Boolean).sort((a, b) => (a.bytes ?? Infinity) - (b.bytes ?? Infinity))) {
       const t0 = performance.now();
-      const prefetch = t.m && prefetchTable(t.m, f => https(f, access.sas), { data: t.bytes != null && t.bytes <= SMALL_BYTES })
+      const prefetch = t.m && prefetchTable(t.name, t.m, f => https(f, access.sas), { data: t.bytes != null && t.bytes <= SMALL_BYTES })
         .then(n => perf.log('fetch', `prefetch ${t.name}: ${n} files`, { ms: performance.now() - t0 }),
               e => perf.log('info', `prefetch ${t.name}: ${e?.message || e}`));
       located.set(t.name, { location: t.location, bytes: t.bytes, prefetch });

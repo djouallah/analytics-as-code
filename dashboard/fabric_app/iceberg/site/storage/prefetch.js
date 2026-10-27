@@ -9,7 +9,8 @@
 // read, many at once, and DuckDB finds it cached. Nothing is kept here: the cache is the
 // browser's, and the URLs (the file and the SAS) are the ones azure_wasm builds.
 //
-//   prefetchTable(metadata, url, { data })  metadata: the table's metadata.json, parsed;
+//   prefetchTable(name, metadata, url, { data })  name: the table, for prioritize(name);
+//                                           metadata: the table's metadata.json, parsed;
 //                                           url(abfss) -> the https URL DuckDB will ask for;
 //                                           data: the data files too (delete files included:
 //                                           a table about to be read whole), after every
@@ -19,21 +20,33 @@
 // OneLake answers HTTP/1.1 only, so a browser keeps six connections to it: more would queue.
 const PARALLEL = 6;
 
-// PARALLEL slots shared by every table. The metadata layers go before the data files: a
-// table cannot be opened before its manifests, whoever's data files are still coming. (Data
-// files fetched only when their table opens were slower: tables open one at a time.)
+// PARALLEL slots shared by every table, served table by table: the table a query is about to
+// open first (prioritize, called by data.js before it opens one), then the others in the order
+// they were started (smallest first). Within a table its manifests come before its data files,
+// which need them. (First come, first served across tables, the first query on power's full
+// data waited 35 s for dim_region's three files behind the large tables' hundreds of
+// manifests; data files fetched only when their table opens were slower still: tables open one
+// at a time.)
 let active = 0;
-const waiting = { high: [], low: [] };
-async function limited(fn, low) {
-  if (active >= PARALLEL) await new Promise(r => waiting[low ? 'low' : 'high'].push(r));
-  active++;
-  try { return await fn(); } finally { active--; (waiting.high.shift() ?? waiting.low.shift())?.(); }
+let order = [];                       // table names, the first served first
+const waiting = new Map();            // table name -> resolvers waiting for a slot
+export function prioritize(...names) {
+  order = [...names, ...order.filter(n => !names.includes(n))];
 }
-const get = (url, low = false) => limited(async () => {
+function next() {
+  for (const n of order) { const w = waiting.get(n); if (w?.length) return w.shift(); }
+  return null;
+}
+async function limited(fn, table) {
+  if (active >= PARALLEL) await new Promise(r => { if (!waiting.has(table)) waiting.set(table, []); waiting.get(table).push(r); });
+  active++;
+  try { return await fn(); } finally { active--; next()?.(); }
+}
+const get = (url, table) => limited(async () => {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return new Uint8Array(await r.arrayBuffer());
-}, low);
+}, table);
 
 // --- An Avro object container file, as far as its strings: the header's codec, then each
 // block, inflated if the codec is deflate. Enough to find the paths in a manifest.
@@ -73,18 +86,19 @@ async function avroText(b) {
 const paths = (s, ext) => [...new Set(s.match(new RegExp(`abfss://[\\x21-\\x7e]+?\\.${ext}`, 'g')) ?? [])];
 
 // The current snapshot's manifest list, its manifests, and with `data` the files they name.
-export async function prefetchTable(metadata, url, { data = false } = {}) {
+export async function prefetchTable(name, metadata, url, { data = false } = {}) {
+  if (!order.includes(name)) order.push(name);
   const current = String(metadata['current-snapshot-id']);
   const snapshot = (metadata.snapshots ?? []).find(s => String(s['snapshot-id']) === current);
   if (!snapshot?.['manifest-list']) return 0;
-  const list = await avroText(await get(url(snapshot['manifest-list'])));
-  const manifests = await Promise.all(paths(list, 'avro').map(async m => avroText(await get(url(m)))));
+  const list = await avroText(await get(url(snapshot['manifest-list']), name));
+  const manifests = await Promise.all(paths(list, 'avro').map(async m => avroText(await get(url(m), name))));
   let n = 1 + manifests.length;
   if (data) {
     const files = [...new Set(manifests.flatMap(m => paths(m, 'parquet')))];
     // A manifest also names the files a later snapshot removed (its DELETED entries, which this
     // reader does not tell apart): those answer 404 and are skipped.
-    await Promise.all(files.map(f => get(url(f), true).catch(() => null)));
+    await Promise.all(files.map(f => get(url(f), name).catch(() => null)));
     n += files.length;
   }
   return n;
