@@ -7,10 +7,10 @@
 // the function says where each one is now and signs a read-only SAS (catalog.js); DuckDB-WASM
 // reads them with the `iceberg` extension and `azure_wasm` (abfss:// paths to https with the
 // SAS, as the official `azure` extension has no WASM build).
-// The engine is DuckDB 2.0, served by the app with its extensions (../duckdb/, fetched by
-// ../../duckdb.mjs at build: duckdb-wasm has no 2.0 release yet). They are relabelled for the
-// engine, so unsigned: DuckDB is opened with unsigned extensions allowed and installs them from
-// the app's own ext/ repository only.
+// The engine is duckdb-wasm's npm release (DuckDB 1.5), from jsDelivr, the GitHub page's pin,
+// with DuckDB's signed extensions (azure_wasm from the community repository). Nothing a query
+// reads depends on the engine's Iceberg scan: the extension plans a table (iceberg_metadata),
+// and the views are plain Parquet, delete files applied by the view itself.
 //
 // A table is opened when a query first names its view, v_<table>, so the first paint pays only
 // for the tables it reads. Opening plans the table once: the snapshot's live data files, from
@@ -21,8 +21,8 @@
 // (SMALL_BYTES, from its metadata.json) is copied into DuckDB's memory and its view reads
 // that: later queries do not go back to OneLake. A larger one is read in place, its view
 // read_parquet over the files, as https URLs with the SAS (azure_wasm cannot glob, which
-// read_parquet does to every path), written again on a new SAS; or iceberg_scan when it has
-// delete files. After the first
+// read_parquet does to every path), written again on a new SAS. A table's position deletes are
+// applied by its view (the engine's iceberg_scan is never what a query reads). After the first
 // paint the rest are opened in the background, small ones first, behind whatever the page
 // asks.
 // For a new snapshot the page fetches ahead of DuckDB, many at once (prefetch.js): its new
@@ -41,7 +41,7 @@
 //   query, views, has, needs
 // =============================================================================
 
-import * as duckdb from "../duckdb/duckdb-browser.mjs";
+import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev65.0/+esm";
 import { serialQueue } from "./queue.js";
 import { createAuth } from "./auth.js";
 import { createCatalog } from "./catalog.js";
@@ -51,9 +51,9 @@ import { perf, HTTP_TRACE_SHIM } from "../frontend/perflog.js";
 
 const MODEL = new URL('../semantic/ossie.json' + new URL(import.meta.url).search, import.meta.url);
 const SMALL_BYTES = 32 * 1024 * 1024;   // a table up to this much Parquet is copied into memory
-const ENGINE = new URL('../duckdb/', import.meta.url).href;
-// The extensions DuckDB installs, in that order (iceberg loads parquet itself).
-const EXTENSIONS = ['httpfs', 'avro', 'iceberg', 'azure_wasm', 'icu'];
+// The extensions DuckDB installs, in that order (iceberg loads parquet itself), and where from:
+// azure_wasm is a community extension.
+const EXTENSIONS = { httpfs: 'core', avro: 'core', iceberg: 'core', azure_wasm: 'community', icu: 'core' };
 // The worker's reads of Parquet files, kept in OPFS by block, and no If-Match (blockcache.js).
 const BLOCKCACHE = new URL('./blockcache.js' + new URL(import.meta.url).search, import.meta.url).href;
 
@@ -77,25 +77,20 @@ const lit = s => `'${String(s).replace(/'/g, "''")}'`;
 // abfss://<ws>@onelake.dfs.fabric.microsoft.com/<lh>/... -> https://onelake.dfs.fabric.microsoft.com/<ws>/<lh>/...
 const https = (abfss, sas) => `${abfss.replace(/^abfss:\/\/([^@/]+)@([^/]+)\//, 'https://$2/$1/')}?${sas}`;
 
-// The engine's pins (../../duckdb.mjs), with the extensions' folder, ext-<hash of the pins>: its
-// files never change, so the worker keeps them in OPFS for good (blockcache.js).
-const PINS = fetch(`${ENGINE}pins.json`).then(r => r.json());
-PINS.catch(() => {});   // awaited by init, which reports it
-// DuckDB downloads its extensions one at a time, ~11 MB served uncompressed (13 s live on
-// 2026-10-27). On a browser's first load the page fetches them all at once at the start, while
-// the sign-in and the function run, into the browser's cache, where DuckDB's own request finds
-// them. After that the worker answers DuckDB from OPFS, and the page fetches nothing (the
-// folder it loaded is remembered in localStorage).
+// DuckDB downloads its extensions one at a time (3.2 s cold on 1.5.6). On a browser's first
+// load the page fetches them all at once, as soon as the engine says its version, into the
+// browser's cache, where DuckDB's own request finds them. After that the worker answers DuckDB
+// from OPFS (blockcache.js), and the page fetches nothing (the version it loaded is remembered).
 const EXT_KEY = 'duckdb_extensions';
-function warmExtensions() {
+const extensionUrl = (version, e) =>
+  `https://${EXTENSIONS[e] === 'community' ? 'community-' : ''}extensions.duckdb.org/${version}/wasm_eh/${e}.duckdb_extension.wasm`;
+function warmExtensions(version) {
+  let known = null; try { known = localStorage.getItem(EXT_KEY); } catch (e) {}
+  if (known === version) return;
   const t0 = performance.now();
-  PINS.then(p => {
-    let known = null; try { known = localStorage.getItem(EXT_KEY); } catch (e) {}
-    if (known === p.ext) return;
-    return Promise.all([...EXTENSIONS, 'parquet'].map(e =>
-      fetch(`${ENGINE}${p.ext}/${p.label}/${p.platform}/${e}.duckdb_extension.wasm`).then(r => r.arrayBuffer())))
-      .then(f => perf.log('fetch', `prefetch extensions: ${f.length} files`, { ms: performance.now() - t0 }));
-  }).catch(e => perf.log('info', `prefetch extensions: ${e?.message || e}`));
+  Promise.all([...Object.keys(EXTENSIONS), 'parquet'].map(e => fetch(extensionUrl(version, e)).then(r => r.arrayBuffer())))
+    .then(f => perf.log('fetch', `prefetch extensions: ${f.length} files`, { ms: performance.now() - t0 }))
+    .catch(e => perf.log('info', `prefetch extensions: ${e?.message || e}`));
 }
 
 // onProgress({ label, done, total, detail }) while a long download runs, null when it ends.
@@ -134,19 +129,22 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
     }, Math.max(catalog.renewAt() - Date.now(), 0));
   }
 
-  // The snapshot planned from Iceberg: its live data files, whether a delete file is among
-  // them (then the view stays over iceberg_scan, which applies them), and the manifests read.
-  // The record snapshots.js keeps.
+  // The snapshot planned from Iceberg: its live data files, its delete files (applied by the
+  // view itself, deletesOf), and the manifests read. The record snapshots.js keeps.
+  // A delete file is listed by a manifest of deletes: manifest_content says which, 'DATA' or
+  // 'DELETES', on every DuckDB (its `content` is 'EXISTING' for a data file on 1.5 and 'DATA' on
+  // 2.0). file_format is 'parquet', lower case. `scan`: what the view cannot read itself (no
+  // data file, or a file that is not Parquet: a deletion vector), left to iceberg_scan.
   async function plan(t) {
     const rows = (await conn.query(`SELECT manifest_path, file_path, manifest_content, file_format
       FROM iceberg_metadata(${lit(t.location)}) WHERE status <> 'DELETED'`)).toArray();
+    const isData = r => String(r.manifest_content).toUpperCase() === 'DATA';
+    const paths = rs => [...new Set(rs.map(r => r.file_path))].map(path => ({ path, size: null }));
     return {
       location: t.location, bytes: t.bytes,
-      // A delete file is listed by a manifest of deletes: manifest_content says which, 'DATA'
-      // or 'DELETES', on every DuckDB (its `content` is 'EXISTING' for a data file on 1.5 and
-      // 'DATA' on 2.0). file_format is 'parquet', lower case.
-      deletes: !rows.length || !rows.every(r => String(r.manifest_content).toUpperCase() === 'DATA' && String(r.file_format).toLowerCase() === 'parquet'),
-      files: [...new Set(rows.map(r => r.file_path))].map(path => ({ path, size: null })),
+      scan: !rows.some(isData) || !rows.every(r => String(r.file_format).toLowerCase() === 'parquet'),
+      files: paths(rows.filter(isData)),
+      deleteFiles: paths(rows.filter(r => !isData(r))),
       manifests: [...new Set(rows.map(r => r.manifest_path))],
     };
   }
@@ -159,11 +157,15 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
   // manifest per hourly commit). So a table is planned once (PLAN), and its record kept: the
   // view is read_parquet over the snapshot's files, written as a literal, and a query reads
   // only Parquet (footers held by parquet_metadata_cache, files by blockcache.js). A table
-  // with delete files stays over iceberg_scan, which applies them. The columns are the files'
-  // own: a table's columns change only with a rebuild, never in place.
-  // A large table's new files (all of them on a first visit) are fetched whole ahead, six at
-  // a time, before the view binds (the worker fetches a file whole on its first read, one at a
-  // time); the sizes learnt go into the record, so a HEAD of them needs no request.
+  // with delete files is read the same way, its position deletes applied by the view
+  // (deletesOf): iceberg_scan is never what a query reads, as how it plans differs by version
+  // (DuckDB 1.5's plans a table with delete files again on every scan, every delete file one
+  // request). The columns are the files' own: a table's columns change only with a rebuild,
+  // never in place.
+  // A large table's new files (all of them on a first visit, delete files included) are
+  // fetched whole ahead, six at a time, before the view binds (the worker fetches a file whole
+  // on its first read, one at a time); the sizes learnt go into the record, so a HEAD of them
+  // needs no request.
   // A record that fails to open (a file gone, a record of another build) is dropped and the
   // table planned again, once.
   function open(name) {
@@ -185,7 +187,7 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
   const channel = (() => { try { return new BroadcastChannel('blockcache'); } catch (e) { return null; } })();
   const storePath = p => p.replace(/^abfss:\/\/([^@/]+)@([^/]+)\//, 'https://$2/$1/');
   function tellSizes(record) {
-    const sizes = Object.fromEntries(record.files.filter(f => f.size).map(f => [storePath(f.path), f.size]));
+    const sizes = Object.fromEntries([...record.files, ...record.deleteFiles].filter(f => f.size).map(f => [storePath(f.path), f.size]));
     if (channel && Object.keys(sizes).length) channel.postMessage({ sizes });
   }
   // A whole file the page downloaded, handed to the worker's store; resolved when the writer
@@ -204,9 +206,10 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
     const small = t.bytes != null && t.bytes <= SMALL_BYTES;
     if (!record) {
       record = await perf.time('attach', `PLAN ${name}`, () => plan(t));
-      const before = new Set((snapshots.previous(name)?.files ?? []).map(f => f.path));
-      const fresh = record.files.filter(f => !before.has(f.path));
-      if (!record.deletes && !small && fresh.length) {
+      const last = snapshots.previous(name);
+      const before = new Set([...last?.files ?? [], ...last?.deleteFiles ?? []].map(f => f.path));
+      const fresh = [...record.files, ...record.deleteFiles].filter(f => !before.has(f.path));
+      if (!record.scan && !small && fresh.length) {
         const t0 = performance.now();
         // The page shows how far it has got (onProgress): a first visit downloads a large
         // table whole before its charts draw.
@@ -219,30 +222,52 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
           sizes = new Map((await prefetchFiles(name, fresh, f => https(f, sas), toStore,
             n => { done++; got += n; progress(); })).map(f => [f.path, f.size]));
         } finally { onProgress(null); }
-        for (const f of record.files) if (sizes.get(f.path)) f.size = sizes.get(f.path);
+        for (const f of [...record.files, ...record.deleteFiles]) if (sizes.get(f.path)) f.size = sizes.get(f.path);
         perf.log('fetch', `prefetch ${name}: ${fresh.length} files`, { ms: performance.now() - t0 });
       }
       snapshots.put(name, record);
       t.record = record;
     }
     tellSizes(record);
-    const how = record.deletes ? 'iceberg_scan: delete files' : `${record.files.length} Parquet files`;
+    // The positions the delete files remove, read once per session into memory. A delete file
+    // with no file_path and pos is an equality delete, which the view cannot apply: the table
+    // goes to iceberg_scan, and its record says so.
+    if (!record.scan && record.deleteFiles.length)
+      await perf.time('attach', `DELETES ${name} (${record.deleteFiles.length} delete files)`, () => conn.query(
+        `CREATE OR REPLACE TABLE ${ident(deletesOf(name))} AS
+         SELECT DISTINCT regexp_replace(file_path, '^abfss://([^@/]+)@([^/]+)/', 'https://\\2/\\1/') AS path, pos
+         FROM read_parquet([${record.deleteFiles.map(f => lit(https(f.path, sas))).join(', ')}])`))
+        .catch(e => {
+          perf.log('info', `${name}: delete files not applied (${e?.message || e}), read with iceberg_scan`);
+          record.scan = true; snapshots.put(name, record);
+        });
+    const how = record.scan ? 'iceberg_scan'
+      : `${record.files.length} Parquet files${record.deleteFiles.length ? `, ${record.deleteFiles.length} delete files applied` : ''}`;
     if (small)
       await perf.time('attach', `OPEN ${name} (${mb} MB, copied into memory, ${how})`, () => conn.query(
-        `CREATE OR REPLACE TABLE ${ident(name)} AS SELECT * FROM ${fromOf(t, record)}; CREATE OR REPLACE VIEW ${ident('v_' + name)} AS SELECT * FROM ${ident(name)}`));
+        `CREATE OR REPLACE TABLE ${ident(name)} AS ${selectOf(name, t, record)}; CREATE OR REPLACE VIEW ${ident('v_' + name)} AS SELECT * FROM ${ident(name)}`));
     else {
       await perf.time('attach', `OPEN ${name} (${mb} MB, read in place, ${how})`, () => conn.query(viewOf(name, t, record)));
-      if (!record.deletes) inPlace.set(name, { location: t.location, record });
+      if (!record.scan) inPlace.set(name, { location: t.location, record });
     }
   }
-  // What a view reads: iceberg_scan over abfss:// when the table has delete files, else
-  // read_parquet over the files as https URLs with the SAS. Not abfss://: read_parquet globs
-  // every path it is given, wildcard or not, and azure_wasm implements no glob ("Globbing
-  // Azure paths is not supported"); httpfs takes an https URL as it is. They are the URLs the
-  // prefetch fetched, so DuckDB's requests find them in the browser's cache.
-  const fromOf = (t, record) => record.deletes ? `iceberg_scan(${lit(t.location)})`
-    : `read_parquet([${record.files.map(f => lit(https(f.path, sas))).join(', ')}])`;
-  const viewOf = (name, t, record) => `CREATE OR REPLACE VIEW ${ident('v_' + name)} AS SELECT * FROM ${fromOf(t, record)}`;
+  // What a view reads: read_parquet over the files as https URLs with the SAS. Not abfss://:
+  // read_parquet globs every path it is given, wildcard or not, and azure_wasm implements no
+  // glob ("Globbing Azure paths is not supported"); httpfs takes an https URL as it is. They
+  // are the URLs the prefetch fetched, so DuckDB's requests find them in the browser's cache.
+  // With delete files, the rows whose file and position (file_row_number, 0-based as Iceberg's
+  // pos) a delete file names are left out: the file is its URL without the SAS, the delete
+  // file's file_path written the same way. iceberg_scan over abfss:// only for `scan`.
+  const deletesOf = name => `__deletes_${name}`;
+  const selectOf = (name, t, record) => {
+    if (record.scan) return `SELECT * FROM iceberg_scan(${lit(t.location)})`;
+    const files = `[${record.files.map(f => lit(https(f.path, sas))).join(', ')}]`;
+    if (!record.deleteFiles.length) return `SELECT * FROM read_parquet(${files})`;
+    return `SELECT * EXCLUDE (__file, file_row_number)
+      FROM read_parquet(${files}, filename = '__file', file_row_number = true) AS d
+      ANTI JOIN ${ident(deletesOf(name))} AS x ON x.path = split_part(d.__file, '?', 1) AND x.pos = d.file_row_number`;
+  };
+  const viewOf = (name, t, record) => `CREATE OR REPLACE VIEW ${ident('v_' + name)} AS ${selectOf(name, t, record)}`;
   // The tables a query names (v_<table>) that are not open yet, opened first.
   async function openFor(sql) {
     const names = [...new Set([...sql.matchAll(/\bv_(\w+)\b/g)].map(m => m[1]))].filter(n => located.has(n));
@@ -288,7 +313,6 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
 
 
   async function init() {
-    warmExtensions();
     await auth.signIn();
     onStatus("Loading DuckDB WASM...");
     // The model, the function's answer, the tables' sizes and their prefetch, while DuckDB's
@@ -301,26 +325,27 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
     });
     ready.catch(() => {});   // awaited below
 
+    // Single-threaded (the eh bundle): the page is not cross-origin isolated.
+    const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
     const workerUrl = URL.createObjectURL(
       // HTTP_TRACE_SHIM times the worker's own requests for the Logs tab.
       new Blob([`importScripts("${BLOCKCACHE}");
 `, HTTP_TRACE_SHIM, `
-importScripts("${ENGINE}duckdb-browser-base.worker.js");`], { type: "text/javascript" }));
+importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
     const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), new Worker(workerUrl));
-    await db.instantiate(`${ENGINE}duckdb-base.wasm`);
+    await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
     URL.revokeObjectURL(workerUrl);
-    await db.open({ allowUnsignedExtensions: true });
+    const version = await db.getVersion();
+    warmExtensions(version);
     conn = await db.connect();
 
-    // From the app's own repository (installing needs a home directory). azure_wasm is loaded
-    // before the first scan: it claims abfss://, or DuckDB tries to autoload the official azure
-    // extension, which has no WASM build. icu is the time zones.
-    const pins = await PINS, repo = ENGINE + pins.ext;
-    await perf.time('attach', `LOAD ${EXTENSIONS.join(', ')}`, () =>
-      q(`SET home_directory = '/tmp'; SET custom_extension_repository = ${lit(repo)};
-         SET autoinstall_extension_repository = ${lit(repo)};
-         ${EXTENSIONS.map(e => `INSTALL ${e}; LOAD ${e};`).join(' ')}`));
-    try { localStorage.setItem(EXT_KEY, pins.ext); } catch (e) {}
+    // Installing needs a home directory. azure_wasm is loaded before the first scan: it claims
+    // abfss://, or DuckDB tries to autoload the official azure extension, which has no WASM
+    // build. icu is the time zones.
+    await perf.time('attach', `LOAD ${Object.keys(EXTENSIONS).join(', ')} (DuckDB ${version})`, () =>
+      q(`SET home_directory = '/tmp';
+         ${Object.entries(EXTENSIONS).map(([e, repo]) => `INSTALL ${e}${repo === 'core' ? '' : ` FROM ${repo}`}; LOAD ${e};`).join(' ')}`));
+    try { localStorage.setItem(EXT_KEY, version); } catch (e) {}
     // Iceberg's files never change once written: what DuckDB learnt of one (its size, its
     // Parquet footer) holds for the session. A setting this build lacks is left as it is.
     for (const s of ['SET enable_http_metadata_cache = true', 'SET parquet_metadata_cache = true',

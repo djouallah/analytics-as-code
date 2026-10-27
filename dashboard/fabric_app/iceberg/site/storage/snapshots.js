@@ -3,21 +3,22 @@
 // =============================================================================
 // Planning a table from Iceberg (data.js, PLAN) reads its metadata.json, the manifest list and
 // every manifest, one request at a time, and what comes out is small: the snapshot's live data
-// files, whether any delete file is among them, and the manifests read. That is kept here, per
+// files, its delete files, and the manifests read. That is kept here, per
 // table, keyed by the table's metadata location: an Iceberg commit always writes a new
 // metadata.json, so the same location is the same snapshot, and a table whose location the
 // function gives again is opened from its record with nothing read from OneLake. A new
 // location is planned again, and the record's manifests tell the prefetch which ones the
 // worker already holds (blockcache.js keeps manifests too).
 //
-//   { location, bytes, deletes, files: [{ path, size }], manifests: [path], savedAt }
+//   { location, bytes, scan, files: [{ path, size }], deleteFiles: [{ path, size }],
+//     manifests: [path], savedAt }
 //
 // Paths only, no URL: the SAS is never stored. localStorage, this browser's, best-effort: a
 // browser that blocks it plans every table every visit, as before.
 // =============================================================================
 
 const KEY = 'iceberg_snapshots';
-const VERSION = 3;   // a record of another version is not used (3: `deletes` from manifest_content)
+const VERSION = 4;   // a record of another version is not used (4: delete files listed, applied by the view)
 
 export function createSnapshots() {
   const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } };

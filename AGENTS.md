@@ -599,24 +599,27 @@ else: no import, no file written for it.
   the `iceberg` extension and the community extension `azure_wasm`. That one turns
   `abfss://` into `https://…?<SAS>`, because the official `azure` extension has no WASM
   build; it is loaded before the first scan, or DuckDB tries to autoload `azure`.
-- **The engine is DuckDB 2.0, served by the app itself** (`duckdb.mjs`, run by
-  `rayfin.yml`'s `buildCommand` before `build.mjs`, into `vendor/duckdb/`, not in git; it
-  needs `gh` signed in). duckdb-wasm has no 2.0 release on npm, so the engine is its CI
-  build of main (pinned run, single-threaded loadable package), and the extensions are
-  DuckDB's bucket's `v2.0.0/wasm_eh` ones plus `azure_wasm` from its own CI (its 2.0 port,
-  duckdb/community-extensions#3393 pending). That build calls itself `d54cbbe3df` (the v2.0.0
-  commit), so each extension's footer is relabelled, which voids its signature: `data.js`
-  opens DuckDB with unsigned extensions allowed and installs them from the app's own `ext/`
-  repository. The CI artifacts expire after 90 days: a new pin then, and back to npm and the
-  signed extensions once duckdb-wasm 2.0 ships. The `.wasm` is 33.7 MB, served uncompressed
-  (Rayfin's hosting compresses nothing); it loads while the function is called. The
-  extensions (~11 MB) sit in `ext-<hash of the pins>/` (named in `pins.json`), so a file there
-  never changes: the worker keeps them in OPFS (`blockcache.js`) and answers DuckDB from there
-  after a browser's first load (1-11 ms each instead of 1.5-2.8 s; Rayfin's hosting
-  revalidates every file, `max-age=0`). On that first load the page fetches them all at once
-  at the start (`warmExtensions`), as DuckDB downloads them one at a time (13 s live), and
-  remembers in `localStorage` the folder it has loaded.
-- **2.0 sends every ranged read with `If-Match`**, even with `unsafe_disable_etag_checks`,
+- **The engine is duckdb-wasm `1.33.1-dev65.0` (DuckDB 1.5), from jsDelivr, the GitHub
+  page's pin**, with DuckDB's signed extensions: `httpfs`, `avro`, `iceberg` and `icu` from
+  its repository, `azure_wasm` from the community one. Single-threaded (the `eh` bundle).
+  Until 2026-10-28 the app ran DuckDB 2.0: duckdb-wasm's CI build of main and `azure_wasm`'s
+  own 2.0 port, CI artifacts that expire after 90 days, with the extensions relabelled and so
+  unsigned. A first move to 1.5.6 (2026-10-27) was reverted within the hour, for two things
+  the code took from the engine: `iceberg_metadata()`'s `content` ('EXISTING' for a data file
+  on 1.5, 'DATA' on 2.0; `manifest_content` says it on both), and `iceberg_scan`, which on 1.5
+  plans a table with delete files again on every scan (`fct_curtailment_region`, ~280 delete
+  files then, each one request). Now no query reads `iceberg_scan` (the delete files are
+  applied by the view, below), and the `iceberg` extension only plans. What the app takes
+  from the engine, checked on 1.5.6 and 2.0 against `power`: `iceberg_metadata()`'s
+  `manifest_path`, `file_path`, `manifest_content`, `file_format`, `status`; `read_parquet`'s
+  `filename = '<column>'` and `file_row_number`. Back to 2.0 once duckdb-wasm 2.0 is on npm
+  and `azure_wasm`'s 2.0 build is in the community repository
+  (duckdb/community-extensions#3393): check those first.
+  The extensions sit under their version (`extensions.duckdb.org/v<version>/wasm_eh/...`), so
+  the worker keeps them in OPFS (`blockcache.js`) after a browser's first load; on that first
+  load the page fetches them all at once (`warmExtensions`, as soon as the engine says its
+  version), as DuckDB downloads them one at a time.
+- **DuckDB 2.0 sends every ranged read with `If-Match`** (1.5 does not), even with `unsafe_disable_etag_checks`,
   and the browser's cache answers no request that carries it: every table's
   `metadata.json` went back to OneLake (~0.9 s each). The worker drops the header
   (`blockcache.js`); an Iceberg file is never rewritten in place. The engine also URL-encodes
@@ -644,10 +647,17 @@ else: no import, no file written for it.
   `httpfs`'s `force_download` does not reach duckdb-wasm's file system.
 - **The client has a catalog of its own: a snapshot record per table**
   (`site/storage/snapshots.js`, `localStorage`), keyed by the metadata location the function
-  gave: the snapshot's live data files (with their sizes once learnt), whether it has delete
-  files, and the manifests read. A table is planned once (`PLAN`: `iceberg_metadata()`, one
-  request per manifest) and its view is `read_parquet` over the record's files, written as
-  literals (`iceberg_scan`, which plans again at every query, only with delete files). The
+  gave: the snapshot's live data files and delete files (with their sizes once learnt), and
+  the manifests read. A table is planned once (`PLAN`: `iceberg_metadata()`, one request per
+  manifest) and its view is `read_parquet` over the record's files, written as literals.
+  **A table's position deletes are applied by its view**: its delete files (fetched whole
+  with its data files) are read once per session into a table `__deletes_<table>` (the data
+  file's path and `pos`), and the view is `read_parquet(..., filename = '__file',
+  file_row_number = true)` `ANTI JOIN` it on the file (its URL without the SAS) and the row
+  (both 0-based). On `power` (2026-10-28) the same rows as `iceberg_scan`, on 1.5.6 and 2.0:
+  `fct_curtailment_region` and `dim_duid`, the two tables that have delete files. A delete
+  file that is not position deletes (an equality delete, or a deletion vector) leaves the
+  table to `iceberg_scan` (`scan` in its record); DuckDB writes neither. The
   literals are `https://…?<SAS>` URLs, not `abfss://`: `read_parquet` globs every path,
   wildcard or not, and `azure_wasm` implements no glob ("Globbing Azure paths is not
   supported"); `httpfs` takes the URL as it is. So a new SAS writes those views again, and
@@ -673,8 +683,8 @@ else: no import, no file written for it.
   back of the queue (`attachAgg`, not awaited).
 - **A small table is copied into memory.** Its size is the current snapshot's
   `total-files-size`, read from its `metadata.json`. Up to `SMALL_BYTES` (32 MB), the table
-  is copied into DuckDB's memory once and its view reads that. Above it, the view is over
-  `iceberg_scan`, read in place. `has()` and `views()` answer from the model's columns,
+  is copied into DuckDB's memory once and its view reads that. Above it, the view reads the
+  files in place. `has()` and `views()` answer from the model's columns,
   with no table opened.
 - **The browser's HTTP cache is the prefetch** (`prefetch.js`), for a new snapshot:
   - DuckDB-WASM reads one request at a time, and OneLake answers each in about 0.6 s.
@@ -694,9 +704,10 @@ else: no import, no file written for it.
     which are skipped.
 - **DuckDB's own caches are on** (`enable_http_metadata_cache`, `parquet_metadata_cache`):
   Iceberg files never change once written.
-- **Timings, cold, conformance-oracle's small `nem`, function call excluded:** charts drawn
-  in 14 to 15 s on 2.0 (loading the extensions 0.7 s, opening the 15 tables 1.6 s), 15 to
-  17 s on 1.5.6 (3.2 s and 5.4 s). It was 48 s with lazy opening alone, and 70 to 79 s when
+- **Timings, cold, conformance-oracle's small `nem`, function call excluded, measured before
+  the snapshot records, the whole-file store and `warmExtensions`:** charts drawn in 15 to
+  17 s on 1.5.6 (loading the extensions 3.2 s, opening the 15 tables 5.4 s), 14 to 15 s on
+  2.0 (0.7 s and 1.6 s). It was 48 s with lazy opening alone, and 70 to 79 s when
   every view was created up front.
 - **The function's answer is kept for about 55 minutes** (`catalog.js`), in that viewer's
   `localStorage`. A reload within it calls no function, starts without a session, reads the
@@ -1043,8 +1054,8 @@ image, and the packages those pins pull in.
   reader. Patch releases within 1.5 keep the format; don't move it to 2.0 until a duckdb-wasm
   build on 2.0 is pinned in the dashboard. Parquet is the handoff between the two venvs: 1.5
   can't read tables that compaction rewrote with the 2.0 build.
-- **The GitHub page pins `@duckdb/duckdb-wasm@1.33.1-dev65.0`** (DuckDB 1.5.x line; the Iceberg
-  Fabric app runs 2.0, see its section), a dev build
+- **The GitHub page and the Iceberg Fabric app pin `@duckdb/duckdb-wasm@1.33.1-dev65.0`**
+  (DuckDB 1.5.x line), a dev build
   because nothing stable has shipped since 1.33.0. Don't take npm's `latest` tag: it points
   at `1.33.1-dev57.0`, which the DuckDB blog says breaks OPFS. The dev build lets
   `attachCached` (`dashboard/github/history.js`) read the OPFS-cached files in place
