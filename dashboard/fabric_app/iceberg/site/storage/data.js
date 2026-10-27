@@ -98,7 +98,8 @@ function warmExtensions() {
   }).catch(e => perf.log('info', `prefetch extensions: ${e?.message || e}`));
 }
 
-export function createDataSource({ onStatus = () => {} } = {}) {
+// onProgress({ label, done, total, detail }) while a long download runs, null when it ends.
+export function createDataSource({ onStatus = () => {}, onProgress = () => {} } = {}) {
   const catalog = createCatalog(() => auth.client());
   const snapshots = createSnapshots();
   // A kept answer from the function needs no session: the page starts without the Rayfin SDK.
@@ -204,7 +205,17 @@ export function createDataSource({ onStatus = () => {} } = {}) {
       const fresh = record.files.filter(f => !before.has(f.path));
       if (!record.deletes && !small && fresh.length) {
         const t0 = performance.now();
-        const sizes = new Map((await prefetchFiles(name, fresh, f => https(f, sas), toStore)).map(f => [f.path, f.size]));
+        // The page shows how far it has got (onProgress): a first visit downloads a large
+        // table whole before its charts draw.
+        let done = 0, got = 0;
+        const progress = () => onProgress({ label: `Downloading ${name}`, done, total: fresh.length,
+          detail: `${done} of ${fresh.length} files, ${(got / 1048576).toFixed(0)} MB${t.bytes && fresh.length === record.files.length ? ` of ${(t.bytes / 1048576).toFixed(0)} MB` : ''}. Kept in this browser for the next visit.` });
+        progress();
+        let sizes;
+        try {
+          sizes = new Map((await prefetchFiles(name, fresh, f => https(f, sas), toStore,
+            n => { done++; got += n; progress(); })).map(f => [f.path, f.size]));
+        } finally { onProgress(null); }
         for (const f of record.files) if (sizes.get(f.path)) f.size = sizes.get(f.path);
         perf.log('fetch', `prefetch ${name}: ${fresh.length} files`, { ms: performance.now() - t0 });
       }

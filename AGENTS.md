@@ -654,7 +654,8 @@ else: no import, no file written for it.
   and awaited until the writer says it is kept, so DuckDB's ranged reads of it are answered
   locally. Not through the browser's HTTP cache: it does not keep a 70-100 MB response, and
   the worker downloaded every `fct_summary` file a second time, one at a time (52 s on a
-  first visit, 2026-10-27). A record
+  first visit, 2026-10-27). While it runs, the page shows a card with a bar (`onProgress`,
+  passed to every `createDataSource`; a host that reports nothing never shows it). A record
   that fails to open is dropped and the table planned again, once. The record holds paths
   only, never a SAS.
 - **Threads are not possible yet**: every `wasm_threads` extension published (DuckDB's

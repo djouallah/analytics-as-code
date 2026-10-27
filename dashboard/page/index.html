@@ -73,6 +73,16 @@
     #status.error { color: var(--bad); }
     #status.loading .dot { background: var(--warn); box-shadow: 0 0 6px var(--warn); animation: pulse 1.2s infinite; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    /* A long download (a host's onProgress: the Fabric app's first visit): a card over the
+       page, which keeps working under it. */
+    .progress-card { position: fixed; left: 50%; top: 38%; transform: translate(-50%, -50%); z-index: 50; width: min(380px, calc(100vw - 32px)); padding: 1rem 1.2rem; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); pointer-events: none; }
+    .progress-card[hidden] { display: none; }
+    .progress-label { font-size: 0.9rem; font-weight: 650; margin-bottom: 0.6rem; }
+    .progress-detail { font-size: 0.78rem; color: var(--muted); margin-top: 0.55rem; }
+    .progress-card progress { display: block; width: 100%; height: 6px; border: none; border-radius: 999px; overflow: hidden; background: var(--row-line); appearance: none; }
+    .progress-card progress::-webkit-progress-bar { background: var(--row-line); }
+    .progress-card progress::-webkit-progress-value { background: var(--accent); transition: width 0.2s; }
+    .progress-card progress::-moz-progress-bar { background: var(--accent); }
     .header-link { color: var(--muted); text-decoration: none; display: inline-flex; align-items: center; gap: 3px; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.04em; transition: color 0.15s; }
     .header-link:hover { color: var(--text); }
     .header-link svg { fill: currentColor; }
@@ -541,6 +551,11 @@
       <button type="button" class="theme-toggle" id="themeToggle" aria-label="Switch to light theme" title="Switch to light theme">&#9728;</button>
     </div>
   </header>
+  <div class="progress-card" id="progress" role="status" aria-live="polite" hidden>
+    <div class="progress-label" id="progressLabel"></div>
+    <progress id="progressBar" max="1" value="0"></progress>
+    <div class="progress-detail" id="progressDetail"></div>
+  </div>
   <div class="filter-bar">
     <div class="filter-group">
       <label for="regionFilter">Region</label>
@@ -956,6 +971,17 @@
       document.getElementById("statusText").textContent = msg;
       document.getElementById("status").className = type;
     }
+    // A long download, as the data source reports it ({ label, done, total, detail }), or null
+    // when it ends. A host that reports none never shows the card.
+    function setProgress(p) {
+      document.getElementById('progress').hidden = !p;
+      if (!p) return;
+      document.getElementById('progressLabel').textContent = p.label;
+      const bar = document.getElementById('progressBar');
+      bar.max = p.total || 1;
+      bar.value = p.done || 0;
+      document.getElementById('progressDetail').textContent = p.detail ?? '';
+    }
 
     // `hover` is the region tile or the fuel of the mix under the pointer: it filters the page
     // like a click, for as long as the pointer stays, and leaves no tag (the click's `region`
@@ -1008,7 +1034,7 @@
     // (a host that stores the files differently ships its own): it has a view per table. How
     // the page asks is frontend/queries.js's: the queries, and `connect`, what runs them over
     // the data. The Analyze tab is SQL: over the semantic model, or over the same views.
-    const data = connect(createDataSource({ onStatus: setStatus }));
+    const data = connect(createDataSource({ onStatus: setStatus, onProgress: setProgress }));
     // A host whose engine is the model itself (VertiPaq, in the Fabric app of that name) runs
     // no SQL: its data source has no `needs`, and the tab is left out.
     if (!data.needs) document.getElementById('tab-analyze').remove();

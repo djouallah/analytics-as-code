@@ -20,10 +20,12 @@
 //                                           (snapshots.js: the table's last record), not
 //                                           fetched. A new snapshot's manifest list names
 //                                           every manifest of the table, old ones included.
-//   prefetchFiles(name, files, url, store)  each Parquet file whole, six at a time, handed to
+//   prefetchFiles(name, files, url, store, onFile)
+//                                           each Parquet file whole, six at a time, handed to
 //                                           the worker's store (store(path, bytes), resolved
-//                                           once kept; blockcache.js). files: [{ path, size }].
-//                                           Returns the sizes.
+//                                           once kept; blockcache.js); onFile(bytes) as each
+//                                           one is done. files: [{ path, size }]. Returns the
+//                                           sizes.
 // =============================================================================
 
 // OneLake answers HTTP/1.1 only, so a browser keeps six connections to it: more would queue.
@@ -62,7 +64,7 @@ const get = (url, table) => limited(async () => {
 // answered there, not seeked from OneLake. Not left in the browser's HTTP cache, which does not
 // keep a response of 70-100 MB: the worker downloaded each file again, one at a time (2-5 s
 // each, 52 s for fct_summary on 2026-10-27). Returns each file's size.
-export async function prefetchFiles(name, files, url, store) {
+export async function prefetchFiles(name, files, url, store, onFile = () => {}) {
   if (!order.includes(name)) order.push(name);
   return Promise.all(files.map(f => limited(async () => {
     const r = await fetch(url(f.path), { cache: 'no-store' });
@@ -70,7 +72,7 @@ export async function prefetchFiles(name, files, url, store) {
     const bytes = await r.arrayBuffer();
     await store(f.path, bytes);
     return { path: f.path, size: bytes.byteLength || null };
-  }, name).catch(() => ({ path: f.path, size: f.size ?? null }))));
+  }, name).catch(() => ({ path: f.path, size: f.size ?? null })).then(f => { onFile(f.size ?? 0); return f; })));
 }
 
 // --- An Avro object container file, as far as its strings: the header's codec, then each
