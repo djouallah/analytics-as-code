@@ -5,8 +5,12 @@
 // Iceberg catalog, nothing else: no import, no file written for it. The model names the
 // tables (an Ossie dataset's `source`, or a TMSL table's Direct Lake partition: schema.table);
 // the function says where each one is now and signs a read-only SAS (catalog.js); DuckDB-WASM
-// reads them with the `iceberg` extension and `azure_wasm` (a community extension: abfss://
-// paths to https with the SAS, as the official `azure` extension has no WASM build).
+// reads them with the `iceberg` extension and `azure_wasm` (abfss:// paths to https with the
+// SAS, as the official `azure` extension has no WASM build).
+// The engine is DuckDB 2.0, served by the app with its extensions (../duckdb/, fetched by
+// ../../duckdb.mjs at build: duckdb-wasm has no 2.0 release yet). They are relabelled for the
+// engine, so unsigned: DuckDB is opened with unsigned extensions allowed and installs them from
+// the app's own ext/ repository only.
 //
 // A table is opened when a query first names its view, v_<table>: opening reads the table's
 // metadata (a few requests, one at a time), so the first paint pays only for the tables it
@@ -27,7 +31,7 @@
 //   query, views, has, needs
 // =============================================================================
 
-import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev65.0/+esm";
+import * as duckdb from "../duckdb/duckdb-browser.mjs";
 import { serialQueue } from "./queue.js";
 import { createAuth } from "./auth.js";
 import { createCatalog } from "./catalog.js";
@@ -36,6 +40,16 @@ import { perf, HTTP_TRACE_SHIM } from "../frontend/perflog.js";
 
 const MODEL = new URL('../semantic/ossie.json' + new URL(import.meta.url).search, import.meta.url);
 const SMALL_BYTES = 32 * 1024 * 1024;   // a table up to this much Parquet is copied into memory
+const ENGINE = new URL('../duckdb/', import.meta.url).href;
+// DuckDB 2.0 sends every ranged read with If-Match (the ETag of its HEAD), even with
+// unsafe_disable_etag_checks, and the browser's cache answers no request that carries it: each
+// table's metadata.json went to OneLake again, ~0.9 s each, after the page had fetched it. The
+// worker drops the header. An Iceberg file is never rewritten in place, so the check guards
+// nothing here. (The engine also URL-encodes it, which OneLake answers with HTTP 412:
+// duckdb/duckdb-wasm#2297.)
+const IF_MATCH_SHIM = `(() => { const set = XMLHttpRequest.prototype.setRequestHeader;
+  XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
+    if (String(k).toLowerCase() !== 'if-match') return set.call(this, k, v); }; })();`;
 
 // The model's tables: name -> { source: schema.table, columns }. Ossie: a dataset's `source`
 // and its fields' columns. TMSL (model.bim): a table's Direct Lake partition and its columns.
@@ -137,22 +151,24 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     });
     ready.catch(() => {});   // awaited below
 
-    const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
     const workerUrl = URL.createObjectURL(
       // HTTP_TRACE_SHIM times the worker's own requests for the Logs tab.
-      new Blob([HTTP_TRACE_SHIM, `
-importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
+      new Blob([IF_MATCH_SHIM, HTTP_TRACE_SHIM, `
+importScripts("${ENGINE}duckdb-browser-base.worker.js");`], { type: "text/javascript" }));
     const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), new Worker(workerUrl));
-    await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+    await db.instantiate(`${ENGINE}duckdb-base.wasm`);
     URL.revokeObjectURL(workerUrl);
+    await db.open({ allowUnsignedExtensions: true });
     conn = await db.connect();
 
-    // azure_wasm installs from the community repository, which needs a home directory; it is
-    // loaded before the first scan: it claims abfss://, or DuckDB tries to autoload the
-    // official azure extension, which has no WASM build.
-    await perf.time('attach', 'LOAD httpfs, avro, iceberg, azure_wasm', () =>
-      q(`SET home_directory = '/tmp'; INSTALL httpfs; LOAD httpfs; INSTALL avro; LOAD avro;
-         INSTALL iceberg; LOAD iceberg; INSTALL azure_wasm FROM community; LOAD azure_wasm;`));
+    // From the app's own repository (installing needs a home directory). azure_wasm is loaded
+    // before the first scan: it claims abfss://, or DuckDB tries to autoload the official azure
+    // extension, which has no WASM build. icu is the time zones.
+    await perf.time('attach', 'LOAD httpfs, avro, iceberg, azure_wasm, icu', () =>
+      q(`SET home_directory = '/tmp'; SET custom_extension_repository = ${lit(ENGINE + 'ext')};
+         SET autoinstall_extension_repository = ${lit(ENGINE + 'ext')};
+         INSTALL httpfs; LOAD httpfs; INSTALL avro; LOAD avro; INSTALL iceberg; LOAD iceberg;
+         INSTALL azure_wasm; LOAD azure_wasm; INSTALL icu; LOAD icu;`));
     // Iceberg's files never change once written: what DuckDB learnt of one (its size, its
     // Parquet footer) holds for the session. A setting this build lacks is left as it is.
     for (const s of ['SET enable_http_metadata_cache = true', 'SET parquet_metadata_cache = true',

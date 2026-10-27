@@ -593,6 +593,26 @@ else: no import, no file written for it.
   the `iceberg` extension and the community extension `azure_wasm`. That one turns
   `abfss://` into `https://…?<SAS>`, because the official `azure` extension has no WASM
   build; it is loaded before the first scan, or DuckDB tries to autoload `azure`.
+- **The engine is DuckDB 2.0, served by the app itself** (`duckdb.mjs`, run by
+  `rayfin.yml`'s `buildCommand` before `build.mjs`, into `vendor/duckdb/`, not in git; it
+  needs `gh` signed in). duckdb-wasm has no 2.0 release on npm, so the engine is its CI
+  build of main (pinned run, single-threaded loadable package), and the extensions are
+  DuckDB's bucket's `v2.0.0/wasm_eh` ones plus `azure_wasm` from its own CI (its 2.0 port,
+  duckdb/community-extensions#3393 pending). That build calls itself `d54cbbe3df` (the v2.0.0
+  commit), so each extension's footer is relabelled, which voids its signature: `data.js`
+  opens DuckDB with unsigned extensions allowed and installs them from the app's own `ext/`
+  repository. The CI artifacts expire after 90 days: a new pin then, and back to npm and the
+  signed extensions once duckdb-wasm 2.0 ships. The `.wasm` is 33.7 MB, served uncompressed
+  (Rayfin's hosting compresses nothing); it loads while the function is called.
+- **2.0 sends every ranged read with `If-Match`**, even with `unsafe_disable_etag_checks`,
+  and the browser's cache answers no request that carries it: every table's
+  `metadata.json` went back to OneLake (~0.9 s each). The worker drops the header
+  (`IF_MATCH_SHIM`); an Iceberg file is never rewritten in place. The engine also URL-encodes
+  it, which OneLake answers with 412 (duckdb/duckdb-wasm#2297).
+- **Threads are not possible yet**: every `wasm_threads` extension published (DuckDB's
+  bucket, `azure_wasm`'s CI) imports unshared memory, which the threaded engine refuses
+  (`LinkError … mismatch in shared state of memory`), and the page would need cross-origin
+  isolation, which breaks Fabric's sign-in popup ("Page not accessible directly").
 - **A table is opened when a query first names its view**, so the first paint pays only for
   the tables it reads. The rest are opened after the first paint, in the background, at the
   back of the queue (`attachAgg`, not awaited).
@@ -614,17 +634,15 @@ else: no import, no file written for it.
 - **DuckDB's own caches are on** (`enable_http_metadata_cache`, `parquet_metadata_cache`):
   Iceberg files never change once written.
 - **Timings, cold, conformance-oracle's small `nem`, function call excluded:** charts drawn
-  in 15 to 17 s. It was 48 s with lazy opening alone, and 70 to 79 s when every view was
-  created up front.
+  in 14 to 15 s on 2.0 (loading the extensions 0.7 s, opening the 15 tables 1.6 s), 15 to
+  17 s on 1.5.6 (3.2 s and 5.4 s). It was 48 s with lazy opening alone, and 70 to 79 s when
+  every view was created up front.
 - **The function's answer is kept for about 55 minutes** (`catalog.js`), in that viewer's
   `localStorage`. A reload within it calls no function, starts without a session, reads the
   same snapshots, and gets cache hits (same URLs). A tab open longer gets a new SAS before
   the old one expires; its views stay on their snapshots. A new SAS changes every URL, so
   the browser cache starts over.
 - Nothing is stored between visits beyond the browser's HTTP cache.
-- The pinned duckdb-wasm (1.5.6) loads the signed extensions. Its 2.0 builds cannot yet:
-  their extensions are keyed by commit, and the published `azure_wasm` for 2.0 predates its
-  `GetFileSize` fix.
 `dashboard/fabric_app/common/build.mjs` assembles a project's `dist/`: the DAX page staged
 (`stagePage('dax')`: `page/`, `dax/` and the model, `semantic_model/ossie.yaml` as
 `ossie.json`; it needs `npm ci --prefix scripts` first) and the dbt docs, with
@@ -969,7 +987,8 @@ image, and the packages those pins pull in.
   reader. Patch releases within 1.5 keep the format; don't move it to 2.0 until a duckdb-wasm
   build on 2.0 is pinned in the dashboard. Parquet is the handoff between the two venvs: 1.5
   can't read tables that compaction rewrote with the 2.0 build.
-- **The dashboard pins `@duckdb/duckdb-wasm@1.33.1-dev65.0`** (DuckDB 1.5.x line), a dev build
+- **The GitHub page pins `@duckdb/duckdb-wasm@1.33.1-dev65.0`** (DuckDB 1.5.x line; the Iceberg
+  Fabric app runs 2.0, see its section), a dev build
   because nothing stable has shipped since 1.33.0. Don't take npm's `latest` tag: it points
   at `1.33.1-dev57.0`, which the DuckDB blog says breaks OPFS. The dev build lets
   `attachCached` (`dashboard/github/history.js`) read the OPFS-cached files in place

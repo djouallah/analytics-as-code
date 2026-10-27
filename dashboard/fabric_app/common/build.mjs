@@ -11,6 +11,7 @@
 // can tell a fresh deploy from a cached one: __BUILD__ (git sha + time), and ?v=<build> on
 // every relative import (../../../scripts/stamp_build.mjs, which the Pages build runs too).
 import { rm, cp } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execSync } from "node:child_process";
 import { stampBuild } from "../../../scripts/stamp_build.mjs";
@@ -32,6 +33,8 @@ await stagePage("dax", dist, undefined, null);
 await cp(here("./site/"), dist, { recursive: true });
 await cp(project("./site/"), dist, { recursive: true });
 await stampBuild(dist, BUILD);
-// After the stamping, which must not touch them.
+// After the stamping, which must not touch them: the dbt docs, and a project's vendor/ (files
+// fetched, not written here: the Iceberg app's DuckDB-Wasm, iceberg/duckdb.mjs).
 await cp(DAG, dist + "dag", { recursive: true });
+if (existsSync(project("./vendor/"))) await cp(project("./vendor/"), dist, { recursive: true });
 console.log(`Published ../../page (+ dax) + fabric_app/common/site + site/ -> ${dist} (build ${BUILD})`);

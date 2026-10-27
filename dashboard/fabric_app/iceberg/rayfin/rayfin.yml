@@ -15,7 +15,7 @@ services:
   staticHosting:
     enabled: true
     folder: dist
-    buildCommand: node ../common/build.mjs
+    buildCommand: node duckdb.mjs && node ../common/build.mjs
     indexDocument: index.html
     assetAccess: public
   storage:
