@@ -127,32 +127,38 @@ Four deliberate local differences, all of which must survive a port:
 4. `process_data.yml` runs `dbt run` (tests live in `table_maintenance.yml`), writing straight
    to the OneLake Iceberg catalog. No `dbt run-operation` anywhere — there are no operation
    macros.
-5. **Maintenance:** the `compact_and_expire` job in `table_maintenance.yml` runs
-   `scripts/compact_iceberg.py` (folding small data files together via
-   `iceberg_rewrite_data_files()`) and then `scripts/expire_snapshots.py`. Order is not
-   negotiable: the rewrite adds a snapshot and leaves the previous ones pointing at the files
-   it replaced, so expiry is what makes compaction worth anything. Expiry is **pyiceberg**
-   because duckdb-iceberg has no `expire_snapshots` yet. Expiry is metadata-only: snapshots
-   leave the metadata JSON and their files stay. The same script then runs pyiceberg's
-   `remove_orphan_files()` per table (apache/iceberg-python PR #3361, unreleased, built from
-   its commit): it lists the table's folder and deletes the files no snapshot or metadata
-   references, older than 3 days, skipping every `_`/`.` path (OneLake's `_delta_log`) and
-   refusing when a listed and a referenced path differ only in scheme or host (adlfs lists
-   `abfss://<ws>/...` for the metadata's `abfss://<ws>@onelake.dfs.fabric.microsoft.com/...`,
-   so the script declares those the same authority). It deletes; `ORPHAN_DRY_RUN=true`
-   only lists. The first pass, 2026-10-09, found 14,524 orphans, ~11.5 GB, 7 GB of it
-   `fct_scada`'s.
-   Tables hold 16-18 snapshots, none older than a day,
-   so something on the OneLake side already trims them; treat this step as a bounded safety
-   net, and if a table is ever seen above ~48 snapshots that assumption has changed. The job
-   takes a job-level `process-data` concurrency group — both operations commit
+5. **Maintenance:** the `compact_and_expire` job in `table_maintenance.yml` builds and runs
+   `scripts/maintain` (Go, apache/iceberg-go pinned to a commit of its main in `go.mod`:
+   move the pin by hand). One table at a time, every table of the `landing` and `mart`
+   namespaces:
+   1. **compact**: bin-pack the data files to 128 MiB, a group of at least 5 files; the
+      position deletes of the files it rewrites are removed in the same commit;
+   2. **dangling deletes**: position delete files whose one target data file (its
+      `referenced_data_file`, or equal `file_path` bounds) is not in the snapshot are removed,
+      one commit that adds nothing. DuckDB's `iceberg_rewrite_data_files()`, which compacted
+      until 2026-10-27, left them behind: `fct_curtailment_region` (an hourly MERGE that
+      deletes) had 534 delete files for 15 data files, 520 of them pointing at nothing, and
+      every reader opened them all;
+   3. **expire**: snapshots older than a day (the current one kept), their files deleted;
+   4. **orphans**: files under the table that nothing references, older than 3 days. A path
+      with a `_` or `.` segment (OneLake's `_delta_log/`, what Fabric shows Direct Lake) is
+      never deleted, and a listed path whose scheme or host differs from the referenced one
+      is an error, not a deletion (iceberg-go's default).
+   Order is not negotiable: a rewrite leaves the previous snapshots pointing at the files it
+   replaced, so expiry is what makes compaction worth anything. The tool mints its own
+   tokens from GitHub's OIDC endpoint (an `az login` token cannot be refreshed past its first),
+   prints each table's data files, delete files and snapshots before and after, and keeps a
+   JSON record as the run's `maintenance` artifact. Ported on 2026-10-27 from
+   `djouallah/lakehouse_benchmark`'s `.github/scripts/maintain`, where it replaced the same
+   DuckDB + pyiceberg pair; there, compaction answered `cannot promote timestamp to
+   timestamptz` on some tables, so check the first runs here for it.
+   The job takes a job-level `process-data` concurrency group: every step commits
    optimistically, so an overlap with a load could fail one side. GitHub keeps one pending
-   run per group: while compaction holds it, each new Process Data run replaces the one
+   run per group: while maintenance holds it, each new Process Data run replaces the one
    waiting, and a maintenance job still waiting is replaced by the next Process Data run.
-   It is `continue-on-error` and both scripts always exit 0: maintenance must never fail its
-   workflow (a red run there means a dbt test failed). The price of that is that a
-   compaction that has stopped working only shows in the job's log. Both scripts read their
-   table list from `scripts/iceberg_tables.py`; a new model gets added there once.
+   It is `continue-on-error`, and the tool exits 1 only when every table errored: maintenance
+   must never fail its workflow (a red run there means a dbt test failed). The price is that
+   a step that has stopped working only shows in the job's log.
 
 ## Row-replacing writes
 Until October 2026 the OneLake catalog rejected a commit that mixed delete files with data
@@ -1013,34 +1019,24 @@ never been probed either.
 - Dev/prod targets attach the OneLake Iceberg REST catalog via `database: iceberg_catalog`
 
 ## DuckDB version policy
-Every dbt, pyiceberg and duckdb-wasm version is pinned exactly, and duckdb's 1.5 write venv;
+Every dbt, iceberg-go and duckdb-wasm version is pinned exactly, and duckdb's 1.5 write venv;
 the Python duckdb that touches the catalog is `>=2.0.0`, the newest stable release (pip
 takes no pre-release on its own). Not pinned: the GitHub actions (by major tag), the runner
 image, and the packages those pins pull in.
-- **`process_data.yml`, `build.yml`, `table_maintenance.yml` and `import_data.yml`'s read venv
+- **`process_data.yml`, `build.yml`, `table_maintenance.yml`'s `dbt_test` and `import_data.yml`'s read venv
   take `duckdb>=2.0.0`** (dbt via `requirements.txt`, which pins `dbt-core`/`dbt-duckdb`
   exactly — the insert-only merges lean on adapter internals, and
   `macros/nothing_to_do.sql` is a copy of dbt-duckdb's incremental materialization). 2.0
-  is the floor: `iceberg_rewrite_data_files()` (duckdb-iceberg#1035), which the compaction
-  job needs, first shipped stable in 2.0.0 (2026-10-21; until then the pin was the
-  pre-release `2.0.0.dev2610161340`). Every job installs the same newest release, so a new
+  is the floor (2026-10-21; until then the pin was the pre-release `2.0.0.dev2610161340`):
+  the row-replacing writes need it. Every job installs the same newest release, so a new
   duckdb reaches the catalog on the next run, unannounced: a failure right after a duckdb
   release is the first thing to check against it, and `probe_catalog.yml` is re-run then.
-  The `iceberg` extension is installed from `core` first (`compact_iceberg.py` falls back
-  to `core_nightly`); its binary is keyed to the duckdb build, in a folder per version, so
-  the extension follows duckdb. duckdb-iceberg has no `expire_snapshots` yet
-  (duckdb-iceberg#1341 is open), so pyiceberg stays until that merges.
-- **pyiceberg is pinned to a commit**, `4adf237` (snapshot expiry and orphan files,
-  `table_maintenance.yml` only): apache/iceberg-python PR #3361 on main after 0.12.0, built
-  on the runner from `djouallah/iceberg-python` (tag `orphan-files-4adf237` keeps the commit
-  reachable). Back to a release pin once the PR ships in one. It is pinned on its own
-  schedule — it never touches the duckdb file format, only the REST catalog, and the script
-  reaches into `RestCatalog._supported_endpoints`, which is exactly the kind of internal a
-  floating version breaks. That poke is a fallback: pyiceberg refuses to `commit_table` unless
-  `GET /v1/config` advertises the update-table endpoint, and Microsoft's docs show a
-  GET/HEAD-only config. The live catalog advertises 13 endpoints including
-  `POST /v1/{prefix}/namespaces/{namespace}/tables/{table}`, so the override doesn't fire —
-  the script logs the list each run, which is the evidence.
+  The `iceberg` extension's binary is keyed to the duckdb build, in a folder per version, so
+  the extension follows duckdb.
+- **iceberg-go is pinned to a commit of its main** (`scripts/maintain/go.mod`, table
+  maintenance only): the Azure blob listing its orphan pass needs is after the v0.7.0
+  release. Move the pin by hand (`go get github.com/apache/iceberg-go@<commit>`, then
+  `go mod tidy`); back to a release tag once one carries it.
 - **`import_data.yml`'s write venv stays on the 1.5 line (`duckdb==1.5.6`).** Different reason: it
   builds the `.duckdb` files deployed to the NemTracker dashboard, read client-side by
   DuckDB-WASM (1.5.x), so the on-disk file format must stay stable for the *already deployed*

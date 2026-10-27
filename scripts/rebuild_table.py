@@ -40,8 +40,38 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from compact_iceberg import ENDPOINT, TOKEN, WAREHOUSE, connect, oneline
+import duckdb
+
 from iceberg_tables import TABLES
+
+ENDPOINT = os.environ["ONELAKE_ENDPOINT"]
+TOKEN = os.environ["ONELAKE_TOKEN"]
+WAREHOUSE = os.environ["WAREHOUSE_PATH"]      # "{workspace_id}/{lakehouse_id}"
+# DuckDB's azure extension reads/writes OneLake over a curl transport (its default transport
+# fails the OneLake TLS handshake). dbt sets it in on-run-start; this script sets it itself.
+AZURE_TRANSPORT = os.environ.get("AZURE_TRANSPORT_OPTION_TYPE", "default")
+
+
+def connect():
+    """DuckDB with the catalog attached as `catalog`, as profiles.yml attaches it."""
+    con = duckdb.connect(":memory:")
+    con.install_extension("iceberg")
+    con.load_extension("iceberg")
+    con.execute(f"SET GLOBAL azure_transport_option_type = '{AZURE_TRANSPORT}'")
+    # OneLake is attached with access_delegation_mode 'none': the catalog vends no storage
+    # credentials, so the azure secret is what authorises the data-file reads and writes.
+    con.execute(f"CREATE SECRET onelake_storage (TYPE azure, PROVIDER access_token, ACCESS_TOKEN '{TOKEN}')")
+    con.execute(
+        f"ATTACH '{WAREHOUSE}' AS catalog "
+        f"(TYPE iceberg, ENDPOINT '{ENDPOINT}', TOKEN '{TOKEN}', ACCESS_DELEGATION_MODE 'none')"
+    )
+    return con
+
+
+def oneline(e):
+    """Collapse a duckdb error to its first line — they carry a SQL echo and a caret ruler."""
+    return " ".join(str(e).split(chr(10))[0].split())
+
 
 DFS_HOST = os.environ.get("ONELAKE_DFS_HOST", "onelake.dfs.fabric.microsoft.com")
 

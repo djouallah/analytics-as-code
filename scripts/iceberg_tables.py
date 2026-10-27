@@ -1,7 +1,7 @@
 """The catalog's tables, in maintenance order.
 
-Shared by compact_iceberg.py and expire_snapshots.py so the two halves of the daily
-maintenance can't drift apart when a model is added.
+The names rebuild_table.py accepts (a table to DROP must be one of these). The daily
+maintenance (scripts/maintain) lists the catalog's landing and mart namespaces itself.
 
 Hand-ordered. We know the tables; discovering them costs a metadata scan each and buys
 nothing. A new model just gets added here.

@@ -33,7 +33,7 @@ describes the version in use, not the product.
 - **CI validates SQL on every code change.** `dbt build --target ci` runs all models + tests on plain DuckDB, with real downloads (two files per feed).
 - **Loading skips tests.** The hourly processing cadence is too frequent for expensive test runs against live tables, so `process_data` only runs `dbt run`.
 - **Tests run daily.** `dbt test --target prod` runs the complete suite against the live Iceberg tables — uniqueness, not_null, accepted_values, and file completeness checks.
-- **Tables are maintained daily.** The same workflow compacts each table's small data files (DuckDB) and then expires snapshots older than a day (pyiceberg, as duckdb-iceberg has no `expire_snapshots`). Maintenance never fails its workflow.
+- **Tables are maintained daily.** The same workflow runs one Go tool on apache/iceberg-go (`scripts/maintain`) per table: it compacts the small data files, drops position delete files that point at data files no longer in the snapshot, expires snapshots older than a day and removes orphan files. Maintenance never fails its workflow.
 
 ## Grain Reduction
 
@@ -237,7 +237,6 @@ The Fabric app has limits of its own:
 - A DuckDB-WASM build on DuckDB 2.0: move the dashboard and the import's write venv (1.5)
   together, for one DuckDB version end to end.
 - DuckDB-WASM with Iceberg on Azure (below).
-- duckdb-iceberg#1341 (`expire_snapshots`): replace pyiceberg.
 - microsoft/rayfin#89: deploy the DuckDB-WASM Fabric app from CI.
 - AEMO publishing `ROOFTOP_PV_ACTUAL_PRED`/`_RUN`: move `fct_rooftop_pv` to the 5-minute
   estimate when `ROOFTOP_PV_ACTUAL` stops.
