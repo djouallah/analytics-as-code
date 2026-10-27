@@ -15,8 +15,8 @@
 // metadata.json, a new manifest list and new manifests, and never touches the old ones. So
 // those are kept too (.avro, .metadata.json), and planning a table that has not changed, or
 // the old manifests of one that has, reads nothing from OneLake.
-// DuckDB's extensions are kept the same way, whole: a file of DuckDB's repositories sits
-// under its version (extensions.duckdb.org/v<version>/wasm_eh/...), so it never changes.
+// DuckDB's extensions are kept the same way, whole: their folder is named after the engine's
+// pins (ext-<hash>/, iceberg/duckdb.mjs), so a file there never changes either.
 //
 // Two OPFS files, in blockcache/: blocks.bin (the blocks, appended) and index.jsonl (where
 // each block is, and each file's size and validators), read back at start. Over CAP_BYTES the
@@ -33,7 +33,7 @@
 // fetched whole, in one request, on its first read. The page also tells the worker each
 // file's size as it opens a table, so a HEAD is answered without a request.
 //
-// Also: no If-Match. DuckDB 2.0 (not the 1.5 this app runs) sends every ranged read with it (the ETag of its HEAD), and the
+// Also: no If-Match. DuckDB 2.0 sends every ranged read with it (the ETag of its HEAD), and the
 // browser's cache answers no request that carries it; an Iceberg file never changes, so the
 // check guards nothing. (The engine also URL-encodes it, which OneLake answers with HTTP 412:
 // duckdb/duckdb-wasm#2297.)
@@ -56,7 +56,7 @@
   const dec = new TextDecoder();
 
   const pathOf = u => String(u).split('?')[0];
-  const isExtension = u => /^https:\/\/(community-)?extensions\.duckdb\.org\/v[^/]+\/wasm_[a-z]+\/[^/]+\.duckdb_extension\.wasm$/i.test(pathOf(u));
+  const isExtension = u => /\/ext-[0-9a-f]+\/[^?]*\.duckdb_extension\.wasm$/i.test(pathOf(u));
   const isIceberg = u => /\.(parquet|avro|metadata\.json)$/i.test(pathOf(u));
   const cacheable = (m, u) => (m === 'GET' || m === 'HEAD') && (isIceberg(u) || isExtension(u));
 
@@ -249,7 +249,7 @@
       }
     } catch (e) { /* the store failed: the request goes to OneLake as it is */ }
     const r = send.call(this, body);
-    // A whole file that went to OneLake or DuckDB's repository (an extension): kept, all of it.
+    // A whole file that went to OneLake or the app's hosting (an extension): kept, all of it.
     try {
       if (blocks && this.__bcM === 'GET' && !this.__bcR && cacheable(this.__bcM, this.__bcU) && this.status === 200
           && this.response && this.response.byteLength) {
