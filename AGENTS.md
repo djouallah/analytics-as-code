@@ -193,7 +193,7 @@ The ids live in repository **variables** (public identifiers, not secrets):
   `deploy_fabric.yml` into a fabriccat workspace (the catalog's tenant gets
   `AZURE_CLIENT_ID`). The app's federated credential for this repo has the subject
   `repo:djouallah/analytics-as-code:ref:refs/heads/main`.
-- `TEST_WS_ID`: fabriccat's `dax-conformance-oracle`, where everything but the data pipeline
+- `TEST_WS_ID`: fabriccat's `conformance-oracle`, where everything but the data pipeline
   is tested (`deploy_model.yml` and `deploy_fabric.yml` by default, dax-sql's Oracle). The
   data pipeline (`process_data.yml`, `table_maintenance.yml`, `import_data.yml`) is the only
   thing on `power` (`WS_ID`/`LH_ID`, the owner's tenant).
@@ -651,7 +651,7 @@ Fabric workspace, independent of everything GitHub runs: the mechanism of the si
   `{WS_ID}`/`{LH_ID}` replaced by the workspace's and lakehouse's ids (its own tick, `ossie`:
   a file copy, no Power BI);
 - with `schedule`, runs the pipeline hourly; without it, turns its schedules off (the test
-  workspace, `dax-conformance-oracle` in fabriccat, must not spend CU every hour). A run with
+  workspace, `conformance-oracle` in fabriccat, must not spend CU every hour). A run with
   no part ticked only sets the schedule.
 - the notebook takes 10 files per feed per run (`download_limit`, `process_limit`), and
   writes its log to `nem/Files/logs/run.log` too, whose end the deploy prints when the
@@ -786,7 +786,7 @@ in `landing` are what these tables are built from.
   CI sees a chart draw: a change to a visual is checked by opening the report.
 - `deploy_model.yml` (dispatch only) publishes the model and the report into a workspace,
   by default the test one (`tenant_id`/`workspace_id` empty: fabriccat's
-  `dax-conformance-oracle`, repository variable `TEST_WS_ID`; tests never spend `power`'s
+  `conformance-oracle`, repository variable `TEST_WS_ID`; tests never spend `power`'s
   capacity), on that workspace's lakehouse `nem`, with `scripts/deploy_model.py`
   (fabric-cicd, not duckrun) and runs
   `scripts/check_model.py`: a refresh, then a row count per table and each measure per day

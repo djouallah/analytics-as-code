@@ -17,7 +17,7 @@ on:
         required: false
         default: ''
       workspace_id:
-        description: 'Workspace to install into (empty: the test workspace, TEST_WS_ID, dax-conformance-oracle)'
+        description: 'Workspace to install into (empty: the test workspace, TEST_WS_ID, conformance-oracle)'
         required: false
         default: ''
       data:

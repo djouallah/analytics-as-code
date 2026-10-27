@@ -21,7 +21,7 @@ on:
         required: false
         default: ""
       workspace_id:
-        description: "Workspace (empty: the test workspace, TEST_WS_ID, dax-conformance-oracle; tests never go to power)"
+        description: "Workspace (empty: the test workspace, TEST_WS_ID, conformance-oracle; tests never go to power)"
         required: false
         default: ""
       publish:
