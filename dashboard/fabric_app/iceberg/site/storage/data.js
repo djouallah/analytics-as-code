@@ -9,7 +9,8 @@
 // paths to https with the SAS, as the official `azure` extension has no WASM build).
 //
 // Nothing is stored: a view v_<table> per table over iceberg_scan, at the snapshot the
-// catalog named when the page opened. A query reads the files it needs from OneLake; DuckDB
+// catalog named (catalog.js keeps that answer up to ~55 minutes, so a reload within it reads
+// the same snapshots and calls no function). A query reads the files it needs from OneLake; DuckDB
 // keeps what it read for the session.
 //
 // The members are the ones the page calls on the other hosts:
@@ -43,13 +44,28 @@ const lit = s => `'${String(s).replace(/'/g, "''")}'`;
 
 export function createDataSource({ onStatus = () => {} } = {}) {
   const catalog = createCatalog(() => auth.client());
-  const auth = createAuth();
+  // A kept answer from the function needs no session: the page starts without the Rayfin SDK.
+  const auth = createAuth({ ready: catalog.fresh });
   let conn;
   let _views = new Map();   // view name -> Set of columns
 
   const serial = serialQueue();
   const q = sql => serial(() => conn.query(sql));
   const rows = async sql => (await q(sql)).toArray().map(r => r.toJSON());
+
+  // The secret azure_wasm reads the files with: the SAS from the function.
+  const useSas = sas => q(`CREATE OR REPLACE SECRET onelake (TYPE azure, PROVIDER config, ACCOUNT_NAME 'onelake',
+      CONNECTION_STRING ${lit(`AccountName=onelake;SharedAccessSignature=${sas}`)})`);
+
+  // A page open longer than its SAS: a new one shortly before it expires. The views stay on
+  // the snapshots they were created on; only the SAS is replaced. A failed renewal is tried
+  // again a minute later.
+  function renewLater(sources) {
+    setTimeout(async () => {
+      try { await useSas((await catalog.open(sources, { renew: true })).sas); renewLater(sources); }
+      catch (e) { perf.log('error', 'SAS renewal', { status: String(e?.message || e) }); setTimeout(() => renewLater(sources), 60000); }
+    }, Math.max(catalog.renewAt() - Date.now(), 0));
+  }
 
   async function init() {
     await auth.signIn();
@@ -67,7 +83,8 @@ export function createDataSource({ onStatus = () => {} } = {}) {
 
     const tables = modelTables(await model);
     onStatus('Locating the tables in the catalog...');
-    const access = await catalog.open([...new Set(tables.values())]);
+    const sources = [...new Set(tables.values())];
+    const access = await catalog.open(sources);
 
     // azure_wasm installs from the community repository, which needs a home directory; it is
     // loaded before the first scan: it claims abfss://, or DuckDB tries to autoload the
@@ -75,8 +92,8 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     await perf.time('attach', 'LOAD httpfs, avro, iceberg, azure_wasm', () =>
       q(`SET home_directory = '/tmp'; INSTALL httpfs; LOAD httpfs; INSTALL avro; LOAD avro;
          INSTALL iceberg; LOAD iceberg; INSTALL azure_wasm FROM community; LOAD azure_wasm;`));
-    await q(`CREATE OR REPLACE SECRET onelake (TYPE azure, PROVIDER config, ACCOUNT_NAME 'onelake',
-      CONNECTION_STRING ${lit(`AccountName=onelake;SharedAccessSignature=${access.sas}`)})`);
+    await useSas(access.sas);
+    renewLater(sources);
 
     // A view per table the catalog has. Creating it reads the table's metadata (a few
     // requests); a table that fails is left out, and the page shows no data where it reads it.
