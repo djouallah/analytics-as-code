@@ -17,7 +17,7 @@
 // filters both ways.
 // Rooftop solar is five units of the model (ROOFTOP_<region>, fuel ROOFTOP): every filter on
 // the units reaches it, and no query adds it on its own.
-// What a date range reads: the 5-minute tables up to 30 days, the daily ones beyond (they
+// What a date range reads: the 5-minute tables up to 7 days, the daily ones beyond (they
 // hold the whole days: the day still filling is in the 5-minute tables only). A query does
 // not name the table: a measure picks it, as the model says (its "Reads 5 minutes"): the
 // 5-minute one when the query filters or groups by the fact's own columns, the daily one when
@@ -69,7 +69,7 @@ export function createQueries(page) {
   const seriesCol = (by, unit) => by === 'fuel' ? FUEL : by === 'duid' ? `${unit}.DUID` : 'dim_duid.Plant';
 
   // The days the daily tables hold, `units` (fct_summary_daily) and `regions`
-  // (fct_region_daily), read once the aggregates are attached (readWholeDays). Beyond 30 days
+  // (fct_region_daily), read once the aggregates are attached (readWholeDays). Beyond 7 days
   // a range is cut to them, which is what makes the days a measure adds from the 5-minute
   // table (the ones the daily table lacks) none.
   let wholeDaysHeld = null;
@@ -137,7 +137,7 @@ export function createQueries(page) {
 
     // The header's filters for a measure that reads more than the units: the regions' table
     // too ("Hours", in an average or a capacity factor).
-    // Each fact gets the date range at the grain's side: up to 30 days on its own date
+    // Each fact gets the date range at the grain's side: up to 7 days on its own date
     // (and on dim_calendar's), beyond on dim_calendar's alone, over the days the daily
     // table holds (the regions' daily table holds them too). The region is dim_region's,
     // which reaches the units and the regions.
@@ -155,7 +155,7 @@ export function createQueries(page) {
         ...(fuel ? [fuelIs(fuel)] : []),
         ...(picked.length ? [[`${unit}.DUID`, 'in', picked]] : [])];
     },
-    // Beyond 30 days the hour-of-day tables are by whole month: the months the range touches.
+    // Beyond 7 days the hour-of-day tables are by whole month: the months the range touches.
     months(table) {
       const { from, to } = page.range();
       return [[`${table}.month`, 'between', `${from.slice(0, 8)}01`, to]];
@@ -343,7 +343,7 @@ export function createQueries(page) {
     curtailmentLastDay: { select: { d: { max: 'fct_curtailment.date' } } },
 
     // --- Insights, market: price by hour of day ---
-    // x date up to 30 days; beyond, x month, from the hour-of-day table.
+    // x date up to 7 days; beyond, x month, from the hour-of-day table.
     heatmap: intraday => intraday
       ? { select: { date: 'fct_region.date', y: 'dim_time.hour', price: 'Average price' }, where: queries.wherePrice(), orderBy: ['date', 'y'] }
       : { select: { date: 'fct_region_hourly.month', y: 'fct_region_hourly.hour', price: 'Price at hour' },

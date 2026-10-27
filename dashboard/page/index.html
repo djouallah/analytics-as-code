@@ -634,7 +634,7 @@
       <label class="chart-toggle"><input type="checkbox" id="icNight" checked> Day/night</label>
       <details class="info"><summary title="How to read this page" aria-label="How to read this page">i</summary><div class="info-panel"><p>
         MW is power at that moment; $/MWh is the wholesale spot price, not the cost of the flow.
-        AEMO 5-minute dispatch since 2018, up to 30 days at a time. Arrows point the way power flows; their thickness is the
+        AEMO 5-minute dispatch since 2018, up to 7 days at a time. Arrows point the way power flows; their thickness is the
         flow and their colour how close the link runs to its limit (green &lt; 70% &le; amber &lt; 90%
         &le; red). Regions are shaded by their price in that interval. Bubbles are the generating
         units, sized by their output in that interval and coloured by fuel; a ring is a unit
@@ -674,9 +674,9 @@
         one is 30 to 60 minutes old. Deselect
         "Rooftop solar" in the fuel filter for the utility-scale picture. Renewables = solar, wind, hydro and bioenergy; batteries
         ("Grid") are storage and count on neither side. Capture price = generation-weighted price the
-        fuel earned in its region (5-minute prices for ranges up to 30 days, daily averages beyond).
+        fuel earned in its region (5-minute prices for ranges up to 7 days, daily averages beyond).
         Capacity factor = energy / (registered capacity &times; hours), over units that generated in
-        the range. Net exports = AEMO's net interconnector flow out of each region. Beyond 30 days
+        the range. Net exports = AEMO's net interconnector flow out of each region. Beyond 7 days
         the price heatmap and the average day are hourly, over the whole months the range touches.
         The dashed Demand line on the generation chart is AEMO's operational demand plus the
         rooftop solar in the stack (operational demand alone leaves out what rooftop supplies); with
@@ -1106,7 +1106,7 @@
     // 5. HELPERS
     // =========================================================================
 
-    // Grain: <=30d = 5-min intraday | >30d = daily aggregate
+    // Grain: <=7d = 5-min intraday | >7d = daily aggregate
     function getDateRange() {
       return { from: document.getElementById("dateFrom").value, to: document.getElementById("dateTo").value };
     }
@@ -1115,7 +1115,7 @@
       return daysApart(from, to);
     }
     function isIntradayMode() {
-      return rangeDays() <= 30;
+      return rangeDays() <= 7;
     }
 
     function padTime(time) { return String(time).padStart(4, '0'); }
@@ -1909,7 +1909,7 @@
     };
     const insightsPage = () => document.querySelector('#view-insights .subtab.active').dataset.page;
     async function renderInsights(seq) {
-      // Beyond 30 days the charts read the daily tables, attached after the first paint: a
+      // Beyond 7 days the charts read the daily tables, attached after the first paint: a
       // sub-tab clicked before that waits for them instead of asking for days not held yet.
       if (!isIntradayMode()) await loadDailyAggDatabase();
       if (seq !== _renderSeq) return;
@@ -2042,7 +2042,7 @@
         icState.frames = [];
       };
       // Always 5-minute frames, so only the ranges whose half-year files renderAll loads.
-      if (!isIntradayMode()) return empty('Choose 30 days or less to play the flows');
+      if (!isIntradayMode()) return empty('Choose 7 days or less to play the flows');
       if (!data.has('v_dim_interconnector')) return empty('Interconnectors not deployed yet');
       const [flows, prices] = await Promise.all([
         runQuery(queries.flows(from, to)).catch(() => []),
@@ -2311,7 +2311,7 @@
       }, true);
     }
 
-    // Ranges over 30 days read the hour-of-day x month tables of agg (queries.months). Until agg
+    // Ranges over 7 days read the hour-of-day x month tables of agg (queries.months). Until agg
     // is attached, or while it lacks those tables, the chart says so instead of guessing.
     const formatMonth = str => formatDate(str).replace(/^\d+ /, '');
     function hourlyMissing(id, view) {
@@ -2320,7 +2320,7 @@
       return true;
     }
 
-    // Price by hour of day: x date (5-minute data) or x month (ranges over 30 days).
+    // Price by hour of day: x date (5-minute data) or x month (ranges over 7 days).
     async function renderHeatmap(seq) {
       const intraday = isIntradayMode();
       document.getElementById('title-heat').textContent = intraday
@@ -2349,7 +2349,7 @@
     }
 
     // Average MW at each time of day, by fuel: the "duck curve" when solar is in the mix.
-    // 5-minute steps up to 30 days; beyond, hourly over the whole months the range touches.
+    // 5-minute steps up to 7 days; beyond, hourly over the whole months the range touches.
     // The units' rows are the model's measures: [Generation MW on an average day] at 5
     // minutes, [Average MW at hour] beyond.
     async function renderProfile(seq) {
@@ -2357,7 +2357,7 @@
       document.getElementById('title-profile').textContent = 'Average day by fuel (MW)';
       if (!intraday && hourlyMissing('chart-profile', 'v_fct_summary_hourly')) return;
       const span = intraday ? null : (await runQuery(queries.profileMonths()))[0];
-      // The rows by time (by hour beyond 30 days), and the fuels in the generation chart's
+      // The rows by time (by hour beyond 7 days), and the fuels in the generation chart's
       // order, the largest first (the model's "Average generation MW").
       const [units, order] = await Promise.all([runQuery(queries.profile(intraday)), runQuery(queries.averages('fuel'))]);
       if (seq !== _renderSeq) return;
@@ -2421,7 +2421,7 @@
       }, true);
     }
 
-    // AEMO's net interchange per region: positive = exporting. 5-minute values up to 30 days,
+    // AEMO's net interchange per region: positive = exporting. 5-minute values up to 7 days,
     // daily averages beyond. Intervals without it are gaps in the line.
     async function renderNetExports(seq) {
       const intraday = isIntradayMode();
@@ -2590,7 +2590,7 @@
     async function renderBattery(seq) {
       const title = document.getElementById('title-battery');
       title.textContent = 'Batteries: average day (MW) and price';
-      if (!isIntradayMode()) return showEmpty('chart-battery', 'Choose 30 days or less: daily totals net charging against output');
+      if (!isIntradayMode()) return showEmpty('chart-battery', 'Choose 7 days or less: daily totals net charging against output');
       const [rows, spread, fleet] = await Promise.all([
         runQuery(queries.batteryDay()), runQuery(queries.batterySpread()), runQuery(queries.batteryFleet()),
       ]);
@@ -3349,7 +3349,7 @@
       _ready = true;
       await renderAll();
       // Attach the aggregates (agg) in the background, then refresh what reads them: a range
-      // over 30 days whole; on an intraday view only the parts below, not its charts.
+      // over 7 days whole; on an intraday view only the parts below, not its charts.
       loadDailyAggDatabase().then(() => {
         if (!isIntradayMode()) return renderAll();
         setConnected();   // clear "Downloading..."

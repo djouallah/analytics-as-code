@@ -42,7 +42,7 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 - **In dbt:** every table a chart reads is a dbt model, the aggregates included, because Direct Lake has no views. Rooftop solar is stored half-hourly, as published (`fct_rooftop`); `fct_summary` holds it as five units, `ROOFTOP_<region>`, on the straight line between two half hours.
 - **At import time:** `scripts/cache_catalog.py` copies those tables as they are into DuckDB files for the browser, with no rule of its own. It only decides the split: the 5-minute history as one file per half-year (each under GitHub's 100 MB per-file limit), the last 14 days as a small file refreshed every hour, the dimensions and aggregates in their own files.
 - **In the model:** a quantity is one measure, and the measure picks the table: the 5-minute table when a time of day is asked for, the daily one otherwise. The daily tables store the sums the 5-minute measure sums, so both grains give the same number.
-- **At query time:** the page reads 5-minute data up to 30 days (downloading only the half-years the range touches, and none for the default last 3 days), the daily and hour-of-day tables beyond. This keeps queries fast in single-threaded DuckDB-WASM.
+- **At query time:** the page reads 5-minute data up to 7 days (downloading only the half-years the range touches, and none for the default last 3 days), the daily and hour-of-day tables beyond. This keeps queries fast in single-threaded DuckDB-WASM.
 
 ## How It Works
 

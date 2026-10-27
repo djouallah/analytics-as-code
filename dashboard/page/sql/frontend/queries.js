@@ -9,9 +9,9 @@
 // TIES. The compiler builds the same plan from it as from the DAX page's query object: the
 // same measures, the same rows. A figure is a measure of the model, never SQL written here.
 //
-// What a date range reads: the 5-minute tables up to 30 days, the daily ones beyond, as the
+// What a date range reads: the 5-minute tables up to 7 days, the daily ones beyond, as the
 // measures pick them (the model's "Reads 5 minutes"): a query goes through the fact's own
-// date and keys up to 30 days, through the dimensions beyond, cut to the days the daily
+// date and keys up to 7 days, through the dimensions beyond, cut to the days the daily
 // tables hold (wholeDays).
 // A query of a dimension's columns alone leaves out its blank row (IS NOT NULL on its key),
 // as the DAX page's compiler does for it.
@@ -151,7 +151,7 @@ export function createQueries(page) {
         ...(fuel ? [fuelIs(fuel)] : []),
         ...(picked.length ? [`${unit}.DUID IN ${list(picked)}`] : [])];
     },
-    // Beyond 30 days the hour-of-day tables are by whole month: the months the range touches.
+    // Beyond 7 days the hour-of-day tables are by whole month: the months the range touches.
     months(table) {
       const { from, to } = page.range();
       return [between(`${table}.month`, `${from.slice(0, 8)}01`, to)];

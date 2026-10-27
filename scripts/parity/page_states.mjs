@@ -79,7 +79,7 @@ export async function engine(dataDir) {
 export function pageOf(createQueries, newest) {
   let state;
   const queries = createQueries({
-    range: () => state.range, intraday: () => days(state.range) <= 30, region: () => state.region,
+    range: () => state.range, intraday: () => days(state.range) <= 7, region: () => state.region,
     fuel: () => state.fuel, picked: () => state.picked, newestDate: () => newest,
     shiftDate, UNKNOWN, ROOFTOP });
   return { queries, set: s => { state = s; }, get state() { return state; } };
@@ -105,7 +105,7 @@ export const lists = queries => ({ regions: queries.regions, regionNames: querie
 
 // What each chart asks in a state, with the arguments index.html passes.
 export function asked(queries, state) {
-  const intraday = days(state.range) <= 30;
+  const intraday = days(state.range) <= 7;
   const now = { date: state.range.to, time: 1200 };
   const list = {
     'generation fuel': queries.generation('fuel', intraday),
@@ -150,7 +150,7 @@ export function asked(queries, state) {
     changeEmissions: queries.changeEmissions(),
   };
   if (!intraday) list.profileMonths = queries.profileMonths();
-  // Flows and Batteries draw up to 30 days.
+  // Flows and Batteries draw up to 7 days.
   if (intraday) Object.assign(list, {
     batteryDay: queries.batteryDay(), batterySpread: queries.batterySpread(), batteryFleet: queries.batteryFleet(),
     flowGens: queries.flowGens(state.range.to), flowNow: queries.flowNow(state.range.to),
