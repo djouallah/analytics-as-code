@@ -10,7 +10,7 @@
 // No bundler. Two stamps, so a browser never mixes files of two deploys and the Logs tab
 // can tell a fresh deploy from a cached one: __BUILD__ (git sha + time), and ?v=<build> on
 // every relative import (../../../scripts/stamp_build.mjs, which the Pages build runs too).
-import { rm, cp } from "node:fs/promises";
+import { rm, cp, rename } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execSync } from "node:child_process";
@@ -28,8 +28,13 @@ const dirty = git(`status --porcelain -- "${project("./site")}" . ../../page ../
 // URL-safe (it is the ?v= cache-buster): <sha>.<yyyymmdd-hhmm UTC>
 const BUILD = `${sha}${dirty}.${new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 13)}`;
 
+// `node ../common/build.mjs <host>`: a host's data source staged too (dashboard/<host>/), its
+// data.js as storage/<host>.js, for the project's own storage/data.js to build on (the app
+// `duckdb` reads the GitHub page's files: storage/github.js).
+const host = process.argv[2] ?? null;
 await rm(dist, { recursive: true, force: true });
-await stagePage("dax", dist, undefined, null);
+await stagePage("dax", dist, undefined, host);
+if (host) await rename(dist + "storage/data.js", dist + `storage/${host}.js`);
 await cp(here("./site/"), dist, { recursive: true });
 await cp(project("./site/"), dist, { recursive: true });
 await stampBuild(dist, BUILD);

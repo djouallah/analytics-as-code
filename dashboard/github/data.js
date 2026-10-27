@@ -106,7 +106,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   const SOURCE_LABEL = { 'opfs-hit': 'cached', 'opfs-miss': 'downloaded', 'opfs-refresh': 'refreshed', 'no-opfs': 'downloaded, not cached' };
   async function loadDb(file, alias) {
     let t = performance.now();
-    const res = await cacheInOPFS(`${_baseUrl}/data/${file}`, file);
+    const res = await cacheInOPFS(_fileUrl(file), file);
     perf.log('fetch', file, { ms: performance.now() - t, status: SOURCE_LABEL[res.source], bytes: res.bytes });
     t = performance.now();
     const mode = await attachCached(_db, conn, file, alias, res.buffer);
@@ -115,12 +115,15 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   }
 
   let _db = null;
-  let _baseUrl = '';
+  // Where a data file is: the site's data/, unless the host says otherwise (the Fabric app
+  // `duckdb` reads the same files from a lakehouse's Files/, with a SAS).
+  let _fileUrl = file => file;
 
   // DuckDB-WASM up, `dim` + `today` attached: enough for the default "Last 3 days" view.
   // `base`: where data/ is, relative to the page's folder (a page in a folder of the site
-  // reads the site's files, '../').
-  async function init({ base = '' } = {}) {
+  // reads the site's files, '../'). `url(file)`: the address of a data file, for a host that
+  // keeps them elsewhere (base is then not used).
+  async function init({ base = '', url = null } = {}) {
     onStatus("Loading DuckDB WASM...");
     const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
     const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
@@ -135,7 +138,8 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     URL.revokeObjectURL(workerUrl);
 
     conn = await _db.connect();
-    _baseUrl = new URL(base || '.', window.location.href).href.replace(/\/$/, "");
+    const baseUrl = new URL(base || '.', window.location.href).href.replace(/\/$/, "");
+    _fileUrl = url ?? (file => `${baseUrl}/data/${file}`);
 
     onStatus("Loading today's data...");
     await Promise.all([loadDb('mart_dim.duckdb', 'dim'), loadDb('mart_today.duckdb', 'today')]);
@@ -185,7 +189,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   async function ensureHistory(from, to, msg) {
     if (!_manifest) {
       // no-store: a manifest from the HTTP cache can predate a half-year rollover.
-      const resp = await fetch(`${_baseUrl}/data/mart_manifest.json`, { cache: 'no-store' });
+      const resp = await fetch(_fileUrl('mart_manifest.json'), { cache: 'no-store' });
       if (!resp.ok) throw new Error(`Failed to fetch mart_manifest.json: HTTP ${resp.status}`);
       _manifest = await resp.json();
     }

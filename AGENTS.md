@@ -755,6 +755,18 @@ the workspace, the lakehouse's id, a storage token), `pip install -r requirement
 the same two `dbt run --target prod`. No `rebuild`, maintenance, tests or `.duckdb` import
 there: those stay on GitHub, for the `power` catalog.
 
+**The Fabric app on the `.duckdb` files is `dashboard/fabric_app/duckdb/`** (item `duckdb` in
+`power`, since 2026-10-27): the GitHub page's data source (`dashboard/github/data.js`, staged
+as `storage/github.js` by `node ../common/build.mjs github`) reading the same files from the
+lakehouse's `Files/duckdb/` instead of the site's `data/` (its `init` takes `url(file)`).
+`import_data.yml`'s last step uploads each run's files there and then writes the folder's
+`mart_manifest.json` from what it holds (`scripts/upload_onelake.py`: a temporary name, then a
+rename over the old file; allowed to fail, the GitHub page never waits on it). The function
+`openFiles` signs a read-only SAS on that folder (setting `FILES_URL`,
+`https://onelake.dfs.fabric.microsoft.com/<ws>/<lh>/Files/duckdb`), kept per browser until
+shortly before it expires (`site/storage/files.js`). Deployed like the iceberg app, from the
+owner's laptop.
+
 **The VertiPaq app** is the page with the deployed semantic model as its engine (Power BI in
 Direct Lake over the `mart` tables, no DuckDB, no copy of the data). Its
 `site/storage/data.js` sets `engine: 'dax'`, and the compiler's `createModel` then sends each
