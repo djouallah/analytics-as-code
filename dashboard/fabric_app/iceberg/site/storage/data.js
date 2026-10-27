@@ -99,7 +99,8 @@ function warmExtensions() {
 }
 
 // onProgress({ label, done, total, detail }) while a long download runs, null when it ends.
-export function createDataSource({ onStatus = () => {}, onProgress = () => {} } = {}) {
+// timeZone: the session's, which CURRENT_DATE follows; the page's to say (none: DuckDB's own).
+export function createDataSource({ onStatus = () => {}, onProgress = () => {}, timeZone = null } = {}) {
   const catalog = createCatalog(() => auth.client());
   const snapshots = createSnapshots();
   // A kept answer from the function needs no session: the page starts without the Rayfin SDK.
@@ -323,8 +324,7 @@ importScripts("${ENGINE}duckdb-browser-base.worker.js");`], { type: "text/javasc
     for (const s of ['SET enable_http_metadata_cache = true', 'SET parquet_metadata_cache = true',
                      "SET validate_external_file_cache = 'NO_VALIDATION'"])
       await q(s).catch(e => perf.log('info', `${s}: ${e?.message || e}`));
-    // Brisbane time, for CURRENT_DATE alone (the NEM's day): the tables carry date and time.
-    await q("SET TimeZone = 'Australia/Brisbane';");
+    if (timeZone) await q(`SET TimeZone = ${lit(timeZone)};`);
     await q("SET preserve_insertion_order = false;");
 
     onStatus('Locating the tables in the catalog...');
