@@ -224,21 +224,6 @@ jobs:
           NEMTRACKER_TOKEN: ${{ secrets.NEMTRACKER_TOKEN }}
         run: bash scripts/deploy_pages.sh ./deploy_manifest "deploy from ${{ github.repository }}@${{ github.sha }}"
 
-      # The same files into the lakehouse's Files/duckdb/, for the Fabric app `duckdb`
-      # (dashboard/fabric_app/duckdb/): this run's files, then the folder's mart_manifest.json
-      # (scripts/upload_onelake.py). Last, and allowed to fail: the GitHub page never waits on it.
-      # A new token: the one minted at the start may have expired after a long daily run.
-      - name: Upload to OneLake (Fabric app duckdb)
-        if: github.event_name != 'workflow_dispatch' || inputs.publish
-        continue-on-error: true
-        env:
-          WS_ID: ${{ vars.WS_ID }}
-          LH_ID: ${{ vars.LH_ID }}
-        run: |
-          ONELAKE_TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
-          echo "::add-mask::$ONELAKE_TOKEN"
-          ONELAKE_TOKEN=$ONELAKE_TOKEN python scripts/upload_onelake.py mart_data/*.duckdb
-
       # Data-quality tests live in their own workflow
       # (.github/workflows/table_maintenance.yml) so a failing assertion never blocks
       # publishing the dashboard.
