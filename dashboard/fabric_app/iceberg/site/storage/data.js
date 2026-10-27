@@ -20,7 +20,9 @@
 // location is the same is opened from its record, nothing read. A table whose files are small
 // (SMALL_BYTES, from its metadata.json) is copied into DuckDB's memory and its view reads
 // that: later queries do not go back to OneLake. A larger one is read in place, its view
-// read_parquet over the files (or iceberg_scan when it has delete files). After the first
+// read_parquet over the files, as https URLs with the SAS (azure_wasm cannot glob, which
+// read_parquet does to every path), written again on a new SAS; or iceberg_scan when it has
+// delete files. After the first
 // paint the rest are opened in the background, small ones first, behind whatever the page
 // asks.
 // For a new snapshot the page fetches ahead of DuckDB, many at once (prefetch.js): its new
@@ -109,9 +111,15 @@ export function createDataSource({ onStatus = () => {} } = {}) {
 
   // The secret azure_wasm reads the files with: the SAS from the function. The page's own
   // fetches (the prefetch) use the same one, the newest.
+  // A view read in place over read_parquet carries the SAS in its URLs (fromOf), so a new SAS
+  // writes those views again: the tables opened that way, name -> { location, record }.
   let sas = '';
-  const useSas = s => q(`CREATE OR REPLACE SECRET onelake (TYPE azure, PROVIDER config, ACCOUNT_NAME 'onelake',
+  const inPlace = new Map();
+  async function useSas(s) {
+    await q(`CREATE OR REPLACE SECRET onelake (TYPE azure, PROVIDER config, ACCOUNT_NAME 'onelake',
       CONNECTION_STRING ${lit(`AccountName=onelake;SharedAccessSignature=${sas = s}`)})`);
+    for (const [name, t] of inPlace) await q(viewOf(name, t, t.record));
+  }
 
   // A page open longer than its SAS: a new one shortly before it expires. The views stay on
   // the snapshots they were created on; only the SAS is replaced. A failed renewal is tried
@@ -192,16 +200,23 @@ export function createDataSource({ onStatus = () => {} } = {}) {
       t.record = record;
     }
     tellSizes(record);
-    const from = record.deletes ? `iceberg_scan(${lit(t.location)})`
-      : `read_parquet([${record.files.map(f => lit(f.path)).join(', ')}])`;
     const how = record.deletes ? 'iceberg_scan: delete files' : `${record.files.length} Parquet files`;
     if (small)
       await perf.time('attach', `OPEN ${name} (${mb} MB, copied into memory, ${how})`, () => conn.query(
-        `CREATE OR REPLACE TABLE ${ident(name)} AS SELECT * FROM ${from}; CREATE OR REPLACE VIEW ${ident('v_' + name)} AS SELECT * FROM ${ident(name)}`));
-    else
-      await perf.time('attach', `OPEN ${name} (${mb} MB, read in place, ${how})`, () =>
-        conn.query(`CREATE OR REPLACE VIEW ${ident('v_' + name)} AS SELECT * FROM ${from}`));
+        `CREATE OR REPLACE TABLE ${ident(name)} AS SELECT * FROM ${fromOf(t, record)}; CREATE OR REPLACE VIEW ${ident('v_' + name)} AS SELECT * FROM ${ident(name)}`));
+    else {
+      await perf.time('attach', `OPEN ${name} (${mb} MB, read in place, ${how})`, () => conn.query(viewOf(name, t, record)));
+      if (!record.deletes) inPlace.set(name, { location: t.location, record });
+    }
   }
+  // What a view reads: iceberg_scan over abfss:// when the table has delete files, else
+  // read_parquet over the files as https URLs with the SAS. Not abfss://: read_parquet globs
+  // every path it is given, wildcard or not, and azure_wasm implements no glob ("Globbing
+  // Azure paths is not supported"); httpfs takes an https URL as it is. They are the URLs the
+  // prefetch fetched, so DuckDB's requests find them in the browser's cache.
+  const fromOf = (t, record) => record.deletes ? `iceberg_scan(${lit(t.location)})`
+    : `read_parquet([${record.files.map(f => lit(https(f.path, sas))).join(', ')}])`;
+  const viewOf = (name, t, record) => `CREATE OR REPLACE VIEW ${ident('v_' + name)} AS SELECT * FROM ${fromOf(t, record)}`;
   // The tables a query names (v_<table>) that are not open yet, opened first.
   async function openFor(sql) {
     const names = [...new Set([...sql.matchAll(/\bv_(\w+)\b/g)].map(m => m[1]))].filter(n => located.has(n));

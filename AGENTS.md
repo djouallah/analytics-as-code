@@ -643,6 +643,10 @@ else: no import, no file written for it.
   files, and the manifests read. A table is planned once (`PLAN`: `iceberg_metadata()`, one
   request per manifest) and its view is `read_parquet` over the record's files, written as
   literals (`iceberg_scan`, which plans again at every query, only with delete files). The
+  literals are `https://…?<SAS>` URLs, not `abfss://`: `read_parquet` globs every path,
+  wildcard or not, and `azure_wasm` implements no glob ("Globbing Azure paths is not
+  supported"); `httpfs` takes the URL as it is. So a new SAS writes those views again, and
+  Analyze's EXPLAIN of one shows the SAS (the read-only one the page holds anyway). The
   same location again is the same snapshot: the table opens from its record, no
   `metadata.json` fetched, no prefetch, nothing read from OneLake. A new location is planned
   again, and the page prefetches only what is new: the manifests the last record lacks, and a
