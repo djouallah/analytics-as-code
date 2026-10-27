@@ -155,6 +155,12 @@
 
   // The bytes [a, b] of `path` from the store, or null when a block is missing.
   function fromStore(path, a, b) {
+    // A read-only tab whose writer has started the store over (its index shrank): the offsets
+    // it holds now point at other files' blocks.
+    if (!writable && index.getSize() < indexRead) {
+      where.clear(); files.clear(); indexRead = 0;
+      if (!applyIndex()) return null;
+    }
     const out = new Uint8Array(b - a + 1);
     for (let n = Math.floor(a / BLOCK); n <= Math.floor(b / BLOCK); n++) {
       const at = where.get(`${path}#${n}`);
@@ -183,6 +189,8 @@
   // read-only tab cannot write the store: it learns the file's size, and hands a whole file to
   // the writer, from which its next reads come.
   function keep(x, path, body, start, size) {
+    // Before the file's size is recorded: a reset clears it.
+    if (writable && end > CAP_BYTES) reset();
     if (!files.has(path)) {
       const f = { size, etag: x.getResponseHeader('ETag'), lastModified: x.getResponseHeader('Last-Modified') };
       files.set(path, f);
@@ -192,7 +200,6 @@
       if (bc && start === 0 && body.length === size) try { bc.postMessage({ store: path, bytes: body }); } catch (e) {}
       return;
     }
-    if (end > CAP_BYTES) reset();
     for (let n = Math.floor(start / BLOCK); n * BLOCK < start + body.length; n++) {
       const key = `${path}#${n}`;
       const s = n * BLOCK - start, len = Math.min(BLOCK, size - n * BLOCK, body.length - s);

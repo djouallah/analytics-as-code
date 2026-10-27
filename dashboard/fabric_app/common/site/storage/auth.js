@@ -14,7 +14,8 @@
 //                            config. The default is a RayfinClient (functions); the VertiPaq
 //                            app builds one with its connector.
 //   ready()                  true when the app already holds what it needs and can start
-//                            without a session (no app uses it now: both need one at start).
+//                            without a session (the iceberg app: while the function's kept
+//                            answer is good, catalog.js's fresh()).
 // =============================================================================
 
 // Keep these on the same version: jsDelivr resolves their shared deps (rayfin-auth, rayfin-lib)
