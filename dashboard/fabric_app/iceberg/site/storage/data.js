@@ -179,10 +179,22 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   // The worker's store answers a HEAD of a file whose size it knows: the sizes of the record's
   // files, sent before the view binds.
   const channel = (() => { try { return new BroadcastChannel('blockcache'); } catch (e) { return null; } })();
+  const storePath = p => p.replace(/^abfss:\/\/([^@/]+)@([^/]+)\//, 'https://$2/$1/');
   function tellSizes(record) {
-    const sizes = Object.fromEntries(record.files.filter(f => f.size).map(f => [f.path.replace(/^abfss:\/\/([^@/]+)@([^/]+)\//, 'https://$2/$1/'), f.size]));
+    const sizes = Object.fromEntries(record.files.filter(f => f.size).map(f => [storePath(f.path), f.size]));
     if (channel && Object.keys(sizes).length) channel.postMessage({ sizes });
   }
+  // A whole file the page downloaded, handed to the worker's store; resolved when the writer
+  // says it is kept, or after STORE_WAIT (no store: the worker fetches it itself on a miss).
+  const STORE_WAIT = 30000;
+  const stored = new Map();   // store path -> resolve
+  if (channel) channel.onmessage = e => { const p = e.data?.stored; if (p && stored.has(p)) { stored.get(p)(); stored.delete(p); } };
+  const toStore = (path, bytes) => !channel ? Promise.resolve() : new Promise(resolve => {
+    const key = storePath(path);
+    stored.set(key, resolve);
+    channel.postMessage({ store: key, bytes });
+    setTimeout(() => { if (stored.get(key) === resolve) { stored.delete(key); resolve(); } }, STORE_WAIT);
+  });
   async function openWith(name, t, record) {
     const mb = t.bytes == null ? '?' : (t.bytes / 1048576).toFixed(1);
     const small = t.bytes != null && t.bytes <= SMALL_BYTES;
@@ -192,7 +204,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
       const fresh = record.files.filter(f => !before.has(f.path));
       if (!record.deletes && !small && fresh.length) {
         const t0 = performance.now();
-        const sizes = new Map((await prefetchFiles(name, fresh, f => https(f, sas))).map(f => [f.path, f.size]));
+        const sizes = new Map((await prefetchFiles(name, fresh, f => https(f, sas), toStore)).map(f => [f.path, f.size]));
         for (const f of record.files) if (sizes.get(f.path)) f.size = sizes.get(f.path);
         perf.log('fetch', `prefetch ${name}: ${fresh.length} files`, { ms: performance.now() - t0 });
       }

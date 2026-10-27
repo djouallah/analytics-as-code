@@ -631,7 +631,8 @@ else: no import, no file written for it.
   `blockcache/blocks.bin` and `index.jsonl` in OPFS; over 8 GB the store starts over (whole
   files of every table read: `power`'s full data is about 2 GB). One tab writes it; another
   opens it read-only (Chrome 121+): it answers from what the writer kept, re-reads the index
-  on a miss, and on a miss fetches the whole file and answers from it, keeping nothing. So a
+  on a miss, and on a miss fetches the whole file, answers from it and hands it to the
+  writer to keep (`BroadcastChannel('blockcache')`, `{ store, bytes }`). So a
   first visit downloads every file of each table it reads (`fct_summary` 1.3 GB, its 27
   files fetched ahead six at a time, below); after that a table's new files only.
   `httpfs`'s `force_download` does not reach duckdb-wasm's file system.
@@ -649,8 +650,11 @@ else: no import, no file written for it.
   `metadata.json` fetched, no prefetch, nothing read from OneLake. A new location is planned
   again, and the page prefetches only what is new: the manifests the last record lacks, and a
   large table's new Parquet files whole (`prefetchFiles`, six at a time, before the view
-  binds, the same plain GET the worker sends, so the browser's cache answers it; all its
-  files on a first visit). A record
+  binds; all its files on a first visit), each handed to the worker's store over the channel
+  and awaited until the writer says it is kept, so DuckDB's ranged reads of it are answered
+  locally. Not through the browser's HTTP cache: it does not keep a 70-100 MB response, and
+  the worker downloaded every `fct_summary` file a second time, one at a time (52 s on a
+  first visit, 2026-10-27). A record
   that fails to open is dropped and the table planned again, once. The record holds paths
   only, never a SAS.
 - **Threads are not possible yet**: every `wasm_threads` extension published (DuckDB's

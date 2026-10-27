@@ -20,10 +20,10 @@
 //                                           (snapshots.js: the table's last record), not
 //                                           fetched. A new snapshot's manifest list names
 //                                           every manifest of the table, old ones included.
-//   prefetchFiles(name, files, url)         each Parquet file whole, six at a time: the worker
-//                                           fetches a file whole on its first read of it, one
-//                                           file at a time (blockcache.js). files: [{ path,
-//                                           size }]. Returns the sizes.
+//   prefetchFiles(name, files, url, store)  each Parquet file whole, six at a time, handed to
+//                                           the worker's store (store(path, bytes), resolved
+//                                           once kept; blockcache.js). files: [{ path, size }].
+//                                           Returns the sizes.
 // =============================================================================
 
 // OneLake answers HTTP/1.1 only, so a browser keeps six connections to it: more would queue.
@@ -57,15 +57,19 @@ const get = (url, table) => limited(async () => {
   return new Uint8Array(await r.arrayBuffer());
 }, table);
 
-// A large table's new files, whole, six at a time: the plain GET the worker sends on its first
-// read of a file (blockcache.js fetches whole files, never seeks), so the browser's cache
-// answers it, instead of the worker's one-at-a-time downloads. Returns each file's size.
-export async function prefetchFiles(name, files, url) {
+// A large table's new files, whole, six at a time, each handed to the worker's store
+// (store(path, bytes), resolved once it is kept): DuckDB's ranged reads of them are then
+// answered there, not seeked from OneLake. Not left in the browser's HTTP cache, which does not
+// keep a response of 70-100 MB: the worker downloaded each file again, one at a time (2-5 s
+// each, 52 s for fct_summary on 2026-10-27). Returns each file's size.
+export async function prefetchFiles(name, files, url, store) {
   if (!order.includes(name)) order.push(name);
   return Promise.all(files.map(f => limited(async () => {
-    const r = await fetch(url(f.path));
+    const r = await fetch(url(f.path), { cache: 'no-store' });
     if (!r.ok) return { path: f.path, size: f.size ?? null };
-    return { path: f.path, size: (await r.arrayBuffer()).byteLength || null };   // the cache keeps it once the body is read
+    const bytes = await r.arrayBuffer();
+    await store(f.path, bytes);
+    return { path: f.path, size: bytes.byteLength || null };
   }, name).catch(() => ({ path: f.path, size: f.size ?? null }))));
 }
 

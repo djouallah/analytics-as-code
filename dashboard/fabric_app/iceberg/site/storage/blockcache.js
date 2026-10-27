@@ -22,16 +22,16 @@
 // each block is, and each file's size and validators), read back at start. Over CAP_BYTES the
 // store starts over. One tab writes them (an OPFS access handle is exclusive); another tab
 // opens them read-only: it answers from what the writer has kept, reads the index again on a
-// miss (both files only grow), and what it fetches itself it does not keep. Until the store
-// is open, reads go to OneLake as before.
+// miss (both files only grow), and hands what it fetches to the writer to keep. Until the
+// store is open, reads go to OneLake as before.
 //
-// A miss fetches the whole file, in one request, and never seeks OneLake: a request costs
-// ~0.5 s whatever its size, so a file's next reads (DuckDB reads a Parquet file in many: the
-// footer in three, then a column chunk at a time) are a round trip each there and nothing
-// here. The plain GET is the one the page prefetched (prefetch.js), so the browser's cache
-// often answers it. A read-only tab answers from the file it fetched and keeps nothing.
-// The page tells the worker each file's size as it opens a table (BroadcastChannel
-// 'blockcache', { sizes }), so a HEAD is answered without a request.
+// OneLake is never seeked: a request costs ~0.5 s whatever its size, and DuckDB reads a
+// Parquet file in many (the footer in three, then a column chunk at a time). The page
+// downloads a table's files whole, six at a time, and hands them to the writer over the
+// channel before the table's view is created (prefetch.js), so DuckDB's ranged reads are
+// answered here. A file still missing (a table read before its prefetch, a store reset) is
+// fetched whole, in one request, on its first read. The page also tells the worker each
+// file's size as it opens a table, so a HEAD is answered without a request.
 //
 // Also: no If-Match. DuckDB 2.0 sends every ranged read with it (the ETag of its HEAD), and the
 // browser's cache answers no request that carries it; an Iceberg file never changes, so the
@@ -116,18 +116,32 @@
     }
   })();
 
-  // The sizes the page knows (its snapshot records), so a HEAD is answered without a request
-  // and a read in a file's tail fetches the whole tail.
+  // The page's channel (BroadcastChannel 'blockcache'), to every tab's worker:
+  //   { sizes }          the sizes the page knows (its snapshot records), so a HEAD is answered
+  //                      without a request;
+  //   { store, bytes }   a whole file the page downloaded (prefetch.js), or a read-only tab's
+  //                      worker fetched: the writer keeps it and answers { stored }. Not the
+  //                      browser's HTTP cache: it does not keep a response of 70-100 MB.
+  let bc = null;
   try {
-    new BroadcastChannel('blockcache').onmessage = e => {
+    bc = new BroadcastChannel('blockcache');
+    bc.onmessage = e => {
       for (const [path, size] of Object.entries(e.data?.sizes ?? {})) {
         if (files.has(path) || !(size > 0)) continue;
         files.set(path, { size, etag: null, lastModified: null });
         log({ f: path, s: size, e: null, m: null });
       }
       if (writable && index) index.flush();
+      const { store, bytes } = e.data ?? {};
+      // The writer answers once it has kept it, and a worker with no store at once (nothing will
+      // keep it: the page waits no longer); a read-only tab leaves it to the writer.
+      if (store && bytes && (writable || !blocks)) {
+        if (writable) try { const b = new Uint8Array(bytes); keep(NO_HEADERS, store, b, 0, b.length); } catch (x) {}
+        bc.postMessage({ stored: store });
+      }
     };
   } catch (e) {}
+  const NO_HEADERS = { getResponseHeader: () => null };
 
   // A response DuckDB reads as if it came from OneLake: status, bytes and the few headers it asks.
   function answer(xhr, status, body, headers) {
@@ -166,14 +180,18 @@
   }
 
   // Keeps the bytes `body`, from offset `start` of a file of `size` bytes, as blocks. A
-  // read-only tab keeps nothing: it only learns the file's size, for the HEADs that follow.
+  // read-only tab cannot write the store: it learns the file's size, and hands a whole file to
+  // the writer, from which its next reads come.
   function keep(x, path, body, start, size) {
     if (!files.has(path)) {
       const f = { size, etag: x.getResponseHeader('ETag'), lastModified: x.getResponseHeader('Last-Modified') };
       files.set(path, f);
       log({ f: path, s: f.size, e: f.etag, m: f.lastModified });
     }
-    if (!writable) return;
+    if (!writable) {
+      if (bc && start === 0 && body.length === size) try { bc.postMessage({ store: path, bytes: body }); } catch (e) {}
+      return;
+    }
     if (end > CAP_BYTES) reset();
     for (let n = Math.floor(start / BLOCK); n * BLOCK < start + body.length; n++) {
       const key = `${path}#${n}`;
