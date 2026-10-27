@@ -40,8 +40,8 @@
 // =============================================================================
 (() => {
   const BLOCK = 256 * 1024;
-  // Whole files of every table read: power's full data is ~2 GB, and over the cap the store
-  // starts over, so the cap leaves it room to grow.
+  // Whole files of every table read, and over the cap the store starts over: the cap is well
+  // above what a model's tables hold, so it has room to grow.
   const CAP_BYTES = 8 * 1024 * 1024 * 1024;
   const VERSION = 1;
 

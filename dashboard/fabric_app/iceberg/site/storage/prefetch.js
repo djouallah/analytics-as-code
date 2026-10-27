@@ -34,10 +34,9 @@ const PARALLEL = 6;
 // PARALLEL slots shared by every table, served table by table: the table a query is about to
 // open first (prioritize, called by data.js before it opens one), then the others in the order
 // they were started (smallest first). Within a table its manifests come before its data files,
-// which need them. (First come, first served across tables, the first query on power's full
-// data waited 35 s for dim_region's three files behind the large tables' hundreds of
-// manifests; data files fetched only when their table opens were slower still: tables open one
-// at a time.)
+// which need them. (First come, first served across tables, a small table's few files waited
+// behind the large tables' hundreds of manifests; data files fetched only when their table
+// opens were slower still: tables open one at a time.)
 let active = 0;
 let order = [];                       // table names, the first served first
 const waiting = new Map();            // table name -> resolvers waiting for a slot
@@ -63,7 +62,7 @@ const get = (url, table) => limited(async () => {
 // (store(path, bytes), resolved once it is kept): DuckDB's ranged reads of them are then
 // answered there, not seeked from OneLake. Not left in the browser's HTTP cache, which does not
 // keep a response of 70-100 MB: the worker downloaded each file again, one at a time (2-5 s
-// each, 52 s for fct_summary on 2026-10-27). Returns each file's size.
+// each). Returns each file's size.
 export async function prefetchFiles(name, files, url, store, onFile = () => {}) {
   if (!order.includes(name)) order.push(name);
   return Promise.all(files.map(f => limited(async () => {

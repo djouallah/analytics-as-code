@@ -10,8 +10,8 @@
 // one (`renew`). This browser's alone, like the page's memory: nothing is shared.
 //
 //   const catalog = createCatalog(() => auth.client());
-//   await catalog.open(['mart.fct_summary', ...])
-//     -> { metadata: { 'mart.fct_summary': 'abfss://...metadata.json' }, missing: [...], sas, expiresOn }
+//   await catalog.open(['<schema>.<table>', ...])
+//     -> { metadata: { '<schema>.<table>': 'abfss://...metadata.json' }, missing: [...], sas, expiresOn }
 //   catalog.fresh()     true while the kept answer is good: the page can start without a session
 //   catalog.renewAt()   when to ask again (ms since the epoch)
 // =============================================================================

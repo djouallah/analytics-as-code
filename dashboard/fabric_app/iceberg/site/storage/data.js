@@ -269,8 +269,7 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {} } 
       }
     }));
     // Smallest first: the prefetch's queues are first come, first served, and a small table's
-    // few files would otherwise wait behind a large one's manifests (on power's full data the
-    // first query waited 30 s for dim_region's three files).
+    // few files would otherwise wait behind a large one's manifests.
     let kept = 0;
     for (const t of metas.filter(Boolean).sort((a, b) => (a.bytes ?? Infinity) - (b.bytes ?? Infinity))) {
       const t0 = performance.now();
