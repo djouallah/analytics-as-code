@@ -12,6 +12,10 @@
 // lacks are fetched, in one request. Only what queries read is kept: the column chunks of the
 // row groups they scan, not whole files. An Iceberg file is never rewritten in place, so a
 // block is never checked again. A HEAD of a file whose size is known is answered too.
+// Every file of an Iceberg table is immutable, not only its Parquet: a commit writes a new
+// metadata.json, a new manifest list and new manifests, and never touches the old ones. So
+// those are kept too (.avro, .metadata.json), and planning a table that has not changed, or
+// the old manifests of one that has, reads nothing from OneLake.
 // DuckDB's extensions are kept the same way, whole: their folder is named after the engine's
 // pins (ext-<hash>/, iceberg/duckdb.mjs), so a file there never changes either.
 //
@@ -39,7 +43,8 @@
 
   const pathOf = u => String(u).split('?')[0];
   const isExtension = u => /\/ext-[0-9a-f]+\/[^?]*\.duckdb_extension\.wasm$/i.test(pathOf(u));
-  const cacheable = (m, u) => (m === 'GET' || m === 'HEAD') && (/\.parquet$/i.test(pathOf(u)) || isExtension(u));
+  const isIceberg = u => /\.(parquet|avro|metadata\.json)$/i.test(pathOf(u));
+  const cacheable = (m, u) => (m === 'GET' || m === 'HEAD') && (isIceberg(u) || isExtension(u));
 
   function log(entry) {
     const b = enc.encode(JSON.stringify(entry) + '\n');

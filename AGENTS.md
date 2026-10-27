@@ -615,19 +615,35 @@ else: no import, no file written for it.
   `metadata.json` went back to OneLake (~0.9 s each). The worker drops the header
   (`blockcache.js`); an Iceberg file is never rewritten in place. The engine also URL-encodes
   it, which OneLake answers with 412 (duckdb/duckdb-wasm#2297).
-- **The worker keeps what DuckDB reads of a Parquet file in OPFS, by block**
+- **The worker keeps what DuckDB reads of an Iceberg table's files in OPFS, by block**
   (`site/storage/blockcache.js`, a classic script loaded into DuckDB's worker before the
   engine): what `cache_httpfs` does for `httpfs`, which has no WASM build. Each ranged read
   is cut into 256 KB blocks, kept under the file's path without the SAS (so a new SAS keeps
   them), and only the blocks a read lacks are fetched, in one request; a HEAD of a known file
   is answered too. Only what queries read is kept (column chunks of the row groups scanned).
+  Every file of an Iceberg table is immutable (a commit writes a new `metadata.json`, a new
+  manifest list and new manifests, and touches no old one), so the store keeps `.parquet`,
+  `.avro` and `.metadata.json` alike: planning a table reads its old manifests from OPFS.
   `blockcache/blocks.bin` and `index.jsonl` in OPFS; over 2 GB the store starts over; a second
   tab cannot open it and reads OneLake. On `power`'s full data, a returning visit (new SAS):
   Parquet reads 0.15 s in all instead of 85 s, charts drawn in 25 s instead of 138 s. The
   first visit still pays for the scans of a big table's whole history: `MAX(fct_summary[date])`
-  reads the footer and the `date` column of all 27 files of the 1.3 GB table, one request at
-  a time (66 s of a cold 120 s), and `fct_region`'s `REGIONID` list 11 s. `httpfs`'s `force_download` does not reach
-  duckdb-wasm's file system.
+  reads the `date` column of all 27 files of the 1.3 GB table, one request at a time (66 s of
+  a cold 120 s with the footers; the footers are now fetched ahead, below), and `fct_region`'s
+  `REGIONID` list 11 s. `httpfs`'s `force_download` does not reach duckdb-wasm's file system.
+- **The client has a catalog of its own: a snapshot record per table**
+  (`site/storage/snapshots.js`, `localStorage`), keyed by the metadata location the function
+  gave: the snapshot's live data files (with their sizes once learnt), whether it has delete
+  files, and the manifests read. A table is planned once (`PLAN`: `iceberg_metadata()`, one
+  request per manifest) and its view is `read_parquet` over the record's files, written as
+  literals (`iceberg_scan`, which plans again at every query, only with delete files). The
+  same location again is the same snapshot: the table opens from its record, no
+  `metadata.json` fetched, no prefetch, nothing read from OneLake. A new location is planned
+  again, and the page prefetches only what is new: the manifests the last record lacks, and a
+  large table's new Parquet footers (`prefetchFooters`, the block-aligned tail of each new
+  file, six at a time, before the view binds; all its files on a first visit). A record
+  that fails to open is dropped and the table planned again, once. The record holds paths
+  only, never a SAS.
 - **Threads are not possible yet**: every `wasm_threads` extension published (DuckDB's
   bucket, `azure_wasm`'s CI) imports unshared memory, which the threaded engine refuses
   (`LinkError … mismatch in shared state of memory`), and the page would need cross-origin
@@ -640,12 +656,12 @@ else: no import, no file written for it.
   is copied into DuckDB's memory once and its view reads that. Above it, the view is over
   `iceberg_scan`, read in place. `has()` and `views()` answer from the model's columns,
   with no table opened.
-- **The browser's HTTP cache is the prefetch** (`prefetch.js`):
+- **The browser's HTTP cache is the prefetch** (`prefetch.js`), for a new snapshot:
   - DuckDB-WASM reads one request at a time, and OneLake answers each in about 0.6 s.
-  - At start the page fetches every table's `metadata.json`, manifest list and manifests,
-    six at a time (OneLake is HTTP/1.1). For a small table it also fetches the data files,
-    after every table's metadata. The manifests are Avro, deflate blocks, read with
-    `DecompressionStream`.
+  - At start the page fetches each changed table's `metadata.json`, manifest list and new
+    manifests, six at a time (OneLake is HTTP/1.1). For a small table it also fetches the
+    data files those name, after every table's metadata. The manifests are Avro, deflate
+    blocks, read with `DecompressionStream`.
   - DuckDB's HEAD and Range requests then come from the cache: OneLake sends
     `Last-Modified` and no `Cache-Control`.
   - Fetching data files only when their table opened was slower, because tables open one
@@ -666,13 +682,15 @@ else: no import, no file written for it.
   `localStorage`. A reload within it calls no function, starts without a session, reads the
   same snapshots, and gets cache hits (same URLs). A tab open longer gets a new SAS before
   the old one expires; its views stay on their snapshots. A new SAS changes every URL, so
-  the browser cache starts over.
-- Nothing is stored between visits beyond the browser's HTTP cache.
+  the browser cache starts over; the OPFS store and the snapshot records do not.
+- What is stored between visits: the block store (OPFS), the snapshot records and the
+  function's answer (`localStorage`). Nothing that can write, and no token.
 `dashboard/fabric_app/common/build.mjs` assembles a project's `dist/`: the DAX page staged
 (`stagePage('dax')`: `page/`, `dax/` and the model, `semantic_model/ossie.yaml` as
 `ossie.json`; it needs `npm ci --prefix scripts` first) and the dbt docs, with
 `fabric_app/common/site/` (`storage/auth.js`) and then the project's own `site/` copied over
-them (here `storage/data.js` and `storage/catalog.js`), and `?v=<build>` added to every
+them (here `storage/` `data.js`, `catalog.js`, `snapshots.js`, `prefetch.js`,
+`blockcache.js`), and `?v=<build>` added to every
 relative import; `query.js` passes its own on to `ossie.json`. The project is the working
 directory of `build.mjs` (`rayfin.yml`'s `buildCommand`, `node ../common/build.mjs`).
 

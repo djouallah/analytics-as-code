@@ -9,12 +9,22 @@
 // read, many at once, and DuckDB finds it cached. Nothing is kept here: the cache is the
 // browser's, and the URLs (the file and the SAS) are the ones azure_wasm builds.
 //
-//   prefetchTable(name, metadata, url, { data })  name: the table, for prioritize(name);
+//   prefetchTable(name, metadata, url, { data, known })
+//                                           name: the table, for prioritize(name);
 //                                           metadata: the table's metadata.json, parsed;
 //                                           url(abfss) -> the https URL DuckDB will ask for;
 //                                           data: the data files too (delete files included:
 //                                           a table about to be read whole), after every
-//                                           table's metadata layers.
+//                                           table's metadata layers;
+//                                           known: manifest paths the worker holds already
+//                                           (snapshots.js: the table's last record), not
+//                                           fetched. A new snapshot's manifest list names
+//                                           every manifest of the table, old ones included.
+//   prefetchFooters(name, files, url)       the tail of each Parquet file (its footer), six at
+//                                           a time: a cold scan starts by reading every file's
+//                                           footer, one request at a time (27 files of
+//                                           fct_summary, 66 s on power). files: [{ path, size }],
+//                                           size null for a HEAD first. Returns the sizes.
 // =============================================================================
 
 // OneLake answers HTTP/1.1 only, so a browser keeps six connections to it: more would queue.
@@ -47,6 +57,27 @@ const get = (url, table) => limited(async () => {
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return new Uint8Array(await r.arrayBuffer());
 }, table);
+
+// The worker's block size (blockcache.js): a tail fetched on a block boundary is the very
+// range the worker asks for when a footer is read, so the browser's cache answers it whole.
+const BLOCK = 256 * 1024;
+const FOOTER_BYTES = 1024 * 1024;   // more than any footer here (tens of KB)
+export async function prefetchFooters(name, files, url) {
+  if (!order.includes(name)) order.push(name);
+  return Promise.all(files.map(f => limited(async () => {
+    let size = f.size;
+    if (!size) {
+      const h = await fetch(url(f.path), { method: 'HEAD' });
+      if (!h.ok) return { path: f.path, size: null };
+      size = Number(h.headers.get('Content-Length')) || null;
+      if (!size) return { path: f.path, size: null };
+    }
+    const from = Math.max(0, Math.floor((size - FOOTER_BYTES) / BLOCK) * BLOCK);
+    const r = await fetch(url(f.path), { headers: { Range: `bytes=${from}-${size - 1}` } });
+    if (r.ok) await r.arrayBuffer();   // the cache keeps it once the body is read
+    return { path: f.path, size };
+  }, name).catch(() => ({ path: f.path, size: f.size ?? null }))));
+}
 
 // --- An Avro object container file, as far as its strings: the header's codec, then each
 // block, inflated if the codec is deflate. Enough to find the paths in a manifest.
@@ -86,13 +117,17 @@ async function avroText(b) {
 const paths = (s, ext) => [...new Set(s.match(new RegExp(`abfss://[\\x21-\\x7e]+?\\.${ext}`, 'g')) ?? [])];
 
 // The current snapshot's manifest list, its manifests, and with `data` the files they name.
-export async function prefetchTable(name, metadata, url, { data = false } = {}) {
+export async function prefetchTable(name, metadata, url, { data = false, known = new Set() } = {}) {
   if (!order.includes(name)) order.push(name);
   const current = String(metadata['current-snapshot-id']);
   const snapshot = (metadata.snapshots ?? []).find(s => String(s['snapshot-id']) === current);
   if (!snapshot?.['manifest-list']) return 0;
   const list = await avroText(await get(url(snapshot['manifest-list']), name));
-  const manifests = await Promise.all(paths(list, 'avro').map(async m => avroText(await get(url(m), name))));
+  // A known manifest is in the worker's store, and so are the data files it names that were
+  // read (a small table was read whole): only the new manifests are fetched, and with `data`
+  // the files they name.
+  const manifests = await Promise.all(paths(list, 'avro').filter(m => !known.has(m))
+    .map(async m => avroText(await get(url(m), name))));
   let n = 1 + manifests.length;
   if (data) {
     const files = [...new Set(manifests.flatMap(m => paths(m, 'parquet')))];

@@ -12,17 +12,24 @@
 // engine, so unsigned: DuckDB is opened with unsigned extensions allowed and installs them from
 // the app's own ext/ repository only.
 //
-// A table is opened when a query first names its view, v_<table>: opening reads the table's
-// metadata (a few requests, one at a time), so the first paint pays only for the tables it
-// reads. A table whose files are small (SMALL_BYTES, from its metadata.json) is copied into
-// DuckDB's memory and its view reads that: later queries do not go back to OneLake. A larger
-// one stays a view over iceberg_scan, read in place. After the first paint the rest are
-// opened in the background, small ones first, behind whatever the page asks.
-// At start the page also fetches every table's Iceberg files, many at once (prefetch.js: the
-// metadata layers, then a small table's data files), into the browser's HTTP cache, where
-// DuckDB's one-at-a-time requests then find them.
-// Nothing is stored between visits: each view is at the snapshot the catalog named (catalog.js
-// keeps that answer up to ~55 minutes, so a reload within it reads the same snapshots).
+// A table is opened when a query first names its view, v_<table>, so the first paint pays only
+// for the tables it reads. Opening plans the table once: the snapshot's live data files, from
+// its metadata.json, manifest list and manifests (PLAN, one request at a time). What that
+// gives is kept in this browser as the client's own catalog (snapshots.js, keyed by the
+// metadata location the function gave: a commit always writes a new one), and a table whose
+// location is the same is opened from its record, nothing read. A table whose files are small
+// (SMALL_BYTES, from its metadata.json) is copied into DuckDB's memory and its view reads
+// that: later queries do not go back to OneLake. A larger one is read in place, its view
+// read_parquet over the files (or iceberg_scan when it has delete files). After the first
+// paint the rest are opened in the background, small ones first, behind whatever the page
+// asks.
+// For a new snapshot the page fetches ahead of DuckDB, many at once (prefetch.js): its new
+// manifests (the old ones are in the worker's store), a small table's new data files, and a
+// large table's new Parquet footers, into the browser's HTTP cache, where DuckDB's
+// one-at-a-time requests find them, and the worker keeps what it reads in OPFS
+// (blockcache.js: Parquet blocks, manifests, metadata.json, every one immutable).
+// Each view is at the snapshot the catalog named (catalog.js keeps that answer up to ~55
+// minutes, so a reload within it reads the same snapshots).
 //
 // The members are the ones the page calls on the other hosts:
 //   init            sign in, locate the tables, size them; nothing opened yet
@@ -35,7 +42,8 @@ import * as duckdb from "../duckdb/duckdb-browser.mjs";
 import { serialQueue } from "./queue.js";
 import { createAuth } from "./auth.js";
 import { createCatalog } from "./catalog.js";
-import { prefetchTable, prioritize } from "./prefetch.js";
+import { createSnapshots } from "./snapshots.js";
+import { prefetchTable, prefetchFooters, prioritize } from "./prefetch.js";
 import { perf, HTTP_TRACE_SHIM } from "../frontend/perflog.js";
 
 const MODEL = new URL('../semantic/ossie.json' + new URL(import.meta.url).search, import.meta.url);
@@ -89,18 +97,21 @@ function warmExtensions() {
 
 export function createDataSource({ onStatus = () => {} } = {}) {
   const catalog = createCatalog(() => auth.client());
+  const snapshots = createSnapshots();
   // A kept answer from the function needs no session: the page starts without the Rayfin SDK.
   const auth = createAuth({ ready: catalog.fresh });
   let conn, tables = new Map();
-  const located = new Map();   // table name -> { location, bytes, prefetch }: in the catalog
+  const located = new Map();   // table name -> { location, bytes, prefetch, record }: in the catalog
   const opened = new Map();    // table name -> promise of its opening
 
   const serial = serialQueue();
   const q = sql => serial(() => conn.query(sql));
 
-  // The secret azure_wasm reads the files with: the SAS from the function.
-  const useSas = sas => q(`CREATE OR REPLACE SECRET onelake (TYPE azure, PROVIDER config, ACCOUNT_NAME 'onelake',
-      CONNECTION_STRING ${lit(`AccountName=onelake;SharedAccessSignature=${sas}`)})`);
+  // The secret azure_wasm reads the files with: the SAS from the function. The page's own
+  // fetches (the prefetch) use the same one, the newest.
+  let sas = '';
+  const useSas = s => q(`CREATE OR REPLACE SECRET onelake (TYPE azure, PROVIDER config, ACCOUNT_NAME 'onelake',
+      CONNECTION_STRING ${lit(`AccountName=onelake;SharedAccessSignature=${sas = s}`)})`);
 
   // A page open longer than its SAS: a new one shortly before it expires. The views stay on
   // the snapshots they were created on; only the SAS is replaced. A failed renewal is tried
@@ -112,21 +123,75 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     }, Math.max(catalog.renewAt() - Date.now(), 0));
   }
 
+  // The snapshot planned from Iceberg: its live data files, whether a delete file is among
+  // them (then the view stays over iceberg_scan, which applies them), and the manifests read.
+  // The record snapshots.js keeps.
+  async function plan(t) {
+    const rows = (await conn.query(`SELECT manifest_path, file_path, content, file_format
+      FROM iceberg_metadata(${lit(t.location)}) WHERE status <> 'DELETED'`)).toArray();
+    return {
+      location: t.location, bytes: t.bytes,
+      deletes: !rows.length || !rows.every(r => r.content === 'DATA' && r.file_format === 'PARQUET'),
+      files: [...new Set(rows.map(r => r.file_path))].map(path => ({ path, size: null })),
+      manifests: [...new Set(rows.map(r => r.manifest_path))],
+    };
+  }
+
   // Opens a table: its view, over a copy in memory or over the files. Runs inside a queued
   // job, so it calls the connection itself. One opening per table, whoever asks; a failed one
   // can be asked for again.
+  // A view over iceberg_scan is planned again by every query that reads it: metadata.json, the
+  // manifest list and every manifest, one request at a time (hundreds on a large table, one
+  // manifest per hourly commit). So a table is planned once (PLAN), and its record kept: the
+  // view is read_parquet over the snapshot's files, written as a literal, and a query reads
+  // only Parquet (footers held by parquet_metadata_cache, blocks by blockcache.js). A table
+  // with delete files stays over iceberg_scan, which applies them. The columns are the files'
+  // own: a table's columns change only with a rebuild, never in place.
+  // A large table's new files (all of them on a first visit) have their footers fetched ahead,
+  // six at a time, before the view binds (binding reads the first file's footer, and a cold
+  // scan every one's); the sizes learnt go into the record, so the next snapshot's footers
+  // need no HEAD.
+  // A record that fails to open (a file gone, a record of another build) is dropped and the
+  // table planned again, once.
   function open(name) {
     const t = located.get(name);
     return opened.get(name) ?? opened.set(name, (async () => {
       prioritize(name);
       await t.prefetch;
-      const scan = `iceberg_scan(${lit(t.location)})`;
-      const small = t.bytes != null && t.bytes <= SMALL_BYTES;
-      const mb = t.bytes == null ? '?' : (t.bytes / 1048576).toFixed(1);
-      await perf.time('attach', `OPEN ${name} (${mb} MB, ${small ? 'copied into memory' : 'read in place'})`, () => conn.query(small
-        ? `CREATE OR REPLACE TABLE ${ident(name)} AS SELECT * FROM ${scan}; CREATE OR REPLACE VIEW ${ident('v_' + name)} AS SELECT * FROM ${ident(name)}`
-        : `CREATE OR REPLACE VIEW ${ident('v_' + name)} AS SELECT * FROM ${scan}`));
+      try { await openWith(name, t, t.record); }
+      catch (e) {
+        if (!t.record) throw e;
+        perf.log('info', `OPEN ${name} from its record failed (${e?.message || e}): planned again`);
+        snapshots.drop(name); t.record = null;
+        await openWith(name, t, null);
+      }
     })().catch(e => { opened.delete(name); throw e; })).get(name);
+  }
+  async function openWith(name, t, record) {
+    const mb = t.bytes == null ? '?' : (t.bytes / 1048576).toFixed(1);
+    const small = t.bytes != null && t.bytes <= SMALL_BYTES;
+    if (!record) {
+      record = await perf.time('attach', `PLAN ${name}`, () => plan(t));
+      const before = new Set((snapshots.previous(name)?.files ?? []).map(f => f.path));
+      const fresh = record.files.filter(f => !before.has(f.path));
+      if (!record.deletes && !small && fresh.length) {
+        const t0 = performance.now();
+        const sizes = new Map((await prefetchFooters(name, fresh, f => https(f, sas))).map(f => [f.path, f.size]));
+        for (const f of record.files) if (sizes.get(f.path)) f.size = sizes.get(f.path);
+        perf.log('fetch', `prefetch ${name}: ${fresh.length} footers`, { ms: performance.now() - t0 });
+      }
+      snapshots.put(name, record);
+      t.record = record;
+    }
+    const from = record.deletes ? `iceberg_scan(${lit(t.location)})`
+      : `read_parquet([${record.files.map(f => lit(f.path)).join(', ')}])`;
+    const how = record.deletes ? 'iceberg_scan: delete files' : `${record.files.length} Parquet files`;
+    if (small)
+      await perf.time('attach', `OPEN ${name} (${mb} MB, copied into memory, ${how})`, () => conn.query(
+        `CREATE OR REPLACE TABLE ${ident(name)} AS SELECT * FROM ${from}; CREATE OR REPLACE VIEW ${ident('v_' + name)} AS SELECT * FROM ${ident(name)}`));
+    else
+      await perf.time('attach', `OPEN ${name} (${mb} MB, read in place, ${how})`, () =>
+        conn.query(`CREATE OR REPLACE VIEW ${ident('v_' + name)} AS SELECT * FROM ${from}`));
   }
   // The tables a query names (v_<table>) that are not open yet, opened first.
   async function openFor(sql) {
@@ -138,10 +203,14 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   // Each table's size, from its metadata.json, all at once (the page's own requests, in
   // parallel): the current snapshot's total-files-size. And its prefetch, started, not awaited:
   // opening the table waits for it, and a failed prefetch only costs time.
+  // A table whose location has a record (the same snapshot as last planned) fetches nothing:
+  // its size is the record's, and it opens from it.
   async function sizeAll(access) {
     const metas = await Promise.all([...tables].map(async ([name, t]) => {
       const location = access.metadata[t.source];
       if (!location) return null;
+      const record = snapshots.get(name, location);
+      if (record) return { name, location, m: null, bytes: record.bytes, record };
       try {
         const m = await (await fetch(https(location, access.sas))).json();
         const s = (m.snapshots ?? []).find(s => String(s['snapshot-id']) === String(m['current-snapshot-id']));
@@ -155,13 +224,17 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     // Smallest first: the prefetch's queues are first come, first served, and a small table's
     // few files would otherwise wait behind a large one's manifests (on power's full data the
     // first query waited 30 s for dim_region's three files).
+    let kept = 0;
     for (const t of metas.filter(Boolean).sort((a, b) => (a.bytes ?? Infinity) - (b.bytes ?? Infinity))) {
       const t0 = performance.now();
-      const prefetch = t.m && prefetchTable(t.name, t.m, f => https(f, access.sas), { data: t.bytes != null && t.bytes <= SMALL_BYTES })
-        .then(n => perf.log('fetch', `prefetch ${t.name}: ${n} files`, { ms: performance.now() - t0 }),
+      if (t.record) kept++;
+      const known = new Set(snapshots.previous(t.name)?.manifests ?? []);
+      const prefetch = t.m && prefetchTable(t.name, t.m, f => https(f, access.sas), { data: t.bytes != null && t.bytes <= SMALL_BYTES, known })
+        .then(n => perf.log('fetch', `prefetch ${t.name}: ${n} files${known.size ? ` (${known.size} manifests kept)` : ''}`, { ms: performance.now() - t0 }),
               e => perf.log('info', `prefetch ${t.name}: ${e?.message || e}`));
-      located.set(t.name, { location: t.location, bytes: t.bytes, prefetch });
+      located.set(t.name, { location: t.location, bytes: t.bytes, prefetch, record: t.record ?? null });
     }
+    if (kept) perf.log('info', `snapshots: ${kept} of ${metas.filter(Boolean).length} tables unchanged, opened from their records`);
   }
 
 
