@@ -27,9 +27,10 @@
 // asks.
 // For a new snapshot the page fetches ahead of DuckDB, many at once (prefetch.js): its new
 // manifests (the old ones are in the worker's store), a small table's new data files, and a
-// large table's new Parquet footers, into the browser's HTTP cache, where DuckDB's
-// one-at-a-time requests find them, and the worker keeps what it reads in OPFS
-// (blockcache.js: Parquet blocks, manifests, metadata.json, every one immutable).
+// large table's new Parquet files whole, into the browser's HTTP cache, where DuckDB's
+// one-at-a-time requests find them, and the worker keeps every file it reads whole in OPFS
+// (blockcache.js: Parquet, manifests, metadata.json, every one immutable; it never seeks
+// OneLake, as a request costs ~0.5 s whatever its size).
 // Each view is at the snapshot the catalog named (catalog.js keeps that answer up to ~55
 // minutes, so a reload within it reads the same snapshots).
 //
@@ -45,7 +46,7 @@ import { serialQueue } from "./queue.js";
 import { createAuth } from "./auth.js";
 import { createCatalog } from "./catalog.js";
 import { createSnapshots } from "./snapshots.js";
-import { prefetchTable, prefetchFooters, prioritize } from "./prefetch.js";
+import { prefetchTable, prefetchFiles, prioritize } from "./prefetch.js";
 import { perf, HTTP_TRACE_SHIM } from "../frontend/perflog.js";
 
 const MODEL = new URL('../semantic/ossie.json' + new URL(import.meta.url).search, import.meta.url);
@@ -153,13 +154,12 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   // manifest list and every manifest, one request at a time (hundreds on a large table, one
   // manifest per hourly commit). So a table is planned once (PLAN), and its record kept: the
   // view is read_parquet over the snapshot's files, written as a literal, and a query reads
-  // only Parquet (footers held by parquet_metadata_cache, blocks by blockcache.js). A table
+  // only Parquet (footers held by parquet_metadata_cache, files by blockcache.js). A table
   // with delete files stays over iceberg_scan, which applies them. The columns are the files'
   // own: a table's columns change only with a rebuild, never in place.
-  // A large table's new files (all of them on a first visit) have their footers fetched ahead,
-  // six at a time, before the view binds (binding reads the first file's footer, and a cold
-  // scan every one's); the sizes learnt go into the record, so the next snapshot's footers
-  // need no HEAD.
+  // A large table's new files (all of them on a first visit) are fetched whole ahead, six at
+  // a time, before the view binds (the worker fetches a file whole on its first read, one at a
+  // time); the sizes learnt go into the record, so a HEAD of them needs no request.
   // A record that fails to open (a file gone, a record of another build) is dropped and the
   // table planned again, once.
   function open(name) {
@@ -176,8 +176,8 @@ export function createDataSource({ onStatus = () => {} } = {}) {
       }
     })().catch(e => { opened.delete(name); throw e; })).get(name);
   }
-  // The worker's store answers a HEAD of a file whose size it knows, and reads a file's tail
-  // whole: the sizes of the record's files, sent before the view binds.
+  // The worker's store answers a HEAD of a file whose size it knows: the sizes of the record's
+  // files, sent before the view binds.
   const channel = (() => { try { return new BroadcastChannel('blockcache'); } catch (e) { return null; } })();
   function tellSizes(record) {
     const sizes = Object.fromEntries(record.files.filter(f => f.size).map(f => [f.path.replace(/^abfss:\/\/([^@/]+)@([^/]+)\//, 'https://$2/$1/'), f.size]));
@@ -192,9 +192,9 @@ export function createDataSource({ onStatus = () => {} } = {}) {
       const fresh = record.files.filter(f => !before.has(f.path));
       if (!record.deletes && !small && fresh.length) {
         const t0 = performance.now();
-        const sizes = new Map((await prefetchFooters(name, fresh, f => https(f, sas))).map(f => [f.path, f.size]));
+        const sizes = new Map((await prefetchFiles(name, fresh, f => https(f, sas))).map(f => [f.path, f.size]));
         for (const f of record.files) if (sizes.get(f.path)) f.size = sizes.get(f.path);
-        perf.log('fetch', `prefetch ${name}: ${fresh.length} footers`, { ms: performance.now() - t0 });
+        perf.log('fetch', `prefetch ${name}: ${fresh.length} files`, { ms: performance.now() - t0 });
       }
       snapshots.put(name, record);
       t.record = record;

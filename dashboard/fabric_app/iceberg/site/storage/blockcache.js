@@ -7,11 +7,10 @@
 // URL carries the SAS, which changes every hour.
 //
 // So the worker answers DuckDB's reads of .parquet files itself, the way the cache_httpfs
-// extension does for httpfs (it has no WASM build): each read is cut into blocks of BLOCK
-// bytes, a block is kept in OPFS under the file's path (no SAS), and only the blocks a read
-// lacks are fetched, in one request. Only what queries read is kept: the column chunks of the
-// row groups they scan, not whole files. An Iceberg file is never rewritten in place, so a
-// block is never checked again. A HEAD of a file whose size is known is answered too.
+// extension does for httpfs (it has no WASM build): a file is kept in OPFS in blocks of BLOCK
+// bytes under its path (no SAS), and a read is answered from them. An Iceberg file is never
+// rewritten in place, so a block is never checked again. A HEAD of a file whose size is known
+// is answered too.
 // Every file of an Iceberg table is immutable, not only its Parquet: a commit writes a new
 // metadata.json, a new manifest list and new manifests, and never touches the old ones. So
 // those are kept too (.avro, .metadata.json), and planning a table that has not changed, or
@@ -26,15 +25,13 @@
 // miss (both files only grow), and what it fetches itself it does not keep. Until the store
 // is open, reads go to OneLake as before.
 //
-// What a miss fetches, in one round trip (a request costs ~0.5 s whatever its size):
-//   - a file of WHOLE_BYTES or less: the whole file (a dimension, a small table's files);
-//   - a read of READ_MIN or more: READAHEAD from its start, forward (DuckDB scans a file in
-//     reads of ~2 MB, one after the other: a 100 MB file was 50 requests);
-//   - a read in the last TAIL of a file: the whole tail (the 8 bytes before the footer, then
-//     the footer, then the column index: one request instead of three);
-//   - else its own blocks.
+// A miss fetches the whole file, in one request, and never seeks OneLake: a request costs
+// ~0.5 s whatever its size, so a file's next reads (DuckDB reads a Parquet file in many: the
+// footer in three, then a column chunk at a time) are a round trip each there and nothing
+// here. The plain GET is the one the page prefetched (prefetch.js), so the browser's cache
+// often answers it. A read-only tab answers from the file it fetched and keeps nothing.
 // The page tells the worker each file's size as it opens a table (BroadcastChannel
-// 'blockcache', { sizes }), so a HEAD is answered without a request and the tail is known.
+// 'blockcache', { sizes }), so a HEAD is answered without a request.
 //
 // Also: no If-Match. DuckDB 2.0 sends every ranged read with it (the ETag of its HEAD), and the
 // browser's cache answers no request that carries it; an Iceberg file never changes, so the
@@ -43,11 +40,9 @@
 // =============================================================================
 (() => {
   const BLOCK = 256 * 1024;
-  const CAP_BYTES = 2 * 1024 * 1024 * 1024;
-  const READ_MIN = 1024 * 1024;
-  const READAHEAD = 16 * 1024 * 1024;
-  const WHOLE_BYTES = 4 * 1024 * 1024;
-  const TAIL = 1024 * 1024;
+  // Whole files of every table read: power's full data is ~2 GB, and over the cap the store
+  // starts over, so the cap leaves it room to grow.
+  const CAP_BYTES = 8 * 1024 * 1024 * 1024;
   const VERSION = 1;
 
   const P = XMLHttpRequest.prototype, open = P.open, set = P.setRequestHeader, send = P.send;
@@ -158,23 +153,16 @@
     return out;
   }
 
-  // Fetches the blocks [first, last] of `url` in one request and keeps them. False on failure.
-  function fetchBlocks(url, path, first, last) {
+  // Fetches the whole of `url` in one request and keeps it: its bytes, or null on failure.
+  function fetchWhole(url, path) {
     const x = new XMLHttpRequest();
     open.call(x, 'GET', url, false);
     x.responseType = 'arraybuffer';
-    const known = files.get(path);
-    const to = known ? Math.min((last + 1) * BLOCK, known.size) - 1 : (last + 1) * BLOCK - 1;
-    set.call(x, 'Range', `bytes=${first * BLOCK}-${to}`);
     send.call(x, null);
-    if (x.status !== 206 && x.status !== 200) return false;
+    if (x.status !== 200 || !x.response || !x.response.byteLength) return null;
     const body = new Uint8Array(x.response);
-    const start = x.status === 200 ? 0 : first * BLOCK;
-    const size = x.status === 200 ? body.length
-      : Number((x.getResponseHeader('Content-Range') || '').split('/')[1]) || known?.size;
-    if (!size) return false;
-    keep(x, path, body, start, size);
-    return true;
+    keep(x, path, body, 0, body.length);
+    return body;
   }
 
   // Keeps the bytes `body`, from offset `start` of a file of `size` bytes, as blocks. A
@@ -225,25 +213,18 @@
           }
           if (r) {
             const a = Number(r[1]);
-            const b = r[2] === '' ? (f ? f.size - 1 : NaN) : (f ? Math.min(Number(r[2]), f.size - 1) : Number(r[2]));
-            if (Number.isFinite(b) && b >= a) {
-              let out = fromStore(path, a, b);
-              if (!out && !writable && applyIndex()) out = fromStore(path, a, b);   // the writer may have it by now
-              if (!out) {
-                let first = Math.floor(a / BLOCK), last = Math.floor(b / BLOCK);
-                const blocksOf = g => Math.ceil(g.size / BLOCK) - 1;
-                if (f && f.size <= WHOLE_BYTES) { first = 0; last = blocksOf(f); }
-                else if (b - a + 1 >= READ_MIN) last = Math.max(last, f ? Math.min(first + READAHEAD / BLOCK - 1, blocksOf(f)) : first + READAHEAD / BLOCK - 1);
-                else if (f && b >= f.size - TAIL) { first = Math.min(first, Math.max(0, Math.floor((f.size - TAIL) / BLOCK))); last = blocksOf(f); }
-                while (first <= last && where.has(`${path}#${first}`)) first++;
-                while (last >= first && where.has(`${path}#${last}`)) last--;
-                if (writable && fetchBlocks(this.__bcU, path, first, last)) out = fromStore(path, a, Math.min(b, files.get(path).size - 1));
-              }
-              if (out) {
-                const g = files.get(path);
-                return answer(this, 206, out.buffer, { 'Content-Length': out.length, 'Accept-Ranges': 'bytes',
-                  'Content-Range': `bytes ${a}-${a + out.length - 1}/${g.size}`, ETag: g.etag, 'Last-Modified': g.lastModified });
-              }
+            const end = g => r[2] === '' ? g.size - 1 : Math.min(Number(r[2]), g.size - 1);
+            let out = f && end(f) >= a ? fromStore(path, a, end(f)) : null;
+            if (!out && f && !writable && applyIndex()) out = fromStore(path, a, end(f));   // the writer may have it by now
+            if (!out) {
+              const whole = fetchWhole(this.__bcU, path);
+              const g = files.get(path);
+              if (whole && g && end(g) >= a) out = whole.slice(a, end(g) + 1);
+            }
+            if (out && out.length) {
+              const g = files.get(path);
+              return answer(this, 206, out.buffer, { 'Content-Length': out.length, 'Accept-Ranges': 'bytes',
+                'Content-Range': `bytes ${a}-${a + out.length - 1}/${g.size}`, ETag: g.etag, 'Last-Modified': g.lastModified });
             }
           }
         }

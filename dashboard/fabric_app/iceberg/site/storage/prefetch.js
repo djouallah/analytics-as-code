@@ -20,11 +20,10 @@
 //                                           (snapshots.js: the table's last record), not
 //                                           fetched. A new snapshot's manifest list names
 //                                           every manifest of the table, old ones included.
-//   prefetchFooters(name, files, url)       the tail of each Parquet file (its footer), six at
-//                                           a time: a cold scan starts by reading every file's
-//                                           footer, one request at a time (27 files of
-//                                           fct_summary, 66 s on power). files: [{ path, size }],
-//                                           size null for a HEAD first. Returns the sizes.
+//   prefetchFiles(name, files, url)         each Parquet file whole, six at a time: the worker
+//                                           fetches a file whole on its first read of it, one
+//                                           file at a time (blockcache.js). files: [{ path,
+//                                           size }]. Returns the sizes.
 // =============================================================================
 
 // OneLake answers HTTP/1.1 only, so a browser keeps six connections to it: more would queue.
@@ -58,24 +57,15 @@ const get = (url, table) => limited(async () => {
   return new Uint8Array(await r.arrayBuffer());
 }, table);
 
-// The worker's block size (blockcache.js): a tail fetched on a block boundary is the very
-// range the worker asks for when a footer is read, so the browser's cache answers it whole.
-const BLOCK = 256 * 1024;
-const FOOTER_BYTES = 1024 * 1024;   // more than any footer here (tens of KB)
-export async function prefetchFooters(name, files, url) {
+// A large table's new files, whole, six at a time: the plain GET the worker sends on its first
+// read of a file (blockcache.js fetches whole files, never seeks), so the browser's cache
+// answers it, instead of the worker's one-at-a-time downloads. Returns each file's size.
+export async function prefetchFiles(name, files, url) {
   if (!order.includes(name)) order.push(name);
   return Promise.all(files.map(f => limited(async () => {
-    let size = f.size;
-    if (!size) {
-      const h = await fetch(url(f.path), { method: 'HEAD' });
-      if (!h.ok) return { path: f.path, size: null };
-      size = Number(h.headers.get('Content-Length')) || null;
-      if (!size) return { path: f.path, size: null };
-    }
-    const from = Math.max(0, Math.floor((size - FOOTER_BYTES) / BLOCK) * BLOCK);
-    const r = await fetch(url(f.path), { headers: { Range: `bytes=${from}-${size - 1}` } });
-    if (r.ok) await r.arrayBuffer();   // the cache keeps it once the body is read
-    return { path: f.path, size };
+    const r = await fetch(url(f.path));
+    if (!r.ok) return { path: f.path, size: f.size ?? null };
+    return { path: f.path, size: (await r.arrayBuffer()).byteLength || null };   // the cache keeps it once the body is read
   }, name).catch(() => ({ path: f.path, size: f.size ?? null }))));
 }
 
