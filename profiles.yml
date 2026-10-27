@@ -11,6 +11,12 @@ iceberg_as_code:
       schema: "{{ env_var('DBT_SCHEMA', 'mart') }}"
       settings:
         TimeZone: UTC
+        # Under the runner's 16 GB with room for the rest of the process, and somewhere to
+        # spill: an in-memory database has no temp directory of its own. Without them the
+        # full-table tests over fct_scada (half a billion rows, GROUP BY) had the runner
+        # killed instead of spilling, every night from 2026-10-21 (DuckDB 2.0).
+        memory_limit: 10GB
+        temp_directory: /tmp/duckdb_spill
       extensions:
         - parquet
         - httpfs
@@ -32,6 +38,12 @@ iceberg_as_code:
       schema: "{{ env_var('DBT_SCHEMA', 'mart') }}"
       settings:
         TimeZone: UTC
+        # Under the runner's 16 GB with room for the rest of the process, and somewhere to
+        # spill: an in-memory database has no temp directory of its own. Without them the
+        # full-table tests over fct_scada (half a billion rows, GROUP BY) had the runner
+        # killed instead of spilling, every night from 2026-10-21 (DuckDB 2.0).
+        memory_limit: 10GB
+        temp_directory: /tmp/duckdb_spill
       extensions:
         - parquet
         - httpfs
@@ -62,6 +74,12 @@ iceberg_as_code:
       schema: "{{ env_var('DBT_SCHEMA', 'mart') }}"
       settings:
         TimeZone: UTC
+        # Under the runner's 16 GB with room for the rest of the process, and somewhere to
+        # spill: an in-memory database has no temp directory of its own. Without them the
+        # full-table tests over fct_scada (half a billion rows, GROUP BY) had the runner
+        # killed instead of spilling, every night from 2026-10-21 (DuckDB 2.0).
+        memory_limit: 10GB
+        temp_directory: /tmp/duckdb_spill
       extensions:
         - parquet
         - httpfs
