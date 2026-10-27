@@ -437,12 +437,12 @@ func removeOrphans(ctx context.Context, tbl *table.Table) (*orphanResult, error)
 	root, kept := tbl.Metadata().Location(), 0
 	res, err := maintenance.DeleteOrphanFiles(ctx, tbl,
 		maintenance.WithCleanupFilesOlderThan(days(orphanDays)),
-		maintenance.WithCleanupDeleteFunc(func(path string) error {
+		maintenance.WithCleanupDeleteFunc(func(ctx context.Context, path string) error {
 			if hidden(path, root) {
 				kept++
 				return nil
 			}
-			return fs.Remove(path)
+			return fs.Remove(ctx, path)
 		}))
 	out := &orphanResult{Deleted: len(res.DeletedFiles) - kept, Kept: kept,
 		Failed: len(res.OrphanFiles) - len(res.DeletedFiles), Bytes: res.TotalSizeBytes}
