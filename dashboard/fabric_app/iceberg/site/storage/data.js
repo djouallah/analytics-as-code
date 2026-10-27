@@ -43,15 +43,8 @@ const SMALL_BYTES = 32 * 1024 * 1024;   // a table up to this much Parquet is co
 const ENGINE = new URL('../duckdb/', import.meta.url).href;
 // The extensions DuckDB installs, in that order (iceberg loads parquet itself).
 const EXTENSIONS = ['httpfs', 'avro', 'iceberg', 'azure_wasm', 'icu'];
-// DuckDB 2.0 sends every ranged read with If-Match (the ETag of its HEAD), even with
-// unsafe_disable_etag_checks, and the browser's cache answers no request that carries it: each
-// table's metadata.json went to OneLake again, ~0.9 s each, after the page had fetched it. The
-// worker drops the header. An Iceberg file is never rewritten in place, so the check guards
-// nothing here. (The engine also URL-encodes it, which OneLake answers with HTTP 412:
-// duckdb/duckdb-wasm#2297.)
-const IF_MATCH_SHIM = `(() => { const set = XMLHttpRequest.prototype.setRequestHeader;
-  XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
-    if (String(k).toLowerCase() !== 'if-match') return set.call(this, k, v); }; })();`;
+// The worker's reads of Parquet files, kept in OPFS by block, and no If-Match (blockcache.js).
+const BLOCKCACHE = new URL('./blockcache.js' + new URL(import.meta.url).search, import.meta.url).href;
 
 // The model's tables: name -> { source: schema.table, columns }. Ossie: a dataset's `source`
 // and its fields' columns. TMSL (model.bim): a table's Direct Lake partition and its columns.
@@ -134,24 +127,32 @@ export function createDataSource({ onStatus = () => {} } = {}) {
   // Each table's size, from its metadata.json, all at once (the page's own requests, in
   // parallel): the current snapshot's total-files-size. And its prefetch, started, not awaited:
   // opening the table waits for it, and a failed prefetch only costs time.
-  function sizeAll(access) {
-    return Promise.all([...tables].map(async ([name, t]) => {
+  async function sizeAll(access) {
+    const metas = await Promise.all([...tables].map(async ([name, t]) => {
       const location = access.metadata[t.source];
-      if (!location) return;
-      let bytes = null, prefetch = null;
+      if (!location) return null;
       try {
         const m = await (await fetch(https(location, access.sas))).json();
         const s = (m.snapshots ?? []).find(s => String(s['snapshot-id']) === String(m['current-snapshot-id']));
-        bytes = s ? Number(s.summary?.['total-files-size'] ?? NaN) : 0;
-        if (Number.isNaN(bytes)) bytes = null;
-        const t0 = performance.now();
-        prefetch = prefetchTable(m, f => https(f, access.sas), { data: bytes != null && bytes <= SMALL_BYTES })
-          .then(n => perf.log('fetch', `prefetch ${name}: ${n} files`, { ms: performance.now() - t0 }),
-                e => perf.log('info', `prefetch ${name}: ${e?.message || e}`));
-      } catch (e) { perf.log('info', `${name}: size unknown (${e?.message || e}), read in place`); }
-      located.set(name, { location, bytes, prefetch });
+        const bytes = s ? Number(s.summary?.['total-files-size'] ?? NaN) : 0;
+        return { name, location, m, bytes: Number.isNaN(bytes) ? null : bytes };
+      } catch (e) {
+        perf.log('info', `${name}: size unknown (${e?.message || e}), read in place`);
+        return { name, location, m: null, bytes: null };
+      }
     }));
+    // Smallest first: the prefetch's queue is first come, first served, and a small table's few
+    // files would otherwise wait behind a large one's manifests (on power's full data the first
+    // query waited 30 s for dim_region's three files).
+    for (const t of metas.filter(Boolean).sort((a, b) => (a.bytes ?? Infinity) - (b.bytes ?? Infinity))) {
+      const t0 = performance.now();
+      const prefetch = t.m && prefetchTable(t.m, f => https(f, access.sas), { data: t.bytes != null && t.bytes <= SMALL_BYTES })
+        .then(n => perf.log('fetch', `prefetch ${t.name}: ${n} files`, { ms: performance.now() - t0 }),
+              e => perf.log('info', `prefetch ${t.name}: ${e?.message || e}`));
+      located.set(t.name, { location: t.location, bytes: t.bytes, prefetch });
+    }
   }
+
 
   async function init() {
     warmExtensions();
@@ -169,7 +170,8 @@ export function createDataSource({ onStatus = () => {} } = {}) {
 
     const workerUrl = URL.createObjectURL(
       // HTTP_TRACE_SHIM times the worker's own requests for the Logs tab.
-      new Blob([IF_MATCH_SHIM, HTTP_TRACE_SHIM, `
+      new Blob([`importScripts("${BLOCKCACHE}");
+`, HTTP_TRACE_SHIM, `
 importScripts("${ENGINE}duckdb-browser-base.worker.js");`], { type: "text/javascript" }));
     const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), new Worker(workerUrl));
     await db.instantiate(`${ENGINE}duckdb-base.wasm`);

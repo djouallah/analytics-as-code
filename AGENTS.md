@@ -609,8 +609,20 @@ else: no import, no file written for it.
 - **2.0 sends every ranged read with `If-Match`**, even with `unsafe_disable_etag_checks`,
   and the browser's cache answers no request that carries it: every table's
   `metadata.json` went back to OneLake (~0.9 s each). The worker drops the header
-  (`IF_MATCH_SHIM`); an Iceberg file is never rewritten in place. The engine also URL-encodes
+  (`blockcache.js`); an Iceberg file is never rewritten in place. The engine also URL-encodes
   it, which OneLake answers with 412 (duckdb/duckdb-wasm#2297).
+- **The worker keeps what DuckDB reads of a Parquet file in OPFS, by block**
+  (`site/storage/blockcache.js`, a classic script loaded into DuckDB's worker before the
+  engine): what `cache_httpfs` does for `httpfs`, which has no WASM build. Each ranged read
+  is cut into 256 KB blocks, kept under the file's path without the SAS (so a new SAS keeps
+  them), and only the blocks a read lacks are fetched, in one request; a HEAD of a known file
+  is answered too. Only what queries read is kept (column chunks of the row groups scanned).
+  `blockcache/blocks.bin` and `index.jsonl` in OPFS; over 2 GB the store starts over; a second
+  tab cannot open it and reads OneLake. On `power`'s full data, a returning visit (new SAS):
+  Parquet reads 0.15 s in all instead of 85 s, charts drawn in 25 s instead of 138 s. The
+  first visit still pays: `MAX(fct_summary[date])` reads the `date` column of all 27 files of
+  the 1.3 GB table one request at a time (66 s). `httpfs`'s `force_download` does not reach
+  duckdb-wasm's file system.
 - **Threads are not possible yet**: every `wasm_threads` extension published (DuckDB's
   bucket, `azure_wasm`'s CI) imports unshared memory, which the threaded engine refuses
   (`LinkError … mismatch in shared state of memory`), and the page would need cross-origin
@@ -633,6 +645,9 @@ else: no import, no file written for it.
     `Last-Modified` and no `Cache-Control`.
   - Fetching data files only when their table opened was slower, because tables open one
     at a time.
+  - Smallest table first: the queue is first come, first served, and on `power` the first
+    query waited 30 s for `dim_region`'s three files behind the large tables' manifests. A
+    manifest also names files later removed (404), which are skipped.
 - **DuckDB's own caches are on** (`enable_http_metadata_cache`, `parquet_metadata_cache`):
   Iceberg files never change once written.
 - **Timings, cold, conformance-oracle's small `nem`, function call excluded:** charts drawn

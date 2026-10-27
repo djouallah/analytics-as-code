@@ -82,7 +82,9 @@ export async function prefetchTable(metadata, url, { data = false } = {}) {
   let n = 1 + manifests.length;
   if (data) {
     const files = [...new Set(manifests.flatMap(m => paths(m, 'parquet')))];
-    await Promise.all(files.map(f => get(url(f), true)));
+    // A manifest also names the files a later snapshot removed (its DELETED entries, which this
+    // reader does not tell apart): those answer 404 and are skipped.
+    await Promise.all(files.map(f => get(url(f), true).catch(() => null)));
     n += files.length;
   }
   return n;
