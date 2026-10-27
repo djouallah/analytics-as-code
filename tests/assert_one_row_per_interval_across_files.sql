@@ -5,8 +5,11 @@
 -- landing tables would double-count. Returns the keys found in more than one file.
 -- Warn-only: what to do about it (dedupe in the model, or accept) is a decision, not a bug fix.
 {{ config(severity='warn') }}
+-- fct_scada over the last 14 days only: whole, it needs more memory and spill disk than a
+-- runner has (see assert_fct_scada_grain); an interval only reaches a second file with a load.
 SELECT 'fct_scada' AS model, DUID AS id, SETTLEMENTDATE, INTERVENTION, COUNT(DISTINCT file) AS files
 FROM {{ ref('fct_scada') }}
+WHERE DATE >= current_date - 14
 GROUP BY ALL
 HAVING COUNT(DISTINCT file) > 1
 UNION ALL
