@@ -595,27 +595,19 @@ else: no import, no file written for it.
   `metadata-location`). It then signs a read-only user-delegation SAS on the lakehouse's
   `Tables/` (`sp=r`, about 55 minutes). It returns those two and nothing else.
 - `site/storage/data.js` gives each table a view `v_<table>`, which the compiler reads as on
-  the other hosts. DuckDB-WASM reads the metadata, manifests and data files from OneLake with
-  the `iceberg` extension and the community extension `azure_wasm`. That one turns
-  `abfss://` into `https://…?<SAS>`, because the official `azure` extension has no WASM
-  build; it is loaded before the first scan, or DuckDB tries to autoload `azure`.
+  the other hosts. The page reads the Iceberg side itself (metadata.json, manifest list,
+  manifests: `planTable`, below), and DuckDB-WASM reads only Parquet, the data and delete
+  files, over `https://…?<SAS>` URLs with `httpfs`. No Iceberg, Avro or Azure extension (until
+  2026-10-28 `iceberg` planned and the community `azure_wasm` turned `abfss://` into https).
 - **The engine is duckdb-wasm `1.33.1-dev65.0` (DuckDB 1.5), from jsDelivr, the GitHub
-  page's pin**, with DuckDB's signed extensions: `httpfs`, `avro`, `iceberg` and `icu` from
-  its repository, `azure_wasm` from the community one. Single-threaded (the `eh` bundle):
-  several engines instead (the pool, below).
+  page's pin**, with three of DuckDB's signed extensions: `parquet`, `httpfs` and `icu` (the
+  session's time zone). Single-threaded (the `eh` bundle): several engines instead (the pool,
+  below).
   Until 2026-10-28 the app ran DuckDB 2.0: duckdb-wasm's CI build of main and `azure_wasm`'s
   own 2.0 port, CI artifacts that expire after 90 days, with the extensions relabelled and so
-  unsigned. A first move to 1.5.6 (2026-10-27) was reverted within the hour, for two things
-  the code took from the engine: `iceberg_metadata()`'s `content` ('EXISTING' for a data file
-  on 1.5, 'DATA' on 2.0; `manifest_content` says it on both), and `iceberg_scan`, which on 1.5
-  plans a table with delete files again on every scan (`fct_curtailment_region`, ~280 delete
-  files then, each one request). Now no query reads `iceberg_scan` (the delete files are
-  applied by the view, below), and the `iceberg` extension only plans. What the app takes
-  from the engine, checked on 1.5.6 and 2.0 against `power`: `iceberg_metadata()`'s
-  `manifest_path`, `file_path`, `manifest_content`, `file_format`, `status`; `read_parquet`'s
-  `filename = '<column>'` and `file_row_number`. Back to 2.0 once duckdb-wasm 2.0 is on npm
-  and `azure_wasm`'s 2.0 build is in the community repository
-  (duckdb/community-extensions#3393): check those first.
+  unsigned. What the app takes from the engine now: `read_parquet` over https URLs, its
+  `filename = '<column>'` and `file_row_number`. Back to 2.0 once duckdb-wasm 2.0 is on npm;
+  no community extension stands in the way any more.
   The extensions sit under their version (`extensions.duckdb.org/v<version>/wasm_eh/...`), so
   the worker keeps them in OPFS (`blockcache.js`) after a browser's first load; on that first
   load the page fetches them all at once (`warmExtensions`, as soon as the engine says its
@@ -673,9 +665,7 @@ else: no import, no file written for it.
   `fct_curtailment_region` and `dim_duid`, the two tables that have delete files. A table
   with a file that is not position deletes (an equality delete, or a deletion vector) fails to
   open (`scan` in its record): no fallback to `iceberg_scan`. DuckDB writes neither. The
-  literals are `https://…?<SAS>` URLs, not `abfss://`: `read_parquet` globs every path,
-  wildcard or not, and `azure_wasm` implements no glob ("Globbing Azure paths is not
-  supported"); `httpfs` takes the URL as it is. So a new SAS writes those views again, and
+  literals are `https://…?<SAS>` URLs, read by `httpfs`. So a new SAS writes those views again, and
   Analyze's EXPLAIN of one shows the SAS (the read-only one the page holds anyway). The
   same location again is the same snapshot: the table opens from its record, no
   `metadata.json` fetched, no prefetch, nothing read from OneLake. A new location is planned

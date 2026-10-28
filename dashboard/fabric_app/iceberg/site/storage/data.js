@@ -4,26 +4,24 @@
 // The Iceberg backend of the Fabric app. Its inputs are the semantic model and a OneLake
 // Iceberg catalog, nothing else: no import, no file written for it. The model names the
 // tables (an Ossie dataset's `source`, or a TMSL table's Direct Lake partition: schema.table);
-// the function says where each one is now and signs a read-only SAS (catalog.js); DuckDB-WASM
-// reads them with the `iceberg` extension and `azure_wasm` (abfss:// paths to https with the
-// SAS, as the official `azure` extension has no WASM build).
+// the function says where each one is now and signs a read-only SAS (catalog.js); the page
+// reads the Iceberg side itself (prefetch.js), and DuckDB-WASM reads only Parquet, over https
+// URLs with the SAS: no Iceberg, Avro or Azure extension.
 // The engine is duckdb-wasm's npm release (DuckDB 1.5), from jsDelivr, the GitHub page's pin,
-// with DuckDB's signed extensions (azure_wasm from the community repository). Nothing a query
-// reads depends on the engine's Iceberg scan: the extension plans a table (iceberg_metadata),
-// and the views are plain Parquet, delete files applied by the view itself.
+// with DuckDB's signed extensions: parquet, httpfs, icu. The views are plain Parquet, delete
+// files applied by the view itself.
 //
 // A table is opened when a query first names its view, v_<table>, so the first paint pays only
 // for the tables it reads. A table is planned once: the snapshot's live data files, from its
 // metadata.json, manifest list and manifests, read by the page at load, many at once and off
-// every engine (prefetch.js's planTable; DuckDB's PLAN only for a table it cannot). What that
+// every engine (prefetch.js's planTable; a table it cannot plan fails). What that
 // gives is kept in this browser as the client's own catalog (snapshots.js, keyed by the
 // metadata location the function gave: a commit always writes a new one), and a table whose
 // location is the same is opened from its record, nothing read. A table whose files are small
 // (SMALL_BYTES, from its metadata.json) is copied into DuckDB's memory and its view reads
 // that: later queries do not go back to OneLake. A larger one is read in place, its view
-// read_parquet over the files, as https URLs with the SAS (azure_wasm cannot glob, which
-// read_parquet does to every path), written again on a new SAS. A table's position deletes are
-// applied by its view (the engine's iceberg_scan is never what a query reads). After the first
+// read_parquet over the files, as https URLs with the SAS, written again on a new SAS. A
+// table's position deletes are applied by its view. After the first
 // paint the rest are opened in the background, small ones first, behind whatever the page
 // asks.
 // For a new snapshot the page fetches ahead of DuckDB, many at once (prefetch.js): the
@@ -57,9 +55,9 @@ import { perf, HTTP_TRACE_SHIM } from "../frontend/perflog.js";
 
 const MODEL = new URL('../semantic/ossie.json' + new URL(import.meta.url).search, import.meta.url);
 const SMALL_BYTES = 32 * 1024 * 1024;   // a table up to this much Parquet is copied into memory
-// The extensions DuckDB installs, in that order (iceberg loads parquet itself), and where from:
-// azure_wasm is a community extension.
-const EXTENSIONS = { httpfs: 'core', avro: 'core', iceberg: 'core', azure_wasm: 'community', icu: 'core' };
+// The extensions DuckDB installs, all from DuckDB's repository: Parquet, https reads, and icu
+// for the session's time zone.
+const EXTENSIONS = ['parquet', 'httpfs', 'icu'];
 // The worker's reads of Parquet files, kept in OPFS by block, and no If-Match (blockcache.js).
 const BLOCKCACHE = new URL('./blockcache.js' + new URL(import.meta.url).search, import.meta.url).href;
 const ENGINES = (() => {
@@ -92,13 +90,12 @@ const https = (abfss, sas) => `${abfss.replace(/^abfss:\/\/([^@/]+)@([^/]+)\//, 
 // browser's cache, where DuckDB's own request finds them. After that the worker answers DuckDB
 // from OPFS (blockcache.js), and the page fetches nothing (the version it loaded is remembered).
 const EXT_KEY = 'duckdb_extensions';
-const extensionUrl = (version, e) =>
-  `https://${EXTENSIONS[e] === 'community' ? 'community-' : ''}extensions.duckdb.org/${version}/wasm_eh/${e}.duckdb_extension.wasm`;
+const extensionUrl = (version, e) => `https://extensions.duckdb.org/${version}/wasm_eh/${e}.duckdb_extension.wasm`;
 function warmExtensions(version) {
   let known = null; try { known = localStorage.getItem(EXT_KEY); } catch (e) {}
   if (known === version) return;
   const t0 = performance.now();
-  Promise.all([...Object.keys(EXTENSIONS), 'parquet'].map(e => fetch(extensionUrl(version, e)).then(r => r.arrayBuffer())))
+  Promise.all(EXTENSIONS.map(e => fetch(extensionUrl(version, e)).then(r => r.arrayBuffer())))
     .then(f => perf.log('fetch', `prefetch extensions: ${f.length} files`, { ms: performance.now() - t0 }))
     .catch(e => perf.log('info', `prefetch extensions: ${e?.message || e}`));
 }
@@ -128,16 +125,13 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
   const q = (e, sql) => run(e, () => e.conn.query(sql));
   const tag = e => engines.length > 1 ? ` [engine ${e.i + 1}]` : '';
 
-  // The secret azure_wasm reads the files with: the SAS from the function. The page's own
-  // fetches (the prefetch) use the same one, the newest.
-  // A view read in place over read_parquet carries the SAS in its URLs (fromOf), so a new SAS
-  // writes those views again, on every engine.
+  // The SAS from the function, in every URL the page and DuckDB read OneLake with: a view read
+  // in place over read_parquet carries it in its URLs, so a new SAS writes those views again,
+  // on every engine.
   let sas = '';
   async function useSas(s) {
     sas = s;
     await Promise.all(engines.map(async e => {
-      await q(e, `CREATE OR REPLACE SECRET onelake (TYPE azure, PROVIDER config, ACCOUNT_NAME 'onelake',
-        CONNECTION_STRING ${lit(`AccountName=onelake;SharedAccessSignature=${sas}`)})`);
       for (const [name, t] of e.inPlace) await q(e, viewOf(name, t, t.record));
     }));
   }
@@ -258,9 +252,7 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
       e.inPlace.set(name, { location: t.location, record });
     }
   }
-  // What a view reads: read_parquet over the files as https URLs with the SAS. Not abfss://:
-  // read_parquet globs every path it is given, wildcard or not, and azure_wasm implements no
-  // glob ("Globbing Azure paths is not supported"); httpfs takes an https URL as it is. They
+  // What a view reads: read_parquet over the files as https URLs with the SAS (httpfs). They
   // are the URLs the prefetch fetched, so DuckDB's requests find them in the browser's cache.
   // With delete files, the rows whose file and position (file_row_number, 0-based as Iceberg's
   // pos) a delete file names are left out: the file is its URL without the SAS, the delete
@@ -361,12 +353,9 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
       const version = await db.getVersion();
       if (!warmed) { warmed = true; warmExtensions(version); }
       const e = { i, db, conn: await db.connect(), serial: serialQueue(), waiting: 0, opened: new Map(), inPlace: new Map() };
-      // Installing needs a home directory. azure_wasm is loaded before the first scan: it
-      // claims abfss://, or DuckDB tries to autoload the official azure extension, which has no
-      // WASM build. icu is the time zones.
-      await perf.time('attach', `LOAD ${Object.keys(EXTENSIONS).join(', ')} (DuckDB ${version})${ENGINES > 1 ? ` [engine ${i + 1}]` : ''}`, () =>
-        q(e, `SET home_directory = '/tmp';
-           ${Object.entries(EXTENSIONS).map(([x, repo]) => `INSTALL ${x}${repo === 'core' ? '' : ` FROM ${repo}`}; LOAD ${x};`).join(' ')}`));
+      // Installing needs a home directory.
+      await perf.time('attach', `LOAD ${EXTENSIONS.join(', ')} (DuckDB ${version})${ENGINES > 1 ? ` [engine ${i + 1}]` : ''}`, () =>
+        q(e, `SET home_directory = '/tmp'; ${EXTENSIONS.map(x => `INSTALL ${x}; LOAD ${x};`).join(' ')}`));
       try { localStorage.setItem(EXT_KEY, version); } catch (x) {}
       // Iceberg's files never change once written: what DuckDB learnt of one (its size, its
       // Parquet footer) holds for the session. A setting this build lacks is left as it is.
