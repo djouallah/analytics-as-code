@@ -3153,7 +3153,9 @@
         const sql = data.toSQL(data.toDax(q));
         await ensureExploreData(sql, q.where);
         setStatus("Explaining...", "loading");
-        const rows = await runQuery(`EXPLAIN ${sql}`, s => data.query(s), { keep: true });
+        // SQL over the views runs through analyze(), as the SQL page's plan does: query()
+        // takes the page's queries only (objects, or SELECTs over the model).
+        const rows = await runQuery(`EXPLAIN ${sql}`, data.analyze(sql).query, { keep: true });
         explorer.showPlan(rows.map(r => r.explain_value ?? Object.values(r).join('  ')).join('\n'));
         setConnected();
       } catch (e) {
