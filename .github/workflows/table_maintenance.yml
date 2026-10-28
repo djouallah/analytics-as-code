@@ -57,7 +57,7 @@ jobs:
           echo "::add-mask::$TOKEN"
           echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
       - name: dbt test
-        run: dbt test --target prod --profiles-dir .
+        run: dbt test --target prod --project-dir dbt --profiles-dir dbt
 
   # Daily Iceberg maintenance, one table at a time, on apache/iceberg-go (scripts/maintain):
   # compaction, dangling delete files, snapshot expiry, orphan files. It lived in

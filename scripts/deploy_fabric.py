@@ -50,8 +50,8 @@ REPO = Path(__file__).resolve().parent.parent
 ITEMS = REPO / "fabric_items"
 LAKEHOUSE, PIPELINE = "nem", "run_pipeline"
 PROJECT = "Files/project"
-# What the `run` notebook needs of the repo: the dbt project and the pins it installs.
-UPLOADED = ["dbt_project.yml", "profiles.yml", "models", "macros", "tests", "requirements.txt"]
+# What the `run` notebook needs of the repo: the dbt project (dbt/) and the pins it installs.
+UPLOADED = ["dbt", "requirements.txt"]
 MODEL = "semantic_model/ossie.yaml"
 
 WS = os.environ["WS_ID"]

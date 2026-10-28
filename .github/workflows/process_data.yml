@@ -110,7 +110,7 @@ jobs:
       - name: Process data
         # The download, the landing facts and the two dimensions the mart tables are built
         # from. The mart tables are the next step.
-        run: dbt ${{ inputs.debug && '--debug' || '' }} run --target prod --profiles-dir . --exclude tag:powerbi
+        run: dbt ${{ inputs.debug && '--debug' || '' }} run --target prod --project-dir dbt --profiles-dir dbt --exclude tag:powerbi
       - name: Build the Power BI tables
         # The mart tables (tag powerbi), built from the facts above: what the semantic model
         # reads, and so Power BI and the dashboard. A failure fails the job: Import Data only
@@ -119,5 +119,5 @@ jobs:
         timeout-minutes: ${{ inputs.backfill_rooftop && 85 || 45 }}
         # A block scalar: the --vars value holds ": ", which a plain YAML scalar cannot.
         run: >-
-          dbt ${{ inputs.debug && '--debug' || '' }} run --target prod --profiles-dir . --select tag:powerbi
+          dbt ${{ inputs.debug && '--debug' || '' }} run --target prod --project-dir dbt --profiles-dir dbt --select tag:powerbi
           ${{ inputs.backfill_rooftop && '--vars "{backfill_rooftop: true}"' || '' }}

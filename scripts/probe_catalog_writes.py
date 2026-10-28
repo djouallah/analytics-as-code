@@ -3,7 +3,7 @@
 Each case gets a fresh 3-row table in namespace `_write_probe`, runs one statement, reads the
 table back through a fresh ATTACH, and drops it. It prints the snapshots the statement added
 and the rows it left; exit 1 if any case was refused or left the wrong rows.
-Env: WAREHOUSE_PATH, ONELAKE_ENDPOINT, ONELAKE_TOKEN (as profiles.yml).
+Env: WAREHOUSE_PATH, ONELAKE_ENDPOINT, ONELAKE_TOKEN (as dbt/profiles.yml).
 
     python scripts/probe_catalog_writes.py
 """

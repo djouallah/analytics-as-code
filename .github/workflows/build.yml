@@ -127,15 +127,15 @@ jobs:
           # GitHub API: anonymous calls from shared runners get rate-limited.
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          dbt build --target ci --profiles-dir .
-          dbt docs generate --target ci --profiles-dir . --empty-catalog
+          dbt build --target ci --project-dir dbt --profiles-dir dbt
+          dbt docs generate --target ci --project-dir dbt --profiles-dir dbt --empty-catalog
           mkdir -p front_end/page/dag
-          cp target/index.html front_end/page/dag/
+          cp dbt/target/index.html front_end/page/dag/
           # A docs file is copied only when it says something new: dbt stamps each run into
           # the metadata and every node's created_at, so a plain copy changed both files on
           # every push (192 "Update dbt docs" commits in the week to 2026-10-08).
           for f in manifest.json catalog.json; do
-            if python - "target/$f" "front_end/page/dag/$f" <<'PY'
+            if python - "dbt/target/$f" "front_end/page/dag/$f" <<'PY'
           import json, os, sys
           STAMPS = {"created_at", "generated_at", "invocation_id", "invocation_started_at", "user_id"}
           def strip(x):
@@ -146,7 +146,7 @@ jobs:
           same = os.path.exists(old) and strip(json.load(open(new))) == strip(json.load(open(old)))
           sys.exit(1 if same else 0)
           PY
-            then cp "target/$f" front_end/page/dag/; fi
+            then cp "dbt/target/$f" front_end/page/dag/; fi
           done
       - name: Commit dbt docs
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'

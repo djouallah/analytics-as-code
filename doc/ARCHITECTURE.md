@@ -168,11 +168,11 @@ backend to run, no query service, no copy of the data.
 ## Project Structure
 
 ```
-├── models/
+├── dbt/models/
 │   ├── staging/          # Python ingestion model
 │   ├── dimensions/       # Dimension tables (calendar, units, regions, links, time, months)
 │   └── marts/            # Incremental fact tables (landing) and the tables the model reads (mart)
-├── macros/               # Iceberg adapter overrides, the pending-files and date-bounds helpers
+├── dbt/macros/               # Iceberg adapter overrides, the pending-files and date-bounds helpers
 ├── scripts/              # The cache (Iceberg → DuckDB files), table maintenance, deploys, parity/
 ├── semantic_model/       # The one semantic model (ossie.yaml): what every client reads; the deploy writes the Fabric item from it
 ├── front_end/            # Its clients
@@ -187,10 +187,10 @@ backend to run, no query service, no copy of the data.
 │   │   └── vertipaq/     # the deployed model as the engine: its host code and the Rayfin project (deploy_fabric.yml)
 ├── fabric_items/         # The lakehouse, notebook and pipeline deploy_fabric.yml installs into a workspace
 ├── doc/                  # This file and the architecture diagram
-├── tests/                # dbt data tests
+├── dbt/tests/                # dbt data tests
 ├── .github/workflows/    # CI/CD pipelines
-├── dbt_project.yml
-└── profiles.yml          # ci (in-memory) / dev / prod (Iceberg)
+├── dbt/dbt_project.yml
+└── dbt/profiles.yml          # ci (in-memory) / dev / prod (Iceberg)
 ```
 
 ## Limits
@@ -324,7 +324,7 @@ pip install -r requirements.txt
 
 # Validate the models on plain DuckDB (no catalog needed). It runs the download
 # for real: two files per feed, archived under /tmp.
-dbt build --target ci --profiles-dir .
+dbt build --target ci --project-dir dbt --profiles-dir dbt
 ```
 
 The `dev` target is not a sandbox: it attaches the same catalog as `prod` and writes the
@@ -337,7 +337,7 @@ export ONELAKE_ENDPOINT=https://onelake.table.fabric.microsoft.com/iceberg
 export WAREHOUSE_PATH=<workspace-guid>/<lakehouse-guid>
 export FILES_PATH=abfss://<workspace-guid>@onelake.dfs.fabric.microsoft.com/<lakehouse-guid>/Files
 export ONELAKE_TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
-dbt build --target dev --profiles-dir .
+dbt build --target dev --project-dir dbt --profiles-dir dbt
 ```
 
 ### The Fabric App

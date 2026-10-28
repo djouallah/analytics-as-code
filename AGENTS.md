@@ -4,12 +4,15 @@
 - **Stack:** dbt-duckdb, **OneLake Iceberg REST catalog** (Microsoft Fabric workspace `power`,
   lakehouse `nem` — its own lakehouse, separate from the sibling repo's `data`, because both
   repos write identically-named tables in `landing`/`mart`)
-- **Run:** `dbt build --target ci --profiles-dir .` (test, plain DuckDB, no Iceberg; it
+- **Run:** `dbt build --target ci --project-dir dbt --profiles-dir dbt` (test, plain DuckDB, no Iceberg; it
   downloads two files per feed from nemweb and GitHub, so it needs both to be up)
-- **Run:** `dbt build --target dev --profiles-dir .` (writes to Iceberg; needs the OneLake env
+- **Run:** `dbt build --target dev --project-dir dbt --profiles-dir dbt` (writes to Iceberg; needs the OneLake env
   vars below). **`dev` is `prod`**: same catalog, same `landing`/`mart` tables, there is no
-  separate dev schema. It refuses to run without `FILES_PATH` (`dbt_project.yml`
+  separate dev schema. It refuses to run without `FILES_PATH` (`dbt/dbt_project.yml`
   `on-run-start`): the archive would go to the local `/tmp` and its paths into the shared log.
+- **Layout:** the dbt project is `dbt/` (`dbt_project.yml`, `profiles.yml`, `models/`, `macros/`,
+  `tests/`; at the top of the repo until 2026-10-28), the front end `front_end/`, the semantic
+  model `semantic_model/`. `requirements.txt` stays at the top: the scripts install it too.
 - **Schemas:** `mart` (the dimensions and the tables the semantic model reads) / `landing`
   (the raw facts, staging)
 - **Keep the source as raw as possible; transform in the next layer.** A source table holds
@@ -26,7 +29,7 @@
 [`dbt-fabric`](https://github.com/djouallah/dbt-fabric) runs the same AEMO models on other
 engines: `models/aemo/dwh/` (Fabric Warehouse) and `models/aemo/spark/`. It has no
 DuckDB/Iceberg variant, so ports are by idea, not by file (`macros/new_source_files.sql` there
-is the counterpart of `macros/pending_archive_files.sql` here). The one model that is the
+is the counterpart of `dbt/macros/pending_archive_files.sql` here). The one model that is the
 same file is `fct_summary`, taken from the iceberg tree of
 [`fabric-medallion-dbt-community`](https://github.com/djouallah/fabric-medallion-dbt-community)
 (dbt-duckdb on this same kind of catalog); the dashboard reads it with the other `mart`
@@ -46,12 +49,12 @@ Four deliberate local differences, all of which must survive a port:
 - No `relationships → dim_duid` tests on `fct_scada`/`fct_scada_today` — `dim_duid` holds the
   registered DUIDs plus the unlisted ones that generated, while the facts go back to 2018 and
   also carry units only ever dispatched at 0 MW, so the test could never be 0.
-  `tests/assert_recent_scada_duids_registered.sql` is the meaningful version and is this
+  `dbt/tests/assert_recent_scada_duids_registered.sql` is the meaningful version and is this
   repo's own.
-- `tests/assert_all_*files_processed_*.sql` use `NOT EXISTS` and are untagged; the sibling's
+- `dbt/tests/assert_all_*files_processed_*.sql` use `NOT EXISTS` and are untagged; the sibling's
   use `NOT IN` (a single NULL `file` makes them permanently green) and are tagged `heavy`.
-- `profiles.yml` keeps a `ci` target (plain DuckDB, no Iceberg; `build.yml` gives it a file,
-  `ci.duckdb`), and `dbt_project.yml`'s `on-run-start` hooks are guarded with
+- `dbt/profiles.yml` keeps a `ci` target (plain DuckDB, no Iceberg; `build.yml` gives it a file,
+  `ci.duckdb`), and `dbt/dbt_project.yml`'s `on-run-start` hooks are guarded with
   `target.name != 'ci'` — the sibling's are unconditional and would break that target.
 
 ## Architecture
@@ -89,13 +92,13 @@ Four deliberate local differences, all of which must survive a port:
    `dim_duid.CO2eFactor` comes from them for every unit, and `dim_interconnector` from the
    last.
 3. Work is discovered from the **log table**, not a filesystem glob: each fact model's pre-hook
-   (`macros/pending_archive_files.sql`) builds its path list from
+   (`dbt/macros/pending_archive_files.sql`) builds its path list from
    `SELECT DISTINCT stg_csv_archive_log.archive_path` filtered by `NOT EXISTS` against
    **`landing.processed_files`** (not `NOT IN`: one NULL would stop every load), newest first
    (`ORDER BY archive_path DESC LIMIT process_limit`; that is path order, so newest first
    within a source folder, and for a model that reads several folders one folder after the
    other). `processed_files` (`model, csv_filename, processed_at`) is appended by each
-   fact's post-hook (`macros/record_processed_files.sql`, outside the model's transaction)
+   fact's post-hook (`dbt/macros/record_processed_files.sql`, outside the model's transaction)
    with the files its batch merged: a file counts as processed once its batch committed,
    whether or not it yielded a row. Anti-joining against the fact's own `file` column
    instead would be a full scan of the fact over OneLake, twice per model per run. A
@@ -108,7 +111,7 @@ Four deliberate local differences, all of which must survive a port:
    without it a backlog is read 2-N times per batch and turns into duplicate keys.
    **The mart models decide their dates the same way, without scanning:**
    `MIN`/`MAX` of a date column come from the Iceberg manifests
-   (`macros/date_bounds.sql`, `iceberg_column_stats()`), and the dates a run recomputes are
+   (`dbt/macros/date_bounds.sql`, `iceberg_column_stats()`), and the dates a run recomputes are
    written into the SQL as literals, so every scan of a big table carries a constant `DATE`
    filter that duckdb-iceberg prunes data files on. The pinned 2.0 build also prunes on a
    subquery or a join (a runtime min/max filter: `fct_scada`, 3 of 160 files, run
@@ -203,7 +206,7 @@ The ids live in repository **variables** (public identifiers, not secrets):
   is tested (`deploy_model.yml` and `deploy_fabric.yml` by default, dax-sql's Oracle). The
   data pipeline (`process_data.yml`, `table_maintenance.yml`, `import_data.yml`) is the only
   thing on `power` (`WS_ID`/`LH_ID`, the owner's tenant).
-Env contract consumed by profiles.yml, the models and the scripts: `ONELAKE_ENDPOINT`,
+Env contract consumed by dbt/profiles.yml, the models and the scripts: `ONELAKE_ENDPOINT`,
 `ONELAKE_TOKEN`, `WAREHOUSE_PATH`, `FILES_PATH`, `download_limit`, `process_limit`,
 `ALL_PERIODS` (the two import workflows), plus
 `AZURE_TRANSPORT_OPTION_TYPE=curl` + `CURL_CA_INFO` on runners (the azure extension's default
@@ -1000,12 +1003,12 @@ in `landing` are what these tables are built from.
 | fct_rooftop | mart | incremental insert-only merge on (REGIONID, date, time) — the source `fct_summary`'s rooftop units are built from (not a table of the semantic model): the `MEASUREMENT` estimate per region and half hour as published (zeros kept, blanks out), with the half hour's average price from `fct_region`; written once its six prices exist |
 | fct_interconnector | mart | incremental insert-only merge on (interconnector, date, time) — for Power BI: `MWFLOW` and the two limits, the pricing run, one row per interval |
 | fct_curtailment_region | mart | incremental merge on (REGIONID, date, fuel), the one mart table whose rows are revised — for Power BI and the curtailment chart: curtailed and available MWh per region, day and fuel (Wind, Solar), `source` `farms` (`fct_curtailment` added up by the unit's region and fuel) or `aemo` (`fct_region`'s regional semi-scheduled figures, the days after the farms' newest). Each run one MERGE, one commit: updates a row whose figures or source changed (an `aemo` day filling, or becoming `farms`), inserts the new ones, deletes the `aemo` rows the run no longer gives |
-| fct_curtailment | mart | incremental insert-only merge on (DUID, date) — for Power BI: curtailed and available MWh per semi-scheduled unit and day. A day is written once `fct_scada` holds its 288 intervals: the days after the newest one here, and in a refill `process_limit` days below the oldest, newest first (`macros/whole_days.sql`) |
+| fct_curtailment | mart | incremental insert-only merge on (DUID, date) — for Power BI: curtailed and available MWh per semi-scheduled unit and day. A day is written once `fct_scada` holds its 288 intervals: the days after the newest one here, and in a refill `process_limit` days below the oldest, newest first (`dbt/macros/whole_days.sql`) |
 | dim_region | mart | incremental insert-only merge on Region — for Power BI: the regions of `dim_duid`, the one filter that reaches the units and the regional data |
 | dim_interconnector | mart | incremental insert-only merge on interconnector — the links between regions of `dim_region` (from MMSDM `INTERCONNECTOR`): `from_region`/`to_region` (a positive `mw` flows from the first to the second) and AEMO's `description`. The Flows page names a link by its id on the map and by the description on its board; only the bend of each arc is typed there (`LINK_CURVES`) |
 | dim_time | mart | incremental insert-only merge on time — the 288 5-minute times of a day (`time` HHMM, `minute`, `hour`): the time axis of the 5-minute facts, and what the measures look at to choose a table |
 | fct_region_daily | mart | incremental insert-only merge on (REGIONID, date) — the plain average of a day's 288 intervals of `fct_region` (price, demand, net interchange); a day is written once it has all 288 |
-| fct_summary_daily | mart | incremental insert-only merge on (DUID, date) — `fct_summary` per unit and day, written once `fct_scada` holds the day whole (`macros/whole_days.sql`: the days after the newest one here; in a refill `process_limit` days below the oldest, newest first, never below `fct_summary`'s oldest): `output_mwh`, `charging_mwh`, `revenue` (the sums the measures switch to) and `mwh` net with the region's daily `price` (no measure reads those two; Explore's SQL box lists them). Inner join to `fct_region_daily` |
+| fct_summary_daily | mart | incremental insert-only merge on (DUID, date) — `fct_summary` per unit and day, written once `fct_scada` holds the day whole (`dbt/macros/whole_days.sql`: the days after the newest one here; in a refill `process_limit` days below the oldest, newest first, never below `fct_summary`'s oldest): `output_mwh`, `charging_mwh`, `revenue` (the sums the measures switch to) and `mwh` net with the region's daily `price` (no measure reads those two; Explore's SQL box lists them). Inner join to `fct_region_daily` |
 | dim_month | mart | incremental insert-only merge on month — the whole months of `fct_summary_daily` with their number of days |
 | fct_summary_hourly | mart | incremental insert-only merge on (DUID, month, hour) — output energy per unit, whole month and hour of day (`time // 100`), 12 months per run |
 | fct_region_hourly | mart | incremental insert-only merge on (REGIONID, month, hour) — average price per region, whole month and hour of day, with the number of intervals averaged |
@@ -1043,7 +1046,7 @@ never been probed either.
 - **SETTLEMENTDATE is AEST wall clock stored as TIMESTAMPTZ labelled UTC.** The models cast
   the CSV string to TIMESTAMPTZ in a session whose zone is UTC, so the instant in the column
   is 10h early; the `DATE`/`YEAR` columns next to it are cast from the string and are right.
-  `profiles.yml` sets `TimeZone: UTC` on every target, so a run from any machine writes the
+  `dbt/profiles.yml` sets `TimeZone: UTC` on every target, so a run from any machine writes the
   same values. Every reader of the Iceberg tables must run with `TimeZone = 'UTC'` too (as
   `scripts/cache_catalog.py` does) — a Brisbane session shifts every date and time by +10h.
   The browser is not such a reader: the exported files hold `date` and `time`, and `data.js`
@@ -1070,11 +1073,11 @@ never been probed either.
   range (`has_whole_days`), `fct_region_daily` with no whole day missing in its week,
   `dim_month` and the two hourly tables with no month missing (`pending_months`, from the
   manifests)) renders `{{ nothing_to_do() }}`, and the incremental
-  materialization (`macros/nothing_to_do.sql`) returns before any statement: no pre-hook,
+  materialization (`dbt/macros/nothing_to_do.sql`) returns before any statement: no pre-hook,
   BEGIN, temp table, MERGE, post-hook or COMMIT. The materialization is dbt-duckdb 1.11.0's,
   copied with one block added (a wrapper cannot run the Python model: dbt checks the macro
   stack), so it is re-copied when the dbt-duckdb pin moves.
-- **Every file a model reads is a dbt source** (`models/sources.yml`, dbt-duckdb
+- **Every file a model reads is a dbt source** (`dbt/models/sources.yml`, dbt-duckdb
   `external_location`), so the lineage graph shows it. `aemo.*` compiles to the fact model's
   `getvariable('…_paths')`, `duid_reference.*` to the file's path under `Files/csv/duid/`.
   They are not tables — the variable only exists inside its model, so no tests or freshness
@@ -1094,7 +1097,7 @@ image, and the packages those pins pull in.
 - **`process_data.yml`, `build.yml`, `table_maintenance.yml`'s `dbt_test` and `import_data.yml`'s read venv
   take `duckdb>=2.0.0`** (dbt via `requirements.txt`, which pins `dbt-core`/`dbt-duckdb`
   exactly — the insert-only merges lean on adapter internals, and
-  `macros/nothing_to_do.sql` is a copy of dbt-duckdb's incremental materialization). 2.0
+  `dbt/macros/nothing_to_do.sql` is a copy of dbt-duckdb's incremental materialization). 2.0
   is the floor (2026-10-21; until then the pin was the pre-release `2.0.0.dev2610161340`):
   the row-replacing writes need it. Every job installs the same newest release, so a new
   duckdb reaches the catalog on the next run, unannounced: a failure right after a duckdb

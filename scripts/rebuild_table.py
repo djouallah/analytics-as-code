@@ -53,7 +53,7 @@ AZURE_TRANSPORT = os.environ.get("AZURE_TRANSPORT_OPTION_TYPE", "default")
 
 
 def connect():
-    """DuckDB with the catalog attached as `catalog`, as profiles.yml attaches it."""
+    """DuckDB with the catalog attached as `catalog`, as dbt/profiles.yml attaches it."""
     con = duckdb.connect(":memory:")
     con.install_extension("iceberg")
     con.load_extension("iceberg")
@@ -181,7 +181,7 @@ def main():
         return 1
 
     # A landing fact's pending files are the archive log minus landing.processed_files
-    # (macros/pending_archive_files.sql). A reset row makes every file processed before it
+    # (dbt/macros/pending_archive_files.sql). A reset row makes every file processed before it
     # pending again, so the refill reads the whole archive, process_limit files per run.
     # Appended, never deleted; a missing processed_files (being rebuilt itself) needs none.
     if schema == "landing" and tbl != "processed_files" and tbl != "stg_csv_archive_log":
