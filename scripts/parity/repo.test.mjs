@@ -252,6 +252,27 @@ test('Explore: shelves to a query, a query to a pivot', { skip }, async () => {
 // semantic_model/ossie.yaml is read whole: written back from the TMSL it stands for, it is
 // itself, so no property of it is one dax-sql's reader passes over (Power BI's model.bim is
 // written from that TMSL, scripts/ossie_to_bim.mjs).
+// Show plan's profile (frontend/profile.js): a page query profiled by DuckDB, read back as the
+// phases and the operators in the order their pipelines run.
+test('Profile: a page query profiled by DuckDB, read back', { skip }, async () => {
+  const { profileSql, parseProfile } = await import(pathToFileURL(join(staged, 'frontend/profile.js')).href);
+  const sql = page.toSQL(page.toDax({ select: { fuel: 'dim_duid.FuelSourceDescriptor', mwh: 'Generation MWh' },
+    where: [['dim_calendar.date', '>=', '2026-10-01']], orderBy: [['mwh', 'desc']] }));
+  let r;
+  for (const s of profileSql(sql).split(';\n')) r = await con.runAndReadAll(s);
+  const prof = parseProfile(r.getRowObjectsJson()[0].explain_value);
+  assert.ok(prof.operators.length > 2, 'operators');
+  assert.ok(prof.phases.some(f => f.name === 'Optimize'), 'the phases are measured');
+  assert.ok(prof.total >= prof.planning && prof.total >= prof.execution, 'the total holds its parts');
+  assert.ok(prof.operators.every(o => o.ms >= 0 && Number.isFinite(o.rows)));
+  assert.ok(prof.operators.some(o => o.kind === 'scan' && /v_|fct_|dim_/.test(o.detail)), 'a scan names what it reads');
+  assert.ok(prof.rows > 0, `rows returned: ${JSON.stringify(prof.operators.map(o => [o.name, o.depth, o.rows]))}`);
+  // An operator's input comes before it: the deepest operators first, the top one last; a
+  // CTE is materialized before the query that reads it.
+  assert.ok(!/CTE_SCAN/.test(prof.operators[0].name), `a CTE is read after it is built: ${prof.operators[0].name} first`);
+  assert.equal(prof.operators.at(-1).depth, Math.min(...prof.operators.map(o => o.depth)));
+});
+
 test('ossie.yaml reads back as itself', { skip }, () => {
   assert.deepEqual(tmslToOssie(ossieToTmsl(doc), doc.name), doc);
 });

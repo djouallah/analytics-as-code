@@ -349,9 +349,20 @@ page's cache (`runQuery`), so the pivot's SQL unedited is the pivot's query and 
 back at once; the table shows the first 500 rows, the count is the result's. Show plan draws
 the plan in place of the results (it then reads Show results), Reset fills the box again.
 Download CSV writes the box's rows while it is open, the pivot's (all of them) otherwise. There is no SQL sub-tab and no example query: the box is only ever filled from the
-pivot. The plan is DuckDB's own tree, `EXPLAIN (FORMAT html)`: a page of its own (1.5's links
-treeflex's CSS from unpkg and collapses nodes with a script), shown in an
-`<iframe sandbox="allow-scripts">`.
+pivot. **Show plan has two tabs.** Profile, the default (`frontend/profile.js`, generic: it
+reads DuckDB's profile and knows no model): `EXPLAIN (ANALYZE, FORMAT json)` with
+`custom_profiling_settings` asking for the phases too (`PLANNER`, `ALL_OPTIMIZERS`,
+`PHYSICAL_PLANNER`), which runs the query once more, outside the page's cache. It shows the
+totals (time, planning, execution, rows returned and scanned, peak memory), a timeline (the
+phases in order, then each operator's own time laid end to end in the order its pipelines run:
+a join's build side before its probe side, a CTE's query before the query that reads it;
+on one thread the operators add up to the execution, and operators of one pipeline run
+interleaved, so a bar is a share, not a start and an end; those under 0.5% folded), and the
+eight most expensive operators with DuckDB's estimate against the rows that came out (off by
+ten times or more is flagged). Tree is DuckDB's own plan page, `EXPLAIN (FORMAT html)` (1.5's
+links treeflex's CSS from unpkg and collapses nodes with a script), in an
+`<iframe sandbox="allow-scripts">`. `repo.test.mjs` profiles a page query and checks the
+reading (2026-10-28).
 **The box's SQL is SQL, and only SQL**, on both pages: DuckDB's, over the views
 (`v_<table>`, the stored columns), in which **a SELECT over the semantic model** is a
 relation. That SELECT (dax-sql's SQL: `SELECT <columns>, AGG("<measure>"),

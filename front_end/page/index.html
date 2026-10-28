@@ -330,6 +330,41 @@
     .ex-chart { flex: 1 1 0; min-height: 340px; }
     /* Show plan, in the SQL box: DuckDB's plan tree (a page of its own, in a frame), in place of the results. */
     .explore-plan[hidden], .data-table-wrap[hidden] { display: none; }
+    /* Show plan: the query's profile (profile.js) or DuckDB's plan tree, in tabs. */
+    .pf-view { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; gap: 0.6rem; }
+    .pf-tabs { display: flex; gap: 0.15rem; padding: 0.2rem; background: var(--card); border: 1px solid var(--hairline); border-radius: 999px; align-self: flex-start; }
+    .pf-tab { padding: 0.28rem 0.85rem; font-size: 0.78rem; font-weight: 600; color: var(--muted); background: none; border: none; border-radius: 999px; cursor: pointer; }
+    .pf-tab:hover { color: var(--text); }
+    .pf-tab.active { color: var(--on-accent); background: var(--accent); }
+    .pf-body { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+    .pf-wait { display: flex; align-items: center; gap: 0.7rem; padding: 2rem 0.5rem; font-size: 0.95rem; font-weight: 600; color: var(--text); }
+    .pf-wait-time { font-variant-numeric: tabular-nums; color: var(--muted); }
+    .pf { display: flex; flex-direction: column; gap: 1rem; }
+    .pf-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 0.5rem; }
+    .pf-tile { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 0.55rem 0.75rem; }
+    .pf-label { font-size: 0.68rem; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+    .pf-value { font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 0.15rem; }
+    .pf-sub { font-size: 0.72rem; color: var(--muted); }
+    .pf-section h4 { font-size: 0.8rem; font-weight: 700; margin: 0 0 0.4rem; display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
+    .pf-note { font-size: 0.7rem; font-weight: 400; color: var(--faint); }
+    .pf-legend { display: flex; flex-wrap: wrap; gap: 0.9rem; font-size: 0.72rem; color: var(--muted); margin-bottom: 0.4rem; }
+    .pf-legend > span { display: inline-flex; align-items: center; gap: 0.3rem; }
+    .pf-dot { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 2px; margin-right: 0.35rem; flex: none; }
+    .pf-gantt { border: 1px solid var(--hairline); border-radius: var(--radius); max-height: 46vh; overflow: auto; }
+    .pf-row { display: grid; grid-template-columns: minmax(180px, 34%) minmax(0, 1fr) 4.5rem; align-items: center; gap: 0.6rem; padding: 0.18rem 0.6rem; border-bottom: 1px solid var(--row-line); font-size: 0.76rem; }
+    .pf-row:hover { background: var(--hover-soft); }
+    .pf-row[hidden] { display: none; }
+    .pf-fold { margin-left: auto; padding: 0.2rem 0.7rem; font-size: 0.72rem; }
+    .pf-name { display: flex; align-items: center; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+    .pf-detail { margin-left: 0.5rem; font-weight: 400; color: var(--faint); overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.7rem; }
+    .pf-track { position: relative; height: 0.8rem; background: var(--hover-soft); border-radius: 2px; }
+    .pf-bar { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
+    .pf-ms { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+    .pf-top td, .pf-top th { white-space: nowrap; }
+    .pf-num { text-align: right; font-variant-numeric: tabular-nums; }
+    .pf-share { display: inline-block; min-width: 3.2rem; background: linear-gradient(to right, color-mix(in srgb, var(--accent) 35%, transparent) var(--w), transparent var(--w)); border-radius: 2px; padding: 0 0.3rem; }
+    .pf-off { color: var(--bad); font-weight: 600; }
+    .pf-what { max-width: 32rem; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.72rem; }
     .explore-plan { flex: 1 1 auto; min-height: 420px; display: flex; padding: 0 var(--gutter) 1rem; }
     .plan-frame { flex: 1 1 auto; width: 100%; min-height: 420px; border: 1px solid var(--hairline); border-radius: 8px; background: #fff; }
     .ex-table[hidden], .ex-chart[hidden] { display: none; }
@@ -868,6 +903,7 @@
     import { renderLogs } from "./frontend/logs.js";
     import { renderModel, loadModel } from "./frontend/model.js";
     import { createExplorer } from "./frontend/explore.js";
+    import { createPlanView, profileSql } from "./frontend/profile.js";
     import { createQueries, connect } from "./frontend/queries.js";
     import { largestBy, smallestBy, orderBy, cycle, pick, hashIndex, clampIndex, axisClip, percentiles, daysApart, dayCount,
       shiftDate, formatTime, dayAhead, playStep, playDelay, renderCost, round1, round2, kLabel, mwhAxis, fmtGwh, fmtMwh,
@@ -3179,9 +3215,11 @@
 
     // --- Explore: Show SQL, Show plan and Download CSV ---
     // Show SQL, in the bar, opens the box and then reads Show visual, which puts the pivot back.
-    // Show plan, in the box, draws DuckDB's own plan tree (EXPLAIN (FORMAT html): a page of its
-    // own, collapsible nodes) in a sandboxed frame in place of the results: SQL of the views, not
-    // the model's. While it is shown the button reads Show results.
+    // Show plan, in the box, puts the query's plan in place of the results (the button then
+    // reads Show results): its Profile first (frontend/profile.js: DuckDB's EXPLAIN ANALYZE,
+    // which runs the query once more: the totals, a timeline of the phases and the operators,
+    // the most expensive operators), and its Tree, DuckDB's own plan page (EXPLAIN (FORMAT
+    // html), collapsible nodes) in a sandboxed frame. SQL of the views, not the model's.
     async function planFrame(sql, query) {
       const rows = await runQuery(`EXPLAIN (FORMAT html) ${sql}`, query, { keep: true });
       const frame = document.createElement('iframe');
@@ -3196,40 +3234,42 @@
       document.getElementById('exploreSqlToggle').textContent = sqlMode ? 'Show visual' : 'Show SQL';
       document.getElementById('explorePlan').textContent = sqlPlanShown ? 'Show results' : 'Show plan';
     }
-    function showSqlPlan(frame) {
+    function showSqlPlan(node) {
       const view = document.getElementById('explorePlanView');
-      view.replaceChildren(...(frame ? [frame] : []));
-      view.hidden = !frame;
-      document.querySelector('#explore-sql .data-table-wrap').hidden = !!frame;
-      sqlPlanShown = !!frame;
+      view.replaceChildren(...(node ? [node] : []));
+      view.hidden = !node;
+      document.querySelector('#explore-sql .data-table-wrap').hidden = !!node;
+      sqlPlanShown = !!node;
       syncPlanButton();
     }
+    // The profile's colours: planning in the chrome's ink, each kind of operator a colour of
+    // the page's palette.
+    const profileColors = () => {
+      const [scan, join, aggregate, sort, win, filter] = palette();
+      return { plan: cssVar('--faint'), scan, join, aggregate, sort, window: win, filter, other: cssVar('--muted') };
+    };
     async function explorePlan() {
       // A second click puts the results back.
       if (sqlPlanShown) { showSqlPlan(null); return runSql(); }
       const base = getSql();
       const info = document.getElementById('exploreInfo');
       if (!base) { info.textContent = 'Enter a SQL query.'; return; }
-
-      const btn = document.getElementById('explorePlan');
-      btn.disabled = true;
-      btn.textContent = 'Planning...';
       info.textContent = '';
-
       try {
         const { sql, query } = data.analyze(base);
         await ensureExploreData(sql, sqlWhere(base));
-        setStatus("Explaining...", "loading");
-        showSqlPlan(await planFrame(sql, query));
+        // The profile runs as it is asked, not from the page's cache: it is a measurement.
+        showSqlPlan(createPlanView({
+          profile: async () => (await fetchRows(profileSql(sql), query))[0]?.explain_value,
+          tree: () => planFrame(sql, query),
+          colors: profileColors,
+          elapsed,
+        }));
         info.textContent = 'Query plan';
-        setConnected();
       } catch (e) {
         info.textContent = 'Error: ' + e.message;
         setStatus("Query error", "error");
         console.error('[Explore plan]', e);
-      } finally {
-        btn.disabled = false;
-        syncPlanButton();
       }
     }
     // The pivot's query (the shelves, all rows), or the box's SQL once it is open.
