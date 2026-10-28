@@ -33,6 +33,11 @@
 // OneLake, as a request costs ~0.5 s whatever its size).
 // Each view is at the snapshot the catalog named (catalog.js keeps that answer up to ~55
 // minutes, so a reload within it reads the same snapshots).
+// DuckDB-WASM runs single-threaded here, so the page runs a pool of engines (ENGINES, each its
+// own worker and memory; `?engines=N` in the URL, 1 to 4, to compare): a query goes to the
+// engine with the fewest waiting, so a render's queries run side by side. A table is planned
+// and its files downloaded once, by the engine that opens it first; each engine then has its
+// own view (and its own copy of a small table). All the workers share the block store.
 //
 // The members are the ones the page calls on the other hosts:
 //   init            sign in, locate the tables, size them; nothing opened yet
@@ -56,6 +61,10 @@ const SMALL_BYTES = 32 * 1024 * 1024;   // a table up to this much Parquet is co
 const EXTENSIONS = { httpfs: 'core', avro: 'core', iceberg: 'core', azure_wasm: 'community', icu: 'core' };
 // The worker's reads of Parquet files, kept in OPFS by block, and no If-Match (blockcache.js).
 const BLOCKCACHE = new URL('./blockcache.js' + new URL(import.meta.url).search, import.meta.url).href;
+const ENGINES = (() => {
+  try { const n = Number(new URLSearchParams(location.search).get('engines')); if (n >= 1 && n <= 4) return Math.floor(n); } catch (e) {}
+  return 2;
+})();
 
 // The model's tables: name -> { source: schema.table, columns }. Ossie: a dataset's `source`
 // and its fields' columns. TMSL (model.bim): a table's Direct Lake partition and its columns.
@@ -100,23 +109,36 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
   const snapshots = createSnapshots();
   // A kept answer from the function needs no session: the page starts without the Rayfin SDK.
   const auth = createAuth({ ready: catalog.fresh });
-  let conn, tables = new Map();
-  const located = new Map();   // table name -> { location, bytes, prefetch, record }: in the catalog
-  const opened = new Map();    // table name -> promise of its opening
+  let tables = new Map();
+  // table name -> { location, bytes, prefetch, record, stored, ready, whenReady }: in the catalog.
+  // `ready`: the table planned and its new files downloaded, once for every engine.
+  const located = new Map();
 
-  const serial = serialQueue();
-  const q = sql => serial(() => conn.query(sql));
+  // The engines: each its worker, connection, queue, and the tables opened on it
+  // (`opened`: name -> promise of its opening; `inPlace`: the views over the files, written
+  // again on a new SAS). `waiting`: its queries sent and not done (the background openings
+  // not counted), which is how a query picks its engine.
+  let engines = [];
+  const run = (e, fn, options) => {
+    const counted = !options?.later;
+    if (counted) e.waiting++;
+    return e.serial(fn, options).finally(() => { if (counted) e.waiting--; });
+  };
+  const q = (e, sql) => run(e, () => e.conn.query(sql));
+  const tag = e => engines.length > 1 ? ` [engine ${e.i + 1}]` : '';
 
   // The secret azure_wasm reads the files with: the SAS from the function. The page's own
   // fetches (the prefetch) use the same one, the newest.
   // A view read in place over read_parquet carries the SAS in its URLs (fromOf), so a new SAS
-  // writes those views again: the tables opened that way, name -> { location, record }.
+  // writes those views again, on every engine.
   let sas = '';
-  const inPlace = new Map();
   async function useSas(s) {
-    await q(`CREATE OR REPLACE SECRET onelake (TYPE azure, PROVIDER config, ACCOUNT_NAME 'onelake',
-      CONNECTION_STRING ${lit(`AccountName=onelake;SharedAccessSignature=${sas = s}`)})`);
-    for (const [name, t] of inPlace) await q(viewOf(name, t, t.record));
+    sas = s;
+    await Promise.all(engines.map(async e => {
+      await q(e, `CREATE OR REPLACE SECRET onelake (TYPE azure, PROVIDER config, ACCOUNT_NAME 'onelake',
+        CONNECTION_STRING ${lit(`AccountName=onelake;SharedAccessSignature=${sas}`)})`);
+      for (const [name, t] of e.inPlace) await q(e, viewOf(name, t, t.record));
+    }));
   }
 
   // A page open longer than its SAS: a new one shortly before it expires. The views stay on
@@ -135,8 +157,8 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
   // 'DELETES', on every DuckDB (its `content` is 'EXISTING' for a data file on 1.5 and 'DATA' on
   // 2.0). file_format is 'parquet', lower case. `scan`: what the view cannot read itself (no
   // data file, or a file that is not Parquet: a deletion vector), left to iceberg_scan.
-  async function plan(t) {
-    const rows = (await conn.query(`SELECT manifest_path, file_path, manifest_content, file_format
+  async function plan(e, t) {
+    const rows = (await e.conn.query(`SELECT manifest_path, file_path, manifest_content, file_format
       FROM iceberg_metadata(${lit(t.location)}) WHERE status <> 'DELETED'`)).toArray();
     const isData = r => String(r.manifest_content).toUpperCase() === 'DATA';
     const paths = rs => [...new Set(rs.map(r => r.file_path))].map(path => ({ path, size: null }));
@@ -166,22 +188,26 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
   // fetched whole ahead, six at a time, before the view binds (the worker fetches a file whole
   // on its first read, one at a time); the sizes learnt go into the record, so a HEAD of them
   // needs no request.
-  // A record that fails to open (a file gone, a record of another build) is dropped and the
-  // table planned again, once.
-  function open(name) {
+  // A record kept from an earlier visit that fails to open (a file gone, a record of another
+  // build) is dropped and the table planned again, once.
+  // Planning and the download are the table's, done once by the engine that opens it first
+  // (readyOf); the view is each engine's (bind).
+  function open(e, name) {
     const t = located.get(name);
-    return opened.get(name) ?? opened.set(name, (async () => {
+    return e.opened.get(name) ?? e.opened.set(name, (async () => {
       prioritize(name);
       await t.prefetch;
-      try { await openWith(name, t, t.record); }
-      catch (e) {
-        if (!t.record) throw e;
-        perf.log('info', `OPEN ${name} from its record failed (${e?.message || e}): planned again`);
-        snapshots.drop(name); t.record = null;
-        await openWith(name, t, null);
+      try { await bind(e, name, t, await readyOf(e, name, t)); }
+      catch (err) {
+        if (!t.stored) throw err;
+        perf.log('info', `OPEN ${name} from its record failed (${err?.message || err}): planned again`);
+        snapshots.drop(name); t.record = null; t.stored = false; t.ready = null;
+        await bind(e, name, t, await readyOf(e, name, t));
       }
-    })().catch(e => { opened.delete(name); throw e; })).get(name);
+    })().catch(err => { e.opened.delete(name); throw err; })).get(name);
   }
+  const readyOf = (e, name, t) => t.ready ??= (t.record ? Promise.resolve(t.record) : planned(e, name, t))
+    .then(record => { t.whenReady(); return record; }, err => { t.ready = null; throw err; });
   // The worker's store answers a HEAD of a file whose size it knows: the sizes of the record's
   // files, sent before the view binds.
   const channel = (() => { try { return new BroadcastChannel('blockcache'); } catch (e) { return null; } })();
@@ -201,54 +227,58 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
     channel.postMessage({ store: key, bytes });
     setTimeout(() => { if (stored.get(key) === resolve) { stored.delete(key); resolve(); } }, STORE_WAIT);
   });
-  async function openWith(name, t, record) {
+  // The table planned on engine `e`, and a large table's new files downloaded: its record.
+  async function planned(e, name, t) {
+    const small = t.bytes != null && t.bytes <= SMALL_BYTES;
+    const record = await perf.time('attach', `PLAN ${name}${tag(e)}`, () => plan(e, t));
+    const last = snapshots.previous(name);
+    const before = new Set([...last?.files ?? [], ...last?.deleteFiles ?? []].map(f => f.path));
+    const fresh = [...record.files, ...record.deleteFiles].filter(f => !before.has(f.path));
+    if (!record.scan && !small && fresh.length) {
+      const t0 = performance.now();
+      // The page shows how far it has got (onProgress): a first visit downloads a large
+      // table whole before its charts draw.
+      let done = 0, got = 0;
+      const progress = () => onProgress({ label: `Downloading ${name}`, done, total: fresh.length,
+        detail: `${done} of ${fresh.length} files, ${(got / 1048576).toFixed(0)} MB${t.bytes && fresh.length === record.files.length ? ` of ${(t.bytes / 1048576).toFixed(0)} MB` : ''}. Kept in this browser for the next visit.` });
+      progress();
+      let sizes;
+      try {
+        sizes = new Map((await prefetchFiles(name, fresh, f => https(f, sas), toStore,
+          n => { done++; got += n; progress(); })).map(f => [f.path, f.size]));
+      } finally { onProgress(null); }
+      for (const f of [...record.files, ...record.deleteFiles]) if (sizes.get(f.path)) f.size = sizes.get(f.path);
+      perf.log('fetch', `prefetch ${name}: ${fresh.length} files`, { ms: performance.now() - t0 });
+    }
+    snapshots.put(name, record);
+    t.record = record;
+    return record;
+  }
+  // The table's view on engine `e`, over a copy in its memory or over the files.
+  async function bind(e, name, t, record) {
     const mb = t.bytes == null ? '?' : (t.bytes / 1048576).toFixed(1);
     const small = t.bytes != null && t.bytes <= SMALL_BYTES;
-    if (!record) {
-      record = await perf.time('attach', `PLAN ${name}`, () => plan(t));
-      const last = snapshots.previous(name);
-      const before = new Set([...last?.files ?? [], ...last?.deleteFiles ?? []].map(f => f.path));
-      const fresh = [...record.files, ...record.deleteFiles].filter(f => !before.has(f.path));
-      if (!record.scan && !small && fresh.length) {
-        const t0 = performance.now();
-        // The page shows how far it has got (onProgress): a first visit downloads a large
-        // table whole before its charts draw.
-        let done = 0, got = 0;
-        const progress = () => onProgress({ label: `Downloading ${name}`, done, total: fresh.length,
-          detail: `${done} of ${fresh.length} files, ${(got / 1048576).toFixed(0)} MB${t.bytes && fresh.length === record.files.length ? ` of ${(t.bytes / 1048576).toFixed(0)} MB` : ''}. Kept in this browser for the next visit.` });
-        progress();
-        let sizes;
-        try {
-          sizes = new Map((await prefetchFiles(name, fresh, f => https(f, sas), toStore,
-            n => { done++; got += n; progress(); })).map(f => [f.path, f.size]));
-        } finally { onProgress(null); }
-        for (const f of [...record.files, ...record.deleteFiles]) if (sizes.get(f.path)) f.size = sizes.get(f.path);
-        perf.log('fetch', `prefetch ${name}: ${fresh.length} files`, { ms: performance.now() - t0 });
-      }
-      snapshots.put(name, record);
-      t.record = record;
-    }
     tellSizes(record);
     // The positions the delete files remove, read once per session into memory. A delete file
     // with no file_path and pos is an equality delete, which the view cannot apply: the table
     // goes to iceberg_scan, and its record says so.
     if (!record.scan && record.deleteFiles.length)
-      await perf.time('attach', `DELETES ${name} (${record.deleteFiles.length} delete files)`, () => conn.query(
+      await perf.time('attach', `DELETES ${name} (${record.deleteFiles.length} delete files)${tag(e)}`, () => e.conn.query(
         `CREATE OR REPLACE TABLE ${ident(deletesOf(name))} AS
          SELECT DISTINCT regexp_replace(file_path, '^abfss://([^@/]+)@([^/]+)/', 'https://\\2/\\1/') AS path, pos
          FROM read_parquet([${record.deleteFiles.map(f => lit(https(f.path, sas))).join(', ')}])`))
-        .catch(e => {
-          perf.log('info', `${name}: delete files not applied (${e?.message || e}), read with iceberg_scan`);
+        .catch(err => {
+          perf.log('info', `${name}: delete files not applied (${err?.message || err}), read with iceberg_scan`);
           record.scan = true; snapshots.put(name, record);
         });
     const how = record.scan ? 'iceberg_scan'
       : `${record.files.length} Parquet files${record.deleteFiles.length ? `, ${record.deleteFiles.length} delete files applied` : ''}`;
     if (small)
-      await perf.time('attach', `OPEN ${name} (${mb} MB, copied into memory, ${how})`, () => conn.query(
+      await perf.time('attach', `OPEN ${name} (${mb} MB, copied into memory, ${how})${tag(e)}`, () => e.conn.query(
         `CREATE OR REPLACE TABLE ${ident(name)} AS ${selectOf(name, t, record)}; CREATE OR REPLACE VIEW ${ident('v_' + name)} AS SELECT * FROM ${ident(name)}`));
     else {
-      await perf.time('attach', `OPEN ${name} (${mb} MB, read in place, ${how})`, () => conn.query(viewOf(name, t, record)));
-      if (!record.scan) inPlace.set(name, { location: t.location, record });
+      await perf.time('attach', `OPEN ${name} (${mb} MB, read in place, ${how})${tag(e)}`, () => e.conn.query(viewOf(name, t, record)));
+      if (!record.scan) e.inPlace.set(name, { location: t.location, record });
     }
   }
   // What a view reads: read_parquet over the files as https URLs with the SAS. Not abfss://:
@@ -269,10 +299,18 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
   };
   const viewOf = (name, t, record) => `CREATE OR REPLACE VIEW ${ident('v_' + name)} AS ${selectOf(name, t, record)}`;
   // The tables a query names (v_<table>) that are not open yet, opened first.
-  async function openFor(sql) {
-    const names = [...new Set([...sql.matchAll(/\bv_(\w+)\b/g)].map(m => m[1]))].filter(n => located.has(n));
-    prioritize(...names.filter(n => !opened.has(n)));   // their files first, in the prefetch
-    for (const name of names) await open(name);
+  const namedIn = sql => [...new Set([...sql.matchAll(/\bv_(\w+)\b/g)].map(m => m[1]))].filter(n => located.has(n));
+  async function openFor(e, sql) {
+    const names = namedIn(sql);
+    prioritize(...names.filter(n => !e.opened.has(n)));   // their files first, in the prefetch
+    for (const name of names) await open(e, name);
+  }
+  // The engine a query goes to: the one with the fewest queries waiting, and of those, the one
+  // with more of its tables open.
+  function pick(sql) {
+    const names = namedIn(sql);
+    const score = e => e.waiting * 1000 - names.filter(n => e.opened.has(n)).length;
+    return engines.reduce((a, b) => score(b) < score(a) ? b : a);
   }
 
   // Each table's size, from its metadata.json, all at once (the page's own requests, in
@@ -306,7 +344,10 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
       const prefetch = t.m && prefetchTable(t.name, t.m, f => https(f, access.sas), { data: t.bytes != null && t.bytes <= SMALL_BYTES, known })
         .then(n => perf.log('fetch', `prefetch ${t.name}: ${n} files${known.size ? ` (${known.size} manifests kept)` : ''}`, { ms: performance.now() - t0 }),
               e => perf.log('info', `prefetch ${t.name}: ${e?.message || e}`));
-      located.set(t.name, { location: t.location, bytes: t.bytes, prefetch, record: t.record ?? null });
+      let whenReady;
+      const ready = new Promise(r => { whenReady = r; });
+      located.set(t.name, { location: t.location, bytes: t.bytes, prefetch, record: t.record ?? null,
+        stored: !!t.record, ready: null, whenReady, isReady: ready });
     }
     if (kept) perf.log('info', `snapshots: ${kept} of ${metas.filter(Boolean).length} tables unchanged, opened from their records`);
   }
@@ -325,54 +366,70 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
     });
     ready.catch(() => {});   // awaited below
 
-    // Single-threaded (the eh bundle): the page is not cross-origin isolated.
+    // Single-threaded (the eh bundle): the page is not cross-origin isolated. ENGINES of them,
+    // started together.
     const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
     const workerUrl = URL.createObjectURL(
       // HTTP_TRACE_SHIM times the worker's own requests for the Logs tab.
       new Blob([`importScripts("${BLOCKCACHE}");
 `, HTTP_TRACE_SHIM, `
 importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
-    const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), new Worker(workerUrl));
-    await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+    let warmed = false;
+    engines = await Promise.all(Array.from({ length: ENGINES }, async (_, i) => {
+      const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), new Worker(workerUrl));
+      await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+      const version = await db.getVersion();
+      if (!warmed) { warmed = true; warmExtensions(version); }
+      const e = { i, db, conn: await db.connect(), serial: serialQueue(), waiting: 0, opened: new Map(), inPlace: new Map() };
+      // Installing needs a home directory. azure_wasm is loaded before the first scan: it
+      // claims abfss://, or DuckDB tries to autoload the official azure extension, which has no
+      // WASM build. icu is the time zones.
+      await perf.time('attach', `LOAD ${Object.keys(EXTENSIONS).join(', ')} (DuckDB ${version})${ENGINES > 1 ? ` [engine ${i + 1}]` : ''}`, () =>
+        q(e, `SET home_directory = '/tmp';
+           ${Object.entries(EXTENSIONS).map(([x, repo]) => `INSTALL ${x}${repo === 'core' ? '' : ` FROM ${repo}`}; LOAD ${x};`).join(' ')}`));
+      try { localStorage.setItem(EXT_KEY, version); } catch (x) {}
+      // Iceberg's files never change once written: what DuckDB learnt of one (its size, its
+      // Parquet footer) holds for the session. A setting this build lacks is left as it is.
+      for (const s of ['SET enable_http_metadata_cache = true', 'SET parquet_metadata_cache = true',
+                       "SET validate_external_file_cache = 'NO_VALIDATION'"])
+        await q(e, s).catch(x => perf.log('info', `${s}: ${x?.message || x}`));
+      if (timeZone) await q(e, `SET TimeZone = ${lit(timeZone)};`);
+      await q(e, "SET preserve_insertion_order = false;");
+      return e;
+    }));
     URL.revokeObjectURL(workerUrl);
-    const version = await db.getVersion();
-    warmExtensions(version);
-    conn = await db.connect();
-
-    // Installing needs a home directory. azure_wasm is loaded before the first scan: it claims
-    // abfss://, or DuckDB tries to autoload the official azure extension, which has no WASM
-    // build. icu is the time zones.
-    await perf.time('attach', `LOAD ${Object.keys(EXTENSIONS).join(', ')} (DuckDB ${version})`, () =>
-      q(`SET home_directory = '/tmp';
-         ${Object.entries(EXTENSIONS).map(([e, repo]) => `INSTALL ${e}${repo === 'core' ? '' : ` FROM ${repo}`}; LOAD ${e};`).join(' ')}`));
-    try { localStorage.setItem(EXT_KEY, version); } catch (e) {}
-    // Iceberg's files never change once written: what DuckDB learnt of one (its size, its
-    // Parquet footer) holds for the session. A setting this build lacks is left as it is.
-    for (const s of ['SET enable_http_metadata_cache = true', 'SET parquet_metadata_cache = true',
-                     "SET validate_external_file_cache = 'NO_VALIDATION'"])
-      await q(s).catch(e => perf.log('info', `${s}: ${e?.message || e}`));
-    if (timeZone) await q(`SET TimeZone = ${lit(timeZone)};`);
-    await q("SET preserve_insertion_order = false;");
 
     onStatus('Locating the tables in the catalog...');
     const access = await ready;
     await useSas(access.sas);
     renewLater([...new Set([...tables.values()].map(t => t.source))]);
+    // The page's CSV export runs its SQL on a connection of its own: the first engine's, with
+    // the tables the SQL names opened there first.
+    const e0 = engines[0];
+    const db = { connect: async () => {
+      const c = await e0.db.connect();
+      return { send: async sql => { await run(e0, () => openFor(e0, sql)); return c.send(sql); }, close: () => c.close() };
+    } };
     return { db };
   }
 
-  // After the first paint: the tables not opened yet, small ones first, each its own job at
-  // the back of the queue, so whatever the page asks goes first. Not awaited: the page does
-  // not wait for them, and opening a table changes no result it holds.
+  // After the first paint: the tables not opened yet, on every engine, small ones first, each
+  // its own job at the back of its queue, so whatever the page asks goes first. A table not
+  // planned yet is planned (and downloaded) by the first engine; the others open it once it
+  // is, so none of them waits on it with a job of its queue. Not awaited: the page does not
+  // wait for them, and opening a table changes no result it holds.
   let _warming = false;
   function attachAgg() {
     if (!_warming) {
       _warming = true;
-      const rest = [...located].filter(([name]) => !opened.has(name))
-        .sort(([, a], [, b]) => (a.bytes ?? Infinity) - (b.bytes ?? Infinity)).map(([name]) => name);
-      for (const name of rest)
-        serial(() => opened.has(name) ? null : open(name), { later: true }).catch(e =>
-          perf.log('error', `OPEN ${name}`, { status: String(e?.message || e) }));
+      const order = [...located].sort(([, a], [, b]) => (a.bytes ?? Infinity) - (b.bytes ?? Infinity));
+      for (const e of engines)
+        for (const [name, t] of order) {
+          if (e.opened.has(name)) continue;
+          const job = () => run(e, () => e.opened.has(name) ? null : open(e, name), { later: true });
+          (e === engines[0] || t.record ? job() : t.isReady.then(job)).catch(err =>
+            perf.log('error', `OPEN ${name}${tag(e)}`, { status: String(err?.message || err) }));
+        }
     }
     return Promise.resolve(false);
   }
@@ -382,7 +439,10 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
     ensureHistory: async () => false,
     // `dax`: the query as the page wrote it, for the Logs tab (the compiler passes it).
     // `options`: the page's for the queue (queue.js): `stale`, `early`, `later`.
-    query: (sql, dax, options) => perf.query(sql, () => serial(async () => { await openFor(sql); return conn.query(sql); }, options), dax),
+    query: (sql, dax, options) => perf.query(sql, () => {
+      const e = pick(sql);
+      return run(e, async () => { await openFor(e, sql); return e.conn.query(sql); }, options);
+    }, dax),
     // The tables the catalog has, with the model's columns (opening is not needed to list them).
     views: () => [...located.keys()].map(name => ({ name: 'v_' + name, columns: [...tables.get(name).columns] })),
     has: (view, column) => {

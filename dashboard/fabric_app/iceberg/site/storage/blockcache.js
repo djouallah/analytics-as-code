@@ -20,10 +20,13 @@
 //
 // Two OPFS files, in blockcache/: blocks.bin (the blocks, appended) and index.jsonl (where
 // each block is, and each file's size and validators), read back at start. Over CAP_BYTES the
-// store starts over. One tab writes them (an OPFS access handle is exclusive); another tab
-// opens them read-only: it answers from what the writer has kept, reads the index again on a
-// miss (both files only grow), and hands what it fetches to the writer to keep. Until the
-// store is open, reads go to OneLake as before.
+// store starts over. Every worker (each of the page's engines, in every tab) opens them
+// 'readwrite-unsafe', the one mode two handles share (Chrome 121+; 'read-only' fails while a
+// 'readwrite' handle is open, checked 2026-10-28), and one of them writes: the holder of the
+// Web Lock 'blockcache-writer', for its lifetime. The others answer from what the writer has
+// kept, read the index again on a miss (both files only grow), and hand what they fetch to the
+// writer to keep; when the writer is gone, the next of them to be handed a file takes the
+// lock and writes. Until the store is open, reads go to OneLake as before.
 //
 // OneLake is never seeked: a request costs ~0.5 s whatever its size, and DuckDB reads a
 // Parquet file in many (the footer in three, then a column chunk at a time). The page
@@ -47,8 +50,8 @@
 
   const P = XMLHttpRequest.prototype, open = P.open, set = P.setRequestHeader, send = P.send;
   let blocks = null, index = null;   // OPFS access handles, once open
-  let writable = false;              // this tab keeps what it fetches; a read-only tab does not
-  let indexRead = 0;                 // bytes of index.jsonl applied (a read-only tab reads on)
+  let writable = false;              // this worker is the writer: it keeps what it fetches
+  let indexRead = 0;                 // bytes of index.jsonl applied (a reader reads on)
   const where = new Map();           // `${path}#${n}` -> [offset, length] in blocks.bin
   const files = new Map();           // path -> { size, etag, lastModified }
   let end = 0;                       // bytes in blocks.bin
@@ -70,9 +73,9 @@
     blocks.truncate(0); index.truncate(0); where.clear(); files.clear(); end = 0; indexRead = 0;
     log({ v: VERSION, block: BLOCK });
   }
-  // The index's lines not applied yet: all of them at start, and for a read-only tab what the
+  // The index's lines not applied yet: all of them at start, and for a reader what the
   // writer added since. The first line is the store's version; a store of another version is
-  // reset by its writer, and a read-only tab leaves it alone and holds nothing.
+  // reset by its writer, and a reader leaves it alone and holds nothing.
   function applyIndex() {
     const size = index.getSize();
     if (size <= indexRead) return true;
@@ -93,39 +96,52 @@
     return true;
   }
 
+  // The writer's lock, if no one holds it: held until the worker ends. Without the Locks API
+  // the handles are exclusive anyway (a browser before 121 ignores the mode), so the worker that
+  // opened them writes.
+  const takeWriter = () => !navigator.locks ? Promise.resolve(true) : new Promise(resolve => {
+    navigator.locks.request('blockcache-writer', { ifAvailable: true }, lock => {
+      resolve(!!lock);
+      return lock ? new Promise(() => {}) : undefined;
+    }).catch(() => resolve(false));
+  });
+  // Becomes the writer when the last one is gone: from what the index says now.
+  let promoting = null;
+  const promote = () => promoting ??= takeWriter().then(won => {
+    promoting = null;
+    if (!won || writable || !blocks) return writable;
+    writable = true;
+    if (!applyIndex()) reset();
+    end = blocks.getSize();
+    return true;
+  });
+
   (async () => {
     let dir;
     try { dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('blockcache', { create: true }); }
     catch (e) { return; }   // no OPFS: reads go to OneLake
-    const bh = await dir.getFileHandle('blocks.bin', { create: true });
-    const ih = await dir.getFileHandle('index.jsonl', { create: true });
     try {
-      const b = await bh.createSyncAccessHandle();
-      const i = await ih.createSyncAccessHandle();
-      blocks = b; index = i; writable = true; end = b.getSize();
-      if (!applyIndex() || index.getSize() === 0 || end > CAP_BYTES) reset();
-    } catch (e) {
-      // Another tab writes the store: read it (Chrome 121+; an older browser throws here too,
-      // and this tab reads OneLake).
-      try {
-        const b = await bh.createSyncAccessHandle({ mode: 'read-only' });
-        const i = await ih.createSyncAccessHandle({ mode: 'read-only' });
-        blocks = b; index = i; writable = false; end = b.getSize();
-        if (!applyIndex()) { blocks = index = null; }
-      } catch (x) { blocks = index = null; }
-    }
+      const bh = await dir.getFileHandle('blocks.bin', { create: true });
+      const ih = await dir.getFileHandle('index.jsonl', { create: true });
+      const b = await bh.createSyncAccessHandle({ mode: 'readwrite-unsafe' });
+      const i = await ih.createSyncAccessHandle({ mode: 'readwrite-unsafe' });
+      blocks = b; index = i; end = b.getSize();
+      writable = await takeWriter();
+      if (writable) { if (!applyIndex() || index.getSize() === 0 || end > CAP_BYTES) reset(); }
+      else if (!applyIndex()) blocks = index = null;   // a store of another version, not reset yet
+    } catch (e) { blocks = index = null; }   // a writer of an older build holds it exclusively
   })();
 
   // The page's channel (BroadcastChannel 'blockcache'), to every tab's worker:
   //   { sizes }          the sizes the page knows (its snapshot records), so a HEAD is answered
   //                      without a request;
-  //   { store, bytes }   a whole file the page downloaded (prefetch.js), or a read-only tab's
+  //   { store, bytes }   a whole file the page downloaded (prefetch.js), or a reader's
   //                      worker fetched: the writer keeps it and answers { stored }. Not the
   //                      browser's HTTP cache: it does not keep a response of 70-100 MB.
   let bc = null;
   try {
     bc = new BroadcastChannel('blockcache');
-    bc.onmessage = e => {
+    bc.onmessage = async e => {
       for (const [path, size] of Object.entries(e.data?.sizes ?? {})) {
         if (files.has(path) || !(size > 0)) continue;
         files.set(path, { size, etag: null, lastModified: null });
@@ -134,7 +150,9 @@
       if (writable && index) index.flush();
       const { store, bytes } = e.data ?? {};
       // The writer answers once it has kept it, and a worker with no store at once (nothing will
-      // keep it: the page waits no longer); a read-only tab leaves it to the writer.
+      // keep it: the page waits no longer); the others leave it to the writer, or become it
+      // when it is gone.
+      if (store && bytes && blocks && !writable) await promote();
       if (store && bytes && (writable || !blocks)) {
         if (writable) try { const b = new Uint8Array(bytes); keep(NO_HEADERS, store, b, 0, b.length); } catch (x) {}
         bc.postMessage({ stored: store });
@@ -155,7 +173,7 @@
 
   // The bytes [a, b] of `path` from the store, or null when a block is missing.
   function fromStore(path, a, b) {
-    // A read-only tab whose writer has started the store over (its index shrank): the offsets
+    // A reader whose writer has started the store over (its index shrank): the offsets
     // it holds now point at other files' blocks.
     if (!writable && index.getSize() < indexRead) {
       where.clear(); files.clear(); indexRead = 0;
@@ -186,7 +204,7 @@
   }
 
   // Keeps the bytes `body`, from offset `start` of a file of `size` bytes, as blocks. A
-  // read-only tab cannot write the store: it learns the file's size, and hands a whole file to
+  // reader does not write the store: it learns the file's size, and hands a whole file to
   // the writer, from which its next reads come.
   function keep(x, path, body, start, size) {
     // Before the file's size is recorded: a reset clears it.

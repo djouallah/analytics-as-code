@@ -601,7 +601,8 @@ else: no import, no file written for it.
   build; it is loaded before the first scan, or DuckDB tries to autoload `azure`.
 - **The engine is duckdb-wasm `1.33.1-dev65.0` (DuckDB 1.5), from jsDelivr, the GitHub
   page's pin**, with DuckDB's signed extensions: `httpfs`, `avro`, `iceberg` and `icu` from
-  its repository, `azure_wasm` from the community one. Single-threaded (the `eh` bundle).
+  its repository, `azure_wasm` from the community one. Single-threaded (the `eh` bundle):
+  several engines instead (the pool, below).
   Until 2026-10-28 the app ran DuckDB 2.0: duckdb-wasm's CI build of main and `azure_wasm`'s
   own 2.0 port, CI artifacts that expire after 90 days, with the extensions relabelled and so
   unsigned. A first move to 1.5.6 (2026-10-27) was reverted within the hour, for two things
@@ -638,10 +639,15 @@ else: no import, no file written for it.
   manifest list and new manifests, and touches no old one), so the store keeps `.parquet`,
   `.avro` and `.metadata.json` alike: planning a table reads its old manifests from OPFS.
   `blockcache/blocks.bin` and `index.jsonl` in OPFS; over 8 GB the store starts over (whole
-  files of every table read: `power`'s full data is about 2 GB). One tab writes it; another
-  opens it read-only (Chrome 121+): it answers from what the writer kept, re-reads the index
-  on a miss, and on a miss fetches the whole file, answers from it and hands it to the
-  writer to keep (`BroadcastChannel('blockcache')`, `{ store, bytes }`). So a
+  files of every table read: `power`'s full data is about 2 GB). Every worker (each engine
+  of the pool, in every tab) opens both files `readwrite-unsafe` (Chrome 121+), the one mode
+  two handles share: `read-only` fails while a `readwrite` handle is open (headless Chrome,
+  2026-10-28), so until then a second tab never had the store. One worker writes: the holder
+  of the Web Lock `blockcache-writer`, for its lifetime. The others answer from what the
+  writer kept, re-read the index on a miss, and on a miss fetch the whole file, answer from it
+  and hand it to the writer to keep (`BroadcastChannel('blockcache')`, `{ store, bytes }`);
+  when the writer is gone, the next one handed a file takes the lock and writes. A reader
+  whose writer started the store over (its index shrank) drops the offsets it held. So a
   first visit downloads every file of each table it reads (`fct_summary` 1.3 GB, its 27
   files fetched ahead six at a time, below); after that a table's new files only.
   `httpfs`'s `force_download` does not reach duckdb-wasm's file system.
@@ -678,9 +684,19 @@ else: no import, no file written for it.
   bucket, `azure_wasm`'s CI) imports unshared memory, which the threaded engine refuses
   (`LinkError … mismatch in shared state of memory`), and the page would need cross-origin
   isolation, which breaks Fabric's sign-in popup ("Page not accessible directly").
+- **So the app runs a pool of engines** (`ENGINES` in `data.js`, 2 by default; `?engines=N`,
+  1 to 4, in the page's URL to compare), each single-threaded in its own worker and memory:
+  a query goes to the engine with the fewest queries waiting (then the one with more of its
+  tables open), so a render's independent queries run side by side; one query is no faster.
+  Each engine has its own queue (`queue.js`, unchanged), extensions, secret and views, and its
+  own copy of a small table. A table is planned and its files downloaded once, by the engine
+  that opens it first (`readyOf`); every engine then binds its own view (`bind`). All the
+  workers share the block store (above). The Logs tab tags each LOAD, PLAN and OPEN with its
+  engine. Added 2026-10-28; check the pool against `?engines=1` on `power` before building on it.
 - **A table is opened when a query first names its view**, so the first paint pays only for
-  the tables it reads. The rest are opened after the first paint, in the background, at the
-  back of the queue (`attachAgg`, not awaited).
+  the tables it reads. The rest are opened after the first paint, on every engine, in the
+  background, at the back of each queue (`attachAgg`, not awaited); an engine other than the
+  first opens a table not planned yet only once it is.
 - **A small table is copied into memory.** Its size is the current snapshot's
   `total-files-size`, read from its `metadata.json`. Up to `SMALL_BYTES` (32 MB), the table
   is copied into DuckDB's memory once and its view reads that. Above it, the view reads the
