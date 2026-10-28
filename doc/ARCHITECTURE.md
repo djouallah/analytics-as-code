@@ -54,9 +54,9 @@ Source data arrives at 5-minute resolution (rooftop solar every half hour). The 
 
 ## The clients
 
-One semantic model (`semantic_model/ossie.yaml`), its clients under `dashboard/`:
+One semantic model (`semantic_model/ossie.yaml`), its clients under `front_end/`:
 
-- `page/` is the page, written once (`dashboard/page/index.html`). A host only decides how
+- `page/` is the page, written once (`front_end/page/index.html`). A host only decides how
   the browser reaches the data (its `storage/data.js`, staged over the page), so a chart
   is written once and reaches every engine.
 - `github/` is GitHub Pages: DuckDB-WASM over `.duckdb` copies of the tables.
@@ -76,8 +76,8 @@ A measure is written once, in the model, and reaches every client.
 | Engine | DuckDB-WASM, in the browser | DuckDB-WASM, in the browser | VertiPaq, in Fabric |
 | Data | `.duckdb` files next to the page | the `mart` Iceberg tables, read in place with a read-only SAS | the `mart` Iceberg tables, Direct Lake, no copy |
 | 5-minute history | one file per half-year, downloaded | the tables as they are | the tables as they are |
-| Host code | `dashboard/github/` | `dashboard/fabric_app/iceberg/site/storage/` | `dashboard/fabric_app/vertipaq/site/storage/` |
-| Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `dashboard/fabric_app/iceberg/`, or `deploy_fabric.yml` | `deploy_fabric.yml` |
+| Host code | `front_end/github/` | `front_end/fabric_app/iceberg/site/storage/` | `front_end/fabric_app/vertipaq/site/storage/` |
+| Deployed by | `build.yml` (page), `import_data.yml` (data) | `rayfin up` from `front_end/fabric_app/iceberg/`, or `deploy_fabric.yml` | `deploy_fabric.yml` |
 
 ### The layers of the dashboard
 
@@ -86,12 +86,12 @@ on purpose: the point is the layers, not their maturity.
 
 | Layer | Here | In a real product |
 |---|---|---|
-| Consumer | `dashboard/page/index.html` | the BI tool |
+| Consumer | `front_end/page/index.html` | the BI tool |
 | Query language | a query of the model's fields (`frontend/queries.js`), which the compiler writes as DAX | DAX, MDX, VizQL, Malloy, a metrics request |
 | Semantic model | `semantic_model/ossie.yaml`, Apache Ossie with DAX measures (the TMSL in its `POWER_BI` extensions) | a Tabular model (TMSL, TMDL), LookML, MetricFlow YAML |
 | Compiler | `dax-sql` | MetricFlow, Cube's schema compiler, Malloy's compiler, Looker's SQL generator, Power BI's formula engine, Tableau's VizQL |
 | Engine | DuckDB-WASM | the warehouse, VertiPaq, Hyper |
-| Storage | `dashboard/page/storage/` | the lakehouse or warehouse connection |
+| Storage | `front_end/page/storage/` | the lakehouse or warehouse connection |
 
 - **The semantic model** describes the tables, their relationships and the measures, each
   with a description. It is an Apache Ossie model (`ossie.yaml`), its measures in DAX, and
@@ -112,7 +112,7 @@ on purpose: the point is the layers, not their maturity.
   compiler turns into the DAX it stands for and then SQL, so its figures are the model's
   measures; any other SQL runs as written over the views. Its CSV export is the rows of that
   SQL.
-- **The same page asking in SQL** is `dashboard/page/sql/`, at `sql/` on the site: the
+- **The same page asking in SQL** is `front_end/page/sql/`, at `sql/` on the site: the
   same `index.html`, storage and model, and its own `frontend/queries.js`, each query a
   SELECT over the model (`SELECT dim_calendar.date, AGG("Generation MWh") FROM model ...`).
   dax-sql reads it into the same syntax tree a DAX query is, so the compiler builds one plan
@@ -175,7 +175,7 @@ backend to run, no query service, no copy of the data.
 ├── macros/               # Iceberg adapter overrides, the pending-files and date-bounds helpers
 ├── scripts/              # The cache (Iceberg → DuckDB files), table maintenance, deploys, parity/
 ├── semantic_model/       # The one semantic model (ossie.yaml): what every client reads; the deploy writes the Fabric item from it
-├── dashboard/            # Its clients
+├── front_end/            # Its clients
 │   ├── page/             # The page, written once, and its two ways of asking
 │   │   ├── common/       # index.html, frontend/ (draws, Logs tab), storage/ (the host, the tables as views), semantic/ (the model's queries), dag/ (dbt docs)
 │   │   ├── dax/          # the queries as objects of the model's fields: frontend/queries.js; served at /
@@ -352,7 +352,7 @@ Everything else is Rayfin — see the
 [Rayfin documentation](https://learn.microsoft.com/fabric/embedded/rayfin/overview):
 
 ```bash
-cd dashboard/fabric_app && npm ci && npm ci --prefix ../../scripts
+cd front_end/fabric_app && npm ci && npm ci --prefix ../../scripts
 cd iceberg && npm ci --prefix rayfin/functions
 npx rayfin login      # sign in to Fabric
 npx rayfin up         # build + deploy to Fabric static hosting; prints the hosting URL

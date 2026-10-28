@@ -167,8 +167,8 @@ jobs:
           fi
           python scripts/parity_model.py "$RUNNER_TEMP/parity.json" "${since[@]}"
       - name: The SQL page against the page through the model
-        # scripts/parity/sql_page.mjs: every question of the SQL page (dashboard/page/sql)
-        # against the same question of the DAX page (dashboard/page/dax), over the
+        # scripts/parity/sql_page.mjs: every question of the SQL page (front_end/page/sql)
+        # against the same question of the DAX page (front_end/page/dax), over the
         # dashboard's files: the same rows. The parity holds the DAX page's to the model, so
         # this holds the SQL page's to it too. A changed measure that the SQL page does not
         # follow fails here. It asks the model nothing, so it always runs.

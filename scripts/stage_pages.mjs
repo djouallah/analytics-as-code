@@ -1,12 +1,12 @@
-// Stages the page. dashboard/page/ is the dashboard, the same on every host:
+// Stages the page. front_end/page/ is the dashboard, the same on every host:
 //   index.html, frontend/ (draw, logs, perflog), storage/queue.js, dag/ (the dbt docs),
 //   semantic/query.js (the page's queries through the semantic model), and the two ways of
 //   asking, one over the other:
 //   dax/     frontend/queries.js: the page's queries as objects of the model's fields
 //   sql/     frontend/queries.js: the page's queries as SELECTs over the model
 // A host adds only its storage/data.js (and what that imports): GitHub Pages' are the files of
-// dashboard/github/, staged into storage/; each Fabric app's are its site/, copied over the page
-// (dashboard/fabric_app/<engine>/site/storage/, next to the app's rayfin/).
+// front_end/github/, staged into storage/; each Fabric app's are its site/, copied over the page
+// (front_end/fabric_app/<engine>/site/storage/, next to the app's rayfin/).
 // A page is page/ with one of the two ways of asking copied over it, a host's files over that,
 // and next to semantic/query.js the model (semantic_model/ossie.yaml as semantic/ossie.json:
 // the browser reads no YAML), the compiler (dax-sql/src as semantic/dax-sql/) and its readers
@@ -37,16 +37,18 @@ export async function readOssie(root = REPO) {
 // `root`: another checkout to take them from (the parity's `since`, the A/B's `before`).
 export async function stagePage(variant, dir, root = REPO, host = "github") {
   await mkdir(dir, { recursive: true });
-  const page = join(root, "dashboard", "page");
+  // The front end's folder: front_end/ since 2026-10-28, dashboard/ in an older checkout.
+  const fe = join(root, existsSync(join(root, "front_end")) ? "front_end" : "dashboard");
+  const page = join(fe, "page");
   if (existsSync(page)) {
     const skip = ["dag", "dax", "sql"].map(d => join(page, d));
     await cp(page, dir, { recursive: true, filter: src => !skip.some(s => src === s || src.startsWith(s + "\\") || src.startsWith(s + "/")) });
     await cp(join(page, variant), dir, { recursive: true });
-    if (host) await cp(join(root, "dashboard", host), join(dir, "storage"), { recursive: true });
+    if (host) await cp(join(fe, host), join(dir, "storage"), { recursive: true });
   } else {
     // A checkout from before 2026-10-27, when the page and GitHub Pages' storage/ were
     // dashboard/github/common/, with dax/ and sql/ next to it.
-    const old = join(root, "dashboard", "github");
+    const old = join(fe, "github");
     await cp(join(old, "common"), dir, { recursive: true, filter: src => !src.startsWith(join(old, "common", "dag")) });
     await cp(join(old, variant), dir, { recursive: true });
   }
@@ -71,7 +73,7 @@ export async function stagePage(variant, dir, root = REPO, host = "github") {
   }
 }
 
-export const DAG = join(REPO, "dashboard", "page", "dag");
+export const DAG = join(REPO, "front_end", "page", "dag");
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [dir, build] = process.argv.slice(2);

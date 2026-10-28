@@ -36,8 +36,9 @@ const bim = await readModel(ROOT);
 fetchFiles(ROOT);
 // The DAX page, staged (scripts/stage_pages.mjs); in a checkout
 // from before 2026-10-08, which `since` can compare with, the page as it was in the repo:
-// dashboard/github-dax, or dashboard/github before the rename of 2026-10-07.
-const PAGE = ['dashboard/page/dax', 'dashboard/github/dax'].some(d => existsSync(path.join(ROOT, d)))
+// dashboard/github-dax, or dashboard/github before the rename of 2026-10-07. The front end is
+// front_end/ since 2026-10-28, dashboard/ before.
+const PAGE = ['front_end/page/dax', 'dashboard/page/dax', 'dashboard/github/dax'].some(d => existsSync(path.join(ROOT, d)))
   ? await (async dir => { await stagePage('dax', dir, ROOT); return dir; })(mkdtempSync(path.join(tmpdir(), 'page-')))
   : ['dashboard/github-dax', 'dashboard/github'].map(d => path.join(ROOT, d)).find(d => existsSync(d));
 const { createModel } = await import(pathToFileURL(path.join(PAGE, ['semantic/query.js', 'semantic/compiler.js'].find(p => existsSync(path.join(PAGE, p))))));

@@ -45,7 +45,7 @@
 // chosen. There is one compiler: a SELECT over the model is the same SQL whether a chart, the
 // pivot or the box sends it.
 // A data source whose engine speaks DAX (`engine: 'dax'`: the deployed semantic model, in
-// dashboard/fabric_app/vertipaq) gets the query's DAX as it is: no views, no SQL.
+// front_end/fabric_app/vertipaq) gets the query's DAX as it is: no views, no SQL.
 // =============================================================================
 
 import { createCompiler } from './dax-sql/index.js';

@@ -212,20 +212,21 @@ transport fails the OneLake TLS handshake).
 
 ## Dashboard
 **The layout says who reads the model:** `semantic_model/` at the top of the repo is the one
-semantic model, and `dashboard/` holds its one client, the page, and the hosts that run it.
-**The page is written once, `dashboard/page/`**, and a host adds only how it reaches the
+semantic model, and `front_end/` (`dashboard/` until 2026-10-28) holds its one client, the page,
+and the hosts that run it.
+**The page is written once, `front_end/page/`**, and a host adds only how it reaches the
 data, its `storage/data.js` (staged over the page, `scripts/stage_pages.mjs`):
-- `dashboard/github/`: GitHub Pages, DuckDB-WASM over the `.duckdb` copies of the tables
+- `front_end/github/`: GitHub Pages, DuckDB-WASM over the `.duckdb` copies of the tables
   (`data.js`, `history.js`, `views.js`, staged into the page's `storage/`).
-- `dashboard/fabric_app/`: the Fabric apps (Rayfin), one per engine. `iceberg/` is
+- `front_end/fabric_app/`: the Fabric apps (Rayfin), one per engine. `iceberg/` is
   DuckDB-WASM over the Iceberg catalog (see "The Fabric app on the Iceberg catalog").
   `vertipaq/` is the deployed model as the engine, installed by `deploy_fabric.yml` (see
-  "The whole stack in one workspace"). What the two share is in `dashboard/fabric_app/`:
+  "The whole stack in one workspace"). What the two share is in `front_end/fabric_app/`:
   `common/` (`build.mjs` and the Fabric sign-in, `site/storage/auth.js`), `package.json`
   (the Rayfin CLI, one `npm ci` for both, `npx rayfin` run in an app's folder) and
   `.gitignore`. What Rayfin wants in each project stays there: `rayfin/rayfin.yml`,
   `rayfin/tsconfig.json`, `rayfin/data/schema.ts`, and `iceberg/`'s function.
-**`dashboard/page/` is one page and two ways of asking:** the page itself
+**`front_end/page/` is one page and two ways of asking:** the page itself
 (`index.html`, `frontend/` draw.js, logs.js, perflog.js, `storage/queue.js`, `dag/`, and
 `semantic/query.js`, which both ask through), `dax/` (`frontend/queries.js`: each query an
 object of the model's fields) and `sql/` (`frontend/queries.js`: each query a SELECT over the
@@ -244,7 +245,7 @@ are internal: they should not break either, but it is not the end of the world
 if one does. So a change that touches what they share (the model, the `mart` tables, the
 page's files) is checked on the public page first and goes out only when that check is
 clean, and where the clients pull apart the public page wins.
-The page has the layers of a BI stack, each in its own place under `dashboard/page/` (the
+The page has the layers of a BI stack, each in its own place under `front_end/page/` (the
 table of what stands in each place in a real product is in `doc/ARCHITECTURE.md`), and two
 hosts that run it on DuckDB-WASM: GitHub Pages and a Fabric app. Everything is the same file
 on both except `storage/data.js`.
@@ -313,7 +314,7 @@ of what is shown is `[Generation share]`; a change against the days before is a
 model or the compiler cannot say something, the model gets the measure or the column, or the
 compiler the case, never the page the formula. What numbers the page does handle is how it
 draws (an axis cut at a percentile, a bubble's size, a layout, a number written as text,
-which row is the largest), and all of it is in `dashboard/page/frontend/draw.js`.
+which row is the largest), and all of it is in `front_end/page/frontend/draw.js`.
 So the page shows no figure that is not a measure: no Flows events under the clock (a jump
 of a link or a price between two intervals), no "how long a link has had no flow", and no
 share on the hero's "Other" (the share of several fuels together is no measure).
@@ -420,8 +421,8 @@ app's build, the parity scripts. To serve it from a laptop, stage the site into 
 (`node scripts/stage_pages.mjs <dir> <build>`) and put a copy of `data/` next to it. A relative
 import is of the staged tree (`semantic/query.js` imports `./dax-sql/index.js`, which
 `stagePage` copies there from `dax-sql/src`).
-- `dashboard/page/index.html` is the page: the charts, which draw what
-  `dashboard/page/dax/frontend/queries.js` asks: every query the charts send, by tab and chart
+- `front_end/page/index.html` is the page: the charts, which draw what
+  `front_end/page/dax/frontend/queries.js` asks: every query the charts send, by tab and chart
   (`createQueries(page)`, over the page's state passed in as functions; the renderers only
   call it). The queries name the model's tables, columns and measures (`fct_summary.mw`,
   `dim_duid.FuelSourceDescriptor`, `Capture price`). **The page joins nothing** and names no
@@ -461,7 +462,7 @@ import is of the staged tree (`semantic/query.js` imports `./dax-sql/index.js`, 
   It holds DAX only: nothing in it is written for DuckDB, and no SQL goes into it. The
   browser reads no YAML: staging writes it as `semantic/ossie.json`. Reading it needs
   `yaml` (`npm ci --prefix scripts`). `repo.test.mjs` checks it reads back as itself.
-- `dashboard/github/views.js` (`withViews(data)`, which every `data.js`
+- `front_end/github/views.js` (`withViews(data)`, which every `data.js`
   returns itself wrapped in) is the tables as views: a view `v_<table>` per table attached,
   over the files (the table whole in `dim` or `agg`, or split by date over `today` and the
   half-years: `today` has the days it holds, cut at a literal date; the files are stacked by
@@ -471,7 +472,7 @@ import is of the staged tree (`semantic/query.js` imports `./dax-sql/index.js`, 
   `views`, `has` and `needs` to the data source: `needs(sql)` says what a SQL
   query reads; `ensureHistory` attaches nothing for a range that starts inside the days
   `today` holds, so the default view fetches no history.
-- `dashboard/page/semantic/query.js` (`createModel(dataSource)`: the data source's
+- `front_end/page/semantic/query.js` (`createModel(dataSource)`: the data source's
   members, `toDax`, `toSQL` and `analyze`): `toDax(query)` writes the DAX page's query as
   DAX, checking each column and measure against the model; a SELECT over the model (the SQL
   page's) dax-sql reads itself, into the same syntax tree; `toSQL(dax)` is `dax-sql`'s compile of it
@@ -505,20 +506,20 @@ import is of the staged tree (`semantic/query.js` imports `./dax-sql/index.js`, 
   `mart_manifest.json` listing the half-years; they are downloaded whole into OPFS, and the
   history is the half-year files (`p2026_h1`, ...), the ones a range needs. The other DuckDB
   host, the Fabric app on the Iceberg catalog, has a `data.js` of its own with the same
-  members (`dashboard/fabric_app/iceberg/site/storage/data.js`, below).
+  members (`front_end/fabric_app/iceberg/site/storage/data.js`, below).
   The history is never read in place over HTTP: duckdb-wasm reads a remote file one block
   at a time, three round trips each, and a remote host answers one in ~700 ms whatever its
   size. Both DuckDB hosts set the session to Brisbane time, on purpose: the tables carry
   `date` and `time`, no TIMESTAMPTZ, and the only thing the zone decides is that
   `CURRENT_DATE` is the NEM's day.
-- `dashboard/github/history.js` is GitHub Pages' about the half-year history
+- `front_end/github/history.js` is GitHub Pages' about the half-year history
   files: `periodsForRange` (which ones a date range needs) and `attachCached` (ATTACH from
   OPFS in place, into memory if a second tab holds the file).
-- `dashboard/page/storage/queue.js` is how both DuckDB `data.js` send queries: one
+- `front_end/page/storage/queue.js` is how both DuckDB `data.js` send queries: one
   at a time (the worker runs one anyway), the hero's `early`, the KPI deltas `later`, and a
   query whose render a newer one replaced dropped unrun when its turn comes (`runQuery` in
   `index.html` says which render a query is for; Explore's are never dropped).
-- `dashboard/page/frontend/perflog.js` and `dashboard/page/frontend/logs.js`
+- `front_end/page/frontend/perflog.js` and `front_end/page/frontend/logs.js`
   are the Logs tab, on both hosts: a table of what this session fetched, attached and ran,
   with timings, and the build stamp. This session only: it lives in the page's memory,
   nothing is stored, written to a file or uploaded, and the Copy button is the one way out.
@@ -544,7 +545,7 @@ rather than round them:
   `[data-theme="light"]`, set by the `<head>` script before first paint: the stored choice,
   else the system's). Colour is for the data and for status, and status comes with an arrow
   or a label. The CSS stays inline: a separate file next to `index.html` would need both
-  deploy copy lists (`build.yml`, `dashboard/fabric_app/common/build.mjs`).
+  deploy copy lists (`build.yml`, `front_end/fabric_app/common/build.mjs`).
 - `chartTheme()` builds one ECharts theme per scheme from those tokens (font, label size,
   tooltip, legend, zoom slider, colour scale) and `plot()` is every chart's plot area, with
   measured axis labels. A chart sets no margin, font or tooltip style of its own.
@@ -588,7 +589,7 @@ depth-1 clone, the published paths added with `-f` (so the deploy repo's `.gitig
 skip a file), push retried on a race. It only adds and replaces: a file leaves the site by
 hand, in the deploy repo.
 **Every build stamps its files** (`scripts/stamp_build.mjs`, run by `build.yml` and by
-`dashboard/fabric_app/common/build.mjs`): `__BUILD__` becomes the build, and every relative
+`front_end/fabric_app/common/build.mjs`): `__BUILD__` becomes the build, and every relative
 import gets `?v=<build>`. Pages serves the files with `max-age=600`, so without it a browser
 would run the new page with its cached old modules for up to 10 minutes after a deploy. A
 harness that imports a module itself from a stamped copy has to add the same `?v=`, or it
@@ -610,7 +611,7 @@ the whole site near 1 GB (GitHub Pages' limit): the copy is about 880 MB. That i
 `fct_summary` is written by date, time, price, DUID: its price is the region's, so in that
 order the column is runs and costs nothing; in key order the files are 60% larger.
 
-**The Fabric app on the Iceberg catalog is `dashboard/fabric_app/iceberg/`**, a Rayfin
+**The Fabric app on the Iceberg catalog is `front_end/fabric_app/iceberg/`**, a Rayfin
 project: static hosting, Fabric sign-in, and one function, `openCatalog`
 (`rayfin/functions`). Its inputs are the semantic model and a OneLake Iceberg catalog, nothing
 else: no import, no file written for it.
@@ -763,7 +764,7 @@ else: no import, no file written for it.
   the browser cache starts over; the OPFS store and the snapshot records do not.
 - What is stored between visits: the block store (OPFS), the snapshot records and the
   function's answer (`localStorage`). Nothing that can write, and no token.
-`dashboard/fabric_app/common/build.mjs` assembles a project's `dist/`: the DAX page staged
+`front_end/fabric_app/common/build.mjs` assembles a project's `dist/`: the DAX page staged
 (`stagePage('dax')`: `page/`, `dax/` and the model, `semantic_model/ossie.yaml` as
 `ossie.json`; it needs `npm ci --prefix scripts` first) and the dbt docs, with
 `fabric_app/common/site/` (`storage/auth.js`) and then the project's own `site/` copied over
@@ -782,12 +783,12 @@ item reading that workspace's lakehouse `nem`: fabriccat's `conformance-oracle` 
 tenant, Australia Southeast, the full data; since 2026-10-27). `.deployments.json` keeps both, `active` the last
 deployed: `--workspace-id` picks the other.
 ```
-cd dashboard/fabric_app && npm ci && npm ci --prefix ../../scripts
+cd front_end/fabric_app && npm ci && npm ci --prefix ../../scripts
 cd iceberg && npm ci --prefix rayfin/functions
 export RAYFIN_TOKEN=$(az account get-access-token --tenant <fabriccat> --resource https://api.fabric.microsoft.com --query accessToken -o tsv)
 npx rayfin up --yes --output json
 ```
-`dashboard/fabric_app/iceberg/rayfin/.deployments.json` (untracked) records the item, and
+`front_end/fabric_app/iceberg/rayfin/.deployments.json` (untracked) records the item, and
 its URL is in `rayfin/rayfin.yml` (`allowedRedirectUris`; the deploy adds it). On a machine
 without that record, add `--workspace-id <workspace>`. A new item needs its catalog once,
 then the function deployed again (`npx rayfin up functions deploy`):
@@ -802,7 +803,7 @@ is why the laptop and CI cannot share an item: a deploy to someone else's fails 
 `fabric_app_iceberg`): Fabric answers 500 ("An internal error occurred.") to every function
 call on an item owned by a service principal, before the function runs (microsoft/rayfin#89,
 open, with this repo's case in its comments). The CI deploy needs:
-- `dashboard/fabric_app/iceberg/rayfin/functions/host.json` is committed: the deploy refuses
+- `front_end/fabric_app/iceberg/rayfin/functions/host.json` is committed: the deploy refuses
   without it, and the Rayfin scaffold's `.gitignore` leaves it out.
 - The lock files resolve from `registry.npmjs.org`: generated on a laptop they name a
   private feed the runner cannot read.
@@ -849,8 +850,8 @@ Fabric workspace, independent of everything GitHub runs: the mechanism of the si
   pipeline fails (the notebook's output stays in Fabric). nemweb answers 403 to most
   downloads from Fabric (2026-10-14), so such a lakehouse holds little data; a fact with no
   file is created empty, and the MMSDM dimensions build without their files.
-Then the workflow deploys `dashboard/fabric_app/vertipaq/` (item `vertipaq`), its connector
-naming the model `nem` of the same workspace, and `dashboard/fabric_app/iceberg/` (item
+Then the workflow deploys `front_end/fabric_app/vertipaq/` (item `vertipaq`), its connector
+naming the model `nem` of the same workspace, and `front_end/fabric_app/iceberg/` (item
 `iceberg`, CI's own: the laptop's refuses another owner), its `CATALOG_URL` the same
 workspace's lakehouse `nem`, which fails until microsoft/rayfin#89 is fixed. The workspace must exist, on a capacity in a
 region with Fabric apps (preview); the login is the repo's Entra app of that tenant
@@ -1114,7 +1115,7 @@ image, and the packages those pins pull in.
   (DuckDB 1.5.x line), a dev build
   because nothing stable has shipped since 1.33.0. Don't take npm's `latest` tag: it points
   at `1.33.1-dev57.0`, which the DuckDB blog says breaks OPFS. The dev build lets
-  `attachCached` (`dashboard/github/history.js`) read the OPFS-cached files in place
+  `attachCached` (`front_end/github/history.js`) read the OPFS-cached files in place
   (`registerFileHandle` + `BROWSER_FSACCESS`) instead of copying each one into the WASM heap.
   Register the plain filename, not `opfs://`: an `opfs://` ATTACH also opens `<file>.wal`,
   which is never registered, so the ATTACH fails. The handle is exclusive, so a second tab
