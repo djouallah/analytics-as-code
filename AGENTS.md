@@ -725,8 +725,12 @@ else: no import, no file written for it.
 `fabric_app/common/site/` (`storage/auth.js`) and then the project's own `site/` copied over
 them (here `storage/` `data.js`, `catalog.js`, `snapshots.js`, `prefetch.js`,
 `blockcache.js`), and `?v=<build>` added to every
-relative import; `query.js` passes its own on to `ossie.json`. The project is the working
-directory of `build.mjs` (`rayfin.yml`'s `buildCommand`, `node ../common/build.mjs`).
+relative import; `query.js` passes its own on to `ossie.json`. Then every module `index.html`
+loads (its static imports, followed through the files: relative and `https://` ones) is named
+in its `<head>` as a `modulepreload`, so the browser fetches them all at once with the HTML:
+the Fabric host answers each request in ~0.7 s whatever its size, and without it the ~37
+modules came in six rounds, 2.0 s to 7.65 s after navigation (2026-10-28). The project is the
+working directory of `build.mjs` (`rayfin.yml`'s `buildCommand`, `node ../common/build.mjs`).
 
 **It is deployed from the owner's laptop**, under their own login, into two workspaces, each
 item reading that workspace's lakehouse `nem`: fabriccat's `conformance-oracle` (item
