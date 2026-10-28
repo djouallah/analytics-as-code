@@ -104,13 +104,17 @@ function warmExtensions(version) {
 }
 
 // The page's main thread blocked 100 ms or more (a long task: rendering, parsing, a large
-// result turned into rows), in the Logs tab with when it started (seconds since the page
-// started, as the Logs tab's t column).
+// result turned into rows): one line in the Logs tab, 20 s after the page started, with how
+// many, their total and the longest (a line each was noise).
 try {
-  new PerformanceObserver(list => {
-    for (const t of list.getEntries()) if (t.duration >= 100)
-      perf.log('info', `main thread blocked ${t.duration.toFixed(0)} ms, from ${(t.startTime / 1000).toFixed(2)} s`, { ms: t.duration });
-  }).observe({ type: 'longtask', buffered: true });
+  const blocks = [];
+  new PerformanceObserver(list => { for (const t of list.getEntries()) if (t.duration >= 100) blocks.push(t); })
+    .observe({ type: 'longtask', buffered: true });
+  setTimeout(() => {
+    if (!blocks.length) return;
+    const longest = blocks.reduce((a, b) => b.duration > a.duration ? b : a);
+    perf.log('info', `main thread: ${blocks.length} blocks of 100 ms or more in the first 20 s, ${(blocks.reduce((s, b) => s + b.duration, 0) / 1000).toFixed(1)} s in all, the longest ${longest.duration.toFixed(0)} ms from ${(longest.startTime / 1000).toFixed(2)} s`);
+  }, Math.max(20000 - performance.now(), 0));
 } catch (e) {}
 
 // What happened before this module ran (its long tasks are not kept by the browser): the
