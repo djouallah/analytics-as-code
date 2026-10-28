@@ -113,6 +113,16 @@ try {
   }).observe({ type: 'longtask', buffered: true });
 } catch (e) {}
 
+// What happened before this module ran (its long tasks are not kept by the browser): the
+// navigation, and every download of 200 ms or more until now, in the order they started.
+try {
+  const at = s => `${(s / 1000).toFixed(2)} s`;
+  const nav = performance.getEntriesByType('navigation')[0];
+  if (nav) perf.log('info', `page: HTML in at ${at(nav.responseEnd)}, DOM parsed at ${at(nav.domInteractive)}, data.js running at ${at(performance.now())}`);
+  for (const r of performance.getEntriesByType('resource').filter(r => r.duration >= 200).sort((a, b) => a.startTime - b.startTime))
+    perf.log('info', `loaded ${r.name.split('?')[0].split('/').slice(-2).join('/')} (${r.initiatorType}): ${at(r.startTime)} to ${at(r.responseEnd)}, ${(r.transferSize / 1024).toFixed(0)} KB${r.transferSize === 0 ? ' (cache)' : ''}`, { ms: r.duration });
+} catch (e) {}
+
 // onProgress({ label, done, total, detail }) while a long download runs, null when it ends.
 // timeZone: the session's, which CURRENT_DATE follows; the page's to say (none: DuckDB's own).
 export function createDataSource({ onStatus = () => {}, onProgress = () => {}, timeZone = null } = {}) {
