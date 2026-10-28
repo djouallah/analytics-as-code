@@ -33,8 +33,10 @@ const BUILD = `${sha}${dirty}.${new Date().toISOString().replace(/[-:]/g, "").re
 // once it has that module, and the Fabric host answers each request in ~0.7 s whatever its
 // size: the page's ~35 modules came in six rounds, 2.0 s to 7.65 s after navigation
 // (2026-10-28). The static imports only (an `import()` is loaded when the page asks), the
-// stamped relative ones and the absolute ones (duckdb-wasm from jsDelivr).
-async function preloadModules(dir) {
+// stamped relative ones and the absolute ones (duckdb-wasm from jsDelivr). And the model,
+// semantic/ossie.json: semantic/query.js fetches it at import (a top-level await), so every
+// module importing it waited for it, and data.js reads it again.
+async function preloadModules(dir, build) {
   const imports = s => [...s.matchAll(/\b(?:from|import)\s*["'](\.{1,2}\/[^"']+\.js(?:\?[^"']*)?|https:\/\/[^"']+)["']/g)].map(m => m[1]);
   const html = await readFile(dir + "index.html", "utf8");
   const seen = new Set(), queue = imports(html).map(u => ({ u, base: "" }));
@@ -49,7 +51,8 @@ async function preloadModules(dir) {
     const src = await readFile(dir + path, "utf8").catch(() => null);
     if (src) for (const v of imports(src)) queue.push({ u: v, base: posix.dirname(path) });
   }
-  const links = [...seen].map(h => `<link rel="modulepreload" href="${h}"${/^https:/.test(h) ? " crossorigin" : ""}>`).join("\n");
+  const links = [`<link rel="preload" href="semantic/ossie.json?v=${build}" as="fetch" crossorigin>`,
+    ...[...seen].map(h => `<link rel="modulepreload" href="${h}"${/^https:/.test(h) ? " crossorigin" : ""}>`)].join("\n");
   await writeFile(dir + "index.html", html.replace("</head>", `${links}\n</head>`));
   console.log(`index.html: ${seen.size} modules preloaded`);
 }
@@ -60,7 +63,7 @@ await stagePage("dax", dist, undefined, null);
 await cp(here("./site/"), dist, { recursive: true });
 await cp(project("./site/"), dist, { recursive: true });
 await stampBuild(dist, BUILD);
-await preloadModules(dist);
+await preloadModules(dist, BUILD);
 // After the stamping, which must not touch them: the dbt docs.
 await cp(DAG, dist + "dag", { recursive: true });
 console.log(`Published ../../page (+ dax) + fabric_app/common/site + site/ -> ${dist} (build ${BUILD})`);

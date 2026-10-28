@@ -377,7 +377,8 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
     let warmed = false;
     engines = await Promise.all(Array.from({ length: ENGINES }, async (_, i) => {
       const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), new Worker(workerUrl));
-      await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+      // Its worker script and WASM module fetched and compiled: the Logs tab says how long.
+      await perf.time('attach', `START engine ${i + 1} (worker + WASM instantiate)`, () => db.instantiate(bundle.mainModule, bundle.pthreadWorker));
       // Its file system reads a registered https file by range, after a HEAD with
       // Range: bytes=0- that the store answers 206; never the whole file at once. All three are
       // needed: with forceFullHTTPReads left out (on), a file opens with no request and fails.
