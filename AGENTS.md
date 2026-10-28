@@ -689,7 +689,9 @@ else: no import, no file written for it.
   views, and its own copy of a small table. A table is planned (by the page) and its files
   downloaded once (`readyOf`); every engine then binds its own view (`bind`). All the workers
   share the store (above). The Logs tab tags each LOAD and OPEN with its engine. Added
-  2026-10-28.
+  2026-10-28. On `power` that day, warm: two engines both busy from the first query (5.0 s) to
+  the last (10.0 s); three no faster (the last at 9.9 s, the first at 5.5 s: a third WASM
+  compile slows the start, and the queries ran 15% slower sharing the CPU).
 - **A table is opened when a query first names its view**, so the first paint pays only for
   the tables it reads. The rest are opened after the first paint, on every engine, in the
   background, at the back of each queue (`attachAgg`, not awaited); an engine other than the

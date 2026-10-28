@@ -28,7 +28,7 @@
 // Each view is at the snapshot the catalog named (catalog.js keeps that answer up to ~55
 // minutes, so a reload within it reads the same snapshots).
 // DuckDB-WASM runs single-threaded here, so the page runs a pool of engines (ENGINES, each its
-// own worker and memory, 3 by default; `?engines=N` in the URL, 1 to 4, to compare): a query goes to the
+// own worker and memory, 2 by default (3 measured no faster, 2026-10-28); `?engines=N` in the URL, 1 to 4, to compare): a query goes to the
 // engine with the fewest waiting, so a render's queries run side by side. A table is planned
 // and its files downloaded once, whichever engine opens it first; each engine then has its own
 // view (and its own copy of a small table). All the workers share the store.
@@ -57,7 +57,7 @@ const EXTENSIONS = ['parquet', 'icu'];
 const BLOCKCACHE = new URL('./blockcache.js' + new URL(import.meta.url).search, import.meta.url).href;
 const ENGINES = (() => {
   try { const n = Number(new URLSearchParams(location.search).get('engines')); if (n >= 1 && n <= 4) return Math.floor(n); } catch (e) {}
-  return 3;
+  return 2;
 })();
 const STORE_WAIT = 30000;   // how long the page waits for the store's writer to answer
 
