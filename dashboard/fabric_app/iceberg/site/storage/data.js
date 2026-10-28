@@ -103,6 +103,16 @@ function warmExtensions(version) {
     .catch(e => perf.log('info', `prefetch extensions: ${e?.message || e}`));
 }
 
+// The page's main thread blocked 100 ms or more (a long task: rendering, parsing, a large
+// result turned into rows), in the Logs tab with when it started (seconds since the page
+// started, as the Logs tab's t column).
+try {
+  new PerformanceObserver(list => {
+    for (const t of list.getEntries()) if (t.duration >= 100)
+      perf.log('info', `main thread blocked ${t.duration.toFixed(0)} ms, from ${(t.startTime / 1000).toFixed(2)} s`, { ms: t.duration });
+  }).observe({ type: 'longtask', buffered: true });
+} catch (e) {}
+
 // onProgress({ label, done, total, detail }) while a long download runs, null when it ends.
 // timeZone: the session's, which CURRENT_DATE follows; the page's to say (none: DuckDB's own).
 export function createDataSource({ onStatus = () => {}, onProgress = () => {}, timeZone = null } = {}) {
@@ -143,11 +153,11 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
   const channel = new BroadcastChannel('blockcache');
   let storeUp;
   const storeReady = new Promise(r => { storeUp = r; });
-  const answers = new Map();   // id -> resolve, for { missing }
+  const answers = new Map();   // id -> resolve, for { missing } and { stats }
   const stored = new Map();    // store path -> resolve, for { store }
   channel.onmessage = ({ data: d }) => {
     if (d?.writer) storeUp();
-    if (d?.id != null && answers.has(d.id)) { answers.get(d.id)(d.missing); answers.delete(d.id); }
+    if (d?.id != null && answers.has(d.id)) { answers.get(d.id)(d); answers.delete(d.id); }
     if (d?.stored && stored.has(d.stored)) { stored.get(d.stored)(); stored.delete(d.stored); }
   };
   const waitFor = (map, key, send, what) => new Promise((resolve, reject) => {
@@ -158,8 +168,14 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
   // The files of `paths` (abfss) the store does not hold whole.
   async function lacking(paths) {
     const id = `${Date.now()}-${Math.random()}`;
-    const missing = new Set(await waitFor(answers, id, () => channel.postMessage({ missing: paths.map(storePath), id }), 'what it holds'));
+    const missing = new Set((await waitFor(answers, id, () => channel.postMessage({ missing: paths.map(storePath), id }), 'what it holds')).missing);
     return paths.filter(p => missing.has(storePath(p)));
+  }
+  // What the store holds, for the Logs tab.
+  async function logStore(when) {
+    const id = `${Date.now()}-${Math.random()}`;
+    const { stats } = await waitFor(answers, id, () => channel.postMessage({ stats: true, id }), 'its size');
+    perf.log('info', `store ${when}: ${stats.files} files, ${(stats.bytes / 1073741824).toFixed(2)} GB`);
   }
   // A whole file the page downloaded, handed to the store: resolved once the writer keeps it.
   const toStore = (path, bytes) =>
@@ -224,6 +240,7 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
     const still = await lacking(fresh.map(f => f.path));
     if (still.length) throw new Error(`${name}: ${still.length} files not in the local store after their download`);
     perf.log('fetch', `download ${name}: ${fresh.length} files, ${(got / 1048576).toFixed(0)} MB`, { ms: performance.now() - t0 });
+    logStore(`after ${name}`).catch(() => {});
   }
   // The table's view on engine `e`, over a copy in its memory or over the files.
   async function bind(e, name, t, record) {
@@ -373,6 +390,7 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
     channel.postMessage({ ping: true });
     await Promise.race([storeReady, new Promise((_, reject) => setTimeout(() =>
       reject(new Error('no local store in this browser (OPFS with shared access handles, Chrome or Edge 121+)')), STORE_WAIT))]);
+    logStore('at start').catch(() => {});
 
     onStatus('Locating the tables in the catalog...');
     await ready;
@@ -413,10 +431,28 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
     ensureHistory: async () => false,
     // `dax`: the query as the page wrote it, for the Logs tab (the compiler passes it).
     // `options`: the page's for the queue (queue.js): `stale`, `early`, `later`.
-    query: (sql, dax, options) => perf.query(sql, () => {
-      const e = pick(sql);
-      return run(e, async () => { await openFor(e, sql); return e.conn.query(sql); }, options);
-    }, dax),
+    // Timed here, not by perf.query: its wait assumes one worker, and with a pool the other
+    // engine's work counted as this query's wait. `wait`: in its engine's queue; `ms`: the
+    // query itself (opening its tables is logged as OPEN); the engine in its status.
+    query: (sql, dax, options) => {
+      const e = pick(sql), t0 = performance.now();
+      const flat = s => String(s ?? '').replace(/\s+/g, ' ').trim();
+      let started = null, ran = null;
+      return run(e, async () => {
+        started = performance.now();
+        await openFor(e, sql);
+        ran = performance.now();
+        return e.conn.query(sql);
+      }, options).then(r => {
+        perf.log('query', flat(sql), { wait: started - t0, ms: performance.now() - ran, status: `${r.numRows} rows${tag(e)}`, dax: flat(dax) });
+        return r;
+      }, err => {
+        if (err?.skipped) perf.log('skip', flat(sql), { status: `replaced by a newer render${tag(e)}`, dax: flat(dax) });
+        else perf.log('error', flat(sql), { wait: started == null ? null : started - t0, ms: started == null ? null : performance.now() - (ran ?? started),
+                                            status: `${err?.message || err}${tag(e)}`, dax: flat(dax) });
+        throw err;
+      });
+    },
     // The tables the catalog has, with the model's columns (opening is not needed to list them).
     views: () => [...located.keys()].map(name => ({ name: 'v_' + name, columns: [...tables.get(name).columns] })),
     has: (view, column) => {

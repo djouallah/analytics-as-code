@@ -31,6 +31,7 @@
 //   { ping }           the writer answers { writer: true } (it also says so when it becomes one);
 //   { missing, id }    store paths: the writer answers { id, missing } with those it does not
 //                      hold whole;
+//   { stats, id }      the writer answers { id, stats: { files, bytes } } (the Logs tab);
 //   { store, bytes }   a whole file the page downloaded: the writer keeps it and answers
 //                      { stored }. Not the browser's HTTP cache: it does not keep a response of
 //                      70-100 MB.
@@ -151,6 +152,7 @@
       const d = e.data ?? {};
       if (d.ping && writable) announce();
       if (d.missing && d.id != null && writable) bc.postMessage({ id: d.id, missing: d.missing.filter(p => !whole(p)) });
+      if (d.stats && d.id != null && writable) bc.postMessage({ id: d.id, stats: { files: files.size, bytes: end } });
       // The writer answers once it has kept it; the others leave it to the writer, or become it
       // when it is gone.
       if (d.store && d.bytes && blocks && !writable) await promote();
