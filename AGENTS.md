@@ -780,8 +780,8 @@ To check a deploy, open the Logs tab: the build stamp, the function call, each v
 query, and the worker's requests. On the Iceberg app the Logs tab is the debugging record (its
 `data.js` adds to it freely; the shared `logs.js`/`perflog.js` stay as they are): each query
 timed by `data.js` itself, `wait` in its engine's queue and `ms` the query alone, the engine
-in its status (perflog's own wait assumes one worker); every main-thread block of 100 ms or
-more (`main thread blocked … ms, from … s`); the store's files and GB at start and after each
+in its status (perflog's own wait assumes one worker); one line on the main-thread blocks of
+100 ms or more in the first 20 s (count, total, longest); the store's files and GB at start and after each
 download. The owner clicks Copy; read it with `Get-Clipboard`, which has no length limit.
 
 ### The whole stack in one workspace
