@@ -152,26 +152,6 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
     }, Math.max(catalog.renewAt() - Date.now(), 0));
   }
 
-  // The snapshot planned from Iceberg: its live data files, its delete files (applied by the
-  // view itself, deletesOf), and the manifests read. The record snapshots.js keeps.
-  // A delete file is listed by a manifest of deletes: manifest_content says which, 'DATA' or
-  // 'DELETES', on every DuckDB (its `content` is 'EXISTING' for a data file on 1.5 and 'DATA' on
-  // 2.0). file_format is 'parquet', lower case. `scan`: what the view cannot read itself (no
-  // data file, or a file that is not Parquet: a deletion vector), left to iceberg_scan.
-  async function plan(e, t) {
-    const rows = (await e.conn.query(`SELECT manifest_path, file_path, manifest_content, file_format
-      FROM iceberg_metadata(${lit(t.location)}) WHERE status <> 'DELETED'`)).toArray();
-    const isData = r => String(r.manifest_content).toUpperCase() === 'DATA';
-    const paths = rs => [...new Set(rs.map(r => r.file_path))].map(path => ({ path, size: null }));
-    return {
-      location: t.location, bytes: t.bytes,
-      scan: !rows.some(isData) || !rows.every(r => String(r.file_format).toLowerCase() === 'parquet'),
-      files: paths(rows.filter(isData)),
-      deleteFiles: paths(rows.filter(r => !isData(r))),
-      manifests: [...new Set(rows.map(r => r.manifest_path))],
-    };
-  }
-
   // Opens a table: its view, over a copy in memory or over the files. Runs inside a queued
   // job, so it calls the connection itself. One opening per table, whoever asks; a failed one
   // can be asked for again.
@@ -206,7 +186,7 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
       }
     })().catch(err => { e.opened.delete(name); throw err; })).get(name);
   }
-  const readyOf = (e, name, t) => t.ready ??= (t.record ? Promise.resolve(t.record) : planned(e, name, t))
+  const readyOf = (e, name, t) => t.ready ??= (t.record ? Promise.resolve(t.record) : planned(name, t))
     .then(record => { t.whenReady(); return record; }, err => { t.ready = null; throw err; });
   // The worker's store answers a HEAD of a file whose size it knows: the sizes of the record's
   // files, sent before the view binds.
@@ -228,20 +208,14 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
     setTimeout(() => { if (stored.get(key) === resolve) { stored.delete(key); resolve(); } }, STORE_WAIT);
   });
   // The table's record, and a large table's new files downloaded. The page planned it
-  // (`planning`, prefetch.js's planTable, started at load); a table it could not plan (its
-  // metadata.json unread, a manifest it cannot decode) is planned by DuckDB on engine `e`.
-  async function planned(e, name, t) {
+  // (`planning`, prefetch.js's planTable, started at load): a table it could not plan fails.
+  async function planned(name, t) {
     const small = t.bytes != null && t.bytes <= SMALL_BYTES;
-    const js = await t.planning?.catch(err => {
-      perf.log('info', `PLAN ${name} in the page failed (${err?.message || err}): DuckDB plans it`);
-      return null;
-    });
-    const record = js ? { location: t.location, bytes: t.bytes, ...js.record }
-      : await perf.time('attach', `PLAN ${name}${tag(e)}`, () => plan(e, t));
+    const record = { location: t.location, bytes: t.bytes, ...(await t.planning).record };
     const last = snapshots.previous(name);
     const before = new Set([...last?.files ?? [], ...last?.deleteFiles ?? []].map(f => f.path));
     const fresh = [...record.files, ...record.deleteFiles].filter(f => !before.has(f.path));
-    if (!record.scan && !small && fresh.length) {
+    if (!small && fresh.length) {
       const t0 = performance.now();
       // The page shows how far it has got (onProgress): a first visit downloads a large
       // table whole before its charts draw.
@@ -265,27 +239,23 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
   async function bind(e, name, t, record) {
     const mb = t.bytes == null ? '?' : (t.bytes / 1048576).toFixed(1);
     const small = t.bytes != null && t.bytes <= SMALL_BYTES;
+    // What a view cannot read (no data file, a file that is not Parquet such as a deletion
+    // vector, an equality delete) is an error: there is no other way in.
+    if (record.scan) throw new Error(`${name}: not readable as Parquet with position deletes (no data file, equality deletes or a deletion vector)`);
     tellSizes(record);
-    // The positions the delete files remove, read once per session into memory. A delete file
-    // with no file_path and pos is an equality delete, which the view cannot apply: the table
-    // goes to iceberg_scan, and its record says so.
-    if (!record.scan && record.deleteFiles.length)
+    // The positions the delete files remove, read once per session into memory.
+    if (record.deleteFiles.length)
       await perf.time('attach', `DELETES ${name} (${record.deleteFiles.length} delete files)${tag(e)}`, () => e.conn.query(
         `CREATE OR REPLACE TABLE ${ident(deletesOf(name))} AS
          SELECT DISTINCT regexp_replace(file_path, '^abfss://([^@/]+)@([^/]+)/', 'https://\\2/\\1/') AS path, pos
-         FROM read_parquet([${record.deleteFiles.map(f => lit(https(f.path, sas))).join(', ')}])`))
-        .catch(err => {
-          perf.log('info', `${name}: delete files not applied (${err?.message || err}), read with iceberg_scan`);
-          record.scan = true; snapshots.put(name, record);
-        });
-    const how = record.scan ? 'iceberg_scan'
-      : `${record.files.length} Parquet files${record.deleteFiles.length ? `, ${record.deleteFiles.length} delete files applied` : ''}`;
+         FROM read_parquet([${record.deleteFiles.map(f => lit(https(f.path, sas))).join(', ')}])`));
+    const how = `${record.files.length} Parquet files${record.deleteFiles.length ? `, ${record.deleteFiles.length} delete files applied` : ''}`;
     if (small)
       await perf.time('attach', `OPEN ${name} (${mb} MB, copied into memory, ${how})${tag(e)}`, () => e.conn.query(
         `CREATE OR REPLACE TABLE ${ident(name)} AS ${selectOf(name, t, record)}; CREATE OR REPLACE VIEW ${ident('v_' + name)} AS SELECT * FROM ${ident(name)}`));
     else {
       await perf.time('attach', `OPEN ${name} (${mb} MB, read in place, ${how})${tag(e)}`, () => e.conn.query(viewOf(name, t, record)));
-      if (!record.scan) e.inPlace.set(name, { location: t.location, record });
+      e.inPlace.set(name, { location: t.location, record });
     }
   }
   // What a view reads: read_parquet over the files as https URLs with the SAS. Not abfss://:
@@ -294,10 +264,9 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
   // are the URLs the prefetch fetched, so DuckDB's requests find them in the browser's cache.
   // With delete files, the rows whose file and position (file_row_number, 0-based as Iceberg's
   // pos) a delete file names are left out: the file is its URL without the SAS, the delete
-  // file's file_path written the same way. iceberg_scan over abfss:// only for `scan`.
+  // file's file_path written the same way.
   const deletesOf = name => `__deletes_${name}`;
   const selectOf = (name, t, record) => {
-    if (record.scan) return `SELECT * FROM iceberg_scan(${lit(t.location)})`;
     const files = `[${record.files.map(f => lit(https(f.path, sas))).join(', ')}]`;
     if (!record.deleteFiles.length) return `SELECT * FROM read_parquet(${files})`;
     return `SELECT * EXCLUDE (__file, file_row_number)
@@ -332,13 +301,14 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
       const record = snapshots.get(name, location);
       if (record) return { name, location, m: null, bytes: record.bytes, record };
       try {
-        const m = await (await fetch(https(location, access.sas))).json();
+        const r = await fetch(https(location, access.sas));
+        if (!r.ok) throw new Error(`metadata.json: HTTP ${r.status}`);
+        const m = await r.json();
         const s = (m.snapshots ?? []).find(s => String(s['snapshot-id']) === String(m['current-snapshot-id']));
         const bytes = s ? Number(s.summary?.['total-files-size'] ?? NaN) : 0;
         return { name, location, m, bytes: Number.isNaN(bytes) ? null : bytes };
       } catch (e) {
-        perf.log('info', `${name}: size unknown (${e?.message || e}), read in place`);
-        return { name, location, m: null, bytes: null };
+        return { name, location, m: null, bytes: null, error: e };   // the table fails when opened
       }
     }));
     // Smallest first: the prefetch's queues are first come, first served, and a small table's
@@ -349,9 +319,11 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
       if (t.record) kept++;
       // A new snapshot is planned here, at once, off every engine (and a small table's files
       // fetched into the HTTP cache): opening the table waits for it.
-      const planning = t.m ? planTable(t.name, t.m, f => https(f, access.sas), { data: t.bytes != null && t.bytes <= SMALL_BYTES }) : null;
+      const planning = t.record ? null
+        : t.m ? planTable(t.name, t.m, f => https(f, access.sas), { data: t.bytes != null && t.bytes <= SMALL_BYTES })
+        : Promise.reject(t.error);
       planning?.then(p => perf.log('attach', `PLAN ${t.name} (in the page: ${p.manifests} manifests, ${p.fetched} read, ${p.record.files.length} files)`, { ms: performance.now() - t0 }),
-                     () => {});   // a failure is logged when the table opens, and DuckDB plans it
+                     e => perf.log('error', `PLAN ${t.name}`, { status: String(e?.message || e) }));
       let whenReady;
       const ready = new Promise(r => { whenReady = r; });
       located.set(t.name, { location: t.location, bytes: t.bytes, planning, record: t.record ?? null,

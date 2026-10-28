@@ -663,17 +663,16 @@ else: no import, no file written for it.
   (`iceberg-manifests-v1`): a new snapshot reads only the manifests it added. On `power`
   (2026-10-28) the same files as `iceberg_metadata()` for all 25 tables of `mart` and
   `landing` (205 files, about 260 manifests). A table the page cannot plan (its metadata.json
-  unread, a codec it does not read) is planned by DuckDB as before (`PLAN` on an engine,
-  `iceberg_metadata()`, one request per manifest). Its view is `read_parquet` over the
+  unread, a codec it does not read) fails: there is no fallback, on purpose. Its view is `read_parquet` over the
   record's files, written as literals.
   **A table's position deletes are applied by its view**: its delete files (fetched whole
   with its data files) are read once per session into a table `__deletes_<table>` (the data
   file's path and `pos`), and the view is `read_parquet(..., filename = '__file',
   file_row_number = true)` `ANTI JOIN` it on the file (its URL without the SAS) and the row
   (both 0-based). On `power` (2026-10-28) the same rows as `iceberg_scan`, on 1.5.6 and 2.0:
-  `fct_curtailment_region` and `dim_duid`, the two tables that have delete files. A delete
-  file that is not position deletes (an equality delete, or a deletion vector) leaves the
-  table to `iceberg_scan` (`scan` in its record); DuckDB writes neither. The
+  `fct_curtailment_region` and `dim_duid`, the two tables that have delete files. A table
+  with a file that is not position deletes (an equality delete, or a deletion vector) fails to
+  open (`scan` in its record): no fallback to `iceberg_scan`. DuckDB writes neither. The
   literals are `https://…?<SAS>` URLs, not `abfss://`: `read_parquet` globs every path,
   wildcard or not, and `azure_wasm` implements no glob ("Globbing Azure paths is not
   supported"); `httpfs` takes the URL as it is. So a new SAS writes those views again, and

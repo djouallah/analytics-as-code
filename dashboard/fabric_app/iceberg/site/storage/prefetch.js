@@ -74,7 +74,7 @@ export async function prefetchFiles(name, files, url, store, onFile = () => {}) 
 
 // --- Avro object container files, read by the schema in their header: the records of a
 // manifest list and of a manifest. Codecs null and deflate (what Iceberg writers use by
-// default); another one throws, and the table is planned by DuckDB instead.
+// default); another one throws, and the table fails.
 const utf8 = new TextDecoder();
 function long(r) {
   let n = 0, shift = 0, byte;
@@ -180,7 +180,7 @@ async function manifestEntries(path, content, url, name) {
 
 // The current snapshot's live files: what DuckDB's iceberg_metadata() WHERE status <> 'DELETED'
 // gives. `scan`: what a view over the Parquet files cannot read (no data file, a file that is
-// not Parquet such as a deletion vector, an equality delete), left to iceberg_scan.
+// not Parquet such as a deletion vector, an equality delete): the table fails to open.
 export async function planTable(name, metadata, url, { data = false } = {}) {
   if (!order.includes(name)) order.push(name);
   const current = String(metadata['current-snapshot-id']);
