@@ -690,7 +690,13 @@ else: no import, no file written for it.
   2026-10-28 a query was given an engine when sent: behind an 18 s full-history scan on one
   engine, queries waited 14-16 s there while the other sat idle.) A job tied to an engine (its
   setup, its background openings) runs on that one. Each engine has its own extensions,
-  registered files and views, and its own copy of a small table. A table is planned (by the page) and its files
+  registered files and views, and its own copy of a small table.
+- **A query that ran this session is answered from its result** (`results` in `data.js`,
+  2026-10-28): the views stay on the snapshots they were opened on for the whole session, so
+  the same SQL gives the same rows. Only a read (SELECT, WITH, FROM) with no volatile function
+  (Analyze can be given anything), kept once it succeeded, a result over 500,000 rows not
+  kept, and the least recently used dropped past 2,000,000 rows in all. A hit shows in the Logs
+  tab as `… rows (cached)`. In memory only: a reload starts empty (a new snapshot may be there). A table is planned (by the page) and its files
   downloaded once (`readyOf`); every engine then binds its own view (`bind`). All the workers
   share the store (above). The Logs tab tags each LOAD and OPEN with its engine. Added
   2026-10-28. On `power` that day, warm: two engines both busy from the first query (5.0 s) to

@@ -450,6 +450,21 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
   // ready yet is made ready (planned, downloaded) by the first engine; the others open it once
   // it is, so none of them waits on it with a job of its queue. Not awaited: the page does not
   // wait for them, and opening a table changes no result it holds.
+  // The results of this session's queries, by SQL, least recently used first (query()).
+  const RESULT_ROWS = 2_000_000;
+  const results = new Map();
+  let resultRows = 0;
+  const VOLATILE = /\b(random|uuid|gen_random_uuid|setseed|now|current_timestamp|current_time|get_current_time|nextval)\s*\(|\bcurrent_(timestamp|time)\b/i;
+  function keepResult(sql, r) {
+    if (!/^\s*(select|with|from)\b/i.test(sql) || VOLATILE.test(sql) || r.numRows > RESULT_ROWS / 4) return;
+    results.set(sql, r);
+    resultRows += r.numRows;
+    for (const [k, v] of results) {
+      if (resultRows <= RESULT_ROWS) break;
+      results.delete(k); resultRows -= v.numRows;
+    }
+  }
+
   let _warming = false;
   function attachAgg() {
     if (!_warming) {
@@ -474,9 +489,19 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
     // Timed here, not by perf.query: its wait assumes one worker. `wait`: in the queue, until
     // an engine took it; `ms`: the query itself (opening its tables is logged as OPEN); the
     // engine in its status.
+    // A query that ran this session is answered from its result (`results`): the views are on
+    // fixed snapshots for the whole session, so the same SQL gives the same rows. Only a read
+    // (SELECT, WITH) with no volatile function (Analyze can be given anything), only once it
+    // succeeded, and the least recently used dropped past RESULT_ROWS rows in all.
     query: (sql, dax, options) => {
       const t0 = performance.now();
       const flat = s => String(s ?? '').replace(/\s+/g, ' ').trim();
+      const hit = results.get(sql);
+      if (hit) {
+        results.delete(sql); results.set(sql, hit);
+        perf.log('query', flat(sql), { wait: 0, ms: performance.now() - t0, status: `${hit.numRows} rows (cached)`, dax: flat(dax) });
+        return Promise.resolve(hit);
+      }
       let started = null, ran = null, used = null;
       return submit(async e => {
         used = e; started = performance.now();
@@ -485,6 +510,7 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
         return e.conn.query(sql);
       }, { ...options, names: namedIn(sql) }).then(r => {
         perf.log('query', flat(sql), { wait: started - t0, ms: performance.now() - ran, status: `${r.numRows} rows${tag(used)}`, dax: flat(dax) });
+        keepResult(sql, r);
         return r;
       }, err => {
         if (err?.skipped) perf.log('skip', flat(sql), { status: 'replaced by a newer render', dax: flat(dax) });
