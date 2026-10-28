@@ -198,11 +198,25 @@ test("Analyze: a SELECT over the model, through the page's compiler", { skip }, 
 // Explore (frontend/explore.js): the shelves as a query in the page's words, through the
 // page's compiler, and its rows laid out as a pivot. Its totals are the model's.
 test('Explore: shelves to a query, a query to a pivot', { skip }, async () => {
-  const { modelFields, buildQuery, pivot, autoMark } = await import(pathToFileURL(join(staged, 'frontend/explore.js')).href);
+  const { modelFields, buildQuery, pivot, autoMark, modelSql } = await import(pathToFileURL(join(staged, 'frontend/explore.js')).href);
   const fields = modelFields(bim.model);
   assert.ok(fields.byId.has('dim_duid.FuelSourceDescriptor') && fields.byId.has('Generation MWh'));
   assert.ok(!fields.byId.has('Reads 5 minutes'), 'hidden measures are left out');
-  const run = async q => rows(page.toSQL(page.toDax(q)));
+  // Explore runs its query as a SELECT over the model (modelSql): the same rows as the query
+  // object gives, a total flagged 1 by GROUPING where the object's is TRUE.
+  const sqlModel = page.createModel({ query: async sql => rows(sql) });
+  const flag = v => v === true || v === 1 || v === 1n;
+  // As sets: rows tied on every key of the ORDER BY may come in either order (the pivot places
+  // a row by its keys, not by its position).
+  const same = rs => rs.map(r => JSON.stringify(Object.fromEntries(Object.entries(r).sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => [k, k.startsWith('__') ? flag(v) : v])), (k, v) => typeof v === 'bigint' ? Number(v) : v)).sort().join('\n');
+  const run = async q => {
+    const viaObject = await rows(page.toSQL(page.toDax(q)));
+    const text = modelSql(q);
+    const viaSql = await sqlModel.query(text).catch(e => { throw new Error(`${e.message}\n${text}`); });
+    assert.equal(same(viaSql), same(viaObject), `a SELECT over the model gives the object's rows:\n${text}`);
+    return viaObject;
+  };
   const base = { rows: [], cols: [], values: [], filters: [], mark: 'auto', totals: true, sort: 'fields' };
   const states = {
     pivot: { rows: ['dim_duid.FuelSourceDescriptor'], cols: ['dim_region.Region'], values: ['Generation MWh'] },

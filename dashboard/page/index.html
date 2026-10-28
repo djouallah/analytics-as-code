@@ -3038,9 +3038,10 @@
     function openExplorer() {
       explorer ??= createExplorer(document.getElementById('analyze-explore'), {
         model: loadModel,
-        run: async q => {
-          await ensureExploreData(data.toSQL(data.toDax(q)), q.where);
-          const rows = await runQuery(q, data.query, { keep: true });
+        // A SELECT over the model (Explore writes it, as the SQL page writes its queries).
+        run: async (text, where) => {
+          await ensureExploreData(data.analyze(text).sql, where);
+          const rows = await runQuery(text, data.query, { keep: true });
           setConnected();
           return rows;
         },
@@ -3146,20 +3147,19 @@
     async function explorePlan() {
       // The plan replaces the view; a second click puts the view back.
       if (explorer?.planShown()) { explorer.showPlan(null); return; }
-      const q = explorer?.query();
-      if (!q) { setStatus('Put a field on the shelves first', 'error'); return; }
+      const x = explorer?.query();
+      if (!x) { setStatus('Put a field on the shelves first', 'error'); return; }
       const btn = document.getElementById('analyzePlan');
       btn.disabled = true;
       btn.textContent = 'Planning...';
       try {
-        const sql = data.toSQL(data.toDax(q));
-        await ensureExploreData(sql, q.where);
+        // Compiled and explained as the SQL page's SQL is (analyze()).
+        const { sql, query } = data.analyze(x.sql);
+        await ensureExploreData(sql, x.where);
         setStatus("Explaining...", "loading");
-        // SQL over the views runs through analyze(), as the SQL page's plan does: query()
-        // takes the page's queries only (objects, or SELECTs over the model).
-        const rows = await runQuery(`EXPLAIN ${sql}`, data.analyze(sql).query, { keep: true });
-        // The SQL first, then its plan.
-        explorer.showPlan(`-- SQL\n${sql}\n\n-- Plan (EXPLAIN)\n${rows.map(r => r.explain_value ?? Object.values(r).join('  ')).join('\n')}`);
+        const rows = await runQuery(`EXPLAIN ${sql}`, query, { keep: true });
+        // The SELECT over the model first, then its plan.
+        explorer.showPlan(`${x.sql}\n\n-- Plan (EXPLAIN)\n${rows.map(r => r.explain_value ?? Object.values(r).join('  ')).join('\n')}`);
         setConnected();
       } catch (e) {
         setStatus("Query error: " + e.message, "error");
@@ -3170,14 +3170,14 @@
       }
     }
     async function exploreDownload() {
-      const q = explorer?.query();
-      if (!q) { setStatus('Put a field on the shelves first', 'error'); return; }
+      const x = explorer?.query();
+      if (!x) { setStatus('Put a field on the shelves first', 'error'); return; }
       const btn = document.getElementById('analyzeDownload');
       btn.disabled = true;
       btn.textContent = 'Exporting...';
       try {
-        const sql = data.toSQL(data.toDax(q));
-        await ensureExploreData(sql, q.where);
+        const { sql } = data.analyze(x.sql);
+        await ensureExploreData(sql, x.where);
         setStatus("Exporting CSV...", "loading");
         const n = await downloadCSVDirect(`SELECT COLUMNS(*)::VARCHAR FROM (\n${sql}\n) LIMIT 1000000`, 'explore.csv');
         setStatus(`Exported ${n.toLocaleString()} rows`, "connected");

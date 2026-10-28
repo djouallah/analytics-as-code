@@ -5,7 +5,8 @@
 // General purpose: it knows no table, column or measure of any model. It reads the fields
 // off the model it is given (TMSL: tables, columns, measures, relationships; hidden ones left
 // out), and every view is one query in the page's words (`select`, `where`, `totals`,
-// `orderBy`, `top`): the figures are the model's measures, a total is a `totals` row. What it
+// `orderBy`, `top`), run as a SELECT over the model (modelSql, the SQL page's form): the
+// figures are the model's measures, a total is a ROLLUP row. What it
 // does with the rows is layout: a row of the result goes in a cell of the pivot or a point of
 // a chart. The host passes in how to run a query and how to draw (createExplorer's `ctx`).
 // =============================================================================
@@ -85,6 +86,48 @@ export function buildQuery(s, { cap = CAP, today = localToday() } = {}) {
   return q;
 }
 
+// The query as a SELECT over the model, in dax-sql's SQL (the SQL page's form): the model's
+// columns (table.column) and its measures as AGG("name"), FROM model, WHERE, GROUP BY ALL or
+// ROLLUP for a total (GROUPING names it), ORDER BY, FETCH FIRST n ROWS WITH TIES. What
+// Explore runs and shows: the compiler builds the same plan from it as from the query object.
+const isColumn = x => /^\w+\.\w+$/.test(x);
+const sqlStr = v => `'${String(v).replace(/'/g, "''")}'`;
+const sqlVal = v => v == null ? 'NULL' : typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE') : typeof v === 'number' ? String(v)
+  : /^\d{4}-\d{2}-\d{2}$/.test(v) ? `DATE ${sqlStr(v)}` : sqlStr(v);
+function sqlCondition([col, op, ...a]) {
+  const named = vs => vs.filter(v => v != null), blank = vs => vs.some(v => v == null);
+  const list = vs => `(${vs.map(sqlVal).join(', ')})`;
+  switch (op) {
+    case 'between': return `${col} BETWEEN ${sqlVal(a[0])} AND ${sqlVal(a[1])}`;
+    case 'blank': return `${col} IS NULL`;
+    case 'notBlank': return `${col} IS NOT NULL`;
+    case 'in': {
+      const n = named(a[0]);
+      if (!blank(a[0])) return `${col} IN ${list(n)}`;
+      return n.length ? `(${col} IS NULL OR ${col} IN ${list(n)})` : `${col} IS NULL`;
+    }
+    case 'notIn': {
+      const n = named(a[0]);
+      return [...(n.length ? [`(${col} NOT IN ${list(n)} OR ${col} IS NULL)`] : []), ...(blank(a[0]) ? [`${col} IS NOT NULL`] : [])].join(' AND ');
+    }
+    default: return `${col} ${op} ${sqlVal(a[0])}`;
+  }
+}
+export function modelSql(q) {
+  const rollup = q.totals ?? {}, rolled = Object.values(rollup).flat();
+  const items = [...Object.entries(q.select).map(([n, x]) => `${isColumn(x) ? x : `AGG(${JSON.stringify(x)})`} AS "${n}"`),
+    ...Object.entries(rollup).map(([n, cols]) => `GROUPING(${cols[0]}) AS "${n}"`)];
+  const keys = Object.values(q.select).filter(isColumn).filter(c => !rolled.includes(c));
+  const group = rolled.length
+    ? `GROUP BY ${[...keys, ...Object.values(rollup).map(cols => `ROLLUP(${cols.length > 1 ? `(${cols.join(', ')})` : cols[0]})`)].join(', ')}`
+    : Object.values(q.select).some(isColumn) ? 'GROUP BY ALL' : '';
+  const order = (q.orderBy ?? []).map(o => Array.isArray(o) ? `"${o[0]}" ${o[1].toUpperCase()}` : `"${o}"`);
+  return [`SELECT ${items.join(', ')}`, 'FROM model',
+    q.where?.length ? `WHERE ${q.where.map(sqlCondition).join('\n  AND ')}` : '', group,
+    order.length ? `ORDER BY ${order.join(', ')}` : '',
+    q.top != null ? `FETCH FIRST ${q.top} ROWS WITH TIES` : ''].filter(Boolean).join('\n');
+}
+
 // Order of the keys of an axis: numbers as numbers, text as a person sorts it.
 const compare = (a, b) => {
   for (let i = 0; i < a.length; i++) {
@@ -147,7 +190,8 @@ const label = a => a.length ? a.map(v => v == null ? '(blank)' : String(v)).join
 
 // `root`: the element the page is built in. `ctx`:
 //   model()          the model, TMSL (a promise)
-//   run(q)           the rows of a query, as objects keyed by the select's names
+//   run(sql, where)  the rows of a SELECT over the model (modelSql), as objects keyed by the
+//                    select's names; `where`: its conditions, for the host's date range
 //   chart(el)        an ECharts instance on el, in the page's theme
 //   palette()        the colours of series, in order
 //   css(name)        a CSS token's value (the chart's tints)
@@ -370,7 +414,7 @@ export function createExplorer(root, ctx) {
       // A list of the column's values to tick.
       detail.replaceChildren(el('div', { class: 'ex-hint' }, 'Reading values…'));
       try {
-        values ??= (await ctx.run({ select: { v: fd.id }, orderBy: ['v'], top: 1000 })).map(r => r.v);
+        values ??= (await ctx.run(modelSql({ select: { v: fd.id }, orderBy: ['v'], top: 1000 }))).map(r => r.v);
       } catch (e) { detail.replaceChildren(el('div', { class: 'ex-error' }, e.message)); return; }
       const picked = new Set(draft.values);
       const find = el('input', { type: 'search', placeholder: 'Search values' });
@@ -410,7 +454,7 @@ export function createExplorer(root, ctx) {
     info.className = 'ex-info';
     info.textContent = 'Running…';
     try {
-      const rows = await ctx.run(q);
+      const rows = await ctx.run(modelSql(q), q.where);
       if (my !== seq) return;
       result = { state: structuredClone(state), rows };
       const n = rows.filter(r => !r[ROW_TOTAL] && !r[COL_TOTAL]).length;
@@ -607,8 +651,9 @@ export function createExplorer(root, ctx) {
     ready,
     // The theme changed: the chart is drawn again in the new one.
     redraw: () => { if (fields) draw(); },
-    // The shelves as one query, all its rows (the page's Download CSV and Show plan), or null.
-    query: () => buildQuery(state, { cap: 0 }),
+    // The shelves as one SELECT over the model, all its rows, and its date filter (the page's
+    // Download CSV and Show plan), or null.
+    query: () => { const q = buildQuery(state, { cap: 0 }); return q && { sql: modelSql(q), where: q.where }; },
     // The query's SQL and plan shown in place of the view (the page's Show plan); null puts
     // the view back.
     showPlan: text => {
