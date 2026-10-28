@@ -1,5 +1,5 @@
 // =============================================================================
-// explore.js — Analyze's Explore page: a pivot of a semantic model, built by dragging its
+// explore.js — the Explore tab's Pivot page: a pivot of a semantic model, built by dragging its
 // fields onto shelves (Rows, Columns, Values, Filters), drawn as a table or a chart
 // =============================================================================
 // General purpose: it knows no table, column or measure of any model. It reads the fields
@@ -196,7 +196,6 @@ const label = a => a.length ? a.map(v => v == null ? '(blank)' : String(v)).join
 //   palette()        the colours of series, in order
 //   css(name)        a CSS token's value (the chart's tints)
 //   storageKey       where the shelves are kept between visits (localStorage)
-//   onPlan(shown)    the plan was put in place of the view (true) or taken away (false)
 export function createExplorer(root, ctx) {
   let fields = null, state = load(), drag = null, seq = 0, timer = null, result = null, pop = null;
 
@@ -219,16 +218,12 @@ export function createExplorer(root, ctx) {
   const info = el('span', { class: 'ex-info' });
   const tools = el('div', { class: 'ex-tools' }, marks,
     el('label', { class: 'ex-check' }, totals, 'Totals'), sort,
-    el('button', { type: 'button', class: 'btn-analyze', title: 'Swap rows and columns', onclick: () => {
+    el('button', { type: 'button', class: 'btn-tool', title: 'Swap rows and columns', onclick: () => {
       [state.rows, state.cols] = [state.cols, state.rows]; changed(); } }, '⇄ Swap'),
-    el('button', { type: 'button', class: 'btn-analyze', onclick: () => { state = { ...EMPTY(), mark: state.mark }; changed(); } }, 'Clear'), info);
+    el('button', { type: 'button', class: 'btn-tool', onclick: () => { state = { ...EMPTY(), mark: state.mark }; changed(); } }, 'Clear'), info);
   const table = el('div', { class: 'ex-table' });
   const chartBox = el('div', { class: 'ex-chart', id: 'exploreChart' });
   const out = el('div', { class: 'ex-out' }, table, chartBox);
-  // The query's SQL and its plan, in place of the view, when the page's Show plan asks for it
-  // (showPlan); the next draw (a change of the shelves) puts the view back.
-  const plan = el('div', { class: 'ex-plan', hidden: true });
-  out.append(plan);
   root.replaceChildren(el('div', { class: 'ex' }, pane, el('section', { class: 'ex-main' }, shelves, tools, out)));
 
   search.addEventListener('input', renderFields);
@@ -375,8 +370,8 @@ export function createExplorer(root, ctx) {
     pop = el('div', { class: 'ex-pop', role: 'dialog', 'aria-label': `Filter ${fd.name}` },
       el('div', { class: 'ex-pop-head' }, fd.id), body,
       el('div', { class: 'ex-pop-foot' },
-        el('button', { type: 'button', class: 'btn-analyze', onclick: closePop }, 'Cancel'),
-        el('button', { type: 'button', class: 'btn-analyze primary', onclick: apply }, 'Apply')));
+        el('button', { type: 'button', class: 'btn-tool', onclick: closePop }, 'Cancel'),
+        el('button', { type: 'button', class: 'btn-tool primary', onclick: apply }, 'Apply')));
     pop.addEventListener('keydown', e => { if (e.key === 'Escape') closePop(); if (e.key === 'Enter' && e.target.tagName === 'INPUT' && e.target.type !== 'checkbox') apply(); });
     document.body.append(pop);
     const r = anchor.getBoundingClientRect();
@@ -428,8 +423,8 @@ export function createExplorer(root, ctx) {
       find.addEventListener('input', show);
       const all = on => () => { picked.clear(); if (on) values.filter(v => String(v).toLowerCase().includes(find.value.toLowerCase())).forEach(v => picked.add(v)); draft.values = values.filter(x => picked.has(x)); show(); };
       detail.replaceChildren(find, el('div', { class: 'ex-row' },
-        el('button', { type: 'button', class: 'btn-analyze', onclick: all(true) }, 'All'),
-        el('button', { type: 'button', class: 'btn-analyze', onclick: all(false) }, 'None'),
+        el('button', { type: 'button', class: 'btn-tool', onclick: all(true) }, 'All'),
+        el('button', { type: 'button', class: 'btn-tool', onclick: all(false) }, 'None'),
         values.length >= 1000 ? el('span', { class: 'ex-hint' }, 'first 1,000 values') : null), boxes);
       show();
     }
@@ -472,7 +467,6 @@ export function createExplorer(root, ctx) {
   }
   // --- Drawing ---
   function draw() {
-    if (!plan.hidden) { plan.hidden = true; plan.replaceChildren(); ctx.onPlan?.(false); }
     if (!result) {
       chartBox.hidden = true;
       table.hidden = false;
@@ -509,7 +503,7 @@ export function createExplorer(root, ctx) {
     const rowKeys = [...piv.rowKeys, ...(piv.hasRowTotal ? [null] : [])];
     const tint = ctx.palette()[0];
     const ranges = Object.fromEntries(measures.map(m => [m, extent(piv.rowKeys.flatMap(a => piv.colKeys.map(b => piv.cell(a, b)?.[nameOf(m)])))]));
-    const t = el('table', { class: 'analyze-table ex-pivot' });
+    const t = el('table', { class: 'data-table ex-pivot' });
     const head = el('thead');
     // One header line per column field, then the measures' names when there are several (or no column field).
     const lead = text => el('th', { class: 'ex-rowhead', scope: 'col' }, text);
@@ -653,17 +647,7 @@ export function createExplorer(root, ctx) {
     // The theme changed: the chart is drawn again in the new one.
     redraw: () => { if (fields) draw(); },
     // The shelves as one SELECT over the model, all its rows, and its date filter (the page's
-    // Download CSV and Show plan), or null.
-    query: () => { const q = buildQuery(state, { cap: 0 }); return q && { sql: modelSql(q), where: q.where }; },
-    // The query's SQL and plan shown in place of the view (the page's Show plan); null puts
-    // the view back.
-    // `shown`: the SELECT over the model, and the plan, an element the page builds.
-    showPlan: shown => {
-      if (shown == null) { draw(); return; }
-      plan.replaceChildren(el('pre', { class: 'ex-plan-sql' }, shown.sql), shown.plan);
-      table.hidden = true; chartBox.hidden = true; plan.hidden = false;
-      ctx.onPlan?.(true);
-    },
-    planShown: () => !plan.hidden,
+    // Download CSV, and the SQL box Show plan opens), or null.
+    query: () => { try { const q = buildQuery(state, { cap: 0 }); return q && { sql: modelSql(q), where: q.where }; } catch { return null; } },
   };
 }

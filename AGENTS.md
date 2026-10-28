@@ -324,12 +324,29 @@ does not read `draw.js`, which a review reads instead. The rows the page uses as
 stored are not figures: the filter lists, the newest interval, the Flows rows (a unit's MW,
 a link's flow and limits).
 
-**Analyze opens on Model**, its first sub-tab: the model drawn as a star
+**The Explore tab** (Analyze until 2026-10-28) sits after the dashboard's tabs, with Logs, a
+divider before it: tools over the model and the engine, not the dashboard. It is generic: it
+names no table, column or measure, and reads only the model (and, on the Iceberg app, the
+catalog). **It opens on Model**, its first sub-tab: the model drawn as a star
 (`frontend/model.js`, the layout `draw.js`'s `modelLayout`: a dimension is a table a
 relationship points to, in the centre; the facts either side), and for the table picked its
 columns, measures and relationships as the file has them. It reads the staged
-`semantic/ossie.json`, as the TMSL it stands for, and no data. The SQL box is the second sub-tab.
-**The Analyze tab's SQL is SQL, and only SQL**, on both pages: DuckDB's, over the views
+`semantic/ossie.json`, as the TMSL it stands for, and no data. **Pivot** is the second.
+**Pivot runs SELECTs over the model**: its shelves become a query object (`buildQuery`),
+written as dax-sql's SQL by `modelSql` (the SQL page's form: `table.column`, `AGG("measure")`,
+`FROM model`, `GROUP BY ALL` or `ROLLUP` with `GROUPING` for a total, `FETCH FIRST n ROWS WITH
+TIES`), and that text is what runs. `repo.test.mjs` holds it to the object: the same rows for
+every pivot state (2026-10-28).
+Show plan and Download CSV sit in the Pivot page's bar. **Show plan replaces the whole pivot
+with the SQL box**, filled with the pivot's SELECT (all its rows), for the user to edit: Run
+shows the first 500 rows and the count, Reset fills it again, Show visual puts the pivot back
+(the edits go). In the box, Show plan draws the plan in place of the results (the button then
+reads Show results), and Download CSV writes the box's rows; on the pivot it writes the
+pivot's. There is no SQL sub-tab and no example query: the box is only ever filled from the
+pivot. The plan is DuckDB's own tree, `EXPLAIN (FORMAT html)`: a page of its own (1.5's links
+treeflex's CSS from unpkg and collapses nodes with a script), shown in an
+`<iframe sandbox="allow-scripts">`.
+**The box's SQL is SQL, and only SQL**, on both pages: DuckDB's, over the views
 (`v_<table>`, the stored columns), in which **a SELECT over the semantic model** is a
 relation. That SELECT (dax-sql's SQL: `SELECT <columns>, AGG("<measure>"),
 SUM(<table.column>) ... FROM model WHERE ... GROUP BY ALL | ROLLUP ... HAVING ... ORDER BY
@@ -341,27 +358,15 @@ written: joins with the views, unions, window functions. **The model is not a vi
 cannot be one**: a measure has no value until the groups are chosen, so `JOIN model` or an
 unparenthesised `UNION` arm over it is an error. Which text is a SELECT over the model is
 dax-sql's to say (`compileStatement`, with a lexer: `FROM model` in a comment or a string is
-text), never a regex of the page's. Analyze compiles with no browser casts
+text), never a regex of the page's. The box compiles with no browser casts
 (`castOutput: false`), so the model's columns keep DuckDB's types and compose with the views'.
-`analyze(text)` in `query.js` returns what runs; the preview, the count, EXPLAIN and the CSV
-are built round it, and the Logs tab shows the DAX of each model SELECT in it. The example is the
-model query alone. The page writes no SQL into it: SQL built from the page's filters would
-be a second query language with figures of its own. `query()`, which the page's own queries
+`analyze(text)` in `query.js` returns what runs; the results, the count, EXPLAIN and the CSV
+are built round it, and the Logs tab shows the DAX of each model SELECT in it. The page writes
+no SQL from its own filters into it: that would be a second query language with figures of
+its own. `query()`, which the page's own queries
 go through, takes a query object or a SELECT over the model and nothing else, so SQL over
 the views cannot come back into the pages; `query()` and `analyze()` refuse DAX text. Don't
 make the box accept DAX. Its CSV is the rows of its SQL (`draw.js`'s `writeCsv`).
-Show plan and Download CSV sit in Analyze's bar, on the SQL and Explore pages, and act on
-the page shown: the SQL box, or Explore's query (its shelves, all rows), whose SQL and then its
-plan replace its view (a second click, or a change of the shelves, puts the view back). The plan
-is DuckDB's own tree, `EXPLAIN (FORMAT html)`: a page of its own (1.5's links treeflex's CSS
-from unpkg and collapses nodes with a script), shown in an `<iframe sandbox="allow-scripts">`
-in place of the results or the view; the button then reads Show results (SQL) or Show visual
-(Explore).
-**Explore runs SELECTs over the model**: its shelves become a query object (`buildQuery`),
-written as dax-sql's SQL by `modelSql` (the SQL page's form: `table.column`, `AGG("measure")`,
-`FROM model`, `GROUP BY ALL` or `ROLLUP` with `GROUPING` for a total, `FETCH FIRST n ROWS WITH
-TIES`), and that text is what runs and what Show plan shows above the plan. `repo.test.mjs`
-holds it to the object: the same rows for every Explore state (2026-10-28).
 
 **The compiler is checked against the model:** `scripts/parity/page_queries.mjs`
 calls every member of `queries.js` the way `index.html` does, over 12 page states, and runs
@@ -417,7 +422,7 @@ import is of the staged tree (`semantic/query.js` imports `./dax-sql/index.js`, 
   (`createQueries(page)`, over the page's state passed in as functions; the renderers only
   call it). The queries name the model's tables, columns and measures (`fct_summary.mw`,
   `dim_duid.FuelSourceDescriptor`, `Capture price`). **The page joins nothing** and names no
-  view (outside Analyze and `data.has('v_...')`). Which fuels are renewable, and which units
+  view (outside Explore and `data.has('v_...')`). Which fuels are renewable, and which units
   are storage, is not in the dashboard at all: `dim_duid.Renewable` and `dim_duid.Storage`
   say (a generator is a unit that is not storage, a unit with no fuel included). What
   `queries.js` holds is which grain a date range reads (`grain()`: the 5-minute tables up to
@@ -438,7 +443,7 @@ import is of the staged tree (`semantic/query.js` imports `./dax-sql/index.js`, 
   are in, in Power BI and in the compiler alike.
   **Rooftop solar is five units**: `ROOFTOP_<region>`, fuel "Rooftop solar", rows of
   `fct_summary` like any unit's, so every filter on the units reaches it and no query adds
-  it on its own. It is in the unit picker, search and Analyze; not on the map (no position)
+  it on its own. It is in the unit picker, search and Explore; not on the map (no position)
   and not in `[Units]`.
 - `semantic_model/ossie.yaml` is the semantic model (see "The semantic model"), in
   [Apache Ossie](https://github.com/apache/ossie) (core-spec 0.2.0.dev0), edited by hand:
@@ -500,7 +505,7 @@ import is of the staged tree (`semantic/query.js` imports `./dax-sql/index.js`, 
 - `dashboard/page/storage/queue.js` is how both DuckDB `data.js` send queries: one
   at a time (the worker runs one anyway), the hero's `early`, the KPI deltas `later`, and a
   query whose render a newer one replaced dropped unrun when its turn comes (`runQuery` in
-  `index.html` says which render a query is for; Analyze's are never dropped).
+  `index.html` says which render a query is for; Explore's are never dropped).
 - `dashboard/page/frontend/perflog.js` and `dashboard/page/frontend/logs.js`
   are the Logs tab, on both hosts: a table of what this session fetched, attached and ran,
   with timings, and the build stamp. This session only: it lives in the page's memory,
@@ -639,7 +644,7 @@ else: no import, no file written for it.
   worker before the engine, and the worker's only way out. It answers `store.local` from
   OPFS (a HEAD: the size, 206 when asked with a range; a range; the whole file); a file it does
   not hold is a 404, never a request. It lets through DuckDB's extension downloads (kept
-  whole) and **refuses every other request** (403): SQL typed in Analyze cannot reach any URL
+  whole) and **refuses every other request** (403): SQL typed in Explore cannot reach any URL
   (duckdb-wasm's own file system would otherwise fetch any `https://` URL, even without
   `httpfs`). Files are kept in 256 KB blocks under their OneLake path without the SAS
   (`https://onelake.dfs.fabric.microsoft.com/<ws>/<lh>/...`; `store.local/<ws>/<lh>/...` reads
@@ -847,7 +852,7 @@ there: those stay on GitHub, for the `power` catalog.
 Direct Lake over the `mart` tables, no DuckDB, no copy of the data). Its
 `site/storage/data.js` sets `engine: 'dax'`, and the compiler's `createModel` then sends each
 query's DAX (`toDax`) to it as it is, with no views and no SQL; with no `needs`, the page
-leaves out Analyze. The route to the model is a Rayfin connector of type
+leaves out Explore. The route to the model is a Rayfin connector of type
 `fabric-semanticmodel` (`executeQuery`, delegated): the app's backend runs the query on the
 model as the signed-in user, so the browser holds no Power BI token. Not deployed in
 `power` yet: Fabric answered `403 The feature is not available` there (microsoft/rayfin#8)
@@ -929,7 +934,7 @@ in `landing` are what these tables are built from.
   For the number to be the same from either table, the daily table stores the day's sums of
   what the 5-minute measure sums: `output_mwh`, `charging_mwh`, `revenue`. Its `mwh` (net)
   and `price` (the day's average) are not the same numbers (a battery's day nets out, a day
-  is priced at its average) and no measure reads them; Analyze's SQL lists them. The
+  is priced at its average) and no measure reads them; Explore's SQL box lists them. The
   hour-of-day tables are not switched to: `[Output MWh hourly]`, `[Average MW at hour]` and
   `[Price at hour]` name them, as `[Negative price days share]`, `[Lowest daily price]` and
   `[Average MWh a day]` name the daily tables: a share of days is not a share of intervals.
@@ -987,7 +992,7 @@ in `landing` are what these tables are built from.
 | dim_interconnector | mart | incremental insert-only merge on interconnector — the links between regions of `dim_region` (from MMSDM `INTERCONNECTOR`): `from_region`/`to_region` (a positive `mw` flows from the first to the second) and AEMO's `description`. The Flows page names a link by its id on the map and by the description on its board; only the bend of each arc is typed there (`LINK_CURVES`) |
 | dim_time | mart | incremental insert-only merge on time — the 288 5-minute times of a day (`time` HHMM, `minute`, `hour`): the time axis of the 5-minute facts, and what the measures look at to choose a table |
 | fct_region_daily | mart | incremental insert-only merge on (REGIONID, date) — the plain average of a day's 288 intervals of `fct_region` (price, demand, net interchange); a day is written once it has all 288 |
-| fct_summary_daily | mart | incremental insert-only merge on (DUID, date) — `fct_summary` per unit and day, written once `fct_scada` holds the day whole (`macros/whole_days.sql`: the days after the newest one here; in a refill `process_limit` days below the oldest, newest first, never below `fct_summary`'s oldest): `output_mwh`, `charging_mwh`, `revenue` (the sums the measures switch to) and `mwh` net with the region's daily `price` (no measure reads those two; Analyze lists them). Inner join to `fct_region_daily` |
+| fct_summary_daily | mart | incremental insert-only merge on (DUID, date) — `fct_summary` per unit and day, written once `fct_scada` holds the day whole (`macros/whole_days.sql`: the days after the newest one here; in a refill `process_limit` days below the oldest, newest first, never below `fct_summary`'s oldest): `output_mwh`, `charging_mwh`, `revenue` (the sums the measures switch to) and `mwh` net with the region's daily `price` (no measure reads those two; Explore's SQL box lists them). Inner join to `fct_region_daily` |
 | dim_month | mart | incremental insert-only merge on month — the whole months of `fct_summary_daily` with their number of days |
 | fct_summary_hourly | mart | incremental insert-only merge on (DUID, month, hour) — output energy per unit, whole month and hour of day (`time // 100`), 12 months per run |
 | fct_region_hourly | mart | incremental insert-only merge on (REGIONID, month, hour) — average price per region, whole month and hour of day, with the number of intervals averaged |

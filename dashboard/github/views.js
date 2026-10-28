@@ -109,7 +109,7 @@ export function withViews(data) {
       if (changed) await compile();
       return changed;
     },
-    // The views that exist, with their columns: what the Analyze tab's SQL can read on the
+    // The views that exist, with their columns: what the Explore tab's SQL box can read on the
     // SQL page (on the DAX page it is a SELECT over the model, compiled to SQL over them).
     views: () => [..._views].map(([name, v]) => ({ name, columns: [...v.cols] })),
     // Whether a view exists and, given a column, whether it has it.

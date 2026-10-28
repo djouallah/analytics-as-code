@@ -9,7 +9,7 @@
 // not hold is an error (404), not a request. No SAS ever reaches this worker.
 // The one other request a worker may make is DuckDB downloading its extensions
 // (extensions.duckdb.org/v<version>/wasm_eh/...), each kept here whole after its first load (a
-// file under its version never changes). Every other request is refused: SQL typed in Analyze
+// file under its version never changes). Every other request is refused: SQL typed in Explore
 // cannot reach any URL.
 //
 // A file is kept in OPFS in blocks of BLOCK bytes under its OneLake path without the SAS

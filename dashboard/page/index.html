@@ -65,6 +65,9 @@
     .tab-btn { padding: 0.4rem 0.95rem; font-size: 0.85rem; font-weight: 600; color: var(--muted); background: none; border: none; border-radius: 999px; cursor: pointer; white-space: nowrap; transition: color 0.15s, background 0.15s; }
     .tab-btn:hover { color: var(--text); }
     .tab-btn.active { color: var(--on-accent); background: var(--accent); }
+    /* Explore and Logs are tools over the model and the engine, not the dashboard: a divider sets them apart. */
+    .tab-btn[data-tab="explore"] { position: relative; margin-left: 0.7rem; }
+    .tab-btn[data-tab="explore"]::before { content: ""; position: absolute; left: -0.45rem; top: 22%; bottom: 22%; border-left: 1px solid var(--border); }
     .top-actions { display: flex; align-items: center; gap: 0.9rem; margin-left: auto; }
     #status { font-size: 0.78rem; color: var(--muted); display: flex; align-items: center; gap: 0.45rem; }
     #status .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
@@ -92,7 +95,7 @@
     /* --- Filter bar: stays in view while the page scrolls --- */
     .filter-bar { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; gap: 0.6rem 1.1rem; flex-wrap: wrap; padding: 0.6rem var(--gutter); background: color-mix(in srgb, var(--bg) 84%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--hairline); }
     .filter-group { display: flex; align-items: center; gap: 0.45rem; }
-    .filter-group label, .analyze-controls label, .analyze-sql-head label { font-size: 0.7rem; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+    .filter-group label, .tool-controls label, .explore-sql-head label { font-size: 0.7rem; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
     .filter-group select, .filter-group input[type=date], .duid-trigger, .multi-dropdown .dd-trigger { padding: 0.4rem 0.7rem; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 0.85rem; background: var(--input-bg); color: var(--text); cursor: pointer; outline: none; white-space: nowrap; transition: border-color 0.15s, box-shadow 0.15s; }
     .filter-group select:hover, .filter-group input[type=date]:hover, .duid-trigger:hover, .multi-dropdown .dd-trigger:hover { border-color: var(--muted); }
     .filter-group select:focus-visible, .filter-group input[type=date]:focus-visible, .duid-trigger:focus-visible, .multi-dropdown .dd-trigger:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus-ring); outline: none; }
@@ -215,29 +218,29 @@
     .subtab:hover { color: var(--text); }
     .subtab.active { color: var(--on-accent); background: var(--accent); }
 
-    /* --- Analyze and Logs --- */
-    .analyze-controls { display: flex; gap: 0.8rem; padding: var(--gap) var(--gutter) 0.8rem; align-items: center; flex-wrap: wrap; }
-    .btn-analyze, .flows-btn { padding: 0.42rem 1rem; border: 1px solid var(--border); border-radius: 999px; font-size: 0.82rem; font-weight: 600; background: none; color: var(--text); cursor: pointer; transition: border-color 0.15s, background 0.15s, color 0.15s; }
-    .btn-analyze:hover, .flows-btn:hover { border-color: var(--muted); }
-    .btn-analyze.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-    .btn-analyze.primary:hover { opacity: 0.88; }
-    .btn-analyze:disabled { opacity: 0.5; cursor: not-allowed; }
-    .analyze-info { font-size: 0.8rem; color: var(--muted); padding: 0 var(--gutter); }
-    .analyze-sql { padding: 0 var(--gutter) 0.4rem; }
-    .analyze-sql-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem; }
-    .analyze-sql-head label span { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--faint); }
-    .analyze-sql textarea { width: 100%; min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; line-height: 1.5; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.7rem 0.9rem; resize: vertical; white-space: pre; }
-    .analyze-sql textarea:focus { outline: none; border-color: var(--accent); }
-    .analyze-table-wrap { margin: 0.6rem var(--gutter) 1.5rem; overflow: auto; max-height: 60vh; border-radius: var(--radius); }
-    .analyze-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; font-variant-numeric: tabular-nums; }
-    .analyze-table th { position: sticky; top: 0; background: var(--card); color: var(--muted); font-size: 0.74rem; font-weight: 600; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); text-align: left; }
-    .analyze-table td { padding: 0.35rem 0.7rem; border-bottom: 1px solid var(--row-line); color: var(--text); }
-    .analyze-table tr:hover td { background: var(--hover-soft); }
-    /* Analyze, Model: the star (an SVG, model.js) and the table picked. */
+    /* --- Explore and Logs --- */
+    .tool-controls { display: flex; gap: 0.8rem; padding: var(--gap) var(--gutter) 0.8rem; align-items: center; flex-wrap: wrap; }
+    .btn-tool, .flows-btn { padding: 0.42rem 1rem; border: 1px solid var(--border); border-radius: 999px; font-size: 0.82rem; font-weight: 600; background: none; color: var(--text); cursor: pointer; transition: border-color 0.15s, background 0.15s, color 0.15s; }
+    .btn-tool:hover, .flows-btn:hover { border-color: var(--muted); }
+    .btn-tool.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+    .btn-tool.primary:hover { opacity: 0.88; }
+    .btn-tool:disabled { opacity: 0.5; cursor: not-allowed; }
+    .tool-info { font-size: 0.8rem; color: var(--muted); padding: 0 var(--gutter); }
+    .explore-sql { padding: 0 var(--gutter) 0.4rem; }
+    .explore-sql-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem; }
+    .explore-sql-head label span { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--faint); }
+    .explore-sql textarea { width: 100%; min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; line-height: 1.5; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.7rem 0.9rem; resize: vertical; white-space: pre; }
+    .explore-sql textarea:focus { outline: none; border-color: var(--accent); }
+    .data-table-wrap { margin: 0.6rem var(--gutter) 1.5rem; overflow: auto; max-height: 60vh; border-radius: var(--radius); }
+    .data-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+    .data-table th { position: sticky; top: 0; background: var(--card); color: var(--muted); font-size: 0.74rem; font-weight: 600; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); text-align: left; }
+    .data-table td { padding: 0.35rem 0.7rem; border-bottom: 1px solid var(--row-line); color: var(--text); }
+    .data-table tr:hover td { background: var(--hover-soft); }
+    /* Explore, Model: the star (an SVG, model.js) and the table picked. */
     .model-page { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: var(--gap); padding: var(--gap) var(--gutter) 1.5rem; }
-    .model-page[hidden], .analyze-sql-page[hidden], .explore-page[hidden] { display: none; }
-    .analyze-actions { display: flex; gap: 0.4rem; }
-    .analyze-actions[hidden] { display: none; }
+    .model-page[hidden], .explore-sql-page[hidden], .explore-page[hidden] { display: none; }
+    .explore-actions { display: flex; gap: 0.4rem; }
+    .explore-actions[hidden] { display: none; }
     .model-diagram, .model-panel { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); overflow: auto; }
     .model-diagram { padding: 0.8rem; display: flex; }
     .model-diagram svg { display: block; flex: none; width: 100%; min-width: 640px; height: auto; margin: auto; font-family: inherit; }
@@ -274,7 +277,7 @@
     .m-mark { fill: var(--faint); font-size: 11px; font-weight: 700; }
     .m-rel.m-on .m-mark { fill: var(--text); }
     .m-card.m-off, .m-rel.m-off { opacity: 0.2; }
-    /* Analyze, Explore: fields on the left, shelves, the controls and the view (explore.js). */
+    /* Explore, Pivot: fields on the left, shelves, the controls and the view (explore.js). */
     .explore-page { padding: var(--gap) var(--gutter) 1.5rem; }
     .ex { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: var(--gap); min-height: 70vh; }
     .ex-fields, .ex-main { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); min-height: 0; }
@@ -305,7 +308,7 @@
     .ex-chip .ex-x { padding: 0.18rem 0.55rem 0.18rem 0.3rem; color: var(--faint); }
     .ex-chip .ex-x:hover { color: var(--text); }
     .ex-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; }
-    .ex-tools .btn-analyze { padding: 0.28rem 0.75rem; font-size: 0.76rem; }
+    .ex-tools .btn-tool { padding: 0.28rem 0.75rem; font-size: 0.76rem; }
     .ex-marks { display: flex; flex-wrap: wrap; gap: 0.1rem; padding: 0.15rem; border: 1px solid var(--hairline); border-radius: 999px; }
     .ex-mark { padding: 0.22rem 0.6rem; font-size: 0.74rem; font-weight: 600; color: var(--muted); background: none; border: 1px solid transparent; border-radius: 999px; cursor: pointer; }
     .ex-mark:hover { color: var(--text); }
@@ -317,11 +320,9 @@
     .ex-out { flex: 1 1 auto; min-height: 340px; display: flex; flex-direction: column; }
     .ex-table { overflow: auto; flex: 1 1 0; min-height: 0; max-height: 65vh; }
     .ex-chart { flex: 1 1 0; min-height: 340px; }
-    /* Show plan: the SELECT, then DuckDB's plan tree (a page of its own, in a frame). */
-    .ex-plan { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; gap: 0.6rem; }
-    .ex-plan[hidden], .analyze-plan[hidden], .analyze-table-wrap[hidden] { display: none; }
-    .ex-plan-sql { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.72rem; line-height: 1.45; white-space: pre-wrap; color: var(--muted); max-height: 30%; overflow: auto; }
-    .analyze-plan { flex: 1 1 auto; min-height: 420px; display: flex; padding: 0 var(--gutter) 1rem; }
+    /* Show plan, in the SQL box: DuckDB's plan tree (a page of its own, in a frame), in place of the results. */
+    .explore-plan[hidden], .data-table-wrap[hidden] { display: none; }
+    .explore-plan { flex: 1 1 auto; min-height: 420px; display: flex; padding: 0 var(--gutter) 1rem; }
     .plan-frame { flex: 1 1 auto; width: 100%; min-height: 420px; border: 1px solid var(--hairline); border-radius: 8px; background: #fff; }
     .ex-table[hidden], .ex-chart[hidden] { display: none; }
     .ex-empty { color: var(--faint); font-size: 0.85rem; padding: 3rem 1rem; text-align: center; }
@@ -343,7 +344,7 @@
     .ex-pop .ex-values { max-height: 240px; overflow: auto; gap: 0.1rem; }
     .ex-values label { color: var(--text); }
     .ex-pop .ex-row { flex-direction: row; align-items: center; }
-    .ex-row .btn-analyze, .ex-pop-foot .btn-analyze { padding: 0.25rem 0.7rem; font-size: 0.74rem; }
+    .ex-row .btn-tool, .ex-pop-foot .btn-tool { padding: 0.25rem 0.7rem; font-size: 0.74rem; }
     .ex-pop-foot { display: flex; justify-content: flex-end; gap: 0.4rem; }
 
     /* --- Flows page --- */
@@ -472,7 +473,7 @@
       #view-dashboard .charts { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
       #view-dashboard .charts > .full-width { grid-column: 1; grid-row: span 2; }
 
-      .subtab-bar, .kpi-row.records, .flows-bar, .analyze-controls, .analyze-sql, .analyze-info { flex: none; }
+      .subtab-bar, .kpi-row.records, .flows-bar, .tool-controls, .explore-sql, .tool-info { flex: none; }
       .flows-main { flex: 1 1 0; min-height: 0; grid-template-rows: minmax(0, 1fr); }
       .flows-map { display: flex; flex-direction: column; }
       /* The readout keeps one width and one line each, whatever the interval says: the slider
@@ -480,9 +481,9 @@
       .flows-time { flex: none; width: min(30rem, 34vw); min-width: 0; }
       .flows-now, .flows-event { height: 1.4em; line-height: 1.4em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .flows-board { overflow-y: auto; }
-      .analyze-sql textarea { height: 16vh; min-height: 80px; }
-      .analyze-table-wrap { flex: 1 1 0; min-height: 0; max-height: none; }
-      .analyze-sql-page:not([hidden]) { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+      .explore-sql textarea { height: 16vh; min-height: 80px; }
+      .data-table-wrap { flex: 1 1 0; min-height: 0; max-height: none; }
+      .explore-sql-page:not([hidden]) { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
       .model-page:not([hidden]) { flex: 1 1 0; min-height: 0; grid-template-rows: minmax(0, 1fr); }
       .model-panel { max-height: none; }
       .model-diagram svg { height: 100%; }
@@ -549,7 +550,7 @@
       <button class="tab-btn" data-tab="flows" role="tab" id="tab-flows" aria-selected="false" aria-controls="view-flows" tabindex="-1">Flows</button>
       <button class="tab-btn" data-tab="insights" role="tab" id="tab-insights" aria-selected="false" aria-controls="view-insights" tabindex="-1">Insights</button>
       <button class="tab-btn" data-tab="history" role="tab" id="tab-history" aria-selected="false" aria-controls="view-history" tabindex="-1">History</button>
-      <button class="tab-btn" data-tab="analyze" role="tab" id="tab-analyze" aria-selected="false" aria-controls="view-analyze" tabindex="-1">Analyze</button>
+      <button class="tab-btn" data-tab="explore" role="tab" id="tab-explore" aria-selected="false" aria-controls="view-explore" tabindex="-1">Explore</button>
       <button class="tab-btn" data-tab="logs" role="tab" id="tab-logs" aria-selected="false" aria-controls="view-logs" tabindex="-1">Logs</button>
     </div>
     <div class="top-actions">
@@ -796,56 +797,57 @@
     </div>
   </div>
 
-  <div id="view-analyze" role="tabpanel" aria-labelledby="tab-analyze" style="display:none">
+  <div id="view-explore" role="tabpanel" aria-labelledby="tab-explore" style="display:none">
     <div class="subtab-bar">
-      <div class="subtabs" role="tablist" aria-label="Analyze pages">
+      <div class="subtabs" role="tablist" aria-label="Explore pages">
         <button type="button" class="subtab active" data-apage="model" role="tab" aria-selected="true">Model</button>
-        <button type="button" class="subtab" data-apage="sql" role="tab" aria-selected="false" tabindex="-1">SQL</button>
-        <button type="button" class="subtab" data-apage="explore" role="tab" aria-selected="false" tabindex="-1">Explore</button>
+        <button type="button" class="subtab" data-apage="pivot" role="tab" aria-selected="false" tabindex="-1">Pivot</button>
       </div>
-      <!-- On the SQL and Explore pages: they act on the page shown (its SQL, or Explore's query). -->
-      <div class="analyze-actions" id="analyzeActions" hidden>
-        <button class="btn-analyze" id="analyzePlan" type="button">Show plan</button>
-        <button class="btn-analyze primary" id="analyzeDownload" type="button">Download CSV</button>
+      <!-- On the Pivot page: they act on the pivot, or on the SQL box once Show plan has opened it. -->
+      <div class="explore-actions" id="exploreActions" hidden>
+        <button class="btn-tool" id="explorePlan" type="button">Show plan</button>
+        <button class="btn-tool primary" id="exploreDownload" type="button">Download CSV</button>
       </div>
     </div>
     <!-- The semantic model (ossie.yaml) as a star, and what it says of the table picked (model.js fills it). -->
-    <div class="model-page" id="analyze-model">
+    <div class="model-page" id="explore-model">
       <div class="model-diagram"><svg id="modelSvg" role="img" aria-label="The tables of the semantic model and their relationships"></svg></div>
       <aside class="model-panel" id="modelPanel"></aside>
     </div>
     <!-- The model's fields dragged onto shelves, drawn as a pivot or a chart (explore.js builds it). -->
-    <div class="explore-page" id="analyze-explore" hidden></div>
-    <div class="analyze-sql-page" id="analyze-sql-page" hidden>
-    <div class="analyze-controls">
-      <button class="btn-analyze" id="analyzePreview" type="button">Preview</button>
+    <div class="explore-page" id="explore-pivot" hidden></div>
+    <!-- Show plan: the pivot's SQL in a box the user edits, in place of the whole pivot. -->
+    <div class="explore-sql-page" id="explore-sql" hidden>
+    <div class="tool-controls">
+      <button class="btn-tool primary" id="exploreRun" type="button">Run</button>
+      <button class="btn-tool" id="exploreVisual" type="button">Show visual</button>
     </div>
-    <div class="analyze-sql">
-      <div class="analyze-sql-head">
-        <label for="analyzeSql">SQL <span>— a SELECT … FROM model asks the semantic model (its columns, and its measures as AGG("name"): a figure as the charts compute it); any other SQL runs as written over the views of the tables (v_&lt;table&gt;, their stored columns)</span></label>
-        <button class="btn-analyze" id="analyzeSqlReset" type="button">Example</button>
+    <div class="explore-sql">
+      <div class="explore-sql-head">
+        <label for="exploreSql">SQL <span>— a SELECT … FROM model asks the semantic model (its columns, and its measures as AGG("name"): a figure as the charts compute it); any other SQL runs as written over the views of the tables (v_&lt;table&gt;, their stored columns)</span></label>
+        <button class="btn-tool" id="exploreSqlReset" type="button" title="The pivot's SQL again">Reset</button>
       </div>
-      <textarea id="analyzeSql" spellcheck="false" wrap="off"></textarea>
+      <textarea id="exploreSql" spellcheck="false" wrap="off"></textarea>
     </div>
-    <div class="analyze-info" id="analyzeInfo"></div>
-    <div class="analyze-table-wrap">
-      <table class="analyze-table" id="analyzeTable"></table>
+    <div class="tool-info" id="exploreInfo"></div>
+    <div class="data-table-wrap">
+      <table class="data-table" id="exploreTable"></table>
     </div>
-    <!-- Show plan: DuckDB's plan tree, in place of the results. -->
-    <div class="analyze-plan" id="analyzePlanView" hidden></div>
+    <!-- Show plan, in the box: DuckDB's plan tree, in place of the results. -->
+    <div class="explore-plan" id="explorePlanView" hidden></div>
     </div>
   </div>
 
   <!-- What this session fetched, attached and ran, with timings (logs.js fills it). -->
   <div id="view-logs" role="tabpanel" aria-labelledby="tab-logs" style="display:none">
-    <div class="analyze-controls">
-      <button class="btn-analyze" id="logsCopy" type="button">Copy</button>
-      <button class="btn-analyze" id="logsClear" type="button">Clear</button>
-      <span class="analyze-info" style="padding:0">This session only — kept in memory, nothing is stored. "http" rows are the engine's own requests for its data files (Range = a seek in a remote file).</span>
+    <div class="tool-controls">
+      <button class="btn-tool" id="logsCopy" type="button">Copy</button>
+      <button class="btn-tool" id="logsClear" type="button">Clear</button>
+      <span class="tool-info" style="padding:0">This session only — kept in memory, nothing is stored. "http" rows are the engine's own requests for its data files (Range = a seek in a remote file).</span>
     </div>
-    <div class="analyze-info" id="logsSummary" style="white-space:pre;font-family:ui-monospace,Consolas,monospace"></div>
-    <div class="analyze-table-wrap">
-      <table class="analyze-table" id="logsTable">
+    <div class="tool-info" id="logsSummary" style="white-space:pre;font-family:ui-monospace,Consolas,monospace"></div>
+    <div class="data-table-wrap">
+      <table class="data-table" id="logsTable">
         <thead><tr><th>t (s)</th><th>Type</th><th>What</th><th>Range</th><th>Status</th><th>KB</th><th>wait ms</th><th>run ms</th></tr></thead>
         <tbody></tbody>
       </table>
@@ -1046,12 +1048,12 @@
     // Where the .duckdb files live and how they are fetched and attached is data.js's business
     // (a host that stores the files differently ships its own): it has a view per table. How
     // the page asks is frontend/queries.js's: the queries, and `connect`, what runs them over
-    // the data. The Analyze tab is SQL: over the semantic model, or over the same views.
+    // the data. The Explore tab asks the semantic model, and its SQL box the same views.
     // Brisbane time, for CURRENT_DATE alone (the NEM's day): the tables carry date and time.
     const data = connect(createDataSource({ onStatus: setStatus, onProgress: setProgress, timeZone: 'Australia/Brisbane' }));
     // A host whose engine is the model itself (VertiPaq, in the Fabric app of that name) runs
     // no SQL: its data source has no `needs`, and the tab is left out.
-    if (!data.needs) document.getElementById('tab-analyze').remove();
+    if (!data.needs) document.getElementById('tab-explore').remove();
     // What each chart asks the model (frontend/queries.js), over the page's state.
     const queries = createQueries({
       range: getDateRange, intraday: isIntradayMode, region: activeRegion, fuel: activeFuel,
@@ -1066,7 +1068,7 @@
       setConnected();
     }
 
-    // One load, shared by the background load at startup and by Analyze: a second ATTACH of
+    // One load, shared by the background load at startup and by Explore: a second ATTACH of
     // agg while the first is still running would fail.
     let _aggLoading = null;
     function loadDailyAggDatabase() {
@@ -1083,7 +1085,7 @@
       setConnected();
     }
 
-    // Keyed on the view generation as well as the query (the page's, or Analyze's SQL): a
+    // Keyed on the view generation as well as the query (the page's, or Explore's SQL): a
     // query that started before the views were rebuilt and finishes after it stores its result
     // under the old generation.
     const _queryCache = new Map();
@@ -1096,11 +1098,11 @@
     let _queriesRun = 0;   // queries that reached the engine (cache misses), for the status readout
     // The cache holds the promise, not the rows: two charts asking the same query in one
     // render share one run. A query that fails is forgotten, so the next call tries again.
-    // `run` is what sends it (Analyze's goes with the query it was compiled from).
+    // `run` is what sends it (Explore's goes with the query it was compiled from).
     // A page query belongs to the render that asked it last: the engine drops it, unrun, if
     // a newer render has started by its turn (storage/queue.js), so a filter clicked twice
     // does not run the first render's queries. `keep`: no render's (the daily tables' days,
-    // read once); Analyze's are never dropped. `early`: ahead of the others (the hero's);
+    // read once); Explore's are never dropped. `early`: ahead of the others (the hero's);
     // `later`: once the others asked are done (the KPI deltas).
     function runQuery(q, run = data.query, { keep = false, early = false, later = false } = {}) {
       const key = `${_viewGen}|${typeof q === 'string' ? q : JSON.stringify(q)}`;
@@ -1196,7 +1198,7 @@
       return String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    // Analyze's CSV: the rows of its SQL, written out as they come (frontend/draw.js).
+    // Explore's CSV: the rows of its SQL, written out as they come (frontend/draw.js).
     const downloadCSVDirect = async (sqlText, filename) => writeCsv(await _db.connect(), sqlText, filename);
 
     // =========================================================================
@@ -2976,55 +2978,53 @@
           b.tabIndex = on ? 0 : -1;
         }
         const tab = btn.dataset.tab;
-        for (const t of ['dashboard', 'flows', 'insights', 'history', 'analyze', 'logs']) {
+        for (const t of ['dashboard', 'flows', 'insights', 'history', 'explore', 'logs']) {
           document.getElementById(`view-${t}`).style.display = tab === t ? '' : 'none';
         }
         if (tab !== 'flows') icStop();
         if (tab === 'logs') renderLogs();
-        if (tab === 'analyze' && analyzePage() === 'model') renderModel();
+        if (tab === 'explore' && explorePage() === 'model') renderModel();
         if (_ready) {
           if (tab === 'insights') guarded(renderInsights(_renderSeq));
           if (tab === 'history') guarded(renderHistory(_renderSeq));
           if (tab === 'flows') guarded(renderFlows(_renderSeq));
         }
-        // Populate the SQL box the first time Analyze is opened; don't clobber manual edits after.
-        if (tab === 'analyze' && !document.getElementById('analyzeSql').value.trim()) syncAnalyzeSql();
         // Charts drawn while hidden have zero size; resize once visible again. Not the hidden
         // ones: a chart resized to nothing keeps animating (the flow arrows) and draws errors.
-        if (tab !== 'analyze') Object.values(charts).forEach(c => { const el = c.getDom(); if (el.clientWidth && el.clientHeight) c.resize(); });
+        if (tab !== 'explore') Object.values(charts).forEach(c => { const el = c.getDom(); if (el.clientWidth && el.clientHeight) c.resize(); });
       });
     }
 
-    // --- Analyze: two pages, the model (frontend/model.js) and the SQL box ---
-    const analyzePage = () => document.querySelector('#view-analyze .subtab.active').dataset.apage;
-    const analyzeTabs = [...document.querySelectorAll('#view-analyze .subtab')];
-    for (const btn of analyzeTabs) {
+    // --- Explore: two pages, the model (frontend/model.js) and the pivot (frontend/explore.js) ---
+    const explorePage = () => document.querySelector('#view-explore .subtab.active').dataset.apage;
+    const exploreTabs = [...document.querySelectorAll('#view-explore .subtab')];
+    for (const btn of exploreTabs) {
       btn.addEventListener('keydown', e => {
         if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
-        const next = cycle(analyzeTabs, btn, e.key === 'ArrowRight' ? 1 : -1);
+        const next = cycle(exploreTabs, btn, e.key === 'ArrowRight' ? 1 : -1);
         next.focus(); next.click();
       });
       btn.addEventListener('click', () => {
-        for (const b of analyzeTabs) {
+        for (const b of exploreTabs) {
           const on = b === btn;
           b.classList.toggle('active', on);
           b.setAttribute('aria-selected', String(on));
           b.tabIndex = on ? 0 : -1;
         }
-        document.getElementById('analyze-model').hidden = btn.dataset.apage !== 'model';
-        document.getElementById('analyze-sql-page').hidden = btn.dataset.apage !== 'sql';
-        document.getElementById('analyze-explore').hidden = btn.dataset.apage !== 'explore';
-        document.getElementById('analyzeActions').hidden = btn.dataset.apage === 'model';
-        syncPlanButton();
-        if (btn.dataset.apage === 'model') renderModel();
-        if (btn.dataset.apage === 'explore') openExplorer();
+        const page = btn.dataset.apage;
+        if (sqlMode) closeSql();
+        document.getElementById('explore-model').hidden = page !== 'model';
+        document.getElementById('explore-pivot').hidden = page !== 'pivot';
+        document.getElementById('exploreActions').hidden = page !== 'pivot';
+        if (page === 'model') renderModel();
+        if (page === 'pivot') openExplorer();
       });
     }
 
-    // --- Analyze: Explore (frontend/explore.js) ---
-    // A pivot of the model, asked as the page's queries are (objects of the model's fields).
-    // What it needs of this host: the files a query reads, attached first. A 5-minute query
-    // takes the dates of its own date filter, or the header's range when it has none.
+    // --- Explore: the pivot (frontend/explore.js) ---
+    // A pivot of the model, asked as SELECTs over it. What it needs of this host: the files a
+    // query reads, attached first. A 5-minute query takes the dates of its own date filter, or
+    // the header's range when it has none.
     function whereDates(where = []) {
       const isDate = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
       const between = where.find(c => Array.isArray(c) && c[1] === 'between' && isDate(c[2]));
@@ -3044,9 +3044,9 @@
     }
     let explorer = null;
     function openExplorer() {
-      explorer ??= createExplorer(document.getElementById('analyze-explore'), {
+      explorer ??= createExplorer(document.getElementById('explore-pivot'), {
         model: loadModel,
-        // A SELECT over the model (Explore writes it, as the SQL page writes its queries).
+        // A SELECT over the model (explore.js writes it).
         run: async (text, where) => {
           await ensureExploreData(data.analyze(text).sql, where);
           const rows = await runQuery(text, data.query, { keep: true });
@@ -3057,67 +3057,75 @@
         palette,
         css: cssVar,
         storageKey: 'explore',
-        onPlan: () => syncPlanButton(),
       });
     }
 
-    // --- Analyze: SQL, and only SQL ---
-    // A SELECT ... FROM model asks the semantic model: its columns and measures, so a figure
-    // is the model's measure, as the charts compute it (data.analyze compiles it as the page's
-    // queries are). It is the whole text, or a relation in parentheses of any other SQL (a
-    // WITH's query, a subquery, an arm of a UNION), which runs as written over the data's views
-    // (a table's view v_<table>): what the files store, as they store it. The page writes no
-    // SQL here; the example is a query over the model.
-    function syncAnalyzeSql() {
-      const ta = document.getElementById('analyzeSql');
-      if (!ta) return;
-      ta.value = 'SELECT dim_calendar.date, FuelSourceDescriptor, AGG("Generation MWh") AS mwh\nFROM model\n'
-        + 'WHERE dim_calendar.date >= TODAY() - 7\nGROUP BY ALL\nORDER BY 1 DESC, mwh DESC';
+    // --- Explore: the pivot's SQL, in a box the user edits ---
+    // Show plan puts the box in place of the whole pivot, filled with the pivot's SELECT over the
+    // model (all its rows). The box is SQL, and only SQL: a SELECT ... FROM model asks the
+    // semantic model, its columns and measures, so a figure is the model's measure, as the charts
+    // compute it (data.analyze compiles it as the page's queries are). It is the whole text, or a
+    // relation in parentheses of any other SQL (a WITH's query, a subquery, an arm of a UNION),
+    // which runs as written over the data's views (a table's view v_<table>). Show visual puts
+    // the pivot back; the edits go.
+    let sqlMode = false, sqlFrom = null;   // sqlFrom: the pivot's query the box was filled from
+    const sqlBox = () => document.getElementById('exploreSql');
+    const getSql = () => sqlBox().value.trim().replace(/;+\s*$/, '');
+    // The pivot's date filter while the box holds its SQL as written; edited, the header's range.
+    const sqlWhere = text => sqlFrom && text === sqlFrom.sql ? sqlFrom.where : [];
+    function clearSqlResults() {
+      document.getElementById('exploreTable').innerHTML = '';
+      document.getElementById('exploreInfo').textContent = '';
     }
-    function getAnalyzeSql() {
-      return document.getElementById('analyzeSql').value.trim().replace(/;+\s*$/, '');
+    function fillSql() {
+      showSqlPlan(null);
+      sqlFrom = explorer?.query() ?? null;
+      sqlBox().value = sqlFrom?.sql ?? '';
+      clearSqlResults();
+    }
+    function openSql() {
+      if (!explorer?.query()) { setStatus('Put a field on the shelves first', 'error'); return; }
+      sqlMode = true;
+      fillSql();
+      document.getElementById('explore-pivot').hidden = true;
+      document.getElementById('explore-sql').hidden = false;
+      syncPlanButton();
+      sqlBox().focus();
+    }
+    function closeSql() {
+      sqlMode = false;
+      showSqlPlan(null);
+      document.getElementById('explore-sql').hidden = true;
+      document.getElementById('explore-pivot').hidden = explorePage() !== 'pivot';
+      syncPlanButton();
+      explorer?.redraw();   // the chart takes its box's size again
     }
 
-    // --- Analyze: ensure data loaded ---
-    // Read from the query itself, which may have been edited by hand: a 5-minute view needs
-    // the half-years of the header's date range, a daily or hourly one needs agg.
-    async function ensureAnalyzeData(query) {
-      const needs = data.needs(query);
-      if (needs.history) {
-        const { from, to } = getDateRange();
-        await ensureHistory(from, to, "Downloading detailed data for export...");
-      }
-      if (needs.agg) await loadDailyAggDatabase();
-    }
-
-    // --- Analyze: preview ---
-    async function analyzePreview() {
-      const base = getAnalyzeSql();
-      if (!base) {
-        document.getElementById('analyzeInfo').textContent = 'Enter a SQL query.';
-        return;
-      }
+    // --- Explore: run the box ---
+    async function runSql() {
+      const base = getSql();
+      const info = document.getElementById('exploreInfo');
+      if (!base) { info.textContent = 'Enter a SQL query.'; return; }
 
       if (sqlPlanShown) showSqlPlan(null);   // the results take the plan's place
-      const btn = document.getElementById('analyzePreview');
+      const btn = document.getElementById('exploreRun');
       btn.disabled = true;
-      btn.textContent = 'Loading...';
-      const info = document.getElementById('analyzeInfo');
-      const table = document.getElementById('analyzeTable');
+      btn.textContent = 'Running...';
+      const table = document.getElementById('exploreTable');
       table.innerHTML = '';
       info.textContent = '';
 
       try {
         const { sql, query } = data.analyze(base);
-        await ensureAnalyzeData(sql);
-        setStatus("Previewing...", "loading");
+        await ensureExploreData(sql, sqlWhere(base));
+        setStatus("Running...", "loading");
         // Every column as DuckDB prints it: a DATE, TIMESTAMP or DECIMAL read through Arrow
         // would show as its raw number.
         const previewSql = `SELECT COLUMNS(*)::VARCHAR FROM (\n${sql}\n) LIMIT 500`;
         const rows = await runQuery(previewSql, query);
 
         if (!rows.length) {
-          info.textContent = 'No data found for the selected filters.';
+          info.textContent = 'No rows.';
           setConnected();
           return;
         }
@@ -3139,23 +3147,20 @@
 
         setConnected();
       } catch (e) {
-        if (e.message && e.message.includes('Out of Memory')) {
-          info.textContent = 'Out of memory. Apply filters or reduce the date range.';
-        } else {
-          info.textContent = 'Error: ' + e.message;
-        }
+        info.textContent = e.message?.includes('Out of Memory') ? 'Out of memory: add a filter.' : 'Error: ' + e.message;
         setStatus("Query error", "error");
-        console.error('[Analyze]', e);
+        console.error('[Explore SQL]', e);
       } finally {
         btn.disabled = false;
-        btn.textContent = 'Preview';
+        btn.textContent = 'Run';
       }
     }
 
-    // --- Analyze: Show plan and Download CSV, on the SQL page and on Explore ---
-    // The plan is DuckDB's own tree (EXPLAIN (FORMAT html): a page of its own, collapsible
-    // nodes), in a sandboxed frame in place of the view: SQL of the views, not the model's.
-    // While it is shown the button says how to go back (Show results, Show visual).
+    // --- Explore: Show plan and Download CSV ---
+    // On the pivot, Show plan opens the box; in the box, it draws DuckDB's own plan tree
+    // (EXPLAIN (FORMAT html): a page of its own, collapsible nodes) in a sandboxed frame in place
+    // of the results: SQL of the views, not the model's. While it is shown the button reads Show
+    // results.
     async function planFrame(sql, query) {
       const rows = await runQuery(`EXPLAIN (FORMAT html) ${sql}`, query, { keep: true });
       const frame = document.createElement('iframe');
@@ -3167,80 +3172,32 @@
     }
     let sqlPlanShown = false;
     function syncPlanButton() {
-      const page = analyzePage();
-      const shown = page === 'explore' ? !!explorer?.planShown() : page === 'sql' && sqlPlanShown;
-      document.getElementById('analyzePlan').textContent = !shown ? 'Show plan' : page === 'explore' ? 'Show visual' : 'Show results';
+      document.getElementById('explorePlan').textContent = sqlMode && sqlPlanShown ? 'Show results' : 'Show plan';
     }
-    // On Explore they take its query (the shelves, all rows): its SELECT over the model, then
-    // the plan, in place of its view.
-    async function explorePlan() {
-      if (explorer?.planShown()) { explorer.showPlan(null); return; }
-      const x = explorer?.query();
-      if (!x) { setStatus('Put a field on the shelves first', 'error'); return; }
-      const btn = document.getElementById('analyzePlan');
-      btn.disabled = true;
-      btn.textContent = 'Planning...';
-      try {
-        // Compiled and explained as the SQL page's SQL is (analyze()).
-        const { sql, query } = data.analyze(x.sql);
-        await ensureExploreData(sql, x.where);
-        setStatus("Explaining...", "loading");
-        explorer.showPlan({ sql: x.sql, plan: await planFrame(sql, query) });
-        setConnected();
-      } catch (e) {
-        setStatus("Query error: " + e.message, "error");
-        console.error('[Explore plan]', e);
-      } finally {
-        btn.disabled = false;
-        syncPlanButton();
-      }
-    }
-    async function exploreDownload() {
-      const x = explorer?.query();
-      if (!x) { setStatus('Put a field on the shelves first', 'error'); return; }
-      const btn = document.getElementById('analyzeDownload');
-      btn.disabled = true;
-      btn.textContent = 'Exporting...';
-      try {
-        const { sql } = data.analyze(x.sql);
-        await ensureExploreData(sql, x.where);
-        setStatus("Exporting CSV...", "loading");
-        const n = await downloadCSVDirect(`SELECT COLUMNS(*)::VARCHAR FROM (\n${sql}\n) LIMIT 1000000`, 'explore.csv');
-        setStatus(`Exported ${n.toLocaleString()} rows`, "connected");
-      } catch (e) {
-        setStatus("CSV export error: " + e.message, "error");
-        console.error('[Explore CSV]', e);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Download CSV';
-      }
-    }
-
-    // --- Analyze: query plan (EXPLAIN), in place of the results ---
     function showSqlPlan(frame) {
-      const view = document.getElementById('analyzePlanView');
+      const view = document.getElementById('explorePlanView');
       view.replaceChildren(...(frame ? [frame] : []));
       view.hidden = !frame;
-      document.querySelector('#analyze-sql-page .analyze-table-wrap').hidden = !!frame;
+      document.querySelector('#explore-sql .data-table-wrap').hidden = !!frame;
       sqlPlanShown = !!frame;
       syncPlanButton();
     }
-    async function analyzePlan() {
-      if (analyzePage() === 'explore') return explorePlan();
+    async function explorePlan() {
+      if (!sqlMode) return openSql();
       // A second click puts the results back.
-      if (sqlPlanShown) { showSqlPlan(null); return analyzePreview(); }
-      const base = getAnalyzeSql();
-      const info = document.getElementById('analyzeInfo');
+      if (sqlPlanShown) { showSqlPlan(null); return runSql(); }
+      const base = getSql();
+      const info = document.getElementById('exploreInfo');
       if (!base) { info.textContent = 'Enter a SQL query.'; return; }
 
-      const btn = document.getElementById('analyzePlan');
+      const btn = document.getElementById('explorePlan');
       btn.disabled = true;
       btn.textContent = 'Planning...';
       info.textContent = '';
 
       try {
         const { sql, query } = data.analyze(base);
-        await ensureAnalyzeData(sql);
+        await ensureExploreData(sql, sqlWhere(base));
         setStatus("Explaining...", "loading");
         showSqlPlan(await planFrame(sql, query));
         info.textContent = 'Query plan';
@@ -3248,59 +3205,42 @@
       } catch (e) {
         info.textContent = 'Error: ' + e.message;
         setStatus("Query error", "error");
-        console.error('[Analyze plan]', e);
+        console.error('[Explore plan]', e);
       } finally {
         btn.disabled = false;
         syncPlanButton();
       }
     }
-
-    // --- Analyze: download ---
-    async function analyzeDownload() {
-      if (analyzePage() === 'explore') return exploreDownload();
-      const base = getAnalyzeSql();
-      if (!base) {
-        alert('Enter a SQL query.');
-        return;
-      }
-
-      const btn = document.getElementById('analyzeDownload');
+    // The pivot's query (the shelves, all rows), or the box's SQL once it is open.
+    async function exploreDownload() {
+      const x = sqlMode ? null : explorer?.query();
+      const base = sqlMode ? getSql() : x?.sql;
+      if (!base) { setStatus(sqlMode ? 'Enter a SQL query' : 'Put a field on the shelves first', 'error'); return; }
+      const btn = document.getElementById('exploreDownload');
       btn.disabled = true;
-      btn.textContent = 'Loading...';
-
+      btn.textContent = 'Exporting...';
       try {
         const { sql } = data.analyze(base);
-        await ensureAnalyzeData(sql);
-        btn.textContent = 'Exporting...';
+        await ensureExploreData(sql, sqlMode ? sqlWhere(base) : x.where);
         setStatus("Exporting CSV...", "loading");
-        // Cast like the preview, so the file holds what the preview shows (a DECIMAL would
+        // Cast as the box's results are, so the file holds what they show (a DECIMAL would
         // otherwise be written without its decimal point).
-        const exportSql = `SELECT COLUMNS(*)::VARCHAR FROM (\n${sql}\n) LIMIT 1000000`;
-        const { from, to } = getDateRange();
-        const filename = `energy_export_${from}_${to}.csv`;
-        const rowCount = await downloadCSVDirect(exportSql, filename);
-        setStatus(`Exported ${rowCount.toLocaleString()} rows`, "connected");
-        if (rowCount >= 1000000) {
-          alert('Export capped at 1,000,000 rows. Apply filters or reduce the date range for complete data.');
-        }
+        const n = await downloadCSVDirect(`SELECT COLUMNS(*)::VARCHAR FROM (\n${sql}\n) LIMIT 1000000`, 'explore.csv');
+        setStatus(`Exported ${n.toLocaleString()} rows${n >= 1000000 ? ' (capped: add a filter for all of them)' : ''}`, "connected");
       } catch (e) {
-        if (e.message && e.message.includes('Out of Memory')) {
-          setStatus("Export failed: out of memory", "error");
-          alert('Out of memory. Apply filters (region, fuel, DUID) or reduce the date range.');
-        } else {
-          setStatus("CSV export error: " + e.message, "error");
-        }
-        console.error('[Analyze CSV]', e);
+        setStatus(e.message?.includes('Out of Memory') ? 'Export failed: out of memory, add a filter' : "CSV export error: " + e.message, "error");
+        console.error('[Explore CSV]', e);
       } finally {
         btn.disabled = false;
         btn.textContent = 'Download CSV';
       }
     }
 
-    document.getElementById('analyzePreview').addEventListener('click', analyzePreview);
-    document.getElementById('analyzePlan').addEventListener('click', analyzePlan);
-    document.getElementById('analyzeDownload').addEventListener('click', analyzeDownload);
-    document.getElementById('analyzeSqlReset').addEventListener('click', syncAnalyzeSql);
+    document.getElementById('exploreRun').addEventListener('click', runSql);
+    document.getElementById('exploreVisual').addEventListener('click', closeSql);
+    document.getElementById('exploreSqlReset').addEventListener('click', fillSql);
+    document.getElementById('explorePlan').addEventListener('click', explorePlan);
+    document.getElementById('exploreDownload').addEventListener('click', exploreDownload);
 
     // --- Filter population ---
     async function populateFilters() {
@@ -3330,11 +3270,6 @@
     }
 
     // --- Filter change listeners ---
-    function clearAnalyzePreview() {
-      document.getElementById('analyzeTable').innerHTML = '';
-      document.getElementById('analyzeInfo').textContent = '';
-    }
-
     for (const id of ["dateFrom", "dateTo"]) {
       document.getElementById(id).addEventListener("change", () => {
         crossFilter.fuel = null;
@@ -3342,7 +3277,7 @@
         crossFilter.hover = { region: null, fuel: null };
         crossFilter.duids = [];
         updateDuidTrigger();
-        clearAnalyzePreview();
+        clearSqlResults();
 
         renderAll();
       });
@@ -3355,7 +3290,7 @@
         crossFilter.hover = { region: null, fuel: null };
         crossFilter.duids = [];
         updateDuidTrigger();
-        clearAnalyzePreview();
+        clearSqlResults();
 
         renderAll();
       });

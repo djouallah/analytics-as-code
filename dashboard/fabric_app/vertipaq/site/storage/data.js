@@ -17,7 +17,7 @@
 //   query(dax)      run it; what comes back has the shape the page reads from DuckDB
 //   attachAgg, ensureHistory   nothing to attach: the model holds every table
 //   has             every table and column the page asks about is in the model
-// There is no `needs`: it is what the Analyze tab (SQL) asks, and its absence is how the page
+// There is no `needs`: it is what the Explore tab asks, and its absence is how the page
 // knows to leave that tab out.
 // =============================================================================
 

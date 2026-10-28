@@ -109,7 +109,7 @@ export const stackedGrids = (n, top = 0) => Array.from({ length: n }, (_, i) => 
   return { title: `${at + 0.5}%`, grid: { left: 4, right: 16, containLabel: true, top: `${at + 5}%`, height: `${(100 - top) / n - 11}%` } };
 });
 
-// --- The CSV of Analyze ---
+// --- The CSV of Explore ---
 // The rows of a SQL query written out as a CSV file, batch by batch as the engine sends them,
 // every value as it is stored (a date as a date, a timestamp without its zone). Returns the
 // number of rows written.
@@ -260,7 +260,7 @@ export function nightBands(date, hhmm) {
   }).filter(Boolean);
 }
 
-// The semantic model as a star (Analyze, Model): the tables a relationship points to (the
+// The semantic model as a star (Explore, Model): the tables a relationship points to (the
 // dimensions) in a centre column, in the model's order, and the facts on either side of it,
 // each as near as it can be to the height of the dimensions it reaches, so that few lines
 // cross. `tables` is [{ name, lines }] (a card's text lines under its name), `rels` the

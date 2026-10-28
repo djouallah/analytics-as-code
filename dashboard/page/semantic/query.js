@@ -37,7 +37,7 @@
 // as a SELECT over the model (dax-sql's SQL: columns, AGG("measure"), ... FROM model; the SQL
 // page's), never DAX text: the compiler builds one plan from either. ../frontend/queries.js
 // hands it to the page (`connect`).
-// The Analyze tab's box is what the user types: any SQL over the views, in which a SELECT over
+// The Explore tab's SQL box is what the user types: any SQL over the views, in which a SELECT over
 // the model is a relation (the whole text, or in parentheses: a WITH's query, a subquery, an
 // arm of a UNION). `analyze` has dax-sql compile each one as the page's are and put its SQL in
 // its place; the rest runs as written. The model is no view: a measure has no value until the
@@ -203,7 +203,7 @@ function fromSql(text) {
   return out;
 }
 
-// Analyze's compiler: no casts for the browser, so a SELECT over the model gives the engine's
+// Explore's compiler: no casts for the browser, so a SELECT over the model gives the engine's
 // types (a DATE, a DECIMAL) and composes with the views' columns in a JOIN or a UNION. The
 // preview and the CSV cast every column to text at the end.
 const ANALYZE = createCompiler(ossieToModel(OSSIE), { tableSource: t => `v_${t.name}`, assumeIntegrity: true, castOutput: false });
@@ -229,12 +229,12 @@ export function createModel(data) {
       const { sql, dax } = fromSql(q);
       return data.query(sql, dax, options);
     },
-    // Analyze, as typed: SQL over the views, each SELECT ... FROM model in it compiled as the
+    // Explore's SQL box, as typed: SQL over the views, each SELECT ... FROM model in it compiled as the
     // page's are. `sql` is what runs (with its LIMIT and OFFSET); `query` runs SQL built round
     // it (the preview's cast, the count, EXPLAIN), with the DAX of its SELECTs over the model
     // for the Logs tab. DAX text is refused.
     analyze: text => {
-      if (ANALYZE.isDax(text)) throw new Error('Analyze takes SQL: SQL over the views, with SELECT ... FROM model in it');
+      if (ANALYZE.isDax(text)) throw new Error('Explore takes SQL: SQL over the views, with SELECT ... FROM model in it');
       const { sql, relations } = ANALYZE.compileStatement(text);
       const dax = relations.length ? relations.map(r => r.dax).join('\n\n') : undefined;
       return { sql, query: s => data.query(s, dax) };

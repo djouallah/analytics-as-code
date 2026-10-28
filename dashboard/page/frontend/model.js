@@ -1,5 +1,5 @@
 // =============================================================================
-// model.js — the Analyze tab's Model page: the semantic model (ossie.yaml) as a star, and
+// model.js — the Explore tab's Model page: the semantic model (ossie.yaml) as a star, and
 // what the model says of the table picked
 // =============================================================================
 // The same file on every host. It reads semantic/ossie.json (the repo's ossie.yaml, staged
@@ -149,7 +149,7 @@ async function build() {
     }
 
     out.push(el('h4', {}, `Columns (${t.columns?.length ?? 0})`));
-    const table = el('table', { class: 'analyze-table m-cols' });
+    const table = el('table', { class: 'data-table m-cols' });
     const hr = el('tr');
     for (const h of ['Column', 'Type', 'Format']) hr.append(el('th', {}, h));
     table.append(el('thead'), el('tbody'));

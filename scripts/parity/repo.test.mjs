@@ -7,7 +7,7 @@
 //     page's options), runs;
 //   - the SQL page's queries (SELECTs over the model) against the DAX page's, in the same
 //     states: the same rows;
-//   - the Analyze tab's SELECT over the model (query.js's `analyze`), and its rows against
+//   - the Explore tab's SQL box: a SELECT over the model (query.js's `analyze`), and its rows against
 //     the page's query of the same fields; and SQL over the views, as written.
 // All on made-up data in the model's shape (fixtures/nem.mjs). The page's rows are checked on
 // the deployed files, against the SQL page and the compiler before (sql_page.mjs, compiler_ab.mjs).
@@ -136,7 +136,7 @@ test("the SQL page's SELECTs answer what the DAX page's queries answer", { skip 
   assert.ok(ran > 250, `${ran} queries ran`);
 });
 
-test("Analyze: a SELECT over the model, through the page's compiler", { skip }, async () => {
+test("Explore SQL box: a SELECT over the model, through the page's compiler", { skip }, async () => {
   const sent = [];
   const model = page.createModel({ query: async (sql, dax) => { sent.push(dax); return rows(sql); } });
   const ask = async text => { const a = model.analyze(text); return a.query(a.sql); };
@@ -158,7 +158,7 @@ test("Analyze: a SELECT over the model, through the page's compiler", { skip }, 
   assert.equal((await ask(`SELECT dim_region.Region, AGG("Average price") AS p FROM model GROUP BY ALL LIMIT 2`)).length, 2);
   // A name several tables have needs its table; DAX text is refused.
   assert.throws(() => model.analyze('SELECT date, AGG("Generation MWh") FROM model GROUP BY ALL'), /several tables/);
-  assert.throws(() => model.analyze('EVALUATE ROW("v", [Generation MWh])'), /Analyze takes SQL/);
+  assert.throws(() => model.analyze('EVALUATE ROW("v", [Generation MWh])'), /Explore takes SQL/);
   // Any other SQL runs as written over the views: a join, a CTE, a window function. It
   // carries no DAX.
   sent.length = 0;
@@ -190,7 +190,7 @@ test("Analyze: a SELECT over the model, through the page's compiler", { skip }, 
   assert.equal(sent.at(-3).split('\n\n').length, 2);
   // The model is no table, and DAX is refused however it starts.
   assert.throws(() => model.analyze('SELECT * FROM v_dim_duid JOIN model USING ("DUID")'), /not a table/);
-  assert.throws(() => model.analyze('DEFINE MEASURE fct_summary[x] = 1 EVALUATE ROW("v", [x])'), /Analyze takes SQL/);
+  assert.throws(() => model.analyze('DEFINE MEASURE fct_summary[x] = 1 EVALUATE ROW("v", [x])'), /Explore takes SQL/);
   // The page's own queries are the model's words only.
   await assert.rejects(() => model.query('SELECT * FROM v_dim_duid'), /SELECTs over the model/);
 });
