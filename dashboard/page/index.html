@@ -3038,7 +3038,6 @@
     function openExplorer() {
       explorer ??= createExplorer(document.getElementById('analyze-explore'), {
         model: loadModel,
-        toSQL: q => data.toSQL(data.toDax(q)),
         run: async q => {
           await ensureExploreData(data.toSQL(data.toDax(q)), q.where);
           const rows = await runQuery(q, data.query, { keep: true });
@@ -3159,7 +3158,8 @@
         // SQL over the views runs through analyze(), as the SQL page's plan does: query()
         // takes the page's queries only (objects, or SELECTs over the model).
         const rows = await runQuery(`EXPLAIN ${sql}`, data.analyze(sql).query, { keep: true });
-        explorer.showPlan(rows.map(r => r.explain_value ?? Object.values(r).join('  ')).join('\n'));
+        // The SQL first, then its plan.
+        explorer.showPlan(`-- SQL\n${sql}\n\n-- Plan (EXPLAIN)\n${rows.map(r => r.explain_value ?? Object.values(r).join('  ')).join('\n')}`);
         setConnected();
       } catch (e) {
         setStatus("Query error: " + e.message, "error");

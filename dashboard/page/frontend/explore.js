@@ -148,7 +148,6 @@ const label = a => a.length ? a.map(v => v == null ? '(blank)' : String(v)).join
 // `root`: the element the page is built in. `ctx`:
 //   model()          the model, TMSL (a promise)
 //   run(q)           the rows of a query, as objects keyed by the select's names
-//   toSQL(q)         the SQL the query runs as (shown under the view)
 //   chart(el)        an ECharts instance on el, in the page's theme
 //   palette()        the colours of series, in order
 //   css(name)        a CSS token's value (the chart's tints)
@@ -181,13 +180,11 @@ export function createExplorer(root, ctx) {
   const table = el('div', { class: 'ex-table' });
   const chartBox = el('div', { class: 'ex-chart', id: 'exploreChart' });
   const out = el('div', { class: 'ex-out' }, table, chartBox);
-  const sqlText = el('pre');
-  const sqlBox = el('details', { class: 'ex-dax' }, el('summary', {}, 'SQL'), sqlText);
-  // The query plan, in place of the view, when the page's Show plan asks for it (showPlan);
-  // the next draw (a change of the shelves) puts the view back.
+  // The query's SQL and its plan, in place of the view, when the page's Show plan asks for it
+  // (showPlan); the next draw (a change of the shelves) puts the view back.
   const plan = el('pre', { class: 'ex-plan', hidden: true });
   out.append(plan);
-  root.replaceChildren(el('div', { class: 'ex' }, pane, el('section', { class: 'ex-main' }, shelves, tools, out, sqlBox)));
+  root.replaceChildren(el('div', { class: 'ex' }, pane, el('section', { class: 'ex-main' }, shelves, tools, out)));
 
   search.addEventListener('input', renderFields);
   totals.addEventListener('change', () => { state.totals = totals.checked; changed(); });
@@ -409,8 +406,7 @@ export function createExplorer(root, ctx) {
     try {
       q = buildQuery(state);
     } catch (e) { result = null; info.textContent = e.message; info.className = 'ex-info ex-error'; draw(); return; }
-    if (!q) { result = null; sqlText.textContent = ''; info.textContent = ''; draw(); return; }
-    sqlText.textContent = ctx.toSQL(q);
+    if (!q) { result = null; info.textContent = ''; draw(); return; }
     info.className = 'ex-info';
     info.textContent = 'Running…';
     try {
@@ -613,7 +609,8 @@ export function createExplorer(root, ctx) {
     redraw: () => { if (fields) draw(); },
     // The shelves as one query, all its rows (the page's Download CSV and Show plan), or null.
     query: () => buildQuery(state, { cap: 0 }),
-    // A query plan shown in place of the view (the page's Show plan); null puts the view back.
+    // The query's SQL and plan shown in place of the view (the page's Show plan); null puts
+    // the view back.
     showPlan: text => {
       if (text == null) { draw(); return; }
       plan.textContent = text;
