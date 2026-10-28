@@ -654,8 +654,18 @@ else: no import, no file written for it.
 - **The client has a catalog of its own: a snapshot record per table**
   (`site/storage/snapshots.js`, `localStorage`), keyed by the metadata location the function
   gave: the snapshot's live data files and delete files (with their sizes once learnt), and
-  the manifests read. A table is planned once (`PLAN`: `iceberg_metadata()`, one request per
-  manifest) and its view is `read_parquet` over the record's files, written as literals.
+  the manifests read. A table is planned once, by the page, not by DuckDB (`planTable` in
+  `prefetch.js`, at load, every changed table at once, off every engine): metadata.json, the
+  manifest list and the manifests, read by an Avro reader that follows each file's own schema
+  (codecs null and deflate); DELETED entries out, `data_file.content` telling data, position
+  deletes and equality deletes; each file's `file_size_in_bytes` into the record. A manifest
+  never changes, so what it lists is kept in Cache Storage by its path
+  (`iceberg-manifests-v1`): a new snapshot reads only the manifests it added. On `power`
+  (2026-10-28) the same files as `iceberg_metadata()` for all 25 tables of `mart` and
+  `landing` (205 files, about 260 manifests). A table the page cannot plan (its metadata.json
+  unread, a codec it does not read) is planned by DuckDB as before (`PLAN` on an engine,
+  `iceberg_metadata()`, one request per manifest). Its view is `read_parquet` over the
+  record's files, written as literals.
   **A table's position deletes are applied by its view**: its delete files (fetched whole
   with its data files) are read once per session into a table `__deletes_<table>` (the data
   file's path and `pos`), and the view is `read_parquet(..., filename = '__file',
@@ -670,7 +680,7 @@ else: no import, no file written for it.
   Analyze's EXPLAIN of one shows the SAS (the read-only one the page holds anyway). The
   same location again is the same snapshot: the table opens from its record, no
   `metadata.json` fetched, no prefetch, nothing read from OneLake. A new location is planned
-  again, and the page prefetches only what is new: the manifests the last record lacks, and a
+  again, and the page fetches only what is new: the manifests not in its cache, and a
   large table's new Parquet files whole (`prefetchFiles`, six at a time, before the view
   binds; all its files on a first visit), each handed to the worker's store over the channel
   and awaited until the writer says it is kept, so DuckDB's ranged reads of it are answered
@@ -689,8 +699,8 @@ else: no import, no file written for it.
   a query goes to the engine with the fewest queries waiting (then the one with more of its
   tables open), so a render's independent queries run side by side; one query is no faster.
   Each engine has its own queue (`queue.js`, unchanged), extensions, secret and views, and its
-  own copy of a small table. A table is planned and its files downloaded once, by the engine
-  that opens it first (`readyOf`); every engine then binds its own view (`bind`). All the
+  own copy of a small table. A table is planned (by the page) and its files downloaded once,
+  for the engine that opens it first (`readyOf`); every engine then binds its own view (`bind`). All the
   workers share the block store (above). The Logs tab tags each LOAD, PLAN and OPEN with its
   engine. Added 2026-10-28; check the pool against `?engines=1` on `power` before building on it.
 - **A table is opened when a query first names its view**, so the first paint pays only for
@@ -704,10 +714,9 @@ else: no import, no file written for it.
   with no table opened.
 - **The browser's HTTP cache is the prefetch** (`prefetch.js`), for a new snapshot:
   - DuckDB-WASM reads one request at a time, and OneLake answers each in about 0.6 s.
-  - At start the page fetches each changed table's `metadata.json`, manifest list and new
-    manifests, six at a time (OneLake is HTTP/1.1). For a small table it also fetches the
-    data files those name, after every table's metadata. The manifests are Avro, deflate
-    blocks, read with `DecompressionStream`.
+  - At start the page plans each changed table (its `metadata.json`, manifest list and the
+    manifests not cached), six requests at a time (OneLake is HTTP/1.1). For a small table it
+    also fetches the live files the plan names, into the HTTP cache.
   - DuckDB's HEAD and Range requests then come from the cache: OneLake sends
     `Last-Modified` and no `Cache-Control`.
   - Fetching data files only when their table opened was slower, because tables open one
@@ -716,8 +725,7 @@ else: no import, no file written for it.
     `open`), then the others smallest first; within a table, manifests before data files.
     First come, first served across tables, the first query on `power` waited 35 s for
     `dim_region`'s three files behind the large tables' hundreds of manifests (one per
-    hourly commit); now it runs at 7 s. A manifest also names files later removed (404),
-    which are skipped.
+    hourly commit); now it runs at 7 s.
 - **DuckDB's own caches are on** (`enable_http_metadata_cache`, `parquet_metadata_cache`):
   Iceberg files never change once written.
 - **Timings, cold, conformance-oracle's small `nem`, function call excluded, measured before

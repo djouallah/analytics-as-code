@@ -13,8 +13,9 @@
 // and the views are plain Parquet, delete files applied by the view itself.
 //
 // A table is opened when a query first names its view, v_<table>, so the first paint pays only
-// for the tables it reads. Opening plans the table once: the snapshot's live data files, from
-// its metadata.json, manifest list and manifests (PLAN, one request at a time). What that
+// for the tables it reads. A table is planned once: the snapshot's live data files, from its
+// metadata.json, manifest list and manifests, read by the page at load, many at once and off
+// every engine (prefetch.js's planTable; DuckDB's PLAN only for a table it cannot). What that
 // gives is kept in this browser as the client's own catalog (snapshots.js, keyed by the
 // metadata location the function gave: a commit always writes a new one), and a table whose
 // location is the same is opened from its record, nothing read. A table whose files are small
@@ -25,8 +26,8 @@
 // applied by its view (the engine's iceberg_scan is never what a query reads). After the first
 // paint the rest are opened in the background, small ones first, behind whatever the page
 // asks.
-// For a new snapshot the page fetches ahead of DuckDB, many at once (prefetch.js): its new
-// manifests (the old ones are in the worker's store), a small table's new data files, and a
+// For a new snapshot the page fetches ahead of DuckDB, many at once (prefetch.js): the
+// manifests it has not read before (kept in Cache Storage), a small table's files, and a
 // large table's new Parquet files whole, into the browser's HTTP cache, where DuckDB's
 // one-at-a-time requests find them, and the worker keeps every file it reads whole in OPFS
 // (blockcache.js: Parquet, manifests, metadata.json, every one immutable; it never seeks
@@ -51,7 +52,7 @@ import { serialQueue } from "./queue.js";
 import { createAuth } from "./auth.js";
 import { createCatalog } from "./catalog.js";
 import { createSnapshots } from "./snapshots.js";
-import { prefetchTable, prefetchFiles, prioritize } from "./prefetch.js";
+import { planTable, prefetchFiles, prioritize } from "./prefetch.js";
 import { perf, HTTP_TRACE_SHIM } from "../frontend/perflog.js";
 
 const MODEL = new URL('../semantic/ossie.json' + new URL(import.meta.url).search, import.meta.url);
@@ -196,7 +197,6 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
     const t = located.get(name);
     return e.opened.get(name) ?? e.opened.set(name, (async () => {
       prioritize(name);
-      await t.prefetch;
       try { await bind(e, name, t, await readyOf(e, name, t)); }
       catch (err) {
         if (!t.stored) throw err;
@@ -227,10 +227,17 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
     channel.postMessage({ store: key, bytes });
     setTimeout(() => { if (stored.get(key) === resolve) { stored.delete(key); resolve(); } }, STORE_WAIT);
   });
-  // The table planned on engine `e`, and a large table's new files downloaded: its record.
+  // The table's record, and a large table's new files downloaded. The page planned it
+  // (`planning`, prefetch.js's planTable, started at load); a table it could not plan (its
+  // metadata.json unread, a manifest it cannot decode) is planned by DuckDB on engine `e`.
   async function planned(e, name, t) {
     const small = t.bytes != null && t.bytes <= SMALL_BYTES;
-    const record = await perf.time('attach', `PLAN ${name}${tag(e)}`, () => plan(e, t));
+    const js = await t.planning?.catch(err => {
+      perf.log('info', `PLAN ${name} in the page failed (${err?.message || err}): DuckDB plans it`);
+      return null;
+    });
+    const record = js ? { location: t.location, bytes: t.bytes, ...js.record }
+      : await perf.time('attach', `PLAN ${name}${tag(e)}`, () => plan(e, t));
     const last = snapshots.previous(name);
     const before = new Set([...last?.files ?? [], ...last?.deleteFiles ?? []].map(f => f.path));
     const fresh = [...record.files, ...record.deleteFiles].filter(f => !before.has(f.path));
@@ -340,13 +347,14 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
     for (const t of metas.filter(Boolean).sort((a, b) => (a.bytes ?? Infinity) - (b.bytes ?? Infinity))) {
       const t0 = performance.now();
       if (t.record) kept++;
-      const known = new Set(snapshots.previous(t.name)?.manifests ?? []);
-      const prefetch = t.m && prefetchTable(t.name, t.m, f => https(f, access.sas), { data: t.bytes != null && t.bytes <= SMALL_BYTES, known })
-        .then(n => perf.log('fetch', `prefetch ${t.name}: ${n} files${known.size ? ` (${known.size} manifests kept)` : ''}`, { ms: performance.now() - t0 }),
-              e => perf.log('info', `prefetch ${t.name}: ${e?.message || e}`));
+      // A new snapshot is planned here, at once, off every engine (and a small table's files
+      // fetched into the HTTP cache): opening the table waits for it.
+      const planning = t.m ? planTable(t.name, t.m, f => https(f, access.sas), { data: t.bytes != null && t.bytes <= SMALL_BYTES }) : null;
+      planning?.then(p => perf.log('attach', `PLAN ${t.name} (in the page: ${p.manifests} manifests, ${p.fetched} read, ${p.record.files.length} files)`, { ms: performance.now() - t0 }),
+                     () => {});   // a failure is logged when the table opens, and DuckDB plans it
       let whenReady;
       const ready = new Promise(r => { whenReady = r; });
-      located.set(t.name, { location: t.location, bytes: t.bytes, prefetch, record: t.record ?? null,
+      located.set(t.name, { location: t.location, bytes: t.bytes, planning, record: t.record ?? null,
         stored: !!t.record, ready: null, whenReady, isReady: ready });
     }
     if (kept) perf.log('info', `snapshots: ${kept} of ${metas.filter(Boolean).length} tables unchanged, opened from their records`);

@@ -1,25 +1,23 @@
 // =============================================================================
-// prefetch.js — a table's Iceberg files fetched ahead of DuckDB, in parallel
+// prefetch.js — a table planned from Iceberg, and its files fetched ahead of DuckDB
 // =============================================================================
 // DuckDB-WASM reads a remote file one request at a time (synchronous XHR in its worker), and
-// OneLake answers each in ~0.6 s whatever its size: opening a table (metadata.json, manifest
-// list, manifests, a HEAD and a GET each) takes seconds before any data. The browser's HTTP
+// OneLake answers each in ~0.6 s whatever its size. So the page does the Iceberg side itself,
+// many requests at once and off every engine: it plans a table (metadata.json, the manifest
+// list, the manifests, read here) and fetches what DuckDB is about to read. The browser's HTTP
 // cache serves the worker's requests too, HEAD and Range included, and OneLake's files are
-// cacheable (Last-Modified, no Cache-Control). So the page fetches what DuckDB is about to
-// read, many at once, and DuckDB finds it cached. Nothing is kept here: the cache is the
-// browser's, and the URLs (the file and the SAS) are the ones azure_wasm builds.
+// cacheable (Last-Modified, no Cache-Control); a large table's files go to the worker's store.
 //
-//   prefetchTable(name, metadata, url, { data, known })
+//   planTable(name, metadata, url, { data })
 //                                           name: the table, for prioritize(name);
 //                                           metadata: the table's metadata.json, parsed;
-//                                           url(abfss) -> the https URL DuckDB will ask for;
-//                                           data: the data files too (delete files included:
-//                                           a table about to be read whole), after every
-//                                           table's metadata layers;
-//                                           known: manifest paths the worker holds already
-//                                           (snapshots.js: the table's last record), not
-//                                           fetched. A new snapshot's manifest list names
-//                                           every manifest of the table, old ones included.
+//                                           url(abfss) -> the https URL to fetch it with;
+//                                           data: the live files too, into the HTTP cache
+//                                           (a small table, about to be read whole).
+//                                           Returns { record, manifests, fetched }: the record
+//                                           snapshots.js keeps (without location and bytes),
+//                                           the snapshot's manifests and how many were not in
+//                                           the manifest cache.
 //   prefetchFiles(name, files, url, store, onFile)
 //                                           each Parquet file whole, six at a time, handed to
 //                                           the worker's store (store(path, bytes), resolved
@@ -74,62 +72,131 @@ export async function prefetchFiles(name, files, url, store, onFile = () => {}) 
   }, name).catch(() => ({ path: f.path, size: f.size ?? null })).then(f => { onFile(f.size ?? 0); return f; })));
 }
 
-// --- An Avro object container file, as far as its strings: the header's codec, then each
-// block, inflated if the codec is deflate. Enough to find the paths in a manifest.
-function zigzag(b, pos) {
+// --- Avro object container files, read by the schema in their header: the records of a
+// manifest list and of a manifest. Codecs null and deflate (what Iceberg writers use by
+// default); another one throws, and the table is planned by DuckDB instead.
+const utf8 = new TextDecoder();
+function long(r) {
   let n = 0, shift = 0, byte;
-  do { byte = b[pos.i++]; n += (byte & 0x7f) * 2 ** shift; shift += 7; } while (byte & 0x80);
-  return n % 2 ? -(n + 1) / 2 : n / 2;
+  do { byte = r.b[r.i++]; n += (byte & 0x7f) * 2 ** shift; shift += 7; } while (byte & 0x80);
+  return n % 2 ? -(n + 1) / 2 : n / 2;   // exact below 2^53: sizes and counts; ids only skipped
 }
-const text = bytes => new TextDecoder('latin1').decode(bytes);
+const bytesOf = r => { const n = long(r); return r.b.subarray(r.i, r.i += n); };
+// Every named type, by its name and its full name: a schema refers to one by either.
+function names(s, out = new Map(), space = '') {
+  if (Array.isArray(s)) { for (const x of s) names(x, out, space); return out; }
+  if (!s || typeof s !== 'object') return out;
+  const ns = s.namespace ?? space;
+  if (s.name && ['record', 'enum', 'fixed'].includes(s.type)) { out.set(s.name, s); if (ns) out.set(`${ns}.${s.name}`, s); }
+  if (s.type === 'record') for (const f of s.fields) names(f.type, out, ns);
+  else if (s.type === 'array') names(s.items, out, ns);
+  else if (s.type === 'map') names(s.values, out, ns);
+  else if (typeof s.type === 'object') names(s.type, out, ns);
+  return out;
+}
+function decode(s, r, named) {
+  if (Array.isArray(s)) return decode(s[long(r)], r, named);   // a union: its branch, then the value
+  if (typeof s === 'string') {
+    switch (s) {
+      case 'null': return null;
+      case 'boolean': return r.b[r.i++] !== 0;
+      case 'int': case 'long': return long(r);
+      case 'float': { const v = new DataView(r.b.buffer, r.b.byteOffset + r.i, 4).getFloat32(0, true); r.i += 4; return v; }
+      case 'double': { const v = new DataView(r.b.buffer, r.b.byteOffset + r.i, 8).getFloat64(0, true); r.i += 8; return v; }
+      case 'bytes': return bytesOf(r);
+      case 'string': return utf8.decode(bytesOf(r));
+    }
+    const t = named.get(s);
+    if (!t) throw new Error(`Avro: unknown type ${s}`);
+    return decode(t, r, named);
+  }
+  switch (s.type) {
+    case 'record': { const o = {}; for (const f of s.fields) o[f.name] = decode(f.type, r, named); return o; }
+    case 'enum': return s.symbols[long(r)];
+    case 'fixed': return r.b.subarray(r.i, r.i += s.size);
+    case 'array': case 'map': {
+      const out = s.type === 'array' ? [] : {};
+      for (let n; (n = long(r)) !== 0;) {
+        if (n < 0) { n = -n; long(r); }   // a negative count is followed by the block's size
+        for (let k = 0; k < n; k++) {
+          if (s.type === 'array') out.push(decode(s.items, r, named));
+          else { const key = utf8.decode(bytesOf(r)); out[key] = decode(s.values, r, named); }
+        }
+      }
+      return out;
+    }
+    default: return decode(s.type, r, named);   // a primitive with a logical type
+  }
+}
 async function inflateRaw(bytes) {
   const out = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
   return new Uint8Array(await new Response(out).arrayBuffer());
 }
-async function avroText(b) {
-  if (b[0] !== 0x4f || b[1] !== 0x62 || b[2] !== 0x6a || b[3] !== 1) return '';   // "Obj\x01"
-  const pos = { i: 4 }, meta = {};
-  for (let n; (n = zigzag(b, pos)) !== 0;) {
-    if (n < 0) { n = -n; zigzag(b, pos); }   // a negative count is followed by the block's size
-    for (let k = 0; k < n; k++) {
-      const kl = zigzag(b, pos), key = text(b.subarray(pos.i, pos.i += kl));
-      const vl = zigzag(b, pos); meta[key] = text(b.subarray(pos.i, pos.i += vl));
-    }
+export async function avroRecords(b) {
+  if (b[0] !== 0x4f || b[1] !== 0x62 || b[2] !== 0x6a || b[3] !== 1) throw new Error('Avro: not an object container file');
+  const r = { b, i: 4 }, meta = {};
+  for (let n; (n = long(r)) !== 0;) {
+    if (n < 0) { n = -n; long(r); }
+    for (let k = 0; k < n; k++) { const key = utf8.decode(bytesOf(r)); meta[key] = utf8.decode(bytesOf(r)); }
   }
-  pos.i += 16;   // the sync marker
-  const codec = meta['avro.codec'] ?? 'null';
-  if (codec !== 'null' && codec !== 'deflate') return '';
-  let all = '';
-  while (pos.i < b.length) {
-    zigzag(b, pos);                 // objects in the block
-    const size = zigzag(b, pos);
-    const block = b.subarray(pos.i, pos.i += size);
-    pos.i += 16;
-    all += text(codec === 'deflate' ? await inflateRaw(block) : block);
+  r.i += 16;   // the sync marker
+  const codec = meta['avro.codec'] || 'null';
+  if (codec !== 'null' && codec !== 'deflate') throw new Error(`Avro: codec ${codec}`);
+  const schema = JSON.parse(meta['avro.schema']), named = names(schema);
+  const out = [];
+  while (r.i < b.length) {
+    const count = long(r), size = long(r);
+    const block = b.subarray(r.i, r.i += size);
+    r.i += 16;
+    const br = { b: codec === 'deflate' ? await inflateRaw(block) : block, i: 0 };
+    for (let k = 0; k < count; k++) out.push(decode(schema, br, named));
   }
-  return all;
+  return out;
 }
-const paths = (s, ext) => [...new Set(s.match(new RegExp(`abfss://[\\x21-\\x7e]+?\\.${ext}`, 'g')) ?? [])];
 
-// The current snapshot's manifest list, its manifests, and with `data` the files they name.
-export async function prefetchTable(name, metadata, url, { data = false, known = new Set() } = {}) {
+// --- Planning. A manifest is immutable: what it lists is kept by its path (Cache Storage,
+// this browser's), so a new snapshot reads only the manifests it added. Each entry kept as
+// [status, content, path, format, size]: status 2 is DELETED; content 0 data, 1 position
+// deletes, 2 equality deletes (a v1 manifest has none: its manifest list says, 0).
+const MANIFESTS = 'iceberg-manifests-v1';
+const cacheKey = path => `https://manifests.local/${encodeURIComponent(path)}`;
+async function cached(path) {
+  try { const r = await (await caches.open(MANIFESTS)).match(cacheKey(path)); return r ? await r.json() : null; }
+  catch (e) { return null; }   // no Cache Storage: read it again
+}
+async function keep(path, entries) {
+  try { await (await caches.open(MANIFESTS)).put(cacheKey(path), new Response(JSON.stringify(entries))); } catch (e) {}
+}
+async function manifestEntries(path, content, url, name) {
+  const hit = await cached(path);
+  if (hit) return { entries: hit, fetched: false };
+  const entries = (await avroRecords(await get(url(path), name))).map(e => {
+    const f = e.data_file;
+    return [e.status, f.content ?? content, f.file_path, String(f.file_format).toLowerCase(), f.file_size_in_bytes ?? null];
+  });
+  await keep(path, entries);
+  return { entries, fetched: true };
+}
+
+// The current snapshot's live files: what DuckDB's iceberg_metadata() WHERE status <> 'DELETED'
+// gives. `scan`: what a view over the Parquet files cannot read (no data file, a file that is
+// not Parquet such as a deletion vector, an equality delete), left to iceberg_scan.
+export async function planTable(name, metadata, url, { data = false } = {}) {
   if (!order.includes(name)) order.push(name);
   const current = String(metadata['current-snapshot-id']);
   const snapshot = (metadata.snapshots ?? []).find(s => String(s['snapshot-id']) === current);
-  if (!snapshot?.['manifest-list']) return 0;
-  const list = await avroText(await get(url(snapshot['manifest-list']), name));
-  // A known manifest is in the worker's store, and so are the data files it names that were
-  // read (a small table was read whole): only the new manifests are fetched, and with `data`
-  // the files they name.
-  const manifests = await Promise.all(paths(list, 'avro').filter(m => !known.has(m))
-    .map(async m => avroText(await get(url(m), name))));
-  let n = 1 + manifests.length;
-  if (data) {
-    const files = [...new Set(manifests.flatMap(m => paths(m, 'parquet')))];
-    // A manifest also names the files a later snapshot removed (its DELETED entries, which this
-    // reader does not tell apart): those answer 404 and are skipped.
-    await Promise.all(files.map(f => get(url(f), name).catch(() => null)));
-    n += files.length;
-  }
-  return n;
+  const record = { scan: true, files: [], deleteFiles: [], manifests: [] };
+  if (!snapshot?.['manifest-list']) return { record, manifests: 0, fetched: 0 };
+  const list = await avroRecords(await get(url(snapshot['manifest-list']), name));
+  const read = await Promise.all(list.map(m => manifestEntries(m.manifest_path, m.content ?? 0, url, name)));
+  const live = read.flatMap(m => m.entries).filter(e => e[0] !== 2);
+  const files = content => [...new Map(live.filter(e => e[1] === content).map(e => [e[2], { path: e[2], size: e[4] }])).values()];
+  Object.assign(record, {
+    files: files(0), deleteFiles: files(1),
+    manifests: list.map(m => m.manifest_path),
+  });
+  record.scan = !record.files.length || live.some(e => e[1] === 2 || e[3] !== 'parquet');
+  if (data && !record.scan)
+    await Promise.all([...record.files, ...record.deleteFiles].map(f => get(url(f.path), name).catch(() => null)));
+  return { record, manifests: list.length, fetched: read.filter(m => m.fetched).length };
 }
