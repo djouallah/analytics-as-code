@@ -148,7 +148,7 @@ const label = a => a.length ? a.map(v => v == null ? '(blank)' : String(v)).join
 // `root`: the element the page is built in. `ctx`:
 //   model()          the model, TMSL (a promise)
 //   run(q)           the rows of a query, as objects keyed by the select's names
-//   toDax(q)         the query's DAX (shown under the view)
+//   toSQL(q)         the SQL the query runs as (shown under the view)
 //   chart(el)        an ECharts instance on el, in the page's theme
 //   palette()        the colours of series, in order
 //   css(name)        a CSS token's value (the chart's tints)
@@ -181,12 +181,12 @@ export function createExplorer(root, ctx) {
   const table = el('div', { class: 'ex-table' });
   const chartBox = el('div', { class: 'ex-chart', id: 'exploreChart' });
   const out = el('div', { class: 'ex-out' }, table, chartBox);
-  const daxText = el('pre');
-  const dax = el('details', { class: 'ex-dax' }, el('summary', {}, 'DAX'), daxText);
+  const sqlText = el('pre');
+  const sqlBox = el('details', { class: 'ex-dax' }, el('summary', {}, 'SQL'), sqlText);
   // The query plan, when the page's Show plan asks for it (showPlan).
   const planText = el('pre');
   const plan = el('details', { class: 'ex-dax', hidden: true }, el('summary', {}, 'Plan'), planText);
-  root.replaceChildren(el('div', { class: 'ex' }, pane, el('section', { class: 'ex-main' }, shelves, tools, out, dax, plan)));
+  root.replaceChildren(el('div', { class: 'ex' }, pane, el('section', { class: 'ex-main' }, shelves, tools, out, sqlBox, plan)));
 
   search.addEventListener('input', renderFields);
   totals.addEventListener('change', () => { state.totals = totals.checked; changed(); });
@@ -408,8 +408,8 @@ export function createExplorer(root, ctx) {
     try {
       q = buildQuery(state);
     } catch (e) { result = null; info.textContent = e.message; info.className = 'ex-info ex-error'; draw(); return; }
-    if (!q) { result = null; daxText.textContent = ''; info.textContent = ''; draw(); return; }
-    daxText.textContent = ctx.toDax(q);
+    if (!q) { result = null; sqlText.textContent = ''; info.textContent = ''; draw(); return; }
+    sqlText.textContent = ctx.toSQL(q);
     info.className = 'ex-info';
     info.textContent = 'Running…';
     try {

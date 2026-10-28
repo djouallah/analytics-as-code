@@ -352,7 +352,7 @@ the views cannot come back into the pages; `query()` and `analyze()` refuse DAX 
 make the box accept DAX. Its CSV is the rows of its SQL (`draw.js`'s `writeCsv`).
 Show plan and Download CSV sit in Analyze's bar, on the SQL and Explore pages, and act on
 the page shown: the SQL box, or Explore's query (its shelves, all rows), whose plan shows under
-its view.
+its view. Explore shows under its view the SQL its query runs as, not the DAX (2026-10-28).
 
 **The compiler is checked against the model:** `scripts/parity/page_queries.mjs`
 calls every member of `queries.js` the way `index.html` does, over 12 page states, and runs

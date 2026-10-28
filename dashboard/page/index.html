@@ -3037,7 +3037,7 @@
     function openExplorer() {
       explorer ??= createExplorer(document.getElementById('analyze-explore'), {
         model: loadModel,
-        toDax: q => data.toDax(q),
+        toSQL: q => data.toSQL(data.toDax(q)),
         run: async q => {
           await ensureExploreData(data.toSQL(data.toDax(q)), q.where);
           const rows = await runQuery(q, data.query, { keep: true });
