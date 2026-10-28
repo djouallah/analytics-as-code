@@ -28,8 +28,9 @@
 // Each view is at the snapshot the catalog named (catalog.js keeps that answer up to ~55
 // minutes, so a reload within it reads the same snapshots).
 // DuckDB-WASM runs single-threaded here, so the page runs a pool of engines (ENGINES, each its
-// own worker and memory, 2 by default (3 measured no faster, 2026-10-28); `?engines=N` in the URL, 1 to 4, to compare): a query goes to the
-// engine with the fewest waiting, so a render's queries run side by side. A table is planned
+// own worker and memory, 2 by default (3 measured no faster, 2026-10-28); `?engines=N` in the
+// URL, 1 to 4, to compare), fed by one queue: a free engine takes the next query, so a
+// render's queries run side by side and a long one holds up only its own engine. A table is planned
 // and its files downloaded once, whichever engine opens it first; each engine then has its own
 // view (and its own copy of a small table). All the workers share the store.
 //
@@ -41,7 +42,7 @@
 // =============================================================================
 
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev65.0/+esm";
-import { serialQueue } from "./queue.js";
+import { Skipped } from "./queue.js";
 import { createAuth } from "./auth.js";
 import { createCatalog } from "./catalog.js";
 import { createSnapshots } from "./snapshots.js";
@@ -139,17 +140,46 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
   // `ready`: the table's record, its files all in the store: once for every engine.
   const located = new Map();
 
-  // The engines: each its worker, connection, queue, the tables opened on it (`opened`: name
-  // -> promise of its opening) and the files registered on it. `waiting`: its queries sent and
-  // not done (the background openings not counted), which is how a query picks its engine.
+  // The engines: each its worker, connection, the tables opened on it (`opened`: name ->
+  // promise of its opening) and the files registered on it; `busy` while it runs a job.
+  // One queue for all of them, as queue.js's for one engine: `early` jobs first, `later` ones
+  // when nothing else waits, and one whose `stale()` holds when its turn comes dropped unrun
+  // (Skipped). A free engine takes the next job; a query is not given an engine when it is
+  // sent (a query sent to an engine behind an 18 s scan waited 14 s there while the other
+  // engine sat idle, 2026-10-28). Of the free engines, a query goes to the one with more of
+  // its tables open. A job with an `engine` (an engine's own setup, its background openings)
+  // runs on that one.
   let engines = [];
-  const run = (e, fn, options) => {
-    const counted = !options?.later;
-    if (counted) e.waiting++;
-    return e.serial(fn, options).finally(() => { if (counted) e.waiting--; });
-  };
-  const q = (e, sql) => run(e, () => e.conn.query(sql));
-  const tag = e => engines.length > 1 ? ` [engine ${e.i + 1}]` : '';
+  const jobs = { early: [], normal: [], later: [] };
+  function submit(fn, { engine = null, names = [], stale = null, early = false, later = false } = {}) {
+    return new Promise((resolve, reject) => {
+      jobs[early ? 'early' : later ? 'later' : 'normal'].push({ fn, engine, names, stale, resolve, reject });
+      dispatch();
+    });
+  }
+  function dispatch() {
+    for (;;) {
+      const free = engines.filter(e => e && !e.busy);
+      if (!free.length) return;
+      let job = null, e = null;
+      for (const k of ['early', 'normal', 'later']) {
+        const i = jobs[k].findIndex(j => !j.engine || free.includes(j.engine));
+        if (i < 0) continue;
+        [job] = jobs[k].splice(i, 1);
+        break;
+      }
+      if (!job) return;
+      if (job.stale?.()) { job.reject(new Skipped()); continue; }
+      e = job.engine ?? free.reduce((a, b) => job.names.filter(n => b.opened.has(n)).length > job.names.filter(n => a.opened.has(n)).length ? b : a);
+      e.busy = true;
+      (async () => {
+        try { job.resolve(await job.fn(e)); } catch (err) { job.reject(err); }
+        finally { e.busy = false; dispatch(); }
+      })();
+    }
+  }
+  const q = (e, sql) => submit(() => e.conn.query(sql), { engine: e });
+  const tag = e => ENGINES > 1 ? ` [engine ${e.i + 1}]` : '';
 
   // The SAS from the function: the page's downloads use it, and nothing else does. A page open
   // longer than it gets a new one shortly before it expires (a failed renewal is tried again a
@@ -300,13 +330,6 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
     prioritize(...names.filter(n => !e.opened.has(n)));   // their files first, in the downloads
     for (const name of names) await open(e, name);
   }
-  // The engine a query goes to: the one with the fewest queries waiting, and of those, the one
-  // with more of its tables open.
-  function pick(sql) {
-    const names = namedIn(sql);
-    const score = e => e.waiting * 1000 - names.filter(n => e.opened.has(n)).length;
-    return engines.reduce((a, b) => score(b) < score(a) ? b : a);
-  }
 
   // A new snapshot planned by the page, at once, off every engine: opening the table waits for it.
   let access = null;
@@ -379,7 +402,8 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
 `, HTTP_TRACE_SHIM, `
 importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
     let warmed = false;
-    engines = await Promise.all(Array.from({ length: ENGINES }, async (_, i) => {
+    engines = new Array(ENGINES).fill(null);
+    await Promise.all(Array.from({ length: ENGINES }, async (_, i) => {
       const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), new Worker(workerUrl));
       // Its worker script and WASM module fetched and compiled: the Logs tab says how long.
       await perf.time('attach', `START engine ${i + 1} (worker + WASM instantiate)`, () => db.instantiate(bundle.mainModule, bundle.pthreadWorker));
@@ -389,7 +413,8 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
       await db.open({ filesystem: { reliableHeadRequests: true, allowFullHTTPReads: false, forceFullHTTPReads: false } });
       const version = await db.getVersion();
       if (!warmed) { warmed = true; warmExtensions(version); }
-      const e = { i, db, conn: await db.connect(), serial: serialQueue(), waiting: 0, opened: new Map(), registered: new Set() };
+      const e = { i, db, conn: await db.connect(), busy: false, opened: new Map(), registered: new Set() };
+      engines[i] = e;   // its setup below runs through the queue, on it
       // Installing needs a home directory.
       await perf.time('attach', `LOAD ${EXTENSIONS.join(', ')} (DuckDB ${version})${ENGINES > 1 ? ` [engine ${i + 1}]` : ''}`, () =>
         q(e, `SET home_directory = '/tmp'; ${EXTENSIONS.map(x => `INSTALL ${x}; LOAD ${x};`).join(' ')}`));
@@ -415,7 +440,7 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
     const e0 = engines[0];
     const db = { connect: async () => {
       const c = await e0.db.connect();
-      return { send: async sql => { await run(e0, () => openFor(e0, sql)); return c.send(sql); }, close: () => c.close() };
+      return { send: async sql => { await submit(() => openFor(e0, sql), { engine: e0 }); return c.send(sql); }, close: () => c.close() };
     } };
     return { db };
   }
@@ -433,7 +458,7 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
       for (const e of engines)
         for (const [name, t] of order) {
           if (e.opened.has(name)) continue;
-          const job = () => run(e, () => e.opened.has(name) ? null : open(e, name), { later: true });
+          const job = () => submit(() => e.opened.has(name) ? null : open(e, name), { engine: e, later: true });
           (e === engines[0] ? job() : t.isReady.then(job)).catch(err =>
             perf.log('error', `OPEN ${name}${tag(e)}`, { status: String(err?.message || err) }));
         }
@@ -446,25 +471,25 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
     ensureHistory: async () => false,
     // `dax`: the query as the page wrote it, for the Logs tab (the compiler passes it).
     // `options`: the page's for the queue (queue.js): `stale`, `early`, `later`.
-    // Timed here, not by perf.query: its wait assumes one worker, and with a pool the other
-    // engine's work counted as this query's wait. `wait`: in its engine's queue; `ms`: the
-    // query itself (opening its tables is logged as OPEN); the engine in its status.
+    // Timed here, not by perf.query: its wait assumes one worker. `wait`: in the queue, until
+    // an engine took it; `ms`: the query itself (opening its tables is logged as OPEN); the
+    // engine in its status.
     query: (sql, dax, options) => {
-      const e = pick(sql), t0 = performance.now();
+      const t0 = performance.now();
       const flat = s => String(s ?? '').replace(/\s+/g, ' ').trim();
-      let started = null, ran = null;
-      return run(e, async () => {
-        started = performance.now();
+      let started = null, ran = null, used = null;
+      return submit(async e => {
+        used = e; started = performance.now();
         await openFor(e, sql);
         ran = performance.now();
         return e.conn.query(sql);
-      }, options).then(r => {
-        perf.log('query', flat(sql), { wait: started - t0, ms: performance.now() - ran, status: `${r.numRows} rows${tag(e)}`, dax: flat(dax) });
+      }, { ...options, names: namedIn(sql) }).then(r => {
+        perf.log('query', flat(sql), { wait: started - t0, ms: performance.now() - ran, status: `${r.numRows} rows${tag(used)}`, dax: flat(dax) });
         return r;
       }, err => {
-        if (err?.skipped) perf.log('skip', flat(sql), { status: `replaced by a newer render${tag(e)}`, dax: flat(dax) });
+        if (err?.skipped) perf.log('skip', flat(sql), { status: 'replaced by a newer render', dax: flat(dax) });
         else perf.log('error', flat(sql), { wait: started == null ? null : started - t0, ms: started == null ? null : performance.now() - (ran ?? started),
-                                            status: `${err?.message || err}${tag(e)}`, dax: flat(dax) });
+                                            status: `${err?.message || err}${used ? tag(used) : ''}`, dax: flat(dax) });
         throw err;
       });
     },

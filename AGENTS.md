@@ -683,10 +683,14 @@ else: no import, no file written for it.
   isolation, which breaks Fabric's sign-in popup ("Page not accessible directly").
 - **So the app runs a pool of engines** (`ENGINES` in `data.js`, 2 by default; `?engines=N`,
   1 to 4, in the page's URL to compare), each single-threaded in its own worker and memory:
-  a query goes to the engine with the fewest queries waiting (then the one with more of its
-  tables open), so a render's independent queries run side by side; one query is no faster.
-  Each engine has its own queue (`queue.js`, unchanged), extensions, registered files and
-  views, and its own copy of a small table. A table is planned (by the page) and its files
+  **one queue feeds them all** (`submit`/`dispatch` in `data.js`, with `queue.js`'s rules:
+  `early` first, `later` last, a stale job dropped unrun): a free engine takes the next query,
+  preferring the engine with more of its tables open, so a render's independent queries run
+  side by side and a long query holds up only its own engine; one query is no faster. (Until
+  2026-10-28 a query was given an engine when sent: behind an 18 s full-history scan on one
+  engine, queries waited 14-16 s there while the other sat idle.) A job tied to an engine (its
+  setup, its background openings) runs on that one. Each engine has its own extensions,
+  registered files and views, and its own copy of a small table. A table is planned (by the page) and its files
   downloaded once (`readyOf`); every engine then binds its own view (`bind`). All the workers
   share the store (above). The Logs tab tags each LOAD and OPEN with its engine. Added
   2026-10-28. On `power` that day, warm: two engines both busy from the first query (5.0 s) to
