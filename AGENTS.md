@@ -694,9 +694,15 @@ else: no import, no file written for it.
   engine, queries waited 14-16 s there while the other sat idle.) A job tied to an engine (its
   setup, its background openings) runs on that one. Each engine has its own extensions,
   registered files and views, and its own copy of a small table.
-- **No result cache in `data.js`**: the page keeps the rows of its last 200 queries
-  (`runQuery` in `index.html`, keyed by the query, cleared when the views change); one added in
-  `data.js` on 2026-10-28 only held each result a second time and was taken out the same day. A table is planned (by the page) and its files
+- **A query's result is saved in the browser, across visits** (`savedResult`/`saveResult` in
+  `data.js`, IndexedDB `iceberg-results`, Arrow IPC through the `apache-arrow@17.0.0` module
+  duckdb-wasm itself imports): its key is the SQL and the metadata location of every table it
+  names, so a new snapshot is a new key and a result is never served over newer data. A reload
+  answers every query already seen without an engine (`… rows (saved)` in the Logs tab). Not
+  kept: a query reading the clock or today's date (`current_date`, `now()`, `random()`, …), one
+  that is not a read, a result over 8 MB; past 256 MB in all the least recently used go. The
+  page's own cache (`runQuery` in `index.html`, its last 200 queries) still answers within a
+  visit; an in-memory cache in `data.js` only held each result twice and is not there. A table is planned (by the page) and its files
   downloaded once (`readyOf`); every engine then binds its own view (`bind`). All the workers
   share the store (above). The Logs tab tags each LOAD and OPEN with its engine. Added
   2026-10-28. On `power` that day, warm: two engines both busy from the first query (5.0 s) to

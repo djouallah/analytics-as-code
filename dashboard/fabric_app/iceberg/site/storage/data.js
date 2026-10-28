@@ -42,6 +42,9 @@
 // =============================================================================
 
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev65.0/+esm";
+// The Arrow that duckdb-wasm's own module imports (the same URL: the same module), for the
+// saved results.
+import { tableToIPC, tableFromIPC } from "https://cdn.jsdelivr.net/npm/apache-arrow@17.0.0/+esm";
 import { Skipped } from "./queue.js";
 import { createAuth } from "./auth.js";
 import { createCatalog } from "./catalog.js";
@@ -450,6 +453,67 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
   // ready yet is made ready (planned, downloaded) by the first engine; the others open it once
   // it is, so none of them waits on it with a job of its queue. Not awaited: the page does not
   // wait for them, and opening a table changes no result it holds.
+  // --- Saved results: a query's result kept in this browser (IndexedDB), as Arrow IPC ---
+  // Its key is the SQL and the metadata location of every table it names: a new snapshot of
+  // a table is a new key, so a result is never served over newer data. Not kept: a query that
+  // reads the clock or today's date (current_date, now(), random(), ...), one that is not a
+  // read, a result over RESULT_MAX; the least recently used go past RESULTS_MAX in all.
+  // Best-effort: storage refused or failing, a query just runs.
+  const RESULT_MAX = 8 * 1024 * 1024, RESULTS_MAX = 256 * 1024 * 1024;
+  const VOLATILE = /\bcurrent_(date|time|timestamp)\b|\b(now|today|random|uuid|gen_random_uuid|setseed|nextval|get_current_time|timezone)\s*\(/i;
+  function resultKey(sql) {
+    if (!/^\s*(select|with|from)\b/i.test(sql) || VOLATILE.test(sql)) return null;
+    return [sql, ...namedIn(sql).sort().map(n => `${n} ${located.get(n)?.location}`)].join('\n');
+  }
+  const asPromise = r => new Promise((resolve, reject) => { r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
+  let resultsDb = null;
+  const resultStore = () => resultsDb ??= new Promise((resolve, reject) => {
+    const open = indexedDB.open('iceberg-results', 1);
+    // `bytes`: key -> the IPC; `meta`: key -> its size and when last used (for the cap).
+    open.onupgradeneeded = () => { open.result.createObjectStore('bytes'); open.result.createObjectStore('meta').createIndex('at', 'at'); };
+    open.onsuccess = () => resolve(open.result);
+    open.onerror = () => reject(open.error);
+  }).catch(() => null);
+  async function savedResult(key) {
+    try {
+      const db = await resultStore();
+      if (!db) return null;
+      const bytes = await asPromise(db.transaction('bytes').objectStore('bytes').get(key));
+      if (!bytes) return null;
+      const meta = db.transaction('meta', 'readwrite').objectStore('meta');
+      meta.get(key).onsuccess = ev => { const m = ev.target.result; if (m) meta.put({ ...m, at: Date.now() }, key); };
+      return tableFromIPC(bytes);
+    } catch (e) { return null; }
+  }
+  let pruning = null;
+  async function saveResult(key, table) {
+    try {
+      const bytes = tableToIPC(table);
+      if (bytes.byteLength > RESULT_MAX) return;
+      const db = await resultStore();
+      if (!db) return;
+      const tx = db.transaction(['bytes', 'meta'], 'readwrite');
+      tx.objectStore('bytes').put(bytes, key);
+      tx.objectStore('meta').put({ size: bytes.byteLength, at: Date.now() }, key);
+      pruning ??= new Promise(r => setTimeout(r, 5000)).then(() => prune(db)).finally(() => { pruning = null; });
+    } catch (e) {}
+  }
+  // The least recently used results out, past RESULTS_MAX in all.
+  async function prune(db) {
+    const all = [];
+    await new Promise(resolve => {
+      const cur = db.transaction('meta').objectStore('meta').index('at').openCursor(null, 'prev');
+      cur.onsuccess = () => { const c = cur.result; if (!c) return resolve(); all.push([c.primaryKey, c.value.size]); c.continue(); };
+      cur.onerror = () => resolve();
+    });
+    let total = 0;
+    const out = all.filter(([, size]) => (total += size) > RESULTS_MAX).map(([k]) => k);
+    if (!out.length) return;
+    const tx = db.transaction(['bytes', 'meta'], 'readwrite');
+    for (const k of out) { tx.objectStore('bytes').delete(k); tx.objectStore('meta').delete(k); }
+    perf.log('info', `saved results: ${out.length} dropped (over ${RESULTS_MAX / 1048576} MB)`);
+  }
+
   let _warming = false;
   function attachAgg() {
     if (!_warming) {
@@ -474,11 +538,18 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
     // Timed here, not by perf.query: its wait assumes one worker. `wait`: in the queue, until
     // an engine took it; `ms`: the query itself (opening its tables is logged as OPEN); the
     // engine in its status.
-    // No result cache here: the page keeps the rows of its last 200 queries (runQuery in
-    // index.html), so a second one held each result twice.
-    query: (sql, dax, options) => {
+    // A result already computed on these snapshots, on this visit or an earlier one, is read
+    // back from this browser (savedResult) instead: the page's own cache (runQuery) holds the
+    // last 200 for the visit, this one survives a reload.
+    query: async (sql, dax, options) => {
       const t0 = performance.now();
       const flat = s => String(s ?? '').replace(/\s+/g, ' ').trim();
+      const key = resultKey(sql);
+      const saved = key && await savedResult(key);
+      if (saved) {
+        perf.log('query', flat(sql), { wait: 0, ms: performance.now() - t0, status: `${saved.numRows} rows (saved)`, dax: flat(dax) });
+        return saved;
+      }
       let started = null, ran = null, used = null;
       return submit(async e => {
         used = e; started = performance.now();
@@ -487,6 +558,7 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
         return e.conn.query(sql);
       }, { ...options, names: namedIn(sql) }).then(r => {
         perf.log('query', flat(sql), { wait: started - t0, ms: performance.now() - ran, status: `${r.numRows} rows${tag(used)}`, dax: flat(dax) });
+        if (key) saveResult(key, r);
         return r;
       }, err => {
         if (err?.skipped) perf.log('skip', flat(sql), { status: 'replaced by a newer render', dax: flat(dax) });
