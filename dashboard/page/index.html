@@ -317,7 +317,12 @@
     .ex-out { flex: 1 1 auto; min-height: 340px; display: flex; flex-direction: column; }
     .ex-table { overflow: auto; flex: 1 1 0; min-height: 0; max-height: 65vh; }
     .ex-chart { flex: 1 1 0; min-height: 340px; }
-    .ex-plan { flex: 1 1 0; min-height: 0; overflow: auto; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.72rem; line-height: 1.4; white-space: pre; }
+    /* Show plan: the SELECT, then DuckDB's plan tree (a page of its own, in a frame). */
+    .ex-plan { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+    .ex-plan[hidden], .analyze-plan[hidden], .analyze-table-wrap[hidden] { display: none; }
+    .ex-plan-sql { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.72rem; line-height: 1.45; white-space: pre-wrap; color: var(--muted); max-height: 30%; overflow: auto; }
+    .analyze-plan { flex: 1 1 auto; min-height: 420px; display: flex; padding: 0 var(--gutter) 1rem; }
+    .plan-frame { flex: 1 1 auto; width: 100%; min-height: 420px; border: 1px solid var(--hairline); border-radius: 8px; background: #fff; }
     .ex-table[hidden], .ex-chart[hidden] { display: none; }
     .ex-empty { color: var(--faint); font-size: 0.85rem; padding: 3rem 1rem; text-align: center; }
     .ex-pivot th, .ex-pivot td { white-space: nowrap; }
@@ -826,6 +831,8 @@
     <div class="analyze-table-wrap">
       <table class="analyze-table" id="analyzeTable"></table>
     </div>
+    <!-- Show plan: DuckDB's plan tree, in place of the results. -->
+    <div class="analyze-plan" id="analyzePlanView" hidden></div>
     </div>
   </div>
 
@@ -3008,6 +3015,7 @@
         document.getElementById('analyze-sql-page').hidden = btn.dataset.apage !== 'sql';
         document.getElementById('analyze-explore').hidden = btn.dataset.apage !== 'explore';
         document.getElementById('analyzeActions').hidden = btn.dataset.apage === 'model';
+        syncPlanButton();
         if (btn.dataset.apage === 'model') renderModel();
         if (btn.dataset.apage === 'explore') openExplorer();
       });
@@ -3049,6 +3057,7 @@
         palette,
         css: cssVar,
         storageKey: 'explore',
+        onPlan: () => syncPlanButton(),
       });
     }
 
@@ -3089,6 +3098,7 @@
         return;
       }
 
+      if (sqlPlanShown) showSqlPlan(null);   // the results take the plan's place
       const btn = document.getElementById('analyzePreview');
       btn.disabled = true;
       btn.textContent = 'Loading...';
@@ -3143,9 +3153,27 @@
     }
 
     // --- Analyze: Show plan and Download CSV, on the SQL page and on Explore ---
-    // On Explore they take its query (the shelves, all rows); the plan shows under its view.
+    // The plan is DuckDB's own tree (EXPLAIN (FORMAT html): a page of its own, collapsible
+    // nodes), in a sandboxed frame in place of the view: SQL of the views, not the model's.
+    // While it is shown the button says how to go back (Show results, Show visual).
+    async function planFrame(sql, query) {
+      const rows = await runQuery(`EXPLAIN (FORMAT html) ${sql}`, query, { keep: true });
+      const frame = document.createElement('iframe');
+      frame.className = 'plan-frame';
+      frame.title = 'Query plan';
+      frame.setAttribute('sandbox', 'allow-scripts');
+      frame.srcdoc = rows.map(r => r.explain_value ?? Object.values(r).join('\n')).join('\n');
+      return frame;
+    }
+    let sqlPlanShown = false;
+    function syncPlanButton() {
+      const page = analyzePage();
+      const shown = page === 'explore' ? !!explorer?.planShown() : page === 'sql' && sqlPlanShown;
+      document.getElementById('analyzePlan').textContent = !shown ? 'Show plan' : page === 'explore' ? 'Show visual' : 'Show results';
+    }
+    // On Explore they take its query (the shelves, all rows): its SELECT over the model, then
+    // the plan, in place of its view.
     async function explorePlan() {
-      // The plan replaces the view; a second click puts the view back.
       if (explorer?.planShown()) { explorer.showPlan(null); return; }
       const x = explorer?.query();
       if (!x) { setStatus('Put a field on the shelves first', 'error'); return; }
@@ -3157,16 +3185,14 @@
         const { sql, query } = data.analyze(x.sql);
         await ensureExploreData(sql, x.where);
         setStatus("Explaining...", "loading");
-        const rows = await runQuery(`EXPLAIN ${sql}`, query, { keep: true });
-        // The SELECT over the model first, then its plan.
-        explorer.showPlan(`${x.sql}\n\n-- Plan (EXPLAIN)\n${rows.map(r => r.explain_value ?? Object.values(r).join('  ')).join('\n')}`);
+        explorer.showPlan({ sql: x.sql, plan: await planFrame(sql, query) });
         setConnected();
       } catch (e) {
         setStatus("Query error: " + e.message, "error");
         console.error('[Explore plan]', e);
       } finally {
         btn.disabled = false;
-        btn.textContent = 'Show plan';
+        syncPlanButton();
       }
     }
     async function exploreDownload() {
@@ -3190,9 +3216,19 @@
       }
     }
 
-    // --- Analyze: query plan (EXPLAIN) ---
+    // --- Analyze: query plan (EXPLAIN), in place of the results ---
+    function showSqlPlan(frame) {
+      const view = document.getElementById('analyzePlanView');
+      view.replaceChildren(...(frame ? [frame] : []));
+      view.hidden = !frame;
+      document.querySelector('#analyze-sql-page .analyze-table-wrap').hidden = !!frame;
+      sqlPlanShown = !!frame;
+      syncPlanButton();
+    }
     async function analyzePlan() {
       if (analyzePage() === 'explore') return explorePlan();
+      // A second click puts the results back.
+      if (sqlPlanShown) { showSqlPlan(null); return analyzePreview(); }
       const base = getAnalyzeSql();
       const info = document.getElementById('analyzeInfo');
       if (!base) { info.textContent = 'Enter a SQL query.'; return; }
@@ -3200,19 +3236,14 @@
       const btn = document.getElementById('analyzePlan');
       btn.disabled = true;
       btn.textContent = 'Planning...';
-      const table = document.getElementById('analyzeTable');
-      table.innerHTML = '';
       info.textContent = '';
 
       try {
         const { sql, query } = data.analyze(base);
         await ensureAnalyzeData(sql);
         setStatus("Explaining...", "loading");
-        const rows = await runQuery(`EXPLAIN ${sql}`, query);
-        const plan = rows.map(r => r.explain_value ?? Object.values(r).join('  ')).join('\n');
-        const esc = plan.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-        table.innerHTML = `<tbody><tr><td><pre style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.72rem;line-height:1.4;white-space:pre;overflow-x:auto;margin:0">${esc}</pre></td></tr></tbody>`;
-        info.textContent = 'Query plan (EXPLAIN)';
+        showSqlPlan(await planFrame(sql, query));
+        info.textContent = 'Query plan';
         setConnected();
       } catch (e) {
         info.textContent = 'Error: ' + e.message;
@@ -3220,7 +3251,7 @@
         console.error('[Analyze plan]', e);
       } finally {
         btn.disabled = false;
-        btn.textContent = 'Show plan';
+        syncPlanButton();
       }
     }
 

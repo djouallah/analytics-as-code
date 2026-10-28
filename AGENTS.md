@@ -352,7 +352,11 @@ the views cannot come back into the pages; `query()` and `analyze()` refuse DAX 
 make the box accept DAX. Its CSV is the rows of its SQL (`draw.js`'s `writeCsv`).
 Show plan and Download CSV sit in Analyze's bar, on the SQL and Explore pages, and act on
 the page shown: the SQL box, or Explore's query (its shelves, all rows), whose SQL and then its
-plan replace its view (a second click, or a change of the shelves, puts the view back).
+plan replace its view (a second click, or a change of the shelves, puts the view back). The plan
+is DuckDB's own tree, `EXPLAIN (FORMAT html)`: a page of its own (1.5's links treeflex's CSS
+from unpkg and collapses nodes with a script), shown in an `<iframe sandbox="allow-scripts">`
+in place of the results or the view; the button then reads Show results (SQL) or Show visual
+(Explore).
 **Explore runs SELECTs over the model**: its shelves become a query object (`buildQuery`),
 written as dax-sql's SQL by `modelSql` (the SQL page's form: `table.column`, `AGG("measure")`,
 `FROM model`, `GROUP BY ALL` or `ROLLUP` with `GROUPING` for a total, `FETCH FIRST n ROWS WITH

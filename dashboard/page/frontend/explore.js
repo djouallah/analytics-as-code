@@ -196,6 +196,7 @@ const label = a => a.length ? a.map(v => v == null ? '(blank)' : String(v)).join
 //   palette()        the colours of series, in order
 //   css(name)        a CSS token's value (the chart's tints)
 //   storageKey       where the shelves are kept between visits (localStorage)
+//   onPlan(shown)    the plan was put in place of the view (true) or taken away (false)
 export function createExplorer(root, ctx) {
   let fields = null, state = load(), drag = null, seq = 0, timer = null, result = null, pop = null;
 
@@ -226,7 +227,7 @@ export function createExplorer(root, ctx) {
   const out = el('div', { class: 'ex-out' }, table, chartBox);
   // The query's SQL and its plan, in place of the view, when the page's Show plan asks for it
   // (showPlan); the next draw (a change of the shelves) puts the view back.
-  const plan = el('pre', { class: 'ex-plan', hidden: true });
+  const plan = el('div', { class: 'ex-plan', hidden: true });
   out.append(plan);
   root.replaceChildren(el('div', { class: 'ex' }, pane, el('section', { class: 'ex-main' }, shelves, tools, out)));
 
@@ -471,7 +472,7 @@ export function createExplorer(root, ctx) {
   }
   // --- Drawing ---
   function draw() {
-    plan.hidden = true;
+    if (!plan.hidden) { plan.hidden = true; plan.replaceChildren(); ctx.onPlan?.(false); }
     if (!result) {
       chartBox.hidden = true;
       table.hidden = false;
@@ -656,10 +657,12 @@ export function createExplorer(root, ctx) {
     query: () => { const q = buildQuery(state, { cap: 0 }); return q && { sql: modelSql(q), where: q.where }; },
     // The query's SQL and plan shown in place of the view (the page's Show plan); null puts
     // the view back.
-    showPlan: text => {
-      if (text == null) { draw(); return; }
-      plan.textContent = text;
+    // `shown`: the SELECT over the model, and the plan, an element the page builds.
+    showPlan: shown => {
+      if (shown == null) { draw(); return; }
+      plan.replaceChildren(el('pre', { class: 'ex-plan-sql' }, shown.sql), shown.plan);
       table.hidden = true; chartBox.hidden = true; plan.hidden = false;
+      ctx.onPlan?.(true);
     },
     planShown: () => !plan.hidden,
   };
