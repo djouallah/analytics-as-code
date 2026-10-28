@@ -394,7 +394,8 @@ const page = {
   region: () => null, fuel: () => null, picked: () => [], newestDate: () => newest,
 };
 const queries = createQueries(page);
-const source = createDataSource({ onStatus: status });
+// Brisbane time, as the dashboard's session: the NEM's day.
+const source = createDataSource({ onStatus: status, timeZone: 'Australia/Brisbane' });
 const data = connect(source);
 const OSSIE = await (await fetch(new URL('../semantic/ossie.json' + new URL(import.meta.url).search, import.meta.url))).json();
 

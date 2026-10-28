@@ -3464,7 +3464,7 @@
         // Curtailment reads agg whatever the range.
         if (document.getElementById('view-insights').style.display !== 'none' && insightsPage() === 'renewables') guarded(renderCurtailment(_renderSeq));
       })
-        .catch(e => console.warn('[OPFS] Agg load failed:', e));
+        .catch(e => console.warn('[agg] load failed:', e));
     } catch (e) {
       setStatus("Error: " + e.message, "error");
       console.error(e);

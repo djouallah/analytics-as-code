@@ -523,16 +523,21 @@ import is of the staged tree (`semantic/query.js` imports `./dax-sql/index.js`, 
   members (`front_end/fabric_app/iceberg/site/storage/data.js`, below).
   The history is never read in place over HTTP: duckdb-wasm reads a remote file one block
   at a time, three round trips each, and a remote host answers one in ~700 ms whatever its
-  size. Both DuckDB hosts set the session to Brisbane time, on purpose: the tables carry
-  `date` and `time`, no TIMESTAMPTZ, and the only thing the zone decides is that
-  `CURRENT_DATE` is the NEM's day.
+  size. The page sets the session to Brisbane time, on purpose (`createDataSource`'s
+  `timeZone`, which every DuckDB `data.js` applies): the tables carry `date` and `time`, no
+  TIMESTAMPTZ, and the only thing the zone decides is that `CURRENT_DATE` is the NEM's day.
 - `front_end/github/history.js` is GitHub Pages' about the half-year history
   files: `periodsForRange` (which ones a date range needs) and `attachCached` (ATTACH from
   OPFS in place, into memory if a second tab holds the file).
 - `front_end/page/storage/queue.js` is how both DuckDB `data.js` send queries: one
-  at a time (the worker runs one anyway), the hero's `early`, the KPI deltas `later`, and a
-  query whose render a newer one replaced dropped unrun when its turn comes (`runQuery` in
-  `index.html` says which render a query is for; Explore's are never dropped).
+  queue for all of a host's engines (`engineQueue`; GitHub Pages has one, `serialQueue`, the
+  Iceberg app a pool), a free engine taking the next job, the hero's `early`, the KPI deltas
+  `later`, and a query whose render a newer one replaced dropped unrun when its turn comes
+  (`runQuery` in `index.html` says which render a query is for; Explore's are never dropped).
+- `front_end/page/storage/results.js` keeps a query's result in the browser across visits
+  (IndexedDB, Arrow IPC), under a key of the SQL and what the host says versions the data it
+  reads. Only the Iceberg app uses it (below): on GitHub Pages a key would need the version
+  of each file a view reads.
 - `front_end/page/frontend/perflog.js` and `front_end/page/frontend/logs.js`
   are the Logs tab, on both hosts: a table of what this session fetched, attached and ran,
   with timings, and the build stamp. This session only: it lives in the page's memory,
@@ -727,18 +732,19 @@ else: no import, no file written for it.
   isolation, which breaks Fabric's sign-in popup ("Page not accessible directly").
 - **So the app runs a pool of engines** (`ENGINES` in `data.js`, 2 by default; `?engines=N`,
   1 to 4, in the page's URL to compare), each single-threaded in its own worker and memory:
-  **one queue feeds them all** (`submit`/`dispatch` in `data.js`, with `queue.js`'s rules:
-  `early` first, `later` last, a stale job dropped unrun): a free engine takes the next query,
+  **one queue feeds them all** (`queue.js`'s `engineQueue`, the page's: `early` first,
+  `later` last, a stale job dropped unrun): a free engine takes the next query,
   preferring the engine with more of its tables open, so a render's independent queries run
   side by side and a long query holds up only its own engine; one query is no faster. (Until
   2026-10-28 a query was given an engine when sent: behind an 18 s full-history scan on one
   engine, queries waited 14-16 s there while the other sat idle.) A job tied to an engine (its
   setup, its background openings) runs on that one. Each engine has its own extensions,
   registered files and views, and its own copy of a small table.
-- **A query's result is saved in the browser, across visits** (`savedResult`/`saveResult` in
-  `data.js`, IndexedDB `iceberg-results`, Arrow IPC through the `apache-arrow@17.0.0` module
+- **A query's result is saved in the browser, across visits** (the page's `storage/results.js`,
+  IndexedDB `iceberg-results`, Arrow IPC through the `apache-arrow@17.0.0` module
   duckdb-wasm itself imports): its key is the SQL and the metadata location of every table it
-  names, so a new snapshot is a new key and a result is never served over newer data. A reload
+  names (as `v_<table>`, `<table>` or `__deletes_<table>`: `resultKey` in `data.js`), so a new
+  snapshot is a new key and a result is never served over newer data. A reload
   answers every query already seen without an engine (`… rows (saved)` in the Logs tab). Not
   kept: a query reading the clock or today's date (`current_date`, `now()`, `random()`, …), one
   that is not a read, a result over 8 MB; past 256 MB in all the least recently used go. The
@@ -786,8 +792,9 @@ them (here `storage/` `data.js`, `catalog.js`, `snapshots.js`, `prefetch.js`,
 `blockcache.js`), and `?v=<build>` added to every
 relative import; `query.js` passes its own on to `ossie.json`. Then every module `index.html`
 loads (its static imports, followed through the files: relative and `https://` ones) is named
-in its `<head>` as a `modulepreload`, so the browser fetches them all at once with the HTML:
-the Fabric host answers each request in ~0.7 s whatever its size, and without it the ~37
+in its `<head>` as a `modulepreload` (`preloadModules` in `scripts/stamp_build.mjs`, which the
+Pages build runs on both its pages too), so the browser fetches them all at once with the
+HTML: the Fabric host answers each request in ~0.7 s whatever its size, and without it the ~37
 modules came in six rounds, 2.0 s to 7.65 s after navigation (2026-10-28). The project is the
 working directory of `build.mjs` (`rayfin.yml`'s `buildCommand`, `node ../common/build.mjs`).
 
@@ -834,11 +841,12 @@ Rules of the Fabric host that are easy to break:
 - Single-threaded here for one more reason than on Pages: cross-origin isolation breaks the
   Fabric sign-in popup.
 To check a deploy, open the Logs tab: the build stamp, the function call, each view and
-query, and the worker's requests. On the Iceberg app the Logs tab is the debugging record (its
-`data.js` adds to it freely; the shared `logs.js`/`perflog.js` stay as they are): each query
-timed by `data.js` itself, `wait` in its engine's queue and `ms` the query alone, the engine
-in its status (perflog's own wait assumes one worker); one line on the main-thread blocks of
-100 ms or more in the first 20 s (count, total, longest); the store's files and GB at start and after each
+query, and the worker's requests; on every host (`perflog.js`) how the page loaded (the
+navigation, the downloads of 200 ms or more before its code ran) and one line on the
+main-thread blocks of 100 ms or more in the first 20 s (count, total, longest). On the Iceberg
+app the Logs tab is the debugging record (its `data.js` adds to it freely): each query timed
+by `data.js` itself, `wait` in the queue and `ms` the query alone, the engine in its status
+(perflog's own wait assumes one worker); the store's files and GB at start and after each
 download. The owner clicks Copy; read it with `Get-Clipboard`, which has no length limit.
 
 ### The whole stack in one workspace

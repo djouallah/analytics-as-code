@@ -9,6 +9,8 @@
 //     (perf.log / perf.time / perf.query; on Fabric also the SAS calls)
 //   - DuckDB worker: every HTTP request DuckDB makes (seeks = Range reads) arrives over a
 //     BroadcastChannel from the trace shim that data.js prepends to the worker (HTTP_TRACE_SHIM).
+//   - the browser: how the page loaded (the navigation, the slow downloads before the page's
+//     code ran) and the main thread's long tasks in its first 20 s.
 // Timestamps are absolute (performance.timeOrigin + now) so worker and page events line up.
 // =============================================================================
 
@@ -88,6 +90,30 @@ export const perf = {
 try {
   new BroadcastChannel(CHANNEL).onmessage = ({ data }) => push({ ...data, kind: 'http' });
 } catch (e) { /* no BroadcastChannel: worker reads just won't be traced */ }
+
+// The page's main thread blocked 100 ms or more (a long task: rendering, parsing, a large
+// result turned into rows): one line, 20 s after the page started, with how many, their
+// total and the longest (a line each was noise).
+try {
+  const blocks = [];
+  new PerformanceObserver(list => { for (const t of list.getEntries()) if (t.duration >= 100) blocks.push(t); })
+    .observe({ type: 'longtask', buffered: true });
+  setTimeout(() => {
+    if (!blocks.length) return;
+    const longest = blocks.reduce((a, b) => b.duration > a.duration ? b : a);
+    perf.log('info', `main thread: ${blocks.length} blocks of 100 ms or more in the first 20 s, ${(blocks.reduce((s, b) => s + b.duration, 0) / 1000).toFixed(1)} s in all, the longest ${longest.duration.toFixed(0)} ms from ${(longest.startTime / 1000).toFixed(2)} s`);
+  }, Math.max(20000 - performance.now(), 0));
+} catch (e) {}
+
+// What happened before the page's code ran (its long tasks are not kept by the browser): the
+// navigation, and every download of 200 ms or more until now, in the order they started.
+try {
+  const at = s => `${(s / 1000).toFixed(2)} s`;
+  const nav = performance.getEntriesByType('navigation')[0];
+  if (nav) perf.log('info', `page: HTML in at ${at(nav.responseEnd)}, DOM parsed at ${at(nav.domInteractive)}, its code running at ${at(performance.now())}`);
+  for (const r of performance.getEntriesByType('resource').filter(r => r.duration >= 200).sort((a, b) => a.startTime - b.startTime))
+    perf.log('info', `loaded ${r.name.split('?')[0].split('/').slice(-2).join('/')} (${r.initiatorType}): ${at(r.startTime)} to ${at(r.responseEnd)}, ${(r.transferSize / 1024).toFixed(0)} KB${r.transferSize === 0 ? ' (cache)' : ''}`, { ms: r.duration });
+} catch (e) {}
 
 // Prepended to the DuckDB worker (before importScripts). Wraps XMLHttpRequest and fetch to post
 // one event per HTTP request: method, file name (no query string — it holds the SAS), Range

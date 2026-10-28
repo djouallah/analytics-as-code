@@ -42,10 +42,8 @@
 // =============================================================================
 
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev65.0/+esm";
-// The Arrow that duckdb-wasm's own module imports (the same URL: the same module), for the
-// saved results.
-import { tableToIPC, tableFromIPC } from "https://cdn.jsdelivr.net/npm/apache-arrow@17.0.0/+esm";
-import { Skipped } from "./queue.js";
+import { engineQueue } from "./queue.js";
+import { createResults } from "./results.js";
 import { createAuth } from "./auth.js";
 import { createCatalog } from "./catalog.js";
 import { createSnapshots } from "./snapshots.js";
@@ -107,30 +105,6 @@ function warmExtensions(version) {
     .catch(e => perf.log('info', `prefetch extensions: ${e?.message || e}`));
 }
 
-// The page's main thread blocked 100 ms or more (a long task: rendering, parsing, a large
-// result turned into rows): one line in the Logs tab, 20 s after the page started, with how
-// many, their total and the longest (a line each was noise).
-try {
-  const blocks = [];
-  new PerformanceObserver(list => { for (const t of list.getEntries()) if (t.duration >= 100) blocks.push(t); })
-    .observe({ type: 'longtask', buffered: true });
-  setTimeout(() => {
-    if (!blocks.length) return;
-    const longest = blocks.reduce((a, b) => b.duration > a.duration ? b : a);
-    perf.log('info', `main thread: ${blocks.length} blocks of 100 ms or more in the first 20 s, ${(blocks.reduce((s, b) => s + b.duration, 0) / 1000).toFixed(1)} s in all, the longest ${longest.duration.toFixed(0)} ms from ${(longest.startTime / 1000).toFixed(2)} s`);
-  }, Math.max(20000 - performance.now(), 0));
-} catch (e) {}
-
-// What happened before this module ran (its long tasks are not kept by the browser): the
-// navigation, and every download of 200 ms or more until now, in the order they started.
-try {
-  const at = s => `${(s / 1000).toFixed(2)} s`;
-  const nav = performance.getEntriesByType('navigation')[0];
-  if (nav) perf.log('info', `page: HTML in at ${at(nav.responseEnd)}, DOM parsed at ${at(nav.domInteractive)}, data.js running at ${at(performance.now())}`);
-  for (const r of performance.getEntriesByType('resource').filter(r => r.duration >= 200).sort((a, b) => a.startTime - b.startTime))
-    perf.log('info', `loaded ${r.name.split('?')[0].split('/').slice(-2).join('/')} (${r.initiatorType}): ${at(r.startTime)} to ${at(r.responseEnd)}, ${(r.transferSize / 1024).toFixed(0)} KB${r.transferSize === 0 ? ' (cache)' : ''}`, { ms: r.duration });
-} catch (e) {}
-
 // onProgress({ label, done, total, detail }) while a long download runs, null when it ends.
 // timeZone: the session's, which CURRENT_DATE follows; the page's to say (none: DuckDB's own).
 export function createDataSource({ onStatus = () => {}, onProgress = () => {}, timeZone = null } = {}) {
@@ -144,43 +118,12 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
   const located = new Map();
 
   // The engines: each its worker, connection, the tables opened on it (`opened`: name ->
-  // promise of its opening) and the files registered on it; `busy` while it runs a job.
-  // One queue for all of them, as queue.js's for one engine: `early` jobs first, `later` ones
-  // when nothing else waits, and one whose `stale()` holds when its turn comes dropped unrun
-  // (Skipped). A free engine takes the next job; a query is not given an engine when it is
-  // sent (a query sent to an engine behind an 18 s scan waited 14 s there while the other
-  // engine sat idle, 2026-10-28). Of the free engines, a query goes to the one with more of
-  // its tables open. A job with an `engine` (an engine's own setup, its background openings)
-  // runs on that one.
+  // promise of its opening) and the files registered on it. One queue feeds them all
+  // (queue.js); of the free engines, a query goes to the one with more of its tables open.
   let engines = [];
-  const jobs = { early: [], normal: [], later: [] };
-  function submit(fn, { engine = null, names = [], stale = null, early = false, later = false } = {}) {
-    return new Promise((resolve, reject) => {
-      jobs[early ? 'early' : later ? 'later' : 'normal'].push({ fn, engine, names, stale, resolve, reject });
-      dispatch();
-    });
-  }
-  function dispatch() {
-    for (;;) {
-      const free = engines.filter(e => e && !e.busy);
-      if (!free.length) return;
-      let job = null, e = null;
-      for (const k of ['early', 'normal', 'later']) {
-        const i = jobs[k].findIndex(j => !j.engine || free.includes(j.engine));
-        if (i < 0) continue;
-        [job] = jobs[k].splice(i, 1);
-        break;
-      }
-      if (!job) return;
-      if (job.stale?.()) { job.reject(new Skipped()); continue; }
-      e = job.engine ?? free.reduce((a, b) => job.names.filter(n => b.opened.has(n)).length > job.names.filter(n => a.opened.has(n)).length ? b : a);
-      e.busy = true;
-      (async () => {
-        try { job.resolve(await job.fn(e)); } catch (err) { job.reject(err); }
-        finally { e.busy = false; dispatch(); }
-      })();
-    }
-  }
+  const queue = engineQueue({ pick: (job, free) => free.reduce((a, b) =>
+    (job.names ?? []).filter(n => b.opened.has(n)).length > (job.names ?? []).filter(n => a.opened.has(n)).length ? b : a) });
+  const submit = queue.submit;
   const q = (e, sql) => submit(() => e.conn.query(sql), { engine: e });
   const tag = e => ENGINES > 1 ? ` [engine ${e.i + 1}]` : '';
 
@@ -420,8 +363,9 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
         query: { castBigIntToDouble: true, castDecimalToDouble: true } });
       const version = await db.getVersion();
       if (!warmed) { warmed = true; warmExtensions(version); }
-      const e = { i, db, conn: await db.connect(), busy: false, opened: new Map(), registered: new Set() };
-      engines[i] = e;   // its setup below runs through the queue, on it
+      const e = { i, db, conn: await db.connect(), opened: new Map(), registered: new Set() };
+      engines[i] = e;
+      queue.add(e);   // its setup below runs through the queue, on it
       // Installing needs a home directory.
       await perf.time('attach', `LOAD ${EXTENSIONS.join(', ')} (DuckDB ${version})${ENGINES > 1 ? ` [engine ${i + 1}]` : ''}`, () =>
         q(e, `SET home_directory = '/tmp'; ${EXTENSIONS.map(x => `INSTALL ${x}; LOAD ${x};`).join(' ')}`));
@@ -452,72 +396,19 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
     return { db };
   }
 
+  // A query's result saved in this browser, across visits (results.js). What identifies the
+  // data it reads: the metadata location of every table it names, as its view (v_<table>),
+  // its copy in memory (<table>) or its deletes (__deletes_<table>), so a new snapshot of
+  // any of them is a new key.
+  const results = createResults('iceberg-results');
+  const resultKey = sql => results.key(sql, [...located].filter(([n]) => new RegExp(`\\b(?:v_|__deletes_)?${n}\\b`).test(sql))
+    .map(([n, t]) => `${n} ${t.location}`).sort());
+
   // After the first paint: the tables not opened yet, on every engine, small ones first, each
   // its own job at the back of its queue, so whatever the page asks goes first. A table not
   // ready yet is made ready (planned, downloaded) by the first engine; the others open it once
   // it is, so none of them waits on it with a job of its queue. Not awaited: the page does not
   // wait for them, and opening a table changes no result it holds.
-  // --- Saved results: a query's result kept in this browser (IndexedDB), as Arrow IPC ---
-  // Its key is the SQL and the metadata location of every table it names: a new snapshot of
-  // a table is a new key, so a result is never served over newer data. Not kept: a query that
-  // reads the clock or today's date (current_date, now(), random(), ...), one that is not a
-  // read, a result over RESULT_MAX; the least recently used go past RESULTS_MAX in all.
-  // Best-effort: storage refused or failing, a query just runs.
-  const RESULT_MAX = 8 * 1024 * 1024, RESULTS_MAX = 256 * 1024 * 1024;
-  const VOLATILE = /\bcurrent_(date|time|timestamp)\b|\b(now|today|random|uuid|gen_random_uuid|setseed|nextval|get_current_time|timezone)\s*\(/i;
-  function resultKey(sql) {
-    if (!/^\s*(select|with|from)\b/i.test(sql) || VOLATILE.test(sql)) return null;
-    return [sql, ...namedIn(sql).sort().map(n => `${n} ${located.get(n)?.location}`)].join('\n');
-  }
-  const asPromise = r => new Promise((resolve, reject) => { r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
-  let resultsDb = null;
-  const resultStore = () => resultsDb ??= new Promise((resolve, reject) => {
-    const open = indexedDB.open('iceberg-results', 1);
-    // `bytes`: key -> the IPC; `meta`: key -> its size and when last used (for the cap).
-    open.onupgradeneeded = () => { open.result.createObjectStore('bytes'); open.result.createObjectStore('meta').createIndex('at', 'at'); };
-    open.onsuccess = () => resolve(open.result);
-    open.onerror = () => reject(open.error);
-  }).catch(() => null);
-  async function savedResult(key) {
-    try {
-      const db = await resultStore();
-      if (!db) return null;
-      const bytes = await asPromise(db.transaction('bytes').objectStore('bytes').get(key));
-      if (!bytes) return null;
-      const meta = db.transaction('meta', 'readwrite').objectStore('meta');
-      meta.get(key).onsuccess = ev => { const m = ev.target.result; if (m) meta.put({ ...m, at: Date.now() }, key); };
-      return tableFromIPC(bytes);
-    } catch (e) { return null; }
-  }
-  let pruning = null;
-  async function saveResult(key, table) {
-    try {
-      const bytes = tableToIPC(table);
-      if (bytes.byteLength > RESULT_MAX) return;
-      const db = await resultStore();
-      if (!db) return;
-      const tx = db.transaction(['bytes', 'meta'], 'readwrite');
-      tx.objectStore('bytes').put(bytes, key);
-      tx.objectStore('meta').put({ size: bytes.byteLength, at: Date.now() }, key);
-      pruning ??= new Promise(r => setTimeout(r, 5000)).then(() => prune(db)).finally(() => { pruning = null; });
-    } catch (e) {}
-  }
-  // The least recently used results out, past RESULTS_MAX in all.
-  async function prune(db) {
-    const all = [];
-    await new Promise(resolve => {
-      const cur = db.transaction('meta').objectStore('meta').index('at').openCursor(null, 'prev');
-      cur.onsuccess = () => { const c = cur.result; if (!c) return resolve(); all.push([c.primaryKey, c.value.size]); c.continue(); };
-      cur.onerror = () => resolve();
-    });
-    let total = 0;
-    const out = all.filter(([, size]) => (total += size) > RESULTS_MAX).map(([k]) => k);
-    if (!out.length) return;
-    const tx = db.transaction(['bytes', 'meta'], 'readwrite');
-    for (const k of out) { tx.objectStore('bytes').delete(k); tx.objectStore('meta').delete(k); }
-    perf.log('info', `saved results: ${out.length} dropped (over ${RESULTS_MAX / 1048576} MB)`);
-  }
-
   let _warming = false;
   function attachAgg() {
     if (!_warming) {
@@ -543,13 +434,13 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
     // an engine took it; `ms`: the query itself (opening its tables is logged as OPEN); the
     // engine in its status.
     // A result already computed on these snapshots, on this visit or an earlier one, is read
-    // back from this browser (savedResult) instead: the page's own cache (runQuery) holds the
+    // back from this browser (results.js) instead: the page's own cache (runQuery) holds the
     // last 200 for the visit, this one survives a reload.
     query: async (sql, dax, options) => {
       const t0 = performance.now();
       const flat = s => String(s ?? '').replace(/\s+/g, ' ').trim();
       const key = resultKey(sql);
-      const saved = key && await savedResult(key);
+      const saved = key && await results.get(key);
       if (saved) {
         perf.log('query', flat(sql), { wait: 0, ms: performance.now() - t0, status: `${saved.numRows} rows (saved)`, dax: flat(dax) });
         return saved;
@@ -562,7 +453,7 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
         return e.conn.query(sql);
       }, { ...options, names: namedIn(sql) }).then(r => {
         perf.log('query', flat(sql), { wait: started - t0, ms: performance.now() - ran, status: `${r.numRows} rows${tag(used)}`, dax: flat(dax) });
-        if (key) saveResult(key, r);
+        if (key) results.put(key, r);
         return r;
       }, err => {
         if (err?.skipped) perf.log('skip', flat(sql), { status: 'replaced by a newer render', dax: flat(dax) });

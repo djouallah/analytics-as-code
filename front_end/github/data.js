@@ -26,7 +26,8 @@ import { withViews } from "./views.js";
 import { serialQueue } from "./queue.js";
 import { perf, HTTP_TRACE_SHIM } from "../frontend/perflog.js";
 
-export function createDataSource({ onStatus = () => {} } = {}) {
+// timeZone: the session's, which CURRENT_DATE follows; the page's to say (none: DuckDB's own).
+export function createDataSource({ onStatus = () => {}, timeZone = null } = {}) {
   let conn;
 
   // Cache a remote .duckdb file in OPFS. Downloads if missing or stale.
@@ -147,7 +148,7 @@ export function createDataSource({ onStatus = () => {} } = {}) {
 
     onStatus("Loading today's data...");
     await Promise.all([loadDb('mart_dim.duckdb', 'dim'), loadDb('mart_today.duckdb', 'today')]);
-    await conn.query("SET TimeZone = 'Australia/Brisbane';");
+    if (timeZone) await conn.query(`SET TimeZone = '${timeZone.replace(/'/g, "''")}';`);
     await conn.query("SET preserve_insertion_order = false;");
     return { db: _db };
   }

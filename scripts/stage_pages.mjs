@@ -1,5 +1,5 @@
 // Stages the page. front_end/page/ is the dashboard, the same on every host:
-//   index.html, frontend/ (draw, logs, perflog), storage/queue.js, dag/ (the dbt docs),
+//   index.html, frontend/ (draw, logs, perflog), storage/ (queue, results), dag/ (the dbt docs),
 //   semantic/query.js (the page's queries through the semantic model), and the two ways of
 //   asking, one over the other:
 //   dax/     frontend/queries.js: the page's queries as objects of the model's fields
@@ -16,12 +16,13 @@
 //   node scripts/stage_pages.mjs <dir> <build>
 // stages the GitHub Pages site: dax at the root (the default), sql at sql/ (it reads the
 // site's data/, one folder up); then the build stamp and ?v=<build> on every relative
-// import (stamp_build.mjs), and the dbt docs, which are not stamped.
+// import, each page's modules preloaded (stamp_build.mjs), and the dbt docs, which are not
+// stamped.
 import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { join } from "node:path";
-import { stampBuild } from "./stamp_build.mjs";
+import { stampBuild, preloadModules } from "./stamp_build.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 
@@ -81,5 +82,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   await stagePage("dax", dir);
   await stagePage("sql", join(dir, "sql"));
   await stampBuild(dir, build);
+  await preloadModules(join(dir, "/"), build);
+  await preloadModules(join(dir, "sql", "/"), build);
   await cp(DAG, join(dir, "dag"), { recursive: true });
 }
