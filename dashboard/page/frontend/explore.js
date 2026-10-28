@@ -183,10 +183,11 @@ export function createExplorer(root, ctx) {
   const out = el('div', { class: 'ex-out' }, table, chartBox);
   const sqlText = el('pre');
   const sqlBox = el('details', { class: 'ex-dax' }, el('summary', {}, 'SQL'), sqlText);
-  // The query plan, when the page's Show plan asks for it (showPlan).
-  const planText = el('pre');
-  const plan = el('details', { class: 'ex-dax', hidden: true }, el('summary', {}, 'Plan'), planText);
-  root.replaceChildren(el('div', { class: 'ex' }, pane, el('section', { class: 'ex-main' }, shelves, tools, out, sqlBox, plan)));
+  // The query plan, in place of the view, when the page's Show plan asks for it (showPlan);
+  // the next draw (a change of the shelves) puts the view back.
+  const plan = el('pre', { class: 'ex-plan', hidden: true });
+  out.append(plan);
+  root.replaceChildren(el('div', { class: 'ex' }, pane, el('section', { class: 'ex-main' }, shelves, tools, out, sqlBox)));
 
   search.addEventListener('input', renderFields);
   totals.addEventListener('change', () => { state.totals = totals.checked; changed(); });
@@ -430,6 +431,7 @@ export function createExplorer(root, ctx) {
   }
   // --- Drawing ---
   function draw() {
+    plan.hidden = true;
     if (!result) {
       chartBox.hidden = true;
       table.hidden = false;
@@ -611,7 +613,12 @@ export function createExplorer(root, ctx) {
     redraw: () => { if (fields) draw(); },
     // The shelves as one query, all its rows (the page's Download CSV and Show plan), or null.
     query: () => buildQuery(state, { cap: 0 }),
-    // A query plan to show under the view (the page's Show plan); null hides it.
-    showPlan: text => { plan.hidden = text == null; planText.textContent = text ?? ''; plan.open = text != null; },
+    // A query plan shown in place of the view (the page's Show plan); null puts the view back.
+    showPlan: text => {
+      if (text == null) { draw(); return; }
+      plan.textContent = text;
+      table.hidden = true; chartBox.hidden = true; plan.hidden = false;
+    },
+    planShown: () => !plan.hidden,
   };
 }

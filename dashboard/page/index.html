@@ -317,6 +317,7 @@
     .ex-out { flex: 1 1 auto; min-height: 340px; display: flex; flex-direction: column; }
     .ex-table { overflow: auto; flex: 1 1 0; min-height: 0; max-height: 65vh; }
     .ex-chart { flex: 1 1 0; min-height: 340px; }
+    .ex-plan { flex: 1 1 0; min-height: 0; overflow: auto; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.72rem; line-height: 1.4; white-space: pre; }
     .ex-table[hidden], .ex-chart[hidden] { display: none; }
     .ex-empty { color: var(--faint); font-size: 0.85rem; padding: 3rem 1rem; text-align: center; }
     .ex-pivot th, .ex-pivot td { white-space: nowrap; }
@@ -3144,6 +3145,8 @@
     // --- Analyze: Show plan and Download CSV, on the SQL page and on Explore ---
     // On Explore they take its query (the shelves, all rows); the plan shows under its view.
     async function explorePlan() {
+      // The plan replaces the view; a second click puts the view back.
+      if (explorer?.planShown()) { explorer.showPlan(null); return; }
       const q = explorer?.query();
       if (!q) { setStatus('Put a field on the shelves first', 'error'); return; }
       const btn = document.getElementById('analyzePlan');
