@@ -595,90 +595,88 @@ else: no import, no file written for it.
   `metadata-location`). It then signs a read-only user-delegation SAS on the lakehouse's
   `Tables/` (`sp=r`, about 55 minutes). It returns those two and nothing else.
 - `site/storage/data.js` gives each table a view `v_<table>`, which the compiler reads as on
-  the other hosts. The page reads the Iceberg side itself (metadata.json, manifest list,
-  manifests: `planTable`, below), and DuckDB-WASM reads only Parquet, the data and delete
-  files, over `https://…?<SAS>` URLs with `httpfs`. No Iceberg, Avro or Azure extension (until
-  2026-10-28 `iceberg` planned and the community `azure_wasm` turned `abfss://` into https).
+  the other hosts. **The page is the only thing that reads OneLake, and the SAS never leaves
+  it**: it plans each table itself (metadata.json, manifest list, manifests: `planTable`,
+  below) and downloads every file a view reads into the local store (OPFS, `blockcache.js`)
+  before the view is created. **DuckDB reads only that store**: each file is registered on
+  each engine (`registerFileURL`, duckdb-wasm's own HTTP file system) under a local name,
+  `store/<ws>/<lh>/Tables/...`, pointing at `https://store.local/...`, a host that does not
+  exist: the store answers it. No `httpfs`, no Iceberg, Avro or Azure extension, no SECRET,
+  and no SAS in any view, EXPLAIN or log (2026-10-28; until then `iceberg` planned, the
+  community `azure_wasm` turned `abfss://` into https, and the views carried `https://…?<SAS>`
+  URLs read by `httpfs` and rewritten on every new SAS).
 - **The engine is duckdb-wasm `1.33.1-dev65.0` (DuckDB 1.5), from jsDelivr, the GitHub
-  page's pin**, with three of DuckDB's signed extensions: `parquet`, `httpfs` and `icu` (the
-  session's time zone). Single-threaded (the `eh` bundle): several engines instead (the pool,
-  below).
+  page's pin**, with two of DuckDB's signed extensions: `parquet`, and `icu` (the session's
+  time zone). Single-threaded (the `eh` bundle): several engines instead (the pool, below).
+  Each engine is opened with `filesystem: { reliableHeadRequests: true, allowFullHTTPReads:
+  false, forceFullHTTPReads: false }`: its file system then reads a registered file by range,
+  after a HEAD with `Range: bytes=0-` that must answer 206 with a Content-Length (the store
+  does). All three are needed: with `forceFullHTTPReads` left out (on), a file opens with no
+  request at all and fails ("Failed to open file").
   Until 2026-10-28 the app ran DuckDB 2.0: duckdb-wasm's CI build of main and `azure_wasm`'s
   own 2.0 port, CI artifacts that expire after 90 days, with the extensions relabelled and so
-  unsigned. What the app takes from the engine now: `read_parquet` over https URLs, its
-  `filename = '<column>'` and `file_row_number`. Back to 2.0 once duckdb-wasm 2.0 is on npm;
-  no community extension stands in the way any more.
+  unsigned. What the app takes from the engine now: `read_parquet` over registered files, its
+  `filename = '<column>'` (the registered name) and `file_row_number`, and the file system
+  options above. Back to 2.0 once duckdb-wasm 2.0 is on npm; no community extension stands in
+  the way any more.
   The extensions sit under their version (`extensions.duckdb.org/v<version>/wasm_eh/...`), so
-  the worker keeps them in OPFS (`blockcache.js`) after a browser's first load; on that first
-  load the page fetches them all at once (`warmExtensions`, as soon as the engine says its
-  version), as DuckDB downloads them one at a time.
-- **DuckDB 2.0 sends every ranged read with `If-Match`** (1.5 does not), even with `unsafe_disable_etag_checks`,
-  and the browser's cache answers no request that carries it: every table's
-  `metadata.json` went back to OneLake (~0.9 s each). The worker drops the header
-  (`blockcache.js`); an Iceberg file is never rewritten in place. The engine also URL-encodes
-  it, which OneLake answers with 412 (duckdb/duckdb-wasm#2297).
-- **The worker keeps every Iceberg file DuckDB reads in OPFS, whole, and never seeks
-  OneLake** (`site/storage/blockcache.js`, a classic script loaded into DuckDB's worker
-  before the engine): what `cache_httpfs` does for `httpfs`, which has no WASM build. A
-  request to OneLake costs ~0.5 s whatever its size, and DuckDB reads a Parquet file in many
-  ranged reads (the footer in three, then a column chunk at a time), so a miss fetches the
-  whole file in one plain GET, kept in 256 KB blocks under the file's path without the SAS
-  (so a new SAS keeps them), and every later read of the file is local. (Until 2026-10-27 a
-  miss fetched its blocks with read-ahead, and on a slow OneLake each one was a round trip.)
-  A HEAD of a known file is answered without a request: the page sends the worker the sizes
-  of a table's files as it opens it (`BroadcastChannel('blockcache')`).
-  Every file of an Iceberg table is immutable (a commit writes a new `metadata.json`, a new
-  manifest list and new manifests, and touches no old one), so the store keeps `.parquet`,
-  `.avro` and `.metadata.json` alike: planning a table reads its old manifests from OPFS.
-  `blockcache/blocks.bin` and `index.jsonl` in OPFS; over 8 GB the store starts over (whole
-  files of every table read: `power`'s full data is about 2 GB). Every worker (each engine
-  of the pool, in every tab) opens both files `readwrite-unsafe` (Chrome 121+), the one mode
-  two handles share: `read-only` fails while a `readwrite` handle is open (headless Chrome,
-  2026-10-28), so until then a second tab never had the store. One worker writes: the holder
-  of the Web Lock `blockcache-writer`, for its lifetime. The others answer from what the
-  writer kept, re-read the index on a miss, and on a miss fetch the whole file, answer from it
-  and hand it to the writer to keep (`BroadcastChannel('blockcache')`, `{ store, bytes }`);
-  when the writer is gone, the next one handed a file takes the lock and writes. A reader
-  whose writer started the store over (its index shrank) drops the offsets it held. So a
-  first visit downloads every file of each table it reads (`fct_summary` 1.3 GB, its 27
-  files fetched ahead six at a time, below); after that a table's new files only.
-  `httpfs`'s `force_download` does not reach duckdb-wasm's file system.
+  the store keeps them after a browser's first load; on that first load the page fetches them
+  all at once (`warmExtensions`, as soon as the engine says its version), as DuckDB downloads
+  them one at a time.
+- **The store is `site/storage/blockcache.js`**, a classic script loaded into each DuckDB
+  worker before the engine, and the worker's only way out. It answers `store.local` from
+  OPFS (a HEAD: the size, 206 when asked with a range; a range; the whole file); a file it does
+  not hold is a 404, never a request. It lets through DuckDB's extension downloads (kept
+  whole) and **refuses every other request** (403): SQL typed in Analyze cannot reach any URL
+  (duckdb-wasm's own file system would otherwise fetch any `https://` URL, even without
+  `httpfs`). Files are kept in 256 KB blocks under their OneLake path without the SAS
+  (`https://onelake.dfs.fabric.microsoft.com/<ws>/<lh>/...`; `store.local/<ws>/<lh>/...` reads
+  it), in `blockcache/blocks.bin` and `index.jsonl`; over 8 GB the store starts over (whole
+  files of every table read: `power`'s full data is about 2 GB). Every file of an Iceberg table
+  is immutable, so a block is never checked again.
+  Every worker (each engine of the pool, in every tab) opens both files `readwrite-unsafe`
+  (Chrome 121+), the one mode two handles share: `read-only` fails while a `readwrite` handle
+  is open (headless Chrome, 2026-10-28). One worker writes: the holder of the Web Lock
+  `blockcache-writer`, for its lifetime. The others answer from what the writer kept and
+  re-read the index on a miss; when the writer is gone, the next one handed a file takes the
+  lock and writes. A reader whose writer started the store over (its index shrank) drops the
+  offsets it held. The page and the store talk over `BroadcastChannel('blockcache')`:
+  `{ ping }` / `{ writer }` (no writer within 30 s: the page stops with an error, as there is
+  no other way to the data), `{ missing, id }` (the writer answers which files it does not
+  hold whole), `{ store, bytes }` / `{ stored }` (a whole file the page downloaded, kept).
 - **The client has a catalog of its own: a snapshot record per table**
   (`site/storage/snapshots.js`, `localStorage`), keyed by the metadata location the function
-  gave: the snapshot's live data files and delete files (with their sizes once learnt), and
-  the manifests read. A table is planned once, by the page, not by DuckDB (`planTable` in
-  `prefetch.js`, at load, every changed table at once, off every engine): metadata.json, the
-  manifest list and the manifests, read by an Avro reader that follows each file's own schema
-  (codecs null and deflate); DELETED entries out, `data_file.content` telling data, position
-  deletes and equality deletes; each file's `file_size_in_bytes` into the record. A manifest
-  never changes, so what it lists is kept in Cache Storage by its path
-  (`iceberg-manifests-v1`): a new snapshot reads only the manifests it added. On `power`
-  (2026-10-28) the same files as `iceberg_metadata()` for all 25 tables of `mart` and
-  `landing` (205 files, about 260 manifests). A table the page cannot plan (its metadata.json
-  unread, a codec it does not read) fails: there is no fallback, on purpose. Its view is `read_parquet` over the
-  record's files, written as literals.
-  **A table's position deletes are applied by its view**: its delete files (fetched whole
-  with its data files) are read once per session into a table `__deletes_<table>` (the data
-  file's path and `pos`), and the view is `read_parquet(..., filename = '__file',
-  file_row_number = true)` `ANTI JOIN` it on the file (its URL without the SAS) and the row
-  (both 0-based). On `power` (2026-10-28) the same rows as `iceberg_scan`, on 1.5.6 and 2.0:
-  `fct_curtailment_region` and `dim_duid`, the two tables that have delete files. A table
-  with a file that is not position deletes (an equality delete, or a deletion vector) fails to
-  open (`scan` in its record): no fallback to `iceberg_scan`. DuckDB writes neither. The
-  literals are `https://…?<SAS>` URLs, read by `httpfs`. So a new SAS writes those views again, and
-  Analyze's EXPLAIN of one shows the SAS (the read-only one the page holds anyway). The
-  same location again is the same snapshot: the table opens from its record, no
-  `metadata.json` fetched, no prefetch, nothing read from OneLake. A new location is planned
-  again, and the page fetches only what is new: the manifests not in its cache, and a
-  large table's new Parquet files whole (`prefetchFiles`, six at a time, before the view
-  binds; all its files on a first visit), each handed to the worker's store over the channel
-  and awaited until the writer says it is kept, so DuckDB's ranged reads of it are answered
-  locally. Not through the browser's HTTP cache: it does not keep a 70-100 MB response, and
-  the worker downloaded every `fct_summary` file a second time, one at a time (52 s on a
-  first visit, 2026-10-27). While it runs, the page shows a card with a bar (`onProgress`,
-  passed to every `createDataSource`; a host that reports nothing never shows it). A record
-  that fails to open is dropped and the table planned again, once. The record holds paths
-  only, never a SAS.
+  gave: the snapshot's live data files and delete files with their sizes, and the manifests
+  read. A table is planned once, by the page, not by DuckDB (`planTable` in `prefetch.js`, at
+  load, every changed table at once, off every engine): metadata.json, the manifest list and
+  the manifests, read by an Avro reader that follows each file's own schema (codecs null and
+  deflate); DELETED entries out, `data_file.content` telling data, position deletes and
+  equality deletes; each file's `file_size_in_bytes` into the record. A manifest never
+  changes, so what it lists is kept in Cache Storage by its path (`iceberg-manifests-v1`): a
+  new snapshot reads only the manifests it added. On `power` (2026-10-28) the same files as
+  `iceberg_metadata()` for all 25 tables of `mart` and `landing` (205 files, about 260
+  manifests). A table the page cannot plan (its metadata.json unread, a codec it does not
+  read) fails: there is no fallback, on purpose. The same location again is the same
+  snapshot: the table opens from its record, nothing planned.
+  **Before a table's view is created, every file of its record is in the store**
+  (`readyOf`, once per table and session, whichever engine opens it first): the page asks
+  the store which it lacks, downloads those whole, six at a time (`prefetchFiles`), hands each
+  to the store and waits until it is kept, then asks again and fails if any is still missing.
+  A first visit downloads every file of each table it reads (`fct_summary` 1.3 GB, about 20
+  files); after that a table's new files only, and after a wiped store whatever it lost. Not
+  through the browser's HTTP cache: it does not keep a 70-100 MB response. While a large
+  table downloads, the page shows a card with a bar (`onProgress`, passed to every
+  `createDataSource`; a host that reports nothing never shows it). Its view is `read_parquet`
+  over the record's local names, written as literals.
+  **A table's position deletes are applied by its view**: its delete files are read once per
+  session into a table `__deletes_<table>` (the data file's local name and `pos`), and the
+  view is `read_parquet(..., filename = '__file', file_row_number = true)` `ANTI JOIN` it on
+  the file and the row (both 0-based). On `power` (2026-10-28) the same rows as
+  `iceberg_scan`, on 1.5.6 and 2.0: `fct_curtailment_region` and `dim_duid`, the two tables
+  that have delete files. A table with a file that is not position deletes (an equality
+  delete, or a deletion vector) fails to open (`scan` in its record): no fallback to
+  `iceberg_scan`. DuckDB writes neither. A record from an earlier visit that fails to open is
+  dropped and the table planned again, once. The record holds paths only, never a SAS.
 - **Threads are not possible yet**: every `wasm_threads` extension published (DuckDB's
   bucket, `azure_wasm`'s CI) imports unshared memory, which the threaded engine refuses
   (`LinkError … mismatch in shared state of memory`), and the page would need cross-origin
@@ -687,36 +685,28 @@ else: no import, no file written for it.
   1 to 4, in the page's URL to compare), each single-threaded in its own worker and memory:
   a query goes to the engine with the fewest queries waiting (then the one with more of its
   tables open), so a render's independent queries run side by side; one query is no faster.
-  Each engine has its own queue (`queue.js`, unchanged), extensions, secret and views, and its
-  own copy of a small table. A table is planned (by the page) and its files downloaded once,
-  for the engine that opens it first (`readyOf`); every engine then binds its own view (`bind`). All the
-  workers share the block store (above). The Logs tab tags each LOAD, PLAN and OPEN with its
-  engine. Added 2026-10-28; check the pool against `?engines=1` on `power` before building on it.
+  Each engine has its own queue (`queue.js`, unchanged), extensions, registered files and
+  views, and its own copy of a small table. A table is planned (by the page) and its files
+  downloaded once (`readyOf`); every engine then binds its own view (`bind`). All the workers
+  share the store (above). The Logs tab tags each LOAD and OPEN with its engine. Added
+  2026-10-28.
 - **A table is opened when a query first names its view**, so the first paint pays only for
   the tables it reads. The rest are opened after the first paint, on every engine, in the
   background, at the back of each queue (`attachAgg`, not awaited); an engine other than the
-  first opens a table not planned yet only once it is.
+  first opens a table only once it is ready (its files in the store).
 - **A small table is copied into memory.** Its size is the current snapshot's
   `total-files-size`, read from its `metadata.json`. Up to `SMALL_BYTES` (32 MB), the table
-  is copied into DuckDB's memory once and its view reads that. Above it, the view reads the
-  files in place. `has()` and `views()` answer from the model's columns,
-  with no table opened.
-- **The browser's HTTP cache is the prefetch** (`prefetch.js`), for a new snapshot:
-  - DuckDB-WASM reads one request at a time, and OneLake answers each in about 0.6 s.
-  - At start the page plans each changed table (its `metadata.json`, manifest list and the
-    manifests not cached), six requests at a time (OneLake is HTTP/1.1). For a small table it
-    also fetches the live files the plan names, into the HTTP cache.
-  - DuckDB's HEAD and Range requests then come from the cache: OneLake sends
-    `Last-Modified` and no `Cache-Control`.
-  - Fetching data files only when their table opened was slower, because tables open one
-    at a time.
-  - Served table by table: the table a query is about to open first (`prioritize`, from
-    `open`), then the others smallest first; within a table, manifests before data files.
-    First come, first served across tables, the first query on `power` waited 35 s for
-    `dim_region`'s three files behind the large tables' hundreds of manifests (one per
-    hourly commit); now it runs at 7 s.
-- **DuckDB's own caches are on** (`enable_http_metadata_cache`, `parquet_metadata_cache`):
-  Iceberg files never change once written.
+  is copied into each engine's memory once and its view reads that. Above it, the view reads
+  the files in place. `has()` and `views()` answer from the model's columns, with no table
+  opened.
+- **The page's requests to OneLake are many at once** (`prefetch.js`): OneLake answers each in
+  about 0.6 s whatever its size, so planning (metadata.json, manifest list, manifests not
+  cached) and downloading go six at a time (OneLake is HTTP/1.1), served table by table: the
+  table a query is about to open first (`prioritize`, from `open`), then the others smallest
+  first. First come, first served across tables, the first query on `power` waited 35 s for
+  `dim_region`'s three files behind the large tables' hundreds of manifests; now it runs at 7 s.
+- **DuckDB's Parquet footer cache is on** (`parquet_metadata_cache`): Iceberg files never
+  change once written.
 - **Timings, cold, conformance-oracle's small `nem`, function call excluded, measured before
   the snapshot records, the whole-file store and `warmExtensions`:** charts drawn in 15 to
   17 s on 1.5.6 (loading the extensions 3.2 s, opening the 15 tables 5.4 s), 14 to 15 s on

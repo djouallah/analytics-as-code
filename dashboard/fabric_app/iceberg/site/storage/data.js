@@ -1,42 +1,37 @@
 // =============================================================================
-// data.js — DataSource: the catalog's tables, read by DuckDB-WASM
+// data.js — DataSource: the catalog's tables, read by DuckDB-WASM from a local store
 // =============================================================================
 // The Iceberg backend of the Fabric app. Its inputs are the semantic model and a OneLake
 // Iceberg catalog, nothing else: no import, no file written for it. The model names the
 // tables (an Ossie dataset's `source`, or a TMSL table's Direct Lake partition: schema.table);
-// the function says where each one is now and signs a read-only SAS (catalog.js); the page
-// reads the Iceberg side itself (prefetch.js), and DuckDB-WASM reads only Parquet, over https
-// URLs with the SAS: no Iceberg, Avro or Azure extension.
-// The engine is duckdb-wasm's npm release (DuckDB 1.5), from jsDelivr, the GitHub page's pin,
-// with DuckDB's signed extensions: parquet, httpfs, icu. The views are plain Parquet, delete
-// files applied by the view itself.
+// the function says where each one is now and signs a read-only SAS (catalog.js).
+// The page is the only thing that reads OneLake, and the SAS never leaves it: it plans each
+// table itself (metadata.json, manifest list, manifests: prefetch.js's planTable) and
+// downloads every file a table's view reads into the local store (OPFS, blockcache.js) before
+// the view is created. DuckDB reads only that store, by names registered to
+// https://store.local/... (duckdb-wasm's own file system): no httpfs, no SAS in any view, and
+// its worker refuses every other request (blockcache.js). The engine is duckdb-wasm's npm
+// release (DuckDB 1.5), from jsDelivr, the GitHub page's pin, with two of DuckDB's signed
+// extensions: parquet, and icu for the session's time zone.
 //
 // A table is opened when a query first names its view, v_<table>, so the first paint pays only
-// for the tables it reads. A table is planned once: the snapshot's live data files, from its
-// metadata.json, manifest list and manifests, read by the page at load, many at once and off
-// every engine (prefetch.js's planTable; a table it cannot plan fails). What that
-// gives is kept in this browser as the client's own catalog (snapshots.js, keyed by the
-// metadata location the function gave: a commit always writes a new one), and a table whose
-// location is the same is opened from its record, nothing read. A table whose files are small
-// (SMALL_BYTES, from its metadata.json) is copied into DuckDB's memory and its view reads
-// that: later queries do not go back to OneLake. A larger one is read in place, its view
-// read_parquet over the files, as https URLs with the SAS, written again on a new SAS. A
-// table's position deletes are applied by its view. After the first
-// paint the rest are opened in the background, small ones first, behind whatever the page
-// asks.
-// For a new snapshot the page fetches ahead of DuckDB, many at once (prefetch.js): the
-// manifests it has not read before (kept in Cache Storage), a small table's files, and a
-// large table's new Parquet files whole, into the browser's HTTP cache, where DuckDB's
-// one-at-a-time requests find them, and the worker keeps every file it reads whole in OPFS
-// (blockcache.js: Parquet, manifests, metadata.json, every one immutable; it never seeks
-// OneLake, as a request costs ~0.5 s whatever its size).
+// for the tables it reads. Opening it: its record (the snapshot's live data and delete files),
+// planned by the page at load, or kept from an earlier visit in this browser (snapshots.js,
+// keyed by the metadata location the function gave: a commit always writes a new one); then
+// the files the store lacks downloaded, six at a time; then its view, on each engine. A table
+// whose files are small (SMALL_BYTES, from its metadata.json) is copied into the engine's memory
+// and its view reads that; a larger one is read in place, read_parquet over its files. A
+// table's position deletes are applied by its view. A table the page cannot plan, or that a
+// view cannot read (equality deletes, a deletion vector), fails: there is no other way in.
+// After the first paint the rest are opened in the background, small ones first, behind
+// whatever the page asks.
 // Each view is at the snapshot the catalog named (catalog.js keeps that answer up to ~55
 // minutes, so a reload within it reads the same snapshots).
 // DuckDB-WASM runs single-threaded here, so the page runs a pool of engines (ENGINES, each its
 // own worker and memory; `?engines=N` in the URL, 1 to 4, to compare): a query goes to the
 // engine with the fewest waiting, so a render's queries run side by side. A table is planned
-// and its files downloaded once, by the engine that opens it first; each engine then has its
-// own view (and its own copy of a small table). All the workers share the block store.
+// and its files downloaded once, whichever engine opens it first; each engine then has its own
+// view (and its own copy of a small table). All the workers share the store.
 //
 // The members are the ones the page calls on the other hosts:
 //   init            sign in, locate the tables, size them; nothing opened yet
@@ -55,15 +50,16 @@ import { perf, HTTP_TRACE_SHIM } from "../frontend/perflog.js";
 
 const MODEL = new URL('../semantic/ossie.json' + new URL(import.meta.url).search, import.meta.url);
 const SMALL_BYTES = 32 * 1024 * 1024;   // a table up to this much Parquet is copied into memory
-// The extensions DuckDB installs, all from DuckDB's repository: Parquet, https reads, and icu
-// for the session's time zone.
-const EXTENSIONS = ['parquet', 'httpfs', 'icu'];
-// The worker's reads of Parquet files, kept in OPFS by block, and no If-Match (blockcache.js).
+// The extensions DuckDB installs, from DuckDB's repository: Parquet, and icu for the session's
+// time zone. No httpfs: DuckDB reads only the local store.
+const EXTENSIONS = ['parquet', 'icu'];
+// The local store DuckDB reads from, and its worker's only way out (blockcache.js).
 const BLOCKCACHE = new URL('./blockcache.js' + new URL(import.meta.url).search, import.meta.url).href;
 const ENGINES = (() => {
   try { const n = Number(new URLSearchParams(location.search).get('engines')); if (n >= 1 && n <= 4) return Math.floor(n); } catch (e) {}
   return 2;
 })();
+const STORE_WAIT = 30000;   // how long the page waits for the store's writer to answer
 
 // The model's tables: name -> { source: schema.table, columns }. Ossie: a dataset's `source`
 // and its fields' columns. TMSL (model.bim): a table's Direct Lake partition and its columns.
@@ -82,13 +78,20 @@ function modelTables(model) {
 
 const ident = s => `"${String(s).replace(/"/g, '""')}"`;
 const lit = s => `'${String(s).replace(/'/g, "''")}'`;
-// abfss://<ws>@onelake.dfs.fabric.microsoft.com/<lh>/... -> https://onelake.dfs.fabric.microsoft.com/<ws>/<lh>/...
-const https = (abfss, sas) => `${abfss.replace(/^abfss:\/\/([^@/]+)@([^/]+)\//, 'https://$2/$1/')}?${sas}`;
+// A OneLake file, abfss://<ws>@onelake.dfs.fabric.microsoft.com/<lh>/..., as
+//   https    the URL the page downloads it with (the SAS: the page's alone);
+//   storePath its key in the store (blockcache.js), the URL without the SAS;
+//   localName the name DuckDB reads it by, registered to localUrl, which the store answers.
+const ABFSS = /^abfss:\/\/([^@/]+)@([^/]+)\//;
+const https = (abfss, sas) => `${abfss.replace(ABFSS, 'https://$2/$1/')}?${sas}`;
+const storePath = abfss => abfss.replace(ABFSS, 'https://$2/$1/');
+const localName = abfss => abfss.replace(ABFSS, 'store/$1/');
+const localUrl = abfss => abfss.replace(ABFSS, 'https://store.local/$1/');
 
-// DuckDB downloads its extensions one at a time (3.2 s cold on 1.5.6). On a browser's first
-// load the page fetches them all at once, as soon as the engine says its version, into the
-// browser's cache, where DuckDB's own request finds them. After that the worker answers DuckDB
-// from OPFS (blockcache.js), and the page fetches nothing (the version it loaded is remembered).
+// DuckDB downloads its extensions one at a time. On a browser's first load the page fetches
+// them all at once, as soon as the engine says its version, into the browser's cache, where
+// DuckDB's own request finds them. After that the store answers DuckDB (blockcache.js), and the
+// page fetches nothing (the version it loaded is remembered).
 const EXT_KEY = 'duckdb_extensions';
 const extensionUrl = (version, e) => `https://extensions.duckdb.org/${version}/wasm_eh/${e}.duckdb_extension.wasm`;
 function warmExtensions(version) {
@@ -108,14 +111,13 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
   // A kept answer from the function needs no session: the page starts without the Rayfin SDK.
   const auth = createAuth({ ready: catalog.fresh });
   let tables = new Map();
-  // table name -> { location, bytes, prefetch, record, stored, ready, whenReady }: in the catalog.
-  // `ready`: the table planned and its new files downloaded, once for every engine.
+  // table name -> { location, bytes, planning, record, stored, ready, whenReady, isReady }.
+  // `ready`: the table's record, its files all in the store: once for every engine.
   const located = new Map();
 
-  // The engines: each its worker, connection, queue, and the tables opened on it
-  // (`opened`: name -> promise of its opening; `inPlace`: the views over the files, written
-  // again on a new SAS). `waiting`: its queries sent and not done (the background openings
-  // not counted), which is how a query picks its engine.
+  // The engines: each its worker, connection, queue, the tables opened on it (`opened`: name
+  // -> promise of its opening) and the files registered on it. `waiting`: its queries sent and
+  // not done (the background openings not counted), which is how a query picks its engine.
   let engines = [];
   const run = (e, fn, options) => {
     const counted = !options?.later;
@@ -125,109 +127,103 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
   const q = (e, sql) => run(e, () => e.conn.query(sql));
   const tag = e => engines.length > 1 ? ` [engine ${e.i + 1}]` : '';
 
-  // The SAS from the function, in every URL the page and DuckDB read OneLake with: a view read
-  // in place over read_parquet carries it in its URLs, so a new SAS writes those views again,
-  // on every engine.
+  // The SAS from the function: the page's downloads use it, and nothing else does. A page open
+  // longer than it gets a new one shortly before it expires (a failed renewal is tried again a
+  // minute later); the views read the store, so no view changes.
   let sas = '';
-  async function useSas(s) {
-    sas = s;
-    await Promise.all(engines.map(async e => {
-      for (const [name, t] of e.inPlace) await q(e, viewOf(name, t, t.record));
-    }));
-  }
-
-  // A page open longer than its SAS: a new one shortly before it expires. The views stay on
-  // the snapshots they were created on; only the SAS is replaced. A failed renewal is tried
-  // again a minute later.
   function renewLater(sources) {
     setTimeout(async () => {
-      try { await useSas((await catalog.open(sources, { renew: true })).sas); renewLater(sources); }
+      try { sas = (await catalog.open(sources, { renew: true })).sas; renewLater(sources); }
       catch (e) { perf.log('error', 'SAS renewal', { status: String(e?.message || e) }); setTimeout(() => renewLater(sources), 60000); }
     }, Math.max(catalog.renewAt() - Date.now(), 0));
   }
 
+  // The store, over its channel (blockcache.js): its writer says it is there ({ writer }), what
+  // it lacks ({ missing, id }), and that a file handed to it is kept ({ stored }).
+  const channel = new BroadcastChannel('blockcache');
+  let storeUp;
+  const storeReady = new Promise(r => { storeUp = r; });
+  const answers = new Map();   // id -> resolve, for { missing }
+  const stored = new Map();    // store path -> resolve, for { store }
+  channel.onmessage = ({ data: d }) => {
+    if (d?.writer) storeUp();
+    if (d?.id != null && answers.has(d.id)) { answers.get(d.id)(d.missing); answers.delete(d.id); }
+    if (d?.stored && stored.has(d.stored)) { stored.get(d.stored)(); stored.delete(d.stored); }
+  };
+  const waitFor = (map, key, send, what) => new Promise((resolve, reject) => {
+    map.set(key, resolve);
+    send();
+    setTimeout(() => { if (map.get(key) === resolve) { map.delete(key); reject(new Error(`the local store did not answer (${what})`)); } }, STORE_WAIT);
+  });
+  // The files of `paths` (abfss) the store does not hold whole.
+  async function lacking(paths) {
+    const id = `${Date.now()}-${Math.random()}`;
+    const missing = new Set(await waitFor(answers, id, () => channel.postMessage({ missing: paths.map(storePath), id }), 'what it holds'));
+    return paths.filter(p => missing.has(storePath(p)));
+  }
+  // A whole file the page downloaded, handed to the store: resolved once the writer keeps it.
+  const toStore = (path, bytes) =>
+    waitFor(stored, storePath(path), () => channel.postMessage({ store: storePath(path), bytes }), path.split('/').pop());
+
   // Opens a table: its view, over a copy in memory or over the files. Runs inside a queued
-  // job, so it calls the connection itself. One opening per table, whoever asks; a failed one
-  // can be asked for again.
-  // A view over iceberg_scan is planned again by every query that reads it: metadata.json, the
-  // manifest list and every manifest, one request at a time (hundreds on a large table, one
-  // manifest per hourly commit). So a table is planned once (PLAN), and its record kept: the
-  // view is read_parquet over the snapshot's files, written as a literal, and a query reads
-  // only Parquet (footers held by parquet_metadata_cache, files by blockcache.js). A table
-  // with delete files is read the same way, its position deletes applied by the view
-  // (deletesOf): iceberg_scan is never what a query reads, as how it plans differs by version
-  // (DuckDB 1.5's plans a table with delete files again on every scan, every delete file one
-  // request). The columns are the files' own: a table's columns change only with a rebuild,
-  // never in place.
-  // A large table's new files (all of them on a first visit, delete files included) are
-  // fetched whole ahead, six at a time, before the view binds (the worker fetches a file whole
-  // on its first read, one at a time); the sizes learnt go into the record, so a HEAD of them
-  // needs no request.
+  // job, so it calls the connection itself. One opening per table and engine, whoever asks; a
+  // failed one can be asked for again.
+  // A view over iceberg_scan would plan the table again for every query that reads it
+  // (metadata.json, the manifest list and every manifest, one request at a time). So a table
+  // is planned once, by the page, and its record kept: the view is read_parquet over the
+  // snapshot's files, written as literals, and a query reads only Parquet (footers held by
+  // parquet_metadata_cache). The columns are the files' own: a table's columns change only
+  // with a rebuild, never in place.
   // A record kept from an earlier visit that fails to open (a file gone, a record of another
   // build) is dropped and the table planned again, once.
-  // Planning and the download are the table's, done once by the engine that opens it first
-  // (readyOf); the view is each engine's (bind).
   function open(e, name) {
     const t = located.get(name);
     return e.opened.get(name) ?? e.opened.set(name, (async () => {
       prioritize(name);
-      try { await bind(e, name, t, await readyOf(e, name, t)); }
+      try { await bind(e, name, t, await readyOf(name, t)); }
       catch (err) {
         if (!t.stored) throw err;
         perf.log('info', `OPEN ${name} from its record failed (${err?.message || err}): planned again`);
         snapshots.drop(name); t.record = null; t.stored = false; t.ready = null;
-        await bind(e, name, t, await readyOf(e, name, t));
+        t.planning = planFor(t);
+        await bind(e, name, t, await readyOf(name, t));
       }
     })().catch(err => { e.opened.delete(name); throw err; })).get(name);
   }
-  const readyOf = (e, name, t) => t.ready ??= (t.record ? Promise.resolve(t.record) : planned(name, t))
-    .then(record => { t.whenReady(); return record; }, err => { t.ready = null; throw err; });
-  // The worker's store answers a HEAD of a file whose size it knows: the sizes of the record's
-  // files, sent before the view binds.
-  const channel = (() => { try { return new BroadcastChannel('blockcache'); } catch (e) { return null; } })();
-  const storePath = p => p.replace(/^abfss:\/\/([^@/]+)@([^/]+)\//, 'https://$2/$1/');
-  function tellSizes(record) {
-    const sizes = Object.fromEntries([...record.files, ...record.deleteFiles].filter(f => f.size).map(f => [storePath(f.path), f.size]));
-    if (channel && Object.keys(sizes).length) channel.postMessage({ sizes });
-  }
-  // A whole file the page downloaded, handed to the worker's store; resolved when the writer
-  // says it is kept, or after STORE_WAIT (no store: the worker fetches it itself on a miss).
-  const STORE_WAIT = 30000;
-  const stored = new Map();   // store path -> resolve
-  if (channel) channel.onmessage = e => { const p = e.data?.stored; if (p && stored.has(p)) { stored.get(p)(); stored.delete(p); } };
-  const toStore = (path, bytes) => !channel ? Promise.resolve() : new Promise(resolve => {
-    const key = storePath(path);
-    stored.set(key, resolve);
-    channel.postMessage({ store: key, bytes });
-    setTimeout(() => { if (stored.get(key) === resolve) { stored.delete(key); resolve(); } }, STORE_WAIT);
-  });
-  // The table's record, and a large table's new files downloaded. The page planned it
-  // (`planning`, prefetch.js's planTable, started at load): a table it could not plan fails.
+  const readyOf = (name, t) => t.ready ??= (async () => {
+    const record = t.record ?? await planned(name, t);
+    await local(name, t, record);
+    t.whenReady();
+    return record;
+  })().catch(err => { t.ready = null; throw err; });
+
+  // The table's record, planned by the page (`planning`, started at load).
   async function planned(name, t) {
-    const small = t.bytes != null && t.bytes <= SMALL_BYTES;
     const record = { location: t.location, bytes: t.bytes, ...(await t.planning).record };
-    const last = snapshots.previous(name);
-    const before = new Set([...last?.files ?? [], ...last?.deleteFiles ?? []].map(f => f.path));
-    const fresh = [...record.files, ...record.deleteFiles].filter(f => !before.has(f.path));
-    if (!small && fresh.length) {
-      const t0 = performance.now();
-      // The page shows how far it has got (onProgress): a first visit downloads a large
-      // table whole before its charts draw.
-      let done = 0, got = 0;
-      const progress = () => onProgress({ label: `Downloading ${name}`, done, total: fresh.length,
-        detail: `${done} of ${fresh.length} files, ${(got / 1048576).toFixed(0)} MB${t.bytes && fresh.length === record.files.length ? ` of ${(t.bytes / 1048576).toFixed(0)} MB` : ''}. Kept in this browser for the next visit.` });
-      progress();
-      let sizes;
-      try {
-        sizes = new Map((await prefetchFiles(name, fresh, f => https(f, sas), toStore,
-          n => { done++; got += n; progress(); })).map(f => [f.path, f.size]));
-      } finally { onProgress(null); }
-      for (const f of [...record.files, ...record.deleteFiles]) if (sizes.get(f.path)) f.size = sizes.get(f.path);
-      perf.log('fetch', `prefetch ${name}: ${fresh.length} files`, { ms: performance.now() - t0 });
-    }
     snapshots.put(name, record);
     t.record = record;
     return record;
+  }
+  // Every file of the record in the store: the ones it lacks downloaded, six at a time, and
+  // checked kept. A large table shows how far it has got (onProgress): a first visit
+  // downloads it whole before its charts draw.
+  async function local(name, t, record) {
+    const all = [...record.files, ...record.deleteFiles];
+    const missing = new Set(await lacking(all.map(f => f.path)));
+    if (!missing.size) return;
+    const fresh = all.filter(f => missing.has(f.path));
+    const t0 = performance.now();
+    const shown = !(t.bytes != null && t.bytes <= SMALL_BYTES);
+    let done = 0, got = 0;
+    const progress = () => shown && onProgress({ label: `Downloading ${name}`, done, total: fresh.length,
+      detail: `${done} of ${fresh.length} files, ${(got / 1048576).toFixed(0)} MB${t.bytes && fresh.length === all.length ? ` of ${(t.bytes / 1048576).toFixed(0)} MB` : ''}. Kept in this browser for the next visit.` });
+    progress();
+    try {
+      await prefetchFiles(name, fresh, f => https(f, sas), toStore, n => { done++; got += n; progress(); });
+    } finally { if (shown) onProgress(null); }
+    const still = await lacking(fresh.map(f => f.path));
+    if (still.length) throw new Error(`${name}: ${still.length} files not in the local store after their download`);
+    perf.log('fetch', `download ${name}: ${fresh.length} files, ${(got / 1048576).toFixed(0)} MB`, { ms: performance.now() - t0 });
   }
   // The table's view on engine `e`, over a copy in its memory or over the files.
   async function bind(e, name, t, record) {
@@ -236,41 +232,41 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
     // What a view cannot read (no data file, a file that is not Parquet such as a deletion
     // vector, an equality delete) is an error: there is no other way in.
     if (record.scan) throw new Error(`${name}: not readable as Parquet with position deletes (no data file, equality deletes or a deletion vector)`);
-    tellSizes(record);
+    for (const f of [...record.files, ...record.deleteFiles]) {
+      if (e.registered.has(f.path)) continue;
+      await e.db.registerFileURL(localName(f.path), localUrl(f.path), duckdb.DuckDBDataProtocol.HTTP, false);
+      e.registered.add(f.path);
+    }
     // The positions the delete files remove, read once per session into memory.
     if (record.deleteFiles.length)
       await perf.time('attach', `DELETES ${name} (${record.deleteFiles.length} delete files)${tag(e)}`, () => e.conn.query(
         `CREATE OR REPLACE TABLE ${ident(deletesOf(name))} AS
-         SELECT DISTINCT regexp_replace(file_path, '^abfss://([^@/]+)@([^/]+)/', 'https://\\2/\\1/') AS path, pos
-         FROM read_parquet([${record.deleteFiles.map(f => lit(https(f.path, sas))).join(', ')}])`));
+         SELECT DISTINCT regexp_replace(file_path, '^abfss://([^@/]+)@([^/]+)/', 'store/\\1/') AS path, pos
+         FROM read_parquet([${record.deleteFiles.map(f => lit(localName(f.path))).join(', ')}])`));
     const how = `${record.files.length} Parquet files${record.deleteFiles.length ? `, ${record.deleteFiles.length} delete files applied` : ''}`;
     if (small)
       await perf.time('attach', `OPEN ${name} (${mb} MB, copied into memory, ${how})${tag(e)}`, () => e.conn.query(
-        `CREATE OR REPLACE TABLE ${ident(name)} AS ${selectOf(name, t, record)}; CREATE OR REPLACE VIEW ${ident('v_' + name)} AS SELECT * FROM ${ident(name)}`));
-    else {
-      await perf.time('attach', `OPEN ${name} (${mb} MB, read in place, ${how})${tag(e)}`, () => e.conn.query(viewOf(name, t, record)));
-      e.inPlace.set(name, { location: t.location, record });
-    }
+        `CREATE OR REPLACE TABLE ${ident(name)} AS ${selectOf(name, record)}; CREATE OR REPLACE VIEW ${ident('v_' + name)} AS SELECT * FROM ${ident(name)}`));
+    else
+      await perf.time('attach', `OPEN ${name} (${mb} MB, read in place, ${how})${tag(e)}`, () => e.conn.query(
+        `CREATE OR REPLACE VIEW ${ident('v_' + name)} AS ${selectOf(name, record)}`));
   }
-  // What a view reads: read_parquet over the files as https URLs with the SAS (httpfs). They
-  // are the URLs the prefetch fetched, so DuckDB's requests find them in the browser's cache.
-  // With delete files, the rows whose file and position (file_row_number, 0-based as Iceberg's
-  // pos) a delete file names are left out: the file is its URL without the SAS, the delete
-  // file's file_path written the same way.
+  // What a view reads: read_parquet over the files' local names. With delete files, the rows
+  // whose file and position (file_row_number, 0-based as Iceberg's pos) a delete file names are
+  // left out: `filename` is the local name, the delete file's file_path written the same way.
   const deletesOf = name => `__deletes_${name}`;
-  const selectOf = (name, t, record) => {
-    const files = `[${record.files.map(f => lit(https(f.path, sas))).join(', ')}]`;
+  const selectOf = (name, record) => {
+    const files = `[${record.files.map(f => lit(localName(f.path))).join(', ')}]`;
     if (!record.deleteFiles.length) return `SELECT * FROM read_parquet(${files})`;
     return `SELECT * EXCLUDE (__file, file_row_number)
       FROM read_parquet(${files}, filename = '__file', file_row_number = true) AS d
-      ANTI JOIN ${ident(deletesOf(name))} AS x ON x.path = split_part(d.__file, '?', 1) AND x.pos = d.file_row_number`;
+      ANTI JOIN ${ident(deletesOf(name))} AS x ON x.path = d.__file AND x.pos = d.file_row_number`;
   };
-  const viewOf = (name, t, record) => `CREATE OR REPLACE VIEW ${ident('v_' + name)} AS ${selectOf(name, t, record)}`;
   // The tables a query names (v_<table>) that are not open yet, opened first.
   const namedIn = sql => [...new Set([...sql.matchAll(/\bv_(\w+)\b/g)].map(m => m[1]))].filter(n => located.has(n));
   async function openFor(e, sql) {
     const names = namedIn(sql);
-    prioritize(...names.filter(n => !e.opened.has(n)));   // their files first, in the prefetch
+    prioritize(...names.filter(n => !e.opened.has(n)));   // their files first, in the downloads
     for (const name of names) await open(e, name);
   }
   // The engine a query goes to: the one with the fewest queries waiting, and of those, the one
@@ -281,21 +277,32 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
     return engines.reduce((a, b) => score(b) < score(a) ? b : a);
   }
 
+  // A new snapshot planned by the page, at once, off every engine: opening the table waits for it.
+  let access = null;
+  function planFor(t) {
+    const t0 = performance.now();
+    const planning = (t.m ? Promise.resolve(t.m) : metadataOf(t.location)).then(m => planTable(t.name, m, f => https(f, sas || access.sas)));
+    planning.then(p => perf.log('attach', `PLAN ${t.name} (in the page: ${p.manifests} manifests, ${p.fetched} read, ${p.record.files.length} files)`, { ms: performance.now() - t0 }),
+                  e => perf.log('error', `PLAN ${t.name}`, { status: String(e?.message || e) }));
+    return planning;
+  }
+  async function metadataOf(location) {
+    const r = await fetch(https(location, sas || access.sas));
+    if (!r.ok) throw new Error(`metadata.json: HTTP ${r.status}`);
+    return r.json();
+  }
   // Each table's size, from its metadata.json, all at once (the page's own requests, in
-  // parallel): the current snapshot's total-files-size. And its prefetch, started, not awaited:
-  // opening the table waits for it, and a failed prefetch only costs time.
+  // parallel): the current snapshot's total-files-size; and its plan, started, not awaited.
   // A table whose location has a record (the same snapshot as last planned) fetches nothing:
   // its size is the record's, and it opens from it.
-  async function sizeAll(access) {
+  async function sizeAll() {
     const metas = await Promise.all([...tables].map(async ([name, t]) => {
       const location = access.metadata[t.source];
       if (!location) return null;
       const record = snapshots.get(name, location);
       if (record) return { name, location, m: null, bytes: record.bytes, record };
       try {
-        const r = await fetch(https(location, access.sas));
-        if (!r.ok) throw new Error(`metadata.json: HTTP ${r.status}`);
-        const m = await r.json();
+        const m = await metadataOf(location);
         const s = (m.snapshots ?? []).find(s => String(s['snapshot-id']) === String(m['current-snapshot-id']));
         const bytes = s ? Number(s.summary?.['total-files-size'] ?? NaN) : 0;
         return { name, location, m, bytes: Number.isNaN(bytes) ? null : bytes };
@@ -303,23 +310,17 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
         return { name, location, m: null, bytes: null, error: e };   // the table fails when opened
       }
     }));
-    // Smallest first: the prefetch's queues are first come, first served, and a small table's
-    // few files would otherwise wait behind a large one's manifests.
+    // Smallest first: the downloads are served first come, first served, and a small table's
+    // few files would otherwise wait behind a large one's.
     let kept = 0;
     for (const t of metas.filter(Boolean).sort((a, b) => (a.bytes ?? Infinity) - (b.bytes ?? Infinity))) {
-      const t0 = performance.now();
       if (t.record) kept++;
-      // A new snapshot is planned here, at once, off every engine (and a small table's files
-      // fetched into the HTTP cache): opening the table waits for it.
-      const planning = t.record ? null
-        : t.m ? planTable(t.name, t.m, f => https(f, access.sas), { data: t.bytes != null && t.bytes <= SMALL_BYTES })
-        : Promise.reject(t.error);
-      planning?.then(p => perf.log('attach', `PLAN ${t.name} (in the page: ${p.manifests} manifests, ${p.fetched} read, ${p.record.files.length} files)`, { ms: performance.now() - t0 }),
-                     e => perf.log('error', `PLAN ${t.name}`, { status: String(e?.message || e) }));
+      const planning = t.record ? null : t.error ? Promise.reject(t.error) : planFor(t);
+      planning?.catch(() => {});   // logged by planFor, thrown when the table opens
       let whenReady;
-      const ready = new Promise(r => { whenReady = r; });
-      located.set(t.name, { location: t.location, bytes: t.bytes, planning, record: t.record ?? null,
-        stored: !!t.record, ready: null, whenReady, isReady: ready });
+      const isReady = new Promise(r => { whenReady = r; });
+      located.set(t.name, { name: t.name, location: t.location, bytes: t.bytes, planning, record: t.record ?? null,
+        stored: !!t.record, ready: null, whenReady, isReady });
     }
     if (kept) perf.log('info', `snapshots: ${kept} of ${metas.filter(Boolean).length} tables unchanged, opened from their records`);
   }
@@ -328,13 +329,13 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
   async function init() {
     await auth.signIn();
     onStatus("Loading DuckDB WASM...");
-    // The model, the function's answer, the tables' sizes and their prefetch, while DuckDB's
+    // The model, the function's answer, the tables' sizes and their plans, while DuckDB's
     // bundle loads: none of them needs it.
     const ready = fetch(MODEL).then(r => r.json()).then(async model => {
       tables = modelTables(model);
-      const access = await catalog.open([...new Set([...tables.values()].map(t => t.source))]);
-      await sizeAll(access);
-      return access;
+      access = await catalog.open([...new Set([...tables.values()].map(t => t.source))]);
+      sas = access.sas;
+      await sizeAll();
     });
     ready.catch(() => {});   // awaited below
 
@@ -342,7 +343,7 @@ export function createDataSource({ onStatus = () => {}, onProgress = () => {}, t
     // started together.
     const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
     const workerUrl = URL.createObjectURL(
-      // HTTP_TRACE_SHIM times the worker's own requests for the Logs tab.
+      // HTTP_TRACE_SHIM times the worker's own requests (the store's answers) for the Logs tab.
       new Blob([`importScripts("${BLOCKCACHE}");
 `, HTTP_TRACE_SHIM, `
 importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
@@ -350,27 +351,31 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
     engines = await Promise.all(Array.from({ length: ENGINES }, async (_, i) => {
       const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), new Worker(workerUrl));
       await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+      // Its file system reads a registered https file by range, after a HEAD with
+      // Range: bytes=0- that the store answers 206; never the whole file at once. All three are
+      // needed: with forceFullHTTPReads left out (on), a file opens with no request and fails.
+      await db.open({ filesystem: { reliableHeadRequests: true, allowFullHTTPReads: false, forceFullHTTPReads: false } });
       const version = await db.getVersion();
       if (!warmed) { warmed = true; warmExtensions(version); }
-      const e = { i, db, conn: await db.connect(), serial: serialQueue(), waiting: 0, opened: new Map(), inPlace: new Map() };
+      const e = { i, db, conn: await db.connect(), serial: serialQueue(), waiting: 0, opened: new Map(), registered: new Set() };
       // Installing needs a home directory.
       await perf.time('attach', `LOAD ${EXTENSIONS.join(', ')} (DuckDB ${version})${ENGINES > 1 ? ` [engine ${i + 1}]` : ''}`, () =>
         q(e, `SET home_directory = '/tmp'; ${EXTENSIONS.map(x => `INSTALL ${x}; LOAD ${x};`).join(' ')}`));
       try { localStorage.setItem(EXT_KEY, version); } catch (x) {}
-      // Iceberg's files never change once written: what DuckDB learnt of one (its size, its
-      // Parquet footer) holds for the session. A setting this build lacks is left as it is.
-      for (const s of ['SET enable_http_metadata_cache = true', 'SET parquet_metadata_cache = true',
-                       "SET validate_external_file_cache = 'NO_VALIDATION'"])
-        await q(e, s).catch(x => perf.log('info', `${s}: ${x?.message || x}`));
+      // Iceberg's files never change once written: a Parquet footer read holds for the session.
+      await q(e, 'SET parquet_metadata_cache = true;');
       if (timeZone) await q(e, `SET TimeZone = ${lit(timeZone)};`);
       await q(e, "SET preserve_insertion_order = false;");
       return e;
     }));
     URL.revokeObjectURL(workerUrl);
+    // The store: there is no other way to the data, so no store, no page.
+    channel.postMessage({ ping: true });
+    await Promise.race([storeReady, new Promise((_, reject) => setTimeout(() =>
+      reject(new Error('no local store in this browser (OPFS with shared access handles, Chrome or Edge 121+)')), STORE_WAIT))]);
 
     onStatus('Locating the tables in the catalog...');
-    const access = await ready;
-    await useSas(access.sas);
+    await ready;
     renewLater([...new Set([...tables.values()].map(t => t.source))]);
     // The page's CSV export runs its SQL on a connection of its own: the first engine's, with
     // the tables the SQL names opened there first.
@@ -384,8 +389,8 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
 
   // After the first paint: the tables not opened yet, on every engine, small ones first, each
   // its own job at the back of its queue, so whatever the page asks goes first. A table not
-  // planned yet is planned (and downloaded) by the first engine; the others open it once it
-  // is, so none of them waits on it with a job of its queue. Not awaited: the page does not
+  // ready yet is made ready (planned, downloaded) by the first engine; the others open it once
+  // it is, so none of them waits on it with a job of its queue. Not awaited: the page does not
   // wait for them, and opening a table changes no result it holds.
   let _warming = false;
   function attachAgg() {
@@ -396,7 +401,7 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
         for (const [name, t] of order) {
           if (e.opened.has(name)) continue;
           const job = () => run(e, () => e.opened.has(name) ? null : open(e, name), { later: true });
-          (e === engines[0] || t.record ? job() : t.isReady.then(job)).catch(err =>
+          (e === engines[0] ? job() : t.isReady.then(job)).catch(err =>
             perf.log('error', `OPEN ${name}${tag(e)}`, { status: String(err?.message || err) }));
         }
     }

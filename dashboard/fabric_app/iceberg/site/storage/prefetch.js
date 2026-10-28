@@ -1,19 +1,15 @@
 // =============================================================================
 // prefetch.js — a table planned from Iceberg, and its files fetched ahead of DuckDB
 // =============================================================================
-// DuckDB-WASM reads a remote file one request at a time (synchronous XHR in its worker), and
-// OneLake answers each in ~0.6 s whatever its size. So the page does the Iceberg side itself,
-// many requests at once and off every engine: it plans a table (metadata.json, the manifest
-// list, the manifests, read here) and fetches what DuckDB is about to read. The browser's HTTP
-// cache serves the worker's requests too, HEAD and Range included, and OneLake's files are
-// cacheable (Last-Modified, no Cache-Control); a large table's files go to the worker's store.
+// The page is the only thing that reads OneLake (DuckDB reads only the local store,
+// blockcache.js), many requests at once (OneLake answers each in ~0.6 s whatever its size):
+// it plans a table (metadata.json, the manifest list, the manifests, read here) and downloads
+// the files DuckDB will read into the store.
 //
-//   planTable(name, metadata, url, { data })
+//   planTable(name, metadata, url)
 //                                           name: the table, for prioritize(name);
 //                                           metadata: the table's metadata.json, parsed;
-//                                           url(abfss) -> the https URL to fetch it with;
-//                                           data: the live files too, into the HTTP cache
-//                                           (a small table, about to be read whole).
+//                                           url(abfss) -> the https URL to fetch it with.
 //                                           Returns { record, manifests, fetched }: the record
 //                                           snapshots.js keeps (without location and bytes),
 //                                           the snapshot's manifests and how many were not in
@@ -23,7 +19,7 @@
 //                                           the worker's store (store(path, bytes), resolved
 //                                           once kept; blockcache.js); onFile(bytes) as each
 //                                           one is done. files: [{ path, size }]. Returns the
-//                                           sizes.
+//                                           sizes; a file that fails to download throws.
 // =============================================================================
 
 // OneLake answers HTTP/1.1 only, so a browser keeps six connections to it: more would queue.
@@ -56,20 +52,20 @@ const get = (url, table) => limited(async () => {
   return new Uint8Array(await r.arrayBuffer());
 }, table);
 
-// A large table's new files, whole, six at a time, each handed to the worker's store
-// (store(path, bytes), resolved once it is kept): DuckDB's ranged reads of them are then
-// answered there, not seeked from OneLake. Not left in the browser's HTTP cache, which does not
-// keep a response of 70-100 MB: the worker downloaded each file again, one at a time (2-5 s
-// each). Returns each file's size.
+// The files of a table the store lacks, whole, six at a time, each handed to the worker's
+// store (store(path, bytes), resolved once it is kept): DuckDB reads them there. Not through
+// the browser's HTTP cache, which does not keep a response of 70-100 MB. Returns each file's
+// size.
 export async function prefetchFiles(name, files, url, store, onFile = () => {}) {
   if (!order.includes(name)) order.push(name);
   return Promise.all(files.map(f => limited(async () => {
     const r = await fetch(url(f.path), { cache: 'no-store' });
-    if (!r.ok) return { path: f.path, size: f.size ?? null };
+    if (!r.ok) throw new Error(`${f.path.split('/').pop()}: HTTP ${r.status}`);
     const bytes = await r.arrayBuffer();
     await store(f.path, bytes);
-    return { path: f.path, size: bytes.byteLength || null };
-  }, name).catch(() => ({ path: f.path, size: f.size ?? null })).then(f => { onFile(f.size ?? 0); return f; })));
+    onFile(bytes.byteLength);
+    return { path: f.path, size: bytes.byteLength };
+  }, name)));
 }
 
 // --- Avro object container files, read by the schema in their header: the records of a
@@ -181,7 +177,7 @@ async function manifestEntries(path, content, url, name) {
 // The current snapshot's live files: what DuckDB's iceberg_metadata() WHERE status <> 'DELETED'
 // gives. `scan`: what a view over the Parquet files cannot read (no data file, a file that is
 // not Parquet such as a deletion vector, an equality delete): the table fails to open.
-export async function planTable(name, metadata, url, { data = false } = {}) {
+export async function planTable(name, metadata, url) {
   if (!order.includes(name)) order.push(name);
   const current = String(metadata['current-snapshot-id']);
   const snapshot = (metadata.snapshots ?? []).find(s => String(s['snapshot-id']) === current);
@@ -196,7 +192,5 @@ export async function planTable(name, metadata, url, { data = false } = {}) {
     manifests: list.map(m => m.manifest_path),
   });
   record.scan = !record.files.length || live.some(e => e[1] === 2 || e[3] !== 'parquet');
-  if (data && !record.scan)
-    await Promise.all([...record.files, ...record.deleteFiles].map(f => get(url(f.path), name).catch(() => null)));
   return { record, manifests: list.length, fetched: read.filter(m => m.fetched).length };
 }
