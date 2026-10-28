@@ -317,7 +317,15 @@
     .ex-check { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; color: var(--muted); }
     .ex-info { font-size: 0.76rem; color: var(--muted); margin-left: auto; }
     .ex-error { color: var(--bad); font-size: 0.8rem; }
-    .ex-out { flex: 1 1 auto; min-height: 340px; display: flex; flex-direction: column; }
+    .ex-out { flex: 1 1 auto; min-height: 340px; display: flex; position: relative; flex-direction: column; }
+    /* A query running: a card over the view, with a spinner and the seconds so far. */
+    .ex-busy { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 5; pointer-events: none; }
+    .ex-busy[hidden] { display: none; }
+    .ex-running > .ex-table, .ex-running > .ex-chart { opacity: 0.3; transition: opacity 0.2s; }
+    .ex-busy-card { display: flex; align-items: center; gap: 0.75rem; padding: 0.9rem 1.3rem; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25); font-size: 1rem; font-weight: 600; color: var(--text); }
+    .ex-busy-time { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 3.5em; text-align: right; }
+    .ex-spinner { width: 1.3rem; height: 1.3rem; border: 2.5px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: ex-spin 0.8s linear infinite; }
+    @keyframes ex-spin { to { transform: rotate(360deg); } }
     .ex-table { overflow: auto; flex: 1 1 0; min-height: 0; max-height: 65vh; }
     .ex-chart { flex: 1 1 0; min-height: 340px; }
     /* Show plan, in the SQL box: DuckDB's plan tree (a page of its own, in a frame), in place of the results. */
@@ -864,7 +872,7 @@
     import { largestBy, smallestBy, orderBy, cycle, pick, hashIndex, clampIndex, axisClip, percentiles, daysApart, dayCount,
       shiftDate, formatTime, dayAhead, playStep, playDelay, renderCost, round1, round2, kLabel, mwhAxis, fmtGwh, fmtMwh,
       fmtTonnes, fmtMwAbs, pinSide, easeTo, progress, tipPlace, legendColumns, calendarLayout, bandSeries, barPercent,
-      bubbleSize, arrowWidth, arrowLabelled, dotSize, unitSize, sparkline, nightBands, moreOf, writeCsv, stackValue, axisAt, axisTooltip } from "./frontend/draw.js";
+      bubbleSize, arrowWidth, arrowLabelled, dotSize, unitSize, sparkline, nightBands, moreOf, writeCsv, stackValue, axisAt, axisTooltip, elapsed } from "./frontend/draw.js";
 
     // =========================================================================
     // 1. QUERIES: what each chart asks the model is frontend/queries.js (createQueries,
@@ -3114,7 +3122,10 @@
       btn.textContent = 'Running...';
       const table = document.getElementById('exploreTable');
       table.innerHTML = '';
-      info.textContent = '';
+      // The seconds so far, so a long query does not look stuck.
+      const t0 = performance.now(), took = () => elapsed(t0);
+      info.textContent = 'Running query… 0.0 s';
+      const ticker = setInterval(() => { info.textContent = `Running query… ${took()}`; }, 100);
 
       try {
         const { sql, query } = data.analyze(base);
@@ -3126,7 +3137,8 @@
         const rows = await runQuery(previewSql, query);
 
         if (!rows.length) {
-          info.textContent = 'No rows.';
+          clearInterval(ticker);
+          info.textContent = `No rows · ${took()}`;
           setConnected();
           return;
         }
@@ -3142,16 +3154,19 @@
         // The count runs the query again: only when the preview is cut at its 500 rows.
         const total = rows.length < 500 ? rows.length
           : (await runQuery(`SELECT COUNT(*) AS cnt FROM (\n${sql}\n)`, query))[0]?.cnt || rows.length;
-        info.textContent = rows.length < total
+        clearInterval(ticker);
+        info.textContent = (rows.length < total
           ? `Showing ${rows.length} of ${Number(total).toLocaleString()} rows`
-          : `${Number(total).toLocaleString()} rows`;
+          : `${Number(total).toLocaleString()} rows`) + ` · ${took()}`;
 
         setConnected();
       } catch (e) {
+        clearInterval(ticker);
         info.textContent = e.message?.includes('Out of Memory') ? 'Out of memory: add a filter.' : 'Error: ' + e.message;
         setStatus("Query error", "error");
         console.error('[Explore SQL]', e);
       } finally {
+        clearInterval(ticker);
         btn.disabled = false;
         btn.textContent = 'Run';
       }

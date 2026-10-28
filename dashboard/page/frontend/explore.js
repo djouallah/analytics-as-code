@@ -11,7 +11,7 @@
 // a chart. The host passes in how to run a query and how to draw (createExplorer's `ctx`).
 // =============================================================================
 
-import { formatValue, shade, extent, stackedGrids, shiftDate } from './draw.js';
+import { formatValue, shade, extent, stackedGrids, shiftDate, elapsed } from './draw.js';
 
 const CAP = 5000;             // rows asked for at most
 const SERIES_CAP = 24;        // series a chart draws at most
@@ -223,7 +223,28 @@ export function createExplorer(root, ctx) {
     el('button', { type: 'button', class: 'btn-tool', onclick: () => { state = { ...EMPTY(), mark: state.mark }; changed(); } }, 'Clear'), info);
   const table = el('div', { class: 'ex-table' });
   const chartBox = el('div', { class: 'ex-chart', id: 'exploreChart' });
-  const out = el('div', { class: 'ex-out' }, table, chartBox);
+  // While a query runs: a card over the view with the seconds it has taken, so a long query
+  // does not look stuck (the previous view stays under it, dimmed).
+  const busyTime = el('span', { class: 'ex-busy-time' });
+  const busy = el('div', { class: 'ex-busy', hidden: true, role: 'status', 'aria-live': 'polite' },
+    el('div', { class: 'ex-busy-card' }, el('span', { class: 'ex-spinner', 'aria-hidden': 'true' }),
+      el('span', { class: 'ex-busy-text' }, 'Running query'), busyTime));
+  const out = el('div', { class: 'ex-out' }, table, chartBox, busy);
+  let busyTimer = null;
+  function startBusy() {
+    const t0 = performance.now();
+    clearInterval(busyTimer);
+    busyTime.textContent = '0.0 s';
+    busy.hidden = false;
+    out.classList.add('ex-running');
+    busyTimer = setInterval(() => { busyTime.textContent = elapsed(t0); }, 100);
+    return t0;
+  }
+  function stopBusy() {
+    clearInterval(busyTimer);
+    busy.hidden = true;
+    out.classList.remove('ex-running');
+  }
   root.replaceChildren(el('div', { class: 'ex' }, pane, el('section', { class: 'ex-main' }, shelves, tools, out)));
 
   search.addEventListener('input', renderFields);
@@ -445,20 +466,23 @@ export function createExplorer(root, ctx) {
     let q;
     try {
       q = buildQuery(state);
-    } catch (e) { result = null; info.textContent = e.message; info.className = 'ex-info ex-error'; draw(); return; }
-    if (!q) { result = null; info.textContent = ''; draw(); return; }
+    } catch (e) { result = null; info.textContent = e.message; info.className = 'ex-info ex-error'; stopBusy(); draw(); return; }
+    if (!q) { result = null; info.textContent = ''; stopBusy(); draw(); return; }
     info.className = 'ex-info';
     info.textContent = 'Running…';
+    const t0 = startBusy();
     try {
       const rows = await ctx.run(modelSql(q), q.where);
       if (my !== seq) return;
+      stopBusy();
       result = { state: structuredClone(state), rows };
       const n = rows.filter(r => !r[ROW_TOTAL] && !r[COL_TOTAL]).length;
-      info.textContent = rows.length >= CAP ? `${n.toLocaleString()} rows (the first ${CAP.toLocaleString()}: add a filter for all of them)`
-        : `${n.toLocaleString()} row${n === 1 ? '' : 's'}`;
+      info.textContent = (rows.length >= CAP ? `${n.toLocaleString()} rows (the first ${CAP.toLocaleString()}: add a filter for all of them)`
+        : `${n.toLocaleString()} row${n === 1 ? '' : 's'}`) + ` · ${elapsed(t0)}`;
       draw();
     } catch (e) {
       if (my !== seq) return;
+      stopBusy();
       result = null;
       info.className = 'ex-info ex-error';
       info.textContent = e.message?.includes('Out of Memory') ? 'Out of memory: add a filter.' : `Error: ${e.message}`;

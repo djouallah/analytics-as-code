@@ -51,6 +51,8 @@ export function percentiles(values, lo, hi) {
 // 4 days long), `dayCount` both counted, how a range is named ("previous 4 days").
 export const daysApart = (from, to) => Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000);
 export const dayCount = (from, to) => daysApart(from, to) + 1;
+// The seconds since t0 (a performance.now()), written as "3.2 s": a running query's timer.
+export const elapsed = t0 => `${((performance.now() - t0) / 1000).toFixed(1)} s`;
 // A date string moved by n days.
 export function shiftDate(date, n) {
   const d = new Date(`${date}T00:00:00Z`);
