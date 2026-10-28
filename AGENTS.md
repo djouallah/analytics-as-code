@@ -337,12 +337,12 @@ written as dax-sql's SQL by `modelSql` (the SQL page's form: `table.column`, `AG
 `FROM model`, `GROUP BY ALL` or `ROLLUP` with `GROUPING` for a total, `FETCH FIRST n ROWS WITH
 TIES`), and that text is what runs. `repo.test.mjs` holds it to the object: the same rows for
 every pivot state (2026-10-28).
-Show plan and Download CSV sit in the Pivot page's bar. **Show plan replaces the whole pivot
-with the SQL box**, filled with the pivot's SELECT (all its rows), for the user to edit: Run
-shows the first 500 rows and the count, Reset fills it again, Show visual puts the pivot back
-(the edits go). In the box, Show plan draws the plan in place of the results (the button then
-reads Show results), and Download CSV writes the box's rows; on the pivot it writes the
-pivot's. There is no SQL sub-tab and no example query: the box is only ever filled from the
+Show SQL and Download CSV sit in the Pivot page's bar. **Show SQL replaces the whole pivot
+with the SQL box**, filled with the pivot's SELECT (all its rows), for the user to edit, and
+then reads Show visual, which puts the pivot back (the edits go). In the box: Run shows the
+first 500 rows and the count, Show plan draws the plan in place of the results (it then reads
+Show results), Reset fills the box again. Download CSV writes the box's rows while it is open,
+the pivot's otherwise. There is no SQL sub-tab and no example query: the box is only ever filled from the
 pivot. The plan is DuckDB's own tree, `EXPLAIN (FORMAT html)`: a page of its own (1.5's links
 treeflex's CSS from unpkg and collapses nodes with a script), shown in an
 `<iframe sandbox="allow-scripts">`.

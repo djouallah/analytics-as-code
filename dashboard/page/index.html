@@ -803,9 +803,10 @@
         <button type="button" class="subtab active" data-apage="model" role="tab" aria-selected="true">Model</button>
         <button type="button" class="subtab" data-apage="pivot" role="tab" aria-selected="false" tabindex="-1">Pivot</button>
       </div>
-      <!-- On the Pivot page: they act on the pivot, or on the SQL box once Show plan has opened it. -->
+      <!-- On the Pivot page: Show SQL swaps the pivot for its SQL in a box (then reads Show visual);
+           Download CSV writes the pivot's rows, or the box's. -->
       <div class="explore-actions" id="exploreActions" hidden>
-        <button class="btn-tool" id="explorePlan" type="button">Show plan</button>
+        <button class="btn-tool" id="exploreSqlToggle" type="button">Show SQL</button>
         <button class="btn-tool primary" id="exploreDownload" type="button">Download CSV</button>
       </div>
     </div>
@@ -816,11 +817,11 @@
     </div>
     <!-- The model's fields dragged onto shelves, drawn as a pivot or a chart (explore.js builds it). -->
     <div class="explore-page" id="explore-pivot" hidden></div>
-    <!-- Show plan: the pivot's SQL in a box the user edits, in place of the whole pivot. -->
+    <!-- Show SQL: the pivot's SQL in a box the user edits, in place of the whole pivot. -->
     <div class="explore-sql-page" id="explore-sql" hidden>
     <div class="tool-controls">
       <button class="btn-tool primary" id="exploreRun" type="button">Run</button>
-      <button class="btn-tool" id="exploreVisual" type="button">Show visual</button>
+      <button class="btn-tool" id="explorePlan" type="button">Show plan</button>
     </div>
     <div class="explore-sql">
       <div class="explore-sql-head">
@@ -3061,7 +3062,7 @@
     }
 
     // --- Explore: the pivot's SQL, in a box the user edits ---
-    // Show plan puts the box in place of the whole pivot, filled with the pivot's SELECT over the
+    // Show SQL puts the box in place of the whole pivot, filled with the pivot's SELECT over the
     // model (all its rows). The box is SQL, and only SQL: a SELECT ... FROM model asks the
     // semantic model, its columns and measures, so a figure is the model's measure, as the charts
     // compute it (data.analyze compiles it as the page's queries are). It is the whole text, or a
@@ -3156,11 +3157,11 @@
       }
     }
 
-    // --- Explore: Show plan and Download CSV ---
-    // On the pivot, Show plan opens the box; in the box, it draws DuckDB's own plan tree
-    // (EXPLAIN (FORMAT html): a page of its own, collapsible nodes) in a sandboxed frame in place
-    // of the results: SQL of the views, not the model's. While it is shown the button reads Show
-    // results.
+    // --- Explore: Show SQL, Show plan and Download CSV ---
+    // Show SQL, in the bar, opens the box and then reads Show visual, which puts the pivot back.
+    // Show plan, in the box, draws DuckDB's own plan tree (EXPLAIN (FORMAT html): a page of its
+    // own, collapsible nodes) in a sandboxed frame in place of the results: SQL of the views, not
+    // the model's. While it is shown the button reads Show results.
     async function planFrame(sql, query) {
       const rows = await runQuery(`EXPLAIN (FORMAT html) ${sql}`, query, { keep: true });
       const frame = document.createElement('iframe');
@@ -3172,7 +3173,8 @@
     }
     let sqlPlanShown = false;
     function syncPlanButton() {
-      document.getElementById('explorePlan').textContent = sqlMode && sqlPlanShown ? 'Show results' : 'Show plan';
+      document.getElementById('exploreSqlToggle').textContent = sqlMode ? 'Show visual' : 'Show SQL';
+      document.getElementById('explorePlan').textContent = sqlPlanShown ? 'Show results' : 'Show plan';
     }
     function showSqlPlan(frame) {
       const view = document.getElementById('explorePlanView');
@@ -3183,7 +3185,6 @@
       syncPlanButton();
     }
     async function explorePlan() {
-      if (!sqlMode) return openSql();
       // A second click puts the results back.
       if (sqlPlanShown) { showSqlPlan(null); return runSql(); }
       const base = getSql();
@@ -3237,7 +3238,7 @@
     }
 
     document.getElementById('exploreRun').addEventListener('click', runSql);
-    document.getElementById('exploreVisual').addEventListener('click', closeSql);
+    document.getElementById('exploreSqlToggle').addEventListener('click', () => sqlMode ? closeSql() : openSql());
     document.getElementById('exploreSqlReset').addEventListener('click', fillSql);
     document.getElementById('explorePlan').addEventListener('click', explorePlan);
     document.getElementById('exploreDownload').addEventListener('click', exploreDownload);
