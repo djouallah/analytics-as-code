@@ -413,7 +413,11 @@ importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
       // Its file system reads a registered https file by range, after a HEAD with
       // Range: bytes=0- that the store answers 206; never the whole file at once. All three are
       // needed: with forceFullHTTPReads left out (on), a file opens with no request and fails.
-      await db.open({ filesystem: { reliableHeadRequests: true, allowFullHTTPReads: false, forceFullHTTPReads: false } });
+      // A number reaches JavaScript as a number: a BIGINT, HUGEINT or DECIMAL comes out of the
+      // engine as a DOUBLE (duckdb-wasm's own casts, on every result), not as a BigInt or an
+      // unscaled integer. The compiler leaves the engine's types alone (semantic/query.js).
+      await db.open({ filesystem: { reliableHeadRequests: true, allowFullHTTPReads: false, forceFullHTTPReads: false },
+        query: { castBigIntToDouble: true, castDecimalToDouble: true } });
       const version = await db.getVersion();
       if (!warmed) { warmed = true; warmExtensions(version); }
       const e = { i, db, conn: await db.connect(), busy: false, opened: new Map(), registered: new Set() };

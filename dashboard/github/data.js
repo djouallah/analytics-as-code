@@ -136,6 +136,10 @@ export function createDataSource({ onStatus = () => {} } = {}) {
     _db = new duckdb.AsyncDuckDB(logger, worker);
     await _db.instantiate(bundle.mainModule, bundle.pthreadWorker);
     URL.revokeObjectURL(workerUrl);
+    // A number reaches JavaScript as a number: a BIGINT, HUGEINT or DECIMAL comes out of the
+    // engine as a DOUBLE (duckdb-wasm's own casts, on every result), not as a BigInt or an
+    // unscaled integer. The compiler leaves the engine's types alone (semantic/query.js).
+    await _db.open({ query: { castBigIntToDouble: true, castDecimalToDouble: true } });
 
     conn = await _db.connect();
     const baseUrl = new URL(base || '.', window.location.href).href.replace(/\/$/, "");

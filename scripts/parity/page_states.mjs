@@ -50,15 +50,20 @@ export const days = ({ from, to }) => Math.round((new Date(to) - new Date(from))
 
 // --- The engine: the files of <dataDir> attached as data.js attaches them, every half-year
 // at once. `source` has data.js's members (before views.js wraps them); `run` runs SQL.
+const NUMBER = /^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|UHUGEINT|DECIMAL|FLOAT|DOUBLE)\b/;
 export async function engine(dataDir) {
   const instance = await DuckDBInstance.create(':memory:');
   const conn = await instance.connect();
   const file = name => path.resolve(dataDir, name).replace(/\\/g, '/');
   const attach = (name, alias) => conn.run(`ATTACH '${file(name)}' AS ${alias} (READ_ONLY)`);
+  // A result as the page reads it: a number as a number (the browser's engine casts BIGINT and
+  // DECIMAL to DOUBLE, storage/data.js), a date as YYYY-MM-DD (index.html's fetchRows).
   async function run(sql) {
     let reader;
     for (const s of sql.split(';\n')) reader = await conn.runAndReadAll(s);
-    return reader.getRowObjectsJson();
+    const types = reader.columnTypes();
+    const numbers = reader.columnNames().filter((n, i) => NUMBER.test(String(types[i])));
+    return reader.getRowObjectsJson().map(r => { for (const n of numbers) if (r[n] != null) r[n] = Number(r[n]); return r; });
   }
   const source = {
     async init() {

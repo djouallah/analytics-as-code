@@ -338,11 +338,13 @@ written as dax-sql's SQL by `modelSql` (the SQL page's form: `table.column`, `AG
 TIES`), and that text is what runs. `repo.test.mjs` holds it to the object: the same rows for
 every pivot state (2026-10-28).
 Show SQL and Download CSV sit in the Pivot page's bar. **Show SQL replaces the whole pivot
-with the SQL box**, filled with the pivot's SELECT (all its rows), for the user to edit, and
-then reads Show visual, which puts the pivot back (the edits go). In the box: Run shows the
-first 500 rows and the count, Show plan draws the plan in place of the results (it then reads
-Show results), Reset fills the box again. Download CSV writes the box's rows while it is open,
-the pivot's otherwise. There is no SQL sub-tab and no example query: the box is only ever filled from the
+with the SQL box**, filled with the pivot's SELECT exactly as the pivot ran it (its `FETCH
+FIRST 5000 ROWS WITH TIES` included), for the user to edit, and then reads Show visual, which
+puts the pivot back (the edits go). In the box: Run runs the text as written, through the
+page's cache (`runQuery`), so the pivot's SQL unedited is the pivot's query and its rows come
+back at once; the table shows the first 500 rows, the count is the result's. Show plan draws
+the plan in place of the results (it then reads Show results), Reset fills the box again.
+Download CSV writes the box's rows while it is open, the pivot's (all of them) otherwise. There is no SQL sub-tab and no example query: the box is only ever filled from the
 pivot. The plan is DuckDB's own tree, `EXPLAIN (FORMAT html)`: a page of its own (1.5's links
 treeflex's CSS from unpkg and collapses nodes with a script), shown in an
 `<iframe sandbox="allow-scripts">`.
@@ -358,10 +360,11 @@ written: joins with the views, unions, window functions. **The model is not a vi
 cannot be one**: a measure has no value until the groups are chosen, so `JOIN model` or an
 unparenthesised `UNION` arm over it is an error. Which text is a SELECT over the model is
 dax-sql's to say (`compileStatement`, with a lexer: `FROM model` in a comment or a string is
-text), never a regex of the page's. The box compiles with no browser casts
-(`castOutput: false`), so the model's columns keep DuckDB's types and compose with the views'.
-`analyze(text)` in `query.js` returns what runs; the results, the count, EXPLAIN and the CSV
-are built round it, and the Logs tab shows the DAX of each model SELECT in it. The page writes
+text), never a regex of the page's. The box and the page's queries go through **one compiler**
+(see `query.js` below): a SELECT over the model compiles to the same SQL from a chart, the
+pivot or the box, keeping DuckDB's types, so it composes with the views' columns.
+`analyze(text)` in `query.js` returns what runs; the results, EXPLAIN and the CSV are built
+round it, and the Logs tab shows the DAX of each model SELECT in it. The page writes
 no SQL from its own filters into it: that would be a second query language with figures of
 its own. `query()`, which the page's own queries
 go through, takes a query object or a SELECT over the model and nothing else, so SQL over
@@ -473,10 +476,19 @@ import is of the staged tree (`semantic/query.js` imports `./dax-sql/index.js`, 
   DAX, checking each column and measure against the model; a SELECT over the model (the SQL
   page's) dax-sql reads itself, into the same syntax tree; `toSQL(dax)` is `dax-sql`'s compile of it
   over the data source's `v_<table>` views (staged next to the compiler as `semantic/dax-sql/`
-  by `stagePage`), the same text once (a Map). The page's options: `assumeIntegrity` (a
-  dimension's key is read off the fact: the dbt tests keep the data so) and its casts for the
-  browser (a date as VARCHAR, a whole number as INTEGER, a number as DOUBLE: a BIGINT reaches
-  the page as a BigInt). How dax-sql writes its SQL (fused scans, a subquery read once,
+  by `stagePage`), the same text once (a Map). **There is one compiler** (`COMPILER`), for the
+  page's queries, the SQL page's SELECTs and the Explore box alike, with one option of the
+  page's: `assumeIntegrity` (a dimension's key is read off the fact: the dbt tests keep the
+  data so). It casts nothing (`castOutput: false`): its columns keep the engine's types. How a
+  result reaches JavaScript is two other layers', each in one place: the engine (both DuckDB
+  `data.js` open duckdb-wasm with `query: { castBigIntToDouble, castDecimalToDouble }`, so a
+  BIGINT, HUGEINT or DECIMAL is a number, not a BigInt or an unscaled integer) and the page's
+  reader (`fetchRows` in `index.html`: a DATE as `YYYY-MM-DD`, a TIMESTAMP as
+  `YYYY-MM-DD HH:MM:SS`). The Node harness of `scripts/parity` reads results the same way
+  (`page_states.mjs`'s `run`). Until 2026-10-28 the compiler cast the output for the browser,
+  and the Explore box had a second instance without the casts, so the same SELECT compiled to
+  two SQL texts (and missed the result cache); 653 queries in 15 states gave the same rows
+  after the change, and the engine the same time. How dax-sql writes its SQL (fused scans, a subquery read once,
   decorrelation across a relationship that filters both ways) is in its DESIGN.md.
   Checked, offline, on every push (`build.yml`): the compiler on this model
   (`scripts/parity/repo.test.mjs`: every measure in five filter contexts, every query of

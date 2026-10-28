@@ -872,7 +872,7 @@
     import { largestBy, smallestBy, orderBy, cycle, pick, hashIndex, clampIndex, axisClip, percentiles, daysApart, dayCount,
       shiftDate, formatTime, dayAhead, playStep, playDelay, renderCost, round1, round2, kLabel, mwhAxis, fmtGwh, fmtMwh,
       fmtTonnes, fmtMwAbs, pinSide, easeTo, progress, tipPlace, legendColumns, calendarLayout, bandSeries, barPercent,
-      bubbleSize, arrowWidth, arrowLabelled, dotSize, unitSize, sparkline, nightBands, moreOf, writeCsv, stackValue, axisAt, axisTooltip, elapsed } from "./frontend/draw.js";
+      bubbleSize, arrowWidth, arrowLabelled, dotSize, unitSize, sparkline, nightBands, moreOf, writeCsv, stackValue, axisAt, axisTooltip, elapsed, cellText } from "./frontend/draw.js";
 
     // =========================================================================
     // 1. QUERIES: what each chart asks the model is frontend/queries.js (createQueries,
@@ -1125,22 +1125,30 @@
       rows.catch(() => { if (_queryCache.get(key)?.rows === rows) _queryCache.delete(key); });
       return rows;
     }
+    const ARROW_DATE = 8, ARROW_TIMESTAMP = 10;   // Arrow's Type ids
     async function fetchRows(q, run = data.query, options) {
       const result = await run(q, options);
       const numRows = Number(result.numRows);
       const fields = result.schema.fields;
-      // Columnar: extract all columns as arrays at once (much faster than per-row .get())
+      // Columnar: extract all columns as arrays at once (much faster than per-row .get()).
+      // A number is already a JavaScript number (the data source's engine casts BIGINT and
+      // DECIMAL to DOUBLE); a date is read here as its day, YYYY-MM-DD, and a timestamp as
+      // YYYY-MM-DD HH:MM:SS (Arrow gives both as milliseconds since 1970, UTC). This is the one
+      // place a result's types become the page's values: the compiler keeps the engine's.
       const columns = fields.map(f => {
         const col = result.getChild(f.name);
+        const kind = f.type?.typeId;
+        if (kind === ARROW_DATE || kind === ARROW_TIMESTAMP) {
+          const len = kind === ARROW_DATE ? 10 : 19;
+          return Array.from({ length: col.length }, (_, i) => {
+            const v = col.get(i);
+            return v == null ? null : new Date(v).toISOString().slice(0, len).replace('T', ' ');
+          });
+        }
         // toArray() returns the raw value buffer and ignores the validity bitmap, so a NULL
         // came back as whatever value sat in its slot (e.g. a neighbouring row's price).
         // Columns with nulls are read element by element, which honours it.
-        const arr = col.nullCount > 0 ? Array.from({ length: col.length }, (_, i) => col.get(i)) : col.toArray();
-        // BigInt64 -> regular numbers
-        if (arr instanceof BigInt64Array || arr instanceof BigUint64Array || (arr.length && typeof arr[0] === 'bigint')) {
-          return Array.from(arr, v => v == null ? v : Number(v));
-        }
-        return arr;
+        return col.nullCount > 0 ? Array.from({ length: col.length }, (_, i) => col.get(i)) : col.toArray();
       });
       const rows = new Array(numRows);
       for (let i = 0; i < numRows; i++) {
@@ -3111,6 +3119,9 @@
     }
 
     // --- Explore: run the box ---
+    // SQL typed in the box: its SELECTs over the model compiled, the rest as written.
+    const runAnalyze = (text, options) => { const a = data.analyze(text); return a.query(a.sql, options); };
+    const SHOWN = 500;   // rows the box's table shows
     async function runSql() {
       const base = getSql();
       const info = document.getElementById('exploreInfo');
@@ -3128,36 +3139,30 @@
       const ticker = setInterval(() => { info.textContent = `Running query… ${took()}`; }, 100);
 
       try {
-        const { sql, query } = data.analyze(base);
-        await ensureExploreData(sql, sqlWhere(base));
+        await ensureExploreData(data.analyze(base).sql, sqlWhere(base));
         setStatus("Running...", "loading");
-        // Every column as DuckDB prints it: a DATE, TIMESTAMP or DECIMAL read through Arrow
-        // would show as its raw number.
-        const previewSql = `SELECT COLUMNS(*)::VARCHAR FROM (\n${sql}\n) LIMIT 500`;
-        const rows = await runQuery(previewSql, query);
-
+        // The box's SQL runs as written, through the page's cache: the pivot's SQL, unedited,
+        // is the query the pivot ran, so its rows come back at once. The table shows the first
+        // SHOWN rows; the count is the result's.
+        const rows = await runQuery(base, runAnalyze);
+        clearInterval(ticker);
         if (!rows.length) {
-          clearInterval(ticker);
           info.textContent = `No rows · ${took()}`;
           setConnected();
           return;
         }
 
+        const shown = rows.slice(0, SHOWN);
         const cols = Object.keys(rows[0]);
         let html = '<thead><tr>' + cols.map(c => `<th>${escapeHtml(c)}</th>`).join('') + '</tr></thead><tbody>';
-        for (const row of rows) {
-          html += '<tr>' + cols.map(c => `<td>${escapeHtml(row[c])}</td>`).join('') + '</tr>';
+        for (const row of shown) {
+          html += '<tr>' + cols.map(c => `<td>${escapeHtml(cellText(row[c]))}</td>`).join('') + '</tr>';
         }
         html += '</tbody>';
         table.innerHTML = html;
-
-        // The count runs the query again: only when the preview is cut at its 500 rows.
-        const total = rows.length < 500 ? rows.length
-          : (await runQuery(`SELECT COUNT(*) AS cnt FROM (\n${sql}\n)`, query))[0]?.cnt || rows.length;
-        clearInterval(ticker);
-        info.textContent = (rows.length < total
-          ? `Showing ${rows.length} of ${Number(total).toLocaleString()} rows`
-          : `${Number(total).toLocaleString()} rows`) + ` · ${took()}`;
+        info.textContent = (shown.length < rows.length
+          ? `Showing ${shown.length} of ${rows.length.toLocaleString()} rows`
+          : `${rows.length.toLocaleString()} rows`) + ` · ${took()}`;
 
         setConnected();
       } catch (e) {
@@ -3229,7 +3234,7 @@
     }
     // The pivot's query (the shelves, all rows), or the box's SQL once it is open.
     async function exploreDownload() {
-      const x = sqlMode ? null : explorer?.query();
+      const x = sqlMode ? null : explorer?.query({ cap: 0 });
       const base = sqlMode ? getSql() : x?.sql;
       if (!base) { setStatus(sqlMode ? 'Enter a SQL query' : 'Put a field on the shelves first', 'error'); return; }
       const btn = document.getElementById('exploreDownload');

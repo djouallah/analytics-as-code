@@ -27,8 +27,9 @@
 //                  as ./dax-sql/): DAX's filter context, context transition, relationships and
 //                  blanks. The relationships rely on referential integrity (the dbt tests keep
 //                  the data so), so a dimension's key is read off the fact, with no join.
-//                  What comes back is cast as the browser wants it: a date as text, a whole
-//                  number as INTEGER, a number as DOUBLE.
+//                  Its columns keep the engine's types (a DATE, a DECIMAL): how a value
+//                  reaches JavaScript is the data source's and the page's reader's to say,
+//                  not the compiler's.
 // It is checked against the model itself: scripts/parity runs the page's queries through
 // both and compares the rows (deploy_model.yml).
 //
@@ -39,9 +40,10 @@
 // hands it to the page (`connect`).
 // The Explore tab's SQL box is what the user types: any SQL over the views, in which a SELECT over
 // the model is a relation (the whole text, or in parentheses: a WITH's query, a subquery, an
-// arm of a UNION). `analyze` has dax-sql compile each one as the page's are and put its SQL in
-// its place; the rest runs as written. The model is no view: a measure has no value until the
-// groups are chosen.
+// arm of a UNION). `analyze` has dax-sql compile each one and put its SQL in its place; the
+// rest runs as written. The model is no view: a measure has no value until the groups are
+// chosen. There is one compiler: a SELECT over the model is the same SQL whether a chart, the
+// pivot or the box sends it.
 // A data source whose engine speaks DAX (`engine: 'dax'`: the deployed semantic model, in
 // dashboard/fabric_app/vertipaq) gets the query's DAX as it is: no views, no SQL.
 // =============================================================================
@@ -167,46 +169,34 @@ export function toDax(q) {
 // DAX -> SQL
 // =============================================================================
 
-const DAX = createCompiler(ossieToModel(OSSIE), {
-  tableSource: t => `v_${t.name}`,
-  assumeIntegrity: true,
-  castOutput: {
-    int: s => `CAST(${s} AS INTEGER)`,
-    double: s => `CAST(${s} AS DOUBLE)`,
-    decimal: s => `CAST(${s} AS DOUBLE)`,
-    datetime: s => `CAST(CAST(${s} AS DATE) AS VARCHAR)`,
-  },
-});
+const COMPILER = createCompiler(ossieToModel(OSSIE), { tableSource: t => `v_${t.name}`, assumeIntegrity: true, castOutput: false });
 
 // A DAX query as SQL. The same text is translated once.
 const _translated = new Map();
 export function toSQL(dax) {
   let sql = _translated.get(dax);
   if (sql) return sql;
-  sql = DAX.compile(dax).sql;
+  sql = COMPILER.compile(dax).sql;
   if (_translated.size >= 500) _translated.clear();
   _translated.set(dax, sql);
   return sql;
 }
-// A SELECT over the model: its SQL over the views, and the DAX it stands for (the Logs tab's).
-// Which text is DAX, and which SQL is a SELECT over the model, is the compiler's to say: it
-// reads them with a lexer, so a "FROM model" in a comment or a string is text.
-const _selects = new Map();
-function fromSql(text) {
-  let out = _selects.get(text);
+// SQL text with SELECTs over the model in it: the SQL that runs, the DAX of those SELECTs (the
+// Logs tab's), and whether the text is one SELECT over the model and nothing else (what the
+// page's own queries must be). Which text is DAX, and which SQL is a SELECT over the model, is
+// the compiler's to say: it reads them with a lexer, so a "FROM model" in a comment or a string
+// is text. The same text is compiled once.
+const _statements = new Map();
+function compileText(text) {
+  let out = _statements.get(text);
   if (out) return out;
-  const { sql, relations } = DAX.compileStatement(text);
-  if (relations.length !== 1 || relations[0].text !== text) throw new Error("the page's queries are SELECTs over the model (FROM model)");
-  out = { sql, dax: relations[0].dax };
-  if (_selects.size >= 500) _selects.clear();
-  _selects.set(text, out);
+  const { sql, relations } = COMPILER.compileStatement(text);
+  out = { sql, dax: relations.length ? relations.map(r => r.dax).join('\n\n') : undefined,
+    model: relations.length === 1 && relations[0].text === text };
+  if (_statements.size >= 500) _statements.clear();
+  _statements.set(text, out);
   return out;
 }
-
-// Explore's compiler: no casts for the browser, so a SELECT over the model gives the engine's
-// types (a DATE, a DECIMAL) and composes with the views' columns in a JOIN or a UNION. The
-// preview and the CSV cast every column to text at the end.
-const ANALYZE = createCompiler(ossieToModel(OSSIE), { tableSource: t => `v_${t.name}`, assumeIntegrity: true, castOutput: false });
 
 export function createModel(data) {
   if (data.engine === 'dax') return {
@@ -225,19 +215,19 @@ export function createModel(data) {
     // queue: `stale`, `early`, `later`).
     query: async (q, options) => {
       if (typeof q !== 'string') { const dax = toDax(q); return data.query(toSQL(dax), dax, options); }
-      if (DAX.isDax(q)) throw new Error('DAX is written by the compiler: send the query as an object');
-      const { sql, dax } = fromSql(q);
+      if (COMPILER.isDax(q)) throw new Error('DAX is written by the compiler: send the query as an object');
+      const { sql, dax, model } = compileText(q);
+      if (!model) throw new Error("the page's queries are SELECTs over the model (FROM model)");
       return data.query(sql, dax, options);
     },
-    // Explore's SQL box, as typed: SQL over the views, each SELECT ... FROM model in it compiled as the
-    // page's are. `sql` is what runs (with its LIMIT and OFFSET); `query` runs SQL built round
-    // it (the preview's cast, the count, EXPLAIN), with the DAX of its SELECTs over the model
-    // for the Logs tab. DAX text is refused.
+    // Explore's SQL box, as typed: SQL over the views, each SELECT ... FROM model in it compiled
+    // by the same compiler as the page's queries. `sql` is what runs; `query` runs it, or SQL
+    // built round it (EXPLAIN, the CSV), with the DAX of its SELECTs over the model for the
+    // Logs tab. DAX text is refused.
     analyze: text => {
-      if (ANALYZE.isDax(text)) throw new Error('Explore takes SQL: SQL over the views, with SELECT ... FROM model in it');
-      const { sql, relations } = ANALYZE.compileStatement(text);
-      const dax = relations.length ? relations.map(r => r.dax).join('\n\n') : undefined;
-      return { sql, query: s => data.query(s, dax) };
+      if (COMPILER.isDax(text)) throw new Error('Explore takes SQL: SQL over the views, with SELECT ... FROM model in it');
+      const { sql, dax } = compileText(text);
+      return { sql, query: (s, options) => data.query(s, dax, options) };
     },
     toDax,
     toSQL,

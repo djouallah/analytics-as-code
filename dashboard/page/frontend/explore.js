@@ -670,8 +670,9 @@ export function createExplorer(root, ctx) {
     ready,
     // The theme changed: the chart is drawn again in the new one.
     redraw: () => { if (fields) draw(); },
-    // The shelves as one SELECT over the model, all its rows, and its date filter (the page's
-    // Download CSV, and the SQL box Show plan opens), or null.
-    query: () => { try { const q = buildQuery(state, { cap: 0 }); return q && { sql: modelSql(q), where: q.where }; } catch { return null; } },
+    // The shelves as one SELECT over the model, and its date filter, or null. As the pivot runs
+    // it by default (its first CAP rows: what the SQL box is filled with, so its text is the
+    // query the pivot ran); `cap: 0` for all its rows (the page's Download CSV).
+    query: ({ cap = CAP } = {}) => { try { const q = buildQuery(state, { cap }); return q && { sql: modelSql(q), where: q.where }; } catch { return null; } },
   };
 }
