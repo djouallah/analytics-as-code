@@ -236,6 +236,8 @@
     /* Analyze, Model: the star (an SVG, model.js) and the table picked. */
     .model-page { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: var(--gap); padding: var(--gap) var(--gutter) 1.5rem; }
     .model-page[hidden], .analyze-sql-page[hidden], .explore-page[hidden] { display: none; }
+    .analyze-actions { display: flex; gap: 0.4rem; }
+    .analyze-actions[hidden] { display: none; }
     .model-diagram, .model-panel { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--radius); overflow: auto; }
     .model-diagram { padding: 0.8rem; display: flex; }
     .model-diagram svg { display: block; flex: none; width: 100%; min-width: 640px; height: auto; margin: auto; font-family: inherit; }
@@ -795,6 +797,11 @@
         <button type="button" class="subtab" data-apage="sql" role="tab" aria-selected="false" tabindex="-1">SQL</button>
         <button type="button" class="subtab" data-apage="explore" role="tab" aria-selected="false" tabindex="-1">Explore</button>
       </div>
+      <!-- On the SQL and Explore pages: they act on the page shown (its SQL, or Explore's query). -->
+      <div class="analyze-actions" id="analyzeActions" hidden>
+        <button class="btn-analyze" id="analyzePlan" type="button">Show plan</button>
+        <button class="btn-analyze primary" id="analyzeDownload" type="button">Download CSV</button>
+      </div>
     </div>
     <!-- The semantic model (ossie.yaml) as a star, and what it says of the table picked (model.js fills it). -->
     <div class="model-page" id="analyze-model">
@@ -806,8 +813,6 @@
     <div class="analyze-sql-page" id="analyze-sql-page" hidden>
     <div class="analyze-controls">
       <button class="btn-analyze" id="analyzePreview" type="button">Preview</button>
-      <button class="btn-analyze" id="analyzePlan" type="button">Show plan</button>
-      <button class="btn-analyze primary" id="analyzeDownload" type="button">Download CSV</button>
     </div>
     <div class="analyze-sql">
       <div class="analyze-sql-head">
@@ -3001,6 +3006,7 @@
         document.getElementById('analyze-model').hidden = btn.dataset.apage !== 'model';
         document.getElementById('analyze-sql-page').hidden = btn.dataset.apage !== 'sql';
         document.getElementById('analyze-explore').hidden = btn.dataset.apage !== 'explore';
+        document.getElementById('analyzeActions').hidden = btn.dataset.apage === 'model';
         if (btn.dataset.apage === 'model') renderModel();
         if (btn.dataset.apage === 'explore') openExplorer();
       });
@@ -3037,12 +3043,6 @@
           const rows = await runQuery(q, data.query, { keep: true });
           setConnected();
           return rows;
-        },
-        csv: async q => {
-          const sql = data.toSQL(data.toDax(q));
-          await ensureExploreData(sql, q.where);
-          const n = await downloadCSVDirect(`SELECT COLUMNS(*)::VARCHAR FROM (\n${sql}\n) LIMIT 1000000`, 'explore.csv');
-          setStatus(`Exported ${n.toLocaleString()} rows`, "connected");
         },
         chart: el => getChart(el.id),
         palette,
@@ -3141,8 +3141,53 @@
       }
     }
 
+    // --- Analyze: Show plan and Download CSV, on the SQL page and on Explore ---
+    // On Explore they take its query (the shelves, all rows); the plan shows under its view.
+    async function explorePlan() {
+      const q = explorer?.query();
+      if (!q) { setStatus('Put a field on the shelves first', 'error'); return; }
+      const btn = document.getElementById('analyzePlan');
+      btn.disabled = true;
+      btn.textContent = 'Planning...';
+      try {
+        const sql = data.toSQL(data.toDax(q));
+        await ensureExploreData(sql, q.where);
+        setStatus("Explaining...", "loading");
+        const rows = await runQuery(`EXPLAIN ${sql}`, s => data.query(s), { keep: true });
+        explorer.showPlan(rows.map(r => r.explain_value ?? Object.values(r).join('  ')).join('\n'));
+        setConnected();
+      } catch (e) {
+        setStatus("Query error: " + e.message, "error");
+        console.error('[Explore plan]', e);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Show plan';
+      }
+    }
+    async function exploreDownload() {
+      const q = explorer?.query();
+      if (!q) { setStatus('Put a field on the shelves first', 'error'); return; }
+      const btn = document.getElementById('analyzeDownload');
+      btn.disabled = true;
+      btn.textContent = 'Exporting...';
+      try {
+        const sql = data.toSQL(data.toDax(q));
+        await ensureExploreData(sql, q.where);
+        setStatus("Exporting CSV...", "loading");
+        const n = await downloadCSVDirect(`SELECT COLUMNS(*)::VARCHAR FROM (\n${sql}\n) LIMIT 1000000`, 'explore.csv');
+        setStatus(`Exported ${n.toLocaleString()} rows`, "connected");
+      } catch (e) {
+        setStatus("CSV export error: " + e.message, "error");
+        console.error('[Explore CSV]', e);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Download CSV';
+      }
+    }
+
     // --- Analyze: query plan (EXPLAIN) ---
     async function analyzePlan() {
+      if (analyzePage() === 'explore') return explorePlan();
       const base = getAnalyzeSql();
       const info = document.getElementById('analyzeInfo');
       if (!base) { info.textContent = 'Enter a SQL query.'; return; }
@@ -3176,6 +3221,7 @@
 
     // --- Analyze: download ---
     async function analyzeDownload() {
+      if (analyzePage() === 'explore') return exploreDownload();
       const base = getAnalyzeSql();
       if (!base) {
         alert('Enter a SQL query.');

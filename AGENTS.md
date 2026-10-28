@@ -350,6 +350,9 @@ be a second query language with figures of its own. `query()`, which the page's 
 go through, takes a query object or a SELECT over the model and nothing else, so SQL over
 the views cannot come back into the pages; `query()` and `analyze()` refuse DAX text. Don't
 make the box accept DAX. Its CSV is the rows of its SQL (`draw.js`'s `writeCsv`).
+Show plan and Download CSV sit in Analyze's bar, on the SQL and Explore pages, and act on
+the page shown: the SQL box, or Explore's query (its shelves, all rows), whose plan shows under
+its view.
 
 **The compiler is checked against the model:** `scripts/parity/page_queries.mjs`
 calls every member of `queries.js` the way `index.html` does, over 12 page states, and runs
@@ -691,12 +694,9 @@ else: no import, no file written for it.
   engine, queries waited 14-16 s there while the other sat idle.) A job tied to an engine (its
   setup, its background openings) runs on that one. Each engine has its own extensions,
   registered files and views, and its own copy of a small table.
-- **A query that ran this session is answered from its result** (`results` in `data.js`,
-  2026-10-28): the views stay on the snapshots they were opened on for the whole session, so
-  the same SQL gives the same rows. Only a read (SELECT, WITH, FROM) with no volatile function
-  (Analyze can be given anything), kept once it succeeded, a result over 500,000 rows not
-  kept, and the least recently used dropped past 2,000,000 rows in all. A hit shows in the Logs
-  tab as `… rows (cached)`. In memory only: a reload starts empty (a new snapshot may be there). A table is planned (by the page) and its files
+- **No result cache in `data.js`**: the page keeps the rows of its last 200 queries
+  (`runQuery` in `index.html`, keyed by the query, cleared when the views change); one added in
+  `data.js` on 2026-10-28 only held each result a second time and was taken out the same day. A table is planned (by the page) and its files
   downloaded once (`readyOf`); every engine then binds its own view (`bind`). All the workers
   share the store (above). The Logs tab tags each LOAD and OPEN with its engine. Added
   2026-10-28. On `power` that day, warm: two engines both busy from the first query (5.0 s) to

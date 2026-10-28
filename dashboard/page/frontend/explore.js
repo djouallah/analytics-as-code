@@ -149,7 +149,6 @@ const label = a => a.length ? a.map(v => v == null ? '(blank)' : String(v)).join
 //   model()          the model, TMSL (a promise)
 //   run(q)           the rows of a query, as objects keyed by the select's names
 //   toDax(q)         the query's DAX (shown under the view)
-//   csv(q)           a CSV of the query's rows
 //   chart(el)        an ECharts instance on el, in the page's theme
 //   palette()        the colours of series, in order
 //   css(name)        a CSS token's value (the chart's tints)
@@ -178,14 +177,16 @@ export function createExplorer(root, ctx) {
     el('label', { class: 'ex-check' }, totals, 'Totals'), sort,
     el('button', { type: 'button', class: 'btn-analyze', title: 'Swap rows and columns', onclick: () => {
       [state.rows, state.cols] = [state.cols, state.rows]; changed(); } }, '⇄ Swap'),
-    el('button', { type: 'button', class: 'btn-analyze', onclick: () => { state = { ...EMPTY(), mark: state.mark }; changed(); } }, 'Clear'),
-    el('button', { type: 'button', class: 'btn-analyze', onclick: download }, 'CSV'), info);
+    el('button', { type: 'button', class: 'btn-analyze', onclick: () => { state = { ...EMPTY(), mark: state.mark }; changed(); } }, 'Clear'), info);
   const table = el('div', { class: 'ex-table' });
   const chartBox = el('div', { class: 'ex-chart', id: 'exploreChart' });
   const out = el('div', { class: 'ex-out' }, table, chartBox);
   const daxText = el('pre');
   const dax = el('details', { class: 'ex-dax' }, el('summary', {}, 'DAX'), daxText);
-  root.replaceChildren(el('div', { class: 'ex' }, pane, el('section', { class: 'ex-main' }, shelves, tools, out, dax)));
+  // The query plan, when the page's Show plan asks for it (showPlan).
+  const planText = el('pre');
+  const plan = el('details', { class: 'ex-dax', hidden: true }, el('summary', {}, 'Plan'), planText);
+  root.replaceChildren(el('div', { class: 'ex' }, pane, el('section', { class: 'ex-main' }, shelves, tools, out, dax, plan)));
 
   search.addEventListener('input', renderFields);
   totals.addEventListener('change', () => { state.totals = totals.checked; changed(); });
@@ -427,13 +428,6 @@ export function createExplorer(root, ctx) {
       draw();
     }
   }
-  async function download() {
-    try {
-      const q = buildQuery(state, { cap: 0 });
-      if (q) await ctx.csv(q);
-    } catch (e) { info.className = 'ex-info ex-error'; info.textContent = `CSV: ${e.message}`; }
-  }
-
   // --- Drawing ---
   function draw() {
     if (!result) {
@@ -615,5 +609,9 @@ export function createExplorer(root, ctx) {
     ready,
     // The theme changed: the chart is drawn again in the new one.
     redraw: () => { if (fields) draw(); },
+    // The shelves as one query, all its rows (the page's Download CSV and Show plan), or null.
+    query: () => buildQuery(state, { cap: 0 }),
+    // A query plan to show under the view (the page's Show plan); null hides it.
+    showPlan: text => { plan.hidden = text == null; planText.textContent = text ?? ''; plan.open = text != null; },
   };
 }
