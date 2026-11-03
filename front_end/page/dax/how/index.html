@@ -399,12 +399,21 @@ const source = createDataSource({ onStatus: status, timeZone: 'Australia/Brisban
 const data = connect(source);
 const OSSIE = await (await fetch(new URL('../semantic/ossie.json' + new URL(import.meta.url).search, import.meta.url))).json();
 
-// Arrow table to plain rows (BigInt to number), as the dashboard's fetchRows does.
+// Arrow table to plain rows, as the dashboard's fetchRows does: BigInt to number, a date as
+// YYYY-MM-DD and a timestamp as YYYY-MM-DD HH:MM:SS (Arrow gives both as milliseconds, UTC).
+const ARROW_DATE = 8, ARROW_TIMESTAMP = 10;   // Arrow's Type ids
 function rowsOf(result) {
-  const fields = result.schema.fields.map(f => f.name);
+  const fields = result.schema.fields.map(f => {
+    const kind = f.type?.typeId;
+    return { name: f.name, len: kind === ARROW_DATE ? 10 : kind === ARROW_TIMESTAMP ? 19 : 0 };
+  });
   return Array.from({ length: result.numRows }, (_, i) => {
     const r = result.get(i), o = {};
-    for (const f of fields) { const v = r[f]; o[f] = typeof v === 'bigint' ? Number(v) : v; }
+    for (const { name, len } of fields) {
+      const v = r[name];
+      o[name] = v == null ? v : len ? new Date(Number(v)).toISOString().slice(0, len).replace('T', ' ')
+        : typeof v === 'bigint' ? Number(v) : v;
+    }
     return o;
   });
 }
