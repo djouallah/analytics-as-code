@@ -136,9 +136,10 @@ Four deliberate local differences, all of which must survive a port:
    namespaces:
    1. **compact**: bin-pack the data files to 128 MiB, a group of at least 5 files; the
       position deletes of the files it rewrites are removed in the same commit;
-   2. **dangling deletes**: position delete files whose one target data file (its
-      `referenced_data_file`, or equal `file_path` bounds) is not in the snapshot are removed,
-      one commit that adds nothing. DuckDB's `iceberg_rewrite_data_files()`, which compacted
+   2. **dangling deletes**: delete files that no data file of the snapshot picks up in a scan
+      are removed, one commit that adds nothing (iceberg-go's `RemoveDanglingDeleteFiles`, a
+      port of Java's action; until 2026-11-09 the tool's own pass, which only knew a position
+      delete with one target file). DuckDB's `iceberg_rewrite_data_files()`, which compacted
       until 2026-10-27, left them behind: `fct_curtailment_region` (an hourly MERGE that
       deletes) had 534 delete files for 15 data files, 520 of them pointing at nothing, and
       every reader opened them all;
@@ -1126,7 +1127,10 @@ image, and the packages those pins pull in.
 - **iceberg-go is pinned to a commit of its main** (`scripts/maintain/go.mod`, table
   maintenance only): the Azure blob listing its orphan pass needs is after the v0.7.0
   release. Move the pin by hand (`go get github.com/apache/iceberg-go@<commit>`, then
-  `go mod tidy`); back to a release tag once one carries it.
+  `go mod tidy`; commit `go.mod` with its one `require`: the build runs `go mod tidy`
+  itself); back to a release tag once one carries it. Moved on 2026-11-09 to `94102c5c`
+  (2026-11-08), for an expiry replanned on a commit retry (#2354), a rejected commit told
+  from an unknown state (#2350), and the dangling-delete removal (#2408).
 - **`import_data.yml`'s write venv stays on the 1.5 line (`duckdb==1.5.6`).** Different reason: it
   builds the `.duckdb` files deployed to the NemTracker dashboard, read client-side by
   DuckDB-WASM (1.5.x), so the on-disk file format must stay stable for the *already deployed*

@@ -7,8 +7,8 @@
 //
 //  1. compact: bin-pack the data files to TARGET_MB, a group of at least MIN_INPUT_FILES files;
 //     the position deletes of the files it rewrites go with them;
-//  2. dangling deletes: position delete files whose data file is no longer in the snapshot
-//     (rewritten by an earlier compaction that left them behind) are removed. Every reader
+//  2. dangling deletes: delete files that apply to no data file of the snapshot (their data
+//     files rewritten by an earlier compaction that left them behind) are removed. Every reader
 //     otherwise opens them all: fct_curtailment_region had 534 delete files, 520 of them
 //     pointing at nothing (2026-10-27);
 //  3. expire: snapshots older than EXPIRE_OLDER_THAN_DAYS (the current one always kept), and the
@@ -55,9 +55,6 @@ const (
 	blobEndpoint = "blob.fabric.microsoft.com"
 	storageScope = "https://storage.azure.com/.default"
 	oidcAudience = "api://AzureADTokenExchange"
-	// The reserved field id of a position delete file's file_path column: its lower and upper
-	// bounds name the data file it targets when they are equal.
-	filePathFieldID = 2147483546
 	// The catalog and the blobs hold the bearer as a string: reconnect when less than this remains.
 	refreshBefore = 10 * time.Minute
 )
@@ -241,12 +238,12 @@ func state(ctx context.Context, tbl *table.Table) (*tableState, error) {
 	if err != nil {
 		return nil, err
 	}
-	manifests, err := snap.Manifests(fs)
+	manifests, err := snap.Manifests(ctx, fs)
 	if err != nil {
 		return nil, err
 	}
 	for _, m := range manifests {
-		for e, err := range m.Entries(fs, true) {
+		for e, err := range m.Entries(ctx, fs, true) {
 			if err != nil {
 				return nil, err
 			}
@@ -300,90 +297,19 @@ func compact(ctx context.Context, tbl *table.Table) (*compactResult, error) {
 		RemovedDeletes: res.RemovedPositionDeleteFiles, RewrittenBytes: res.BytesBefore}, nil
 }
 
-// The one data file a position delete targets: its referenced_data_file, else equal file_path
-// bounds. "" when it may target several (partition-scoped), which is never removed here.
-func deleteTarget(df iceberg.DataFile) string {
-	if ref := df.ReferencedDataFile(); ref != nil && *ref != "" {
-		return *ref
-	}
-	lower, upper := df.LowerBoundValues()[filePathFieldID], df.UpperBoundValues()[filePathFieldID]
-	if len(lower) == 0 || string(lower) != string(upper) {
-		return ""
-	}
-	lit, err := iceberg.LiteralFromBytes(iceberg.PrimitiveTypes.String, lower)
-	if err != nil {
-		return ""
-	}
-	if v, ok := lit.(iceberg.TypedLiteral[string]); ok {
-		return v.Value()
-	}
-	return ""
-}
-
-// Removes the position delete files whose one target data file is not in the current snapshot:
-// they delete nothing, and every reader still opens them. One rewrite commit that adds nothing.
+// Removes the delete files that no data file of the current snapshot picks up in a scan: they
+// delete nothing, and every reader still opens them. iceberg-go's port of Java's
+// RemoveDanglingDeleteFilesAction: one rewrite commit that adds nothing, no file deleted.
 func dropDanglingDeletes(ctx context.Context, cat *rest.Catalog, ident table.Identifier) (int, error) {
 	tbl, err := cat.LoadTable(ctx, ident)
 	if err != nil {
 		return 0, err
 	}
-	snap := tbl.CurrentSnapshot()
-	if snap == nil {
-		return 0, nil
-	}
-	fs, err := tbl.FS(ctx)
+	res, err := tbl.RemoveDanglingDeleteFiles(ctx)
 	if err != nil {
-		return 0, err
-	}
-	manifests, err := snap.Manifests(fs)
-	if err != nil {
-		return 0, err
-	}
-	live := map[string]struct{}{}
-	seen := map[string]struct{}{}
-	var deletes []iceberg.DataFile
-	for _, m := range manifests {
-		for e, err := range m.Entries(fs, true) {
-			if err != nil {
-				return 0, err
-			}
-			df := e.DataFile()
-			if m.ManifestContent() == iceberg.ManifestContentData {
-				live[df.FilePath()] = struct{}{}
-				continue
-			}
-			if df.ContentType() != iceberg.EntryContentPosDeletes || table.IsDeletionVector(df) {
-				continue
-			}
-			if _, dup := seen[df.FilePath()]; !dup {
-				seen[df.FilePath()] = struct{}{}
-				deletes = append(deletes, df)
-			}
-		}
-	}
-	var dead []iceberg.DataFile
-	for _, df := range deletes {
-		if target := deleteTarget(df); target != "" {
-			if _, ok := live[target]; !ok {
-				dead = append(dead, df)
-			}
-		}
-	}
-	if len(dead) == 0 {
-		return 0, nil
-	}
-	tx := tbl.NewTransaction()
-	rw := tx.NewRewrite(nil)
-	for _, df := range dead {
-		rw.DeleteFile(df)
-	}
-	if err := rw.Commit(ctx); err != nil {
-		return 0, err
-	}
-	if _, err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("commit: %w", err)
 	}
-	return len(dead), nil
+	return res.RemovedDeleteFiles, nil
 }
 
 // Snapshots expired, counted by a re-read: a commit that returns is not proof it landed.
