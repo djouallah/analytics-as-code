@@ -6,6 +6,12 @@ name: Probe Catalog Writes
 # after the duckdb pin moves, before relying on a write the merges don't use yet.
 on:
   workflow_dispatch:
+    inputs:
+      probe:
+        description: "writes: row-replacing writes on throwaway tables; load: read-only loadTable of every table (scripts/probe_load_table.py)"
+        type: choice
+        options: [writes, load]
+        default: writes
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -42,4 +48,4 @@ jobs:
           TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
           echo "::add-mask::$TOKEN"
           echo "ONELAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
-      - run: python scripts/probe_catalog_writes.py
+      - run: python scripts/${{ inputs.probe == 'load' && 'probe_load_table.py' || 'probe_catalog_writes.py' }}
