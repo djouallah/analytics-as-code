@@ -1,13 +1,15 @@
 name: Deploy Fabric
 
-# The whole project in one Fabric workspace: the lakehouse `nem`, the hourly dbt run (the
-# notebook `run`, called by the pipeline `run_pipeline` on a schedule), the semantic model and
+# The whole project in one Fabric workspace: the lakehouse `nem`, the hourly dbt run and the
+# daily dbt test (the Python notebook `run`, called by the pipelines `run_pipeline` and
+# `test_pipeline` on their schedules; the timeouts are the pipelines'), the semantic model and
 # the front end, the Fabric apps: on VertiPaq (front_end/fabric_app/vertipaq/),
 # whose connector names the model next to it, and on DuckDB-WASM over the Iceberg catalog
 # (front_end/fabric_app/iceberg/), whose CATALOG_URL names the lakehouse next to it.
 # scripts/deploy_fabric.py does all but the apps.
-# What runs from GitHub (process_data.yml and the rest, into the workspace of the repository
-# variables) is not touched: this installs a second, independent copy.
+# On power (workspace_id = WS_ID, tenant_id = AZURE_TENANT_ID) this is the production load that
+# process_data.yml ran from GitHub: a change to dbt/ or requirements.txt reaches it by a dispatch
+# with `data` (it uploads HEAD's project and runs it once). Elsewhere an independent copy.
 # One app failing does not stop the other (!cancelled()).
 # The workspace has to exist, on a capacity in a region that has Fabric apps (preview).
 # On dispatch only: it creates Fabric items, and it runs the pipeline once.
@@ -26,8 +28,12 @@ on:
         description: 'Data: lakehouse, notebook, pipeline (runs it once)'
         type: boolean
         default: true
+      test:
+        description: 'Run test_pipeline (dbt test) once and wait for it'
+        type: boolean
+        default: false
       schedule:
-        description: 'Run the pipeline hourly (off: its schedules are turned off; a test workspace spends CU every run)'
+        description: 'run_pipeline hourly, test_pipeline daily at 21:15 UTC (off: their schedules are turned off; a test workspace spends CU every run)'
         type: boolean
         default: false
       semantic_model:
@@ -67,6 +73,10 @@ jobs:
       RAYFIN_WORKSPACE_ID: ${{ inputs.workspace_id || vars.TEST_WS_ID }}
       # The Entra app with a federated credential for this repo, per tenant: the catalog's
       # and the Fabric app's (AGENTS.md, Auth).
+      # Files per feed per run that run_pipeline passes the notebook: process_data.yml's on power,
+      # a few on a test workspace.
+      DOWNLOAD_LIMIT: ${{ (inputs.workspace_id || vars.TEST_WS_ID) == vars.WS_ID && '200' || '10' }}
+      PROCESS_LIMIT: ${{ (inputs.workspace_id || vars.TEST_WS_ID) == vars.WS_ID && '300' || '10' }}
       CLIENT_ID: ${{ (inputs.tenant_id || vars.LAKE_TENANT_ID) == vars.AZURE_TENANT_ID && vars.AZURE_CLIENT_ID || (inputs.tenant_id || vars.LAKE_TENANT_ID) == vars.LAKE_TENANT_ID && vars.LAKE_CLIENT_ID || '' }}
     steps:
       - name: Identity for the tenant
@@ -103,10 +113,11 @@ jobs:
             front_end/fabric_app/iceberg/rayfin/functions/package-lock.json
       - run: npm ci --prefix scripts --no-audit --no-fund
 
-      - name: Data, semantic model, the schedule
+      - name: Data, test, semantic model, the schedules
         # Always runs: the schedule is set, on or off, whatever else is ticked.
         run: >-
           python scripts/deploy_fabric.py ${{ inputs.data && 'data' || '' }}
+          ${{ inputs.test && 'test' || '' }}
           ${{ inputs.semantic_model && 'model' || '' }}
           ${{ inputs.ossie && 'ossie' || '' }}
           ${{ inputs.schedule && 'schedule' || 'noschedule' }}

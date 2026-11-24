@@ -15,7 +15,21 @@
         },
         "typeProperties": {
           "notebookId": "6aa0cd42-0bf8-419e-9f2c-4aae949a9e96",
-          "workspaceId": "00000000-0000-0000-0000-000000000000"
+          "workspaceId": "00000000-0000-0000-0000-000000000000",
+          "parameters": {
+            "command": {
+              "value": "run",
+              "type": "string"
+            },
+            "download_limit": {
+              "value": "10",
+              "type": "string"
+            },
+            "process_limit": {
+              "value": "10",
+              "type": "string"
+            }
+          }
         }
       }
     ]
