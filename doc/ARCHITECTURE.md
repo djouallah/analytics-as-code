@@ -16,7 +16,7 @@ describes the version in use, not the product.
 
 - **dbt-duckdb** — transformation engine that runs entirely in-memory. No database server, no cluster. A Python model handles data ingestion; SQL models handle transformation.
 - **Iceberg REST catalog** — the single persistent layer. All warehouse state lives here as Iceberg tables, and the gzipped source CSVs are archived next to them in object storage, so nothing depends on the ephemeral CI runner's disk.
-- **GitHub Actions** — orchestrates everything. Scheduled workflows replace traditional schedulers (Airflow, Dagster, etc.). Auth is OIDC, no secrets.
+- **Fabric pipelines + GitHub Actions** — the schedulers. A Fabric Python notebook (no Spark), called by the pipelines `run_pipeline` (hourly) and `test_pipeline` (daily), runs dbt; GitHub Actions run CI, the table maintenance and the dashboard's export. No Airflow or Dagster. GitHub's auth is OIDC, no secrets.
 - **One semantic model** — an [Apache Ossie](https://github.com/apache/ossie) model (`semantic_model/ossie.yaml`) over the Iceberg tables, its measures in DAX (Power BI gets the `model.bim` it stands for, written at deploy): what a table is, how tables relate, and every measure, in DAX. Every client reads the data through it.
 - **The clients** — one static HTML page, run by three engines: DuckDB-WASM in the browser on a cached copy of the tables (GitHub Pages, public), DuckDB-WASM reading the Iceberg tables straight from the catalog (a Microsoft Fabric app, sign-in), and the semantic model itself in Direct Lake (a second Fabric app). See [The clients](#the-clients).
 
@@ -31,9 +31,9 @@ describes the version in use, not the product.
 - **The mart decides its dates without scanning.** The date bounds come from the Iceberg manifests and are written into the SQL as literals, so every scan of a big table prunes data files.
 - **Every reader runs in UTC.** `SETTLEMENTDATE` is AEST wall clock stored as a TIMESTAMPTZ labelled UTC; the `date` and `time` columns are right.
 - **CI validates SQL on every code change.** `dbt build --target ci` runs all models + tests on plain DuckDB, with real downloads (two files per feed).
-- **Loading skips tests.** The hourly processing cadence is too frequent for expensive test runs against live tables, so `process_data` only runs `dbt run`.
-- **Tests run daily.** `dbt test --target prod` runs the complete suite against the live Iceberg tables — uniqueness, not_null, accepted_values, and file completeness checks.
-- **Tables are maintained daily.** The same workflow runs one Go tool on apache/iceberg-go (`scripts/maintain`) per table: it compacts the small data files, drops position delete files that point at data files no longer in the snapshot, expires snapshots older than a day and removes orphan files. Maintenance never fails its workflow.
+- **Loading skips tests.** The hourly processing cadence is too frequent for expensive test runs against live tables, so `run_pipeline` only runs `dbt run`.
+- **Tests run daily.** `test_pipeline` runs `dbt test --target prod`: the complete suite against the live Iceberg tables — uniqueness, not_null, accepted_values, and file completeness checks.
+- **Tables are maintained daily.** `table_maintenance.yml` runs one Go tool on apache/iceberg-go (`scripts/maintain`) per table: it compacts the small data files, drops position delete files that point at data files no longer in the snapshot, expires snapshots older than a day and removes orphan files. Maintenance never fails its workflow.
 
 ## Grain Reduction
 

@@ -127,7 +127,10 @@ Four deliberate local differences, all of which must survive a port:
    HTTP 500 to every load and commit of it. `Files/csv_archive_log.parquet` is the durable
    log and the only source of truth — the Iceberg table is a materialization, rebuildable
    from it.
-4. `process_data.yml` runs `dbt run` (tests live in `table_maintenance.yml`), writing straight
+4. The Fabric pipeline `run_pipeline` on `power` runs `dbt run` hourly (the Python notebook
+   `run`, see "The whole stack in one workspace"; until 2026-11-24 `process_data.yml`, now
+   dispatch-only for `rebuild`/`debug`/`backfill_rooftop`), and `test_pipeline` the tests
+   daily at 21:15 UTC, writing straight
    to the OneLake Iceberg catalog. No `dbt run-operation` anywhere — there are no operation
    macros.
 5. **Maintenance:** the `compact_and_expire` job in `table_maintenance.yml` builds and runs
@@ -156,10 +159,10 @@ Four deliberate local differences, all of which must survive a port:
    `djouallah/lakehouse_benchmark`'s `.github/scripts/maintain`, where it replaced the same
    DuckDB + pyiceberg pair; there, compaction answered `cannot promote timestamp to
    timestamptz` on some tables, so check the first runs here for it.
-   The job takes a job-level `process-data` concurrency group: every step commits
-   optimistically, so an overlap with a load could fail one side. GitHub keeps one pending
-   run per group: while maintenance holds it, each new Process Data run replaces the one
-   waiting, and a maintenance job still waiting is replaced by the next Process Data run.
+   The job takes a job-level `process-data` concurrency group, which keeps it off a
+   dispatched `process_data.yml`; nothing keeps it off Fabric's hourly load, and every step
+   commits optimistically, so an overlap fails one side (the load's next hour, or that
+   table's maintenance until tomorrow).
    It is `continue-on-error`, and the tool exits 1 only when every table errored: maintenance
    must never fail its workflow (a red run there means a dbt test failed). The price is that
    a step that has stopped working only shows in the job's log.
@@ -205,8 +208,9 @@ The ids live in repository **variables** (public identifiers, not secrets):
   `repo:djouallah/analytics-as-code:ref:refs/heads/main`.
 - `TEST_WS_ID`: fabriccat's `conformance-oracle`, where everything but the data pipeline
   is tested (`deploy_model.yml` and `deploy_fabric.yml` by default, dax-sql's Oracle). The
-  data pipeline (`process_data.yml`, `table_maintenance.yml`, `import_data.yml`) is the only
-  thing on `power` (`WS_ID`/`LH_ID`, the owner's tenant).
+  data pipeline (Fabric's `run_pipeline` and `test_pipeline`, installed by `deploy_fabric.yml`
+  with `workspace_id=WS_ID`, `tenant_id=AZURE_TENANT_ID`; `table_maintenance.yml`,
+  `import_data.yml`) is the only thing on `power` (`WS_ID`/`LH_ID`, the owner's tenant).
 Env contract consumed by dbt/profiles.yml, the models and the scripts: `ONELAKE_ENDPOINT`,
 `ONELAKE_TOKEN`, `WAREHOUSE_PATH`, `FILES_PATH`, `download_limit`, `process_limit`,
 `ALL_PERIODS` (the two import workflows), plus
@@ -854,22 +858,31 @@ download. The owner clicks Copy; read it with `Get-Clipboard`, which has no leng
 `deploy_fabric.yml` (dispatch: `tenant_id`, `workspace_id`, empty for the fabriccat test
 workspace, `TEST_WS_ID`; and a tick per part, all on by
 default: `data`, `semantic_model`, `ossie`, `fabric_app_vertipaq`,
-`fabric_app_iceberg`; and `schedule`, off by default) installs the project into one
-Fabric workspace, independent of everything GitHub runs: the mechanism of the sibling
+`fabric_app_iceberg`; and `test` and `schedule`, off by default) installs the project into one
+Fabric workspace. On `power` that is the production load (since 2026-11-24, in place of
+`process_data.yml`'s schedule): a change to `dbt/` or `requirements.txt` reaches it only by a
+dispatch with `data`, which uploads HEAD's project and runs it once. Elsewhere it is an
+independent copy: the mechanism of the sibling
 `fabric-medallion-dbt` (`.github/scripts/deploy.py`), ported. `scripts/deploy_fabric.py`:
 - publishes `fabric_items/` with fabric-cicd: the lakehouse `nem` (schema-enabled), the
-  Python notebook `run` and the pipeline `run_pipeline` that calls it;
+  Python notebook `run` (default size, 2 vCores) and the pipelines that call it,
+  `run_pipeline` (`command=run`, activity timeout 1:30, process_data.yml's 90 minutes) and
+  `test_pipeline` (`command=test`, 1:00), each with concurrency 1 (a run that comes due while
+  one runs waits) and no retry; the timeouts are the activities';
 - uploads the dbt project (`git archive HEAD`) to `nem/Files/project`, with a `COMMIT` file;
-- runs the pipeline once and waits: the model names tables a first run creates;
+- runs `run_pipeline` once and waits: the model names tables a first run creates; with
+  `test`, `test_pipeline` too;
 - publishes the model with `deploy_model.main()`, on that lakehouse;
 - copies HEAD's `semantic_model/ossie.yaml` to `nem/Files/semantic_model/ossie.yaml`, its
   `{WS_ID}`/`{LH_ID}` replaced by the workspace's and lakehouse's ids (its own tick, `ossie`:
   a file copy, no Power BI);
-- with `schedule`, runs the pipeline hourly; without it, turns its schedules off (the test
+- with `schedule`, runs `run_pipeline` hourly on the hour and `test_pipeline` daily at
+  21:15 UTC; without it, turns their schedules off (the test
   workspace, `conformance-oracle` in fabriccat, must not spend CU every hour). A run with
   no part ticked only sets the schedule.
-- the notebook takes 10 files per feed per run (`download_limit`, `process_limit`), and
-  writes its log to `nem/Files/logs/run.log` too, whose end the deploy prints when the
+- `run_pipeline` passes the notebook 200 and 300 files per feed per run on `power`
+  (`download_limit`, `process_limit`, process_data.yml's), 10 elsewhere; the notebook mints a
+  OneLake token before each dbt command, and writes its log to `nem/Files/logs/<command>.log` too, whose end the deploy prints when the
   pipeline fails (the notebook's output stays in Fabric). nemweb answers 403 to most
   downloads from Fabric (2026-10-14), so such a lakehouse holds little data; a fact with no
   file is created empty, and the MMSDM dimensions build without their files.
@@ -879,10 +892,13 @@ naming the model `nem` of the same workspace, and `front_end/fabric_app/iceberg/
 workspace's lakehouse `nem`, which fails until microsoft/rayfin#89 is fixed. The workspace must exist, on a capacity in a
 region with Fabric apps (preview); the login is the repo's Entra app of that tenant
 (`AZURE_*` or `LAKE_*`), any other tenant fails at the first step.
-The notebook does what `process_data.yml` does: the same env contract (from `notebookutils`:
+The notebook does what `process_data.yml` did: the same env contract (from `notebookutils`:
 the workspace, the lakehouse's id, a storage token), `pip install -r requirements.txt`, and
-the same two `dbt run --target prod`. No `rebuild`, maintenance, tests or `.duckdb` import
-there: those stay on GitHub, for the `power` catalog.
+the same two `dbt run --target prod`; or `dbt test`. No `rebuild`, maintenance or `.duckdb`
+import there: those stay on GitHub. No GitHub token either: the backfill listings and the
+DUID registration list go anonymous (they are opportunistic, a refused call skips them).
+`import_data.yml` runs hourly at :45 for the newest days (it ran on Process Data's
+completion), daily at 20:00 for everything.
 
 **The VertiPaq app** is the page with the deployed semantic model as its engine (Power BI in
 Direct Lake over the `mart` tables, no DuckDB, no copy of the data). Its
@@ -919,12 +935,14 @@ in `landing` are what these tables are built from.
   `dim_interconnector`. The raw facts cannot be read by Direct Lake as they are (both
   dispatch runs, an interval under two `file`s, regional data split over three tables, no
   curtailment table at all), and Direct Lake has no view to fix that in, so every rule is
-  in a model. `process_data.yml` builds them in a second step, after the landing facts they
-  are built from, **and it stays in that workflow**: the dashboard's files are a copy of
+  in a model. The notebook `run` builds them in a second step, after the landing facts they
+  are built from, **and it stays in that run**: the dashboard's files are a copy of
   these tables, so the import has to find them built. A failure of that step fails the
-  job: Import Data only runs after a green Process Data, so the dashboard keeps the files
-  it has and the red run says why. Dispatched with `debug`, both steps print every
-  statement with its timing.
+  run. Import Data is no longer gated on it (its hourly :45 schedule is not told how the load
+  ended, as the `workflow_run` trigger on Process Data was until 2026-11-24): after a load that
+  failed half way it copies the tables as they are, the ones committed and the ones not, and
+  the next good hour puts that right. A dispatched `process_data.yml` with `debug` prints
+  every statement with its timing.
 - **The import is a copy**: no logic beyond splitting per size. So every table the dashboard
   reads is a dbt model here and a table of the semantic model, its aggregates included: per
   day (`fct_summary_daily`, `fct_region_daily`) and per month and hour of day
@@ -998,9 +1016,8 @@ in `landing` are what these tables are built from.
   filter those tables); with
   `parity=true`, the parity checks above. A table or a column the model names has to exist
   before a deploy: the refresh fails on it and leaves the deployed model broken until the
-  next good one. And a dispatched `process_data.yml` can be cancelled by the next scheduled
-  run queueing behind it (one concurrency group), so read its conclusion and its Power BI
-  step before deploying on the strength of it.
+  next good one. So read the last `run_pipeline` run on `power` (green, its Power BI step)
+  before deploying on the strength of it.
 - **The check asks its DAX over XMLA** (ADOMD.NET under pythonnet), not the REST
   `executeQueries` call: that one answers 401 `PowerBINotAuthorizedException` to a service
   principal on this model, as Contributor and as Admin. Its reference page says service
@@ -1114,7 +1131,7 @@ Every dbt, iceberg-go and duckdb-wasm version is pinned exactly, and duckdb's 1.
 the Python duckdb that touches the catalog is `>=2.0.0`, the newest stable release (pip
 takes no pre-release on its own). Not pinned: the GitHub actions (by major tag), the runner
 image, and the packages those pins pull in.
-- **`process_data.yml`, `build.yml`, `table_maintenance.yml`'s `dbt_test` and `import_data.yml`'s read venv
+- **The Fabric notebook `run`, `process_data.yml`, `build.yml` and `import_data.yml`'s read venv
   take `duckdb>=2.0.0`** (dbt via `requirements.txt`, which pins `dbt-core`/`dbt-duckdb`
   exactly — the insert-only merges lean on adapter internals, and
   `dbt/macros/nothing_to_do.sql` is a copy of dbt-duckdb's incremental materialization). 2.0

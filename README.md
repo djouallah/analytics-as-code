@@ -6,7 +6,8 @@ market (AEMO).
 
 ![Architecture](doc/architecture.svg)
 
-- **dbt + DuckDB** on GitHub Actions load the data into **Iceberg** tables, every hour.
+- **dbt + DuckDB** in a Fabric Python notebook (a Fabric pipeline, every hour) load the data
+  into **Iceberg** tables; GitHub Actions build the dashboard's files from them.
 - **One Power BI semantic model** ([`semantic_model/`](semantic_model/)) describes those
   tables: their relationships and the measures, in DAX.
 - **One page** ([`front_end/page/`](front_end/page/)), the dashboard, written once, and

@@ -3,9 +3,9 @@ name: Import Data
 on:
   schedule:
     - cron: '0 20 * * *'  # 6am AEST (UTC+10) — daily: dims, the aggregates, the latest two half-years
-  workflow_run:
-    workflows: ["Process Data"]
-    types: [completed]
+    # Hourly: the newest days only. The load is Fabric's run_pipeline, on the hour (process_data.yml
+    # until 2026-11-24, whose completion triggered this): :45 is after it in steady state.
+    - cron: '45 * * * *'
   workflow_dispatch:  # manual = daily; everything with all_periods
     inputs:
       all_periods:
@@ -24,7 +24,7 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
-# The 20:00 schedule and a workflow_run trigger can overlap; both push to the same
+# The 20:00 and the hourly schedules can overlap; both push to the same
 # deploy branch, so let one finish before the next starts.
 concurrency:
   group: import-data
@@ -38,10 +38,6 @@ jobs:
   import:
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    if: >-
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
     env:
       # OneLake Iceberg REST catalog — only the .venv-read (export) steps touch it.
       # Workspace/lakehouse ids come from repo VARIABLES; ONELAKE_TOKEN is minted per run.
@@ -89,7 +85,7 @@ jobs:
       - name: Set mode
         id: mode
         run: |
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+          if [ "${{ github.event.schedule }}" = "45 * * * *" ]; then
             echo "is_daily=false" >> $GITHUB_OUTPUT
           else
             echo "is_daily=true" >> $GITHUB_OUTPUT
