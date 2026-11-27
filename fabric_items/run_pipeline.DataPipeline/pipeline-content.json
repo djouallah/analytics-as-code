@@ -31,7 +31,56 @@
             }
           }
         }
+      },
+      {
+        "name": "maintain at 21 UTC",
+        "type": "IfCondition",
+        "dependsOn": [
+          {
+            "activity": "run",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "expression": {
+            "value": "@or(pipeline().parameters.maintain, equals(formatDateTime(pipeline().TriggerTime, 'HH'), '21'))",
+            "type": "Expression"
+          },
+          "ifTrueActivities": [
+            {
+              "name": "maintain",
+              "type": "TridentNotebook",
+              "dependsOn": [],
+              "policy": {
+                "timeout": "0.01:30:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureOutput": false,
+                "secureInput": false
+              },
+              "typeProperties": {
+                "notebookId": "6aa0cd42-0bf8-419e-9f2c-4aae949a9e96",
+                "workspaceId": "00000000-0000-0000-0000-000000000000",
+                "parameters": {
+                  "command": {
+                    "value": "maintain",
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          ],
+          "ifFalseActivities": []
+        }
       }
-    ]
+    ],
+    "parameters": {
+      "maintain": {
+        "type": "bool",
+        "defaultValue": false
+      }
+    }
   }
 }

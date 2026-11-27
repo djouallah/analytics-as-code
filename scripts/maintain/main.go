@@ -1,9 +1,10 @@
 // Table maintenance for the OneLake Iceberg catalog, on apache/iceberg-go: `maintain <record.json>`.
 //
-// process_data commits to the catalog every hour, and nothing on that write path folds the small
+// The hourly load commits to the catalog every hour, and nothing on that write path folds the small
 // files back together or drops a snapshot. This is the daily job that does, one table at a time
-// (table_maintenance.yml, in the `process-data` concurrency group so it never overlaps a dbt run:
-// a rewrite commits optimistically, and overlapping a merge would fail one side):
+// (the 21:00 UTC run of the Fabric pipeline run_pipeline, after its load: one pipeline with
+// concurrency 1, so it never overlaps a dbt run: a rewrite commits optimistically, and
+// overlapping a merge would fail one side):
 //
 //  1. compact: bin-pack the data files to TARGET_MB, a group of at least MIN_INPUT_FILES files;
 //     the position deletes of the files it rewrites go with them;
@@ -18,7 +19,9 @@
 //
 // One library for all four, independent of the engines that write the tables. It replaced
 // DuckDB's iceberg_rewrite_data_files (which leaves delete files behind) plus a pyiceberg fork.
-// Ported from djouallah/lakehouse_benchmark's .github/scripts/maintain.
+// Ported from djouallah/lakehouse_benchmark's .github/scripts/maintain. scripts/deploy_fabric.py
+// uploads this source with the dbt project; the notebook builds it (linux/amd64, no cgo) the
+// first time it sees this go.mod + main.go, and keeps the binary in the lakehouse.
 //
 // The record (per table: before/after counts and each step's result or its exact error) is
 // rewritten after every table, so a job killed by its timeout still leaves what it did. Never
@@ -27,9 +30,9 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"regexp"
 	"runtime/debug"
@@ -54,7 +57,6 @@ const (
 	catalogURI   = "https://onelake.table.fabric.microsoft.com/iceberg"
 	blobEndpoint = "blob.fabric.microsoft.com"
 	storageScope = "https://storage.azure.com/.default"
-	oidcAudience = "api://AzureADTokenExchange"
 	// The catalog and the blobs hold the bearer as a string: reconnect when less than this remains.
 	refreshBefore = 10 * time.Minute
 )
@@ -166,32 +168,39 @@ func icebergGoVersion() string {
 
 // --- credentials and catalog ---------------------------------------------------------------------
 
-// In Actions, a client assertion minted fresh from the GitHub OIDC endpoint on every token
-// (`az login --federated-token` cannot refresh past its first token); on a laptop, `az login`.
+// In the Fabric notebook (fabric_items/run.Notebook, command "maintain"), ONELAKE_TOKEN_FILE: a
+// file the notebook rewrites with a fresh storage token every few minutes, read again on every
+// GetToken, so a run longer than one token's life gets a new bearer per table (conn.fresh). On a
+// developer's machine, `az login`.
 func credential() (azcore.TokenCredential, error) {
-	reqURL := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
-	if reqURL == "" {
-		return azidentity.NewAzureCLICredential(nil)
+	if path := os.Getenv("ONELAKE_TOKEN_FILE"); path != "" {
+		return tokenFile(path), nil
 	}
-	assertion := func(ctx context.Context) (string, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL+"&audience="+oidcAudience, nil)
-		if err != nil {
-			return "", err
-		}
-		req.Header.Set("Authorization", "Bearer "+os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN"))
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return "", err
-		}
-		defer resp.Body.Close()
-		var body struct{ Value string }
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-			return "", err
-		}
-		return body.Value, nil
+	return azidentity.NewAzureCLICredential(nil)
+}
+
+type tokenFile string
+
+// GetToken is the file's bearer with its expiry read from the JWT's `exp`.
+func (f tokenFile) GetToken(context.Context, policy.TokenRequestOptions) (azcore.AccessToken, error) {
+	raw, err := os.ReadFile(string(f))
+	if err != nil {
+		return azcore.AccessToken{}, err
 	}
-	return azidentity.NewClientAssertionCredential(
-		os.Getenv("AZURE_TENANT_ID"), os.Getenv("AZURE_CLIENT_ID"), assertion, nil)
+	tok := strings.TrimSpace(string(raw))
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 {
+		return azcore.AccessToken{}, fmt.Errorf("%s: not a JWT", f)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return azcore.AccessToken{}, fmt.Errorf("%s: payload: %w", f, err)
+	}
+	var claims struct{ Exp int64 }
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.Exp == 0 {
+		return azcore.AccessToken{}, fmt.Errorf("%s: no exp", f)
+	}
+	return azcore.AccessToken{Token: tok, ExpiresOn: time.Unix(claims.Exp, 0)}, nil
 }
 
 type conn struct {
@@ -344,7 +353,9 @@ func expire(ctx context.Context, cat *rest.Catalog, ident table.Identifier) (int
 }
 
 // A path under the table with a segment starting `_` or `.`: OneLake's `_delta_log/` (what
-// Fabric shows Direct Lake), never Iceberg's, so never an orphan of it.
+// Fabric shows Direct Lake), never Iceberg's, so never an orphan of it. iceberg-go's orphan
+// cleanup has no such filter, unlike Java's (apache/iceberg-go#2719): without this, it deletes
+// the table's _delta_log/.
 func hidden(path, root string) bool {
 	rel := strings.TrimPrefix(path, strings.TrimSuffix(root, "/"))
 	for _, seg := range strings.Split(rel, "/") {
@@ -427,7 +438,7 @@ func run(path string) int {
 		return 1
 	}
 	rec := &record{
-		RunID:   envOr("GITHUB_RUN_ID", "local"),
+		RunID:   envOr("RUN_ID", "local"),
 		Started: time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 		Settings: map[string]any{
 			"target_mb": targetMB, "min_input_files": minInputFiles,

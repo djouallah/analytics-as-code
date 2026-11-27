@@ -33,7 +33,7 @@ describes the version in use, not the product.
 - **CI validates SQL on every code change.** `dbt build --target ci` runs all models + tests on plain DuckDB, with real downloads (two files per feed).
 - **Loading skips tests.** The hourly processing cadence is too frequent for expensive test runs against live tables, so `run_pipeline` only runs `dbt run`.
 - **Tests run daily.** `test_pipeline` runs `dbt test --target prod`: the complete suite against the live Iceberg tables — uniqueness, not_null, accepted_values, and file completeness checks.
-- **Tables are maintained daily.** `table_maintenance.yml` runs one Go tool on apache/iceberg-go (`scripts/maintain`) per table: it compacts the small data files, drops position delete files that point at data files no longer in the snapshot, expires snapshots older than a day and removes orphan files. Maintenance never fails its workflow.
+- **Tables are maintained daily.** After its 21:00 UTC load, the Fabric pipeline `run_pipeline` runs one Go tool on apache/iceberg-go (`scripts/maintain`, a binary committed to the repo) per table: it compacts the small data files, drops position delete files that point at data files no longer in the snapshot, expires snapshots older than a day and removes orphan files. Maintenance never fails the pipeline.
 
 ## Grain Reduction
 

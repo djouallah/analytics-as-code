@@ -133,10 +133,14 @@ Four deliberate local differences, all of which must survive a port:
    daily at 21:15 UTC, writing straight
    to the OneLake Iceberg catalog. No `dbt run-operation` anywhere — there are no operation
    macros.
-5. **Maintenance:** the `compact_and_expire` job in `table_maintenance.yml` builds and runs
-   `scripts/maintain` (Go, apache/iceberg-go pinned to a commit of its main in `go.mod`:
-   move the pin by hand). One table at a time, every table of the `landing` and `mart`
-   namespaces:
+5. **Maintenance:** in Fabric, the second activity of `run_pipeline`: after the 21:00 UTC
+   load (or any run with the pipeline parameter `maintain=true`), the notebook `run` with
+   `command=maintain` runs `scripts/maintain/maintain`, a linux/amd64 binary of
+   `scripts/maintain` (Go, apache/iceberg-go pinned to a commit of its main in `go.mod`)
+   **built and committed in the repo**: nothing is compiled in Fabric (iceberg-go releases
+   are source only, and its own CLI has no dangling-delete step and would delete
+   `_delta_log/` as an orphan). The deploy uploads it with the dbt project. One table at a
+   time, every table of the `landing` and `mart` namespaces:
    1. **compact**: bin-pack the data files to 128 MiB, a group of at least 5 files; the
       position deletes of the files it rewrites are removed in the same commit;
    2. **dangling deletes**: delete files that no data file of the snapshot picks up in a scan
@@ -152,20 +156,23 @@ Four deliberate local differences, all of which must survive a port:
       never deleted, and a listed path whose scheme or host differs from the referenced one
       is an error, not a deletion (iceberg-go's default).
    Order is not negotiable: a rewrite leaves the previous snapshots pointing at the files it
-   replaced, so expiry is what makes compaction worth anything. The tool mints its own
-   tokens from GitHub's OIDC endpoint (an `az login` token cannot be refreshed past its first),
-   prints each table's data files, delete files and snapshots before and after, and keeps a
-   JSON record as the run's `maintenance` artifact. Ported on 2026-10-27 from
+   replaced, so expiry is what makes compaction worth anything. The tool reads its token
+   from `ONELAKE_TOKEN_FILE` again for every table; a thread in the notebook rewrites that
+   file with a fresh storage token every 5 minutes (and logs each one's expiry). It prints
+   each table's data files, delete files and snapshots before and after
+   (`Files/logs/maintain.log`) and keeps a JSON record (`Files/logs/maintenance.json`). Ported on 2026-10-27 from
    `djouallah/lakehouse_benchmark`'s `.github/scripts/maintain`, where it replaced the same
    DuckDB + pyiceberg pair; there, compaction answered `cannot promote timestamp to
    timestamptz` on some tables, so check the first runs here for it.
-   The job takes a job-level `process-data` concurrency group, which keeps it off a
-   dispatched `process_data.yml`; nothing keeps it off Fabric's hourly load, and every step
-   commits optimistically, so an overlap fails one side (the load's next hour, or that
-   table's maintenance until tomorrow).
-   It is `continue-on-error`, and the tool exits 1 only when every table errored: maintenance
-   must never fail its workflow (a red run there means a dbt test failed). The price is that
-   a step that has stopped working only shows in the job's log.
+   Every step commits optimistically, so it must not overlap a load: `run_pipeline`'s
+   concurrency 1 sees to it (the 22:00 run waits). It runs only after a load that succeeded.
+   The notebook does not raise when the tool fails, and the tool exits 1 only when every
+   table errored: maintenance must never fail the pipeline. The price is that a step that has
+   stopped working only shows in its log. To move the pin: `go get
+   github.com/apache/iceberg-go@<commit> && go mod tidy`, then build with `GOOS=linux
+   GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o maintain .` and commit
+   the binary with `go.mod`/`go.sum`. `table_maintenance.yml`, which ran it on GitHub until
+   2026-11-27, is disabled.
 
 ## Row-replacing writes
 Until October 2026 the OneLake catalog rejected a commit that mixed delete files with data
@@ -209,7 +216,7 @@ The ids live in repository **variables** (public identifiers, not secrets):
 - `TEST_WS_ID`: fabriccat's `conformance-oracle`, where everything but the data pipeline
   is tested (`deploy_model.yml` and `deploy_fabric.yml` by default, dax-sql's Oracle). The
   data pipeline (Fabric's `run_pipeline` and `test_pipeline`, installed by `deploy_fabric.yml`
-  with `workspace_id=WS_ID`, `tenant_id=AZURE_TENANT_ID`; `table_maintenance.yml`,
+  with `workspace_id=WS_ID`, `tenant_id=AZURE_TENANT_ID`, table maintenance among them;
   `import_data.yml`) is the only thing on `power` (`WS_ID`/`LH_ID`, the owner's tenant).
 Env contract consumed by dbt/profiles.yml, the models and the scripts: `ONELAKE_ENDPOINT`,
 `ONELAKE_TOKEN`, `WAREHOUSE_PATH`, `FILES_PATH`, `download_limit`, `process_limit`,
@@ -867,11 +874,14 @@ independent copy: the mechanism of the sibling
 - publishes `fabric_items/` with fabric-cicd: the lakehouse `nem` (schema-enabled), the
   Python notebook `run` (default size, 2 vCores) and the pipelines that call it,
   `run_pipeline` (`command=run`, activity timeout 1:30, process_data.yml's 90 minutes) and
+  then, at 21:00 UTC or with `maintain=true`, `command=maintain` (1:30), and
   `test_pipeline` (`command=test`, 1:00), each with concurrency 1 (a run that comes due while
   one runs waits) and no retry; the timeouts are the activities';
-- uploads the dbt project (`git archive HEAD`) to `nem/Files/project`, with a `COMMIT` file;
+- uploads the dbt project and the maintenance binary (`git archive HEAD`) to
+  `nem/Files/project`, with a `COMMIT` file;
 - runs `run_pipeline` once and waits: the model names tables a first run creates; with
-  `test`, `test_pipeline` too;
+  `maintain`, that run (one even without `data`) does the table maintenance and the deploy
+  prints its log; with `test`, `test_pipeline` too;
 - publishes the model with `deploy_model.main()`, on that lakehouse;
 - copies HEAD's `semantic_model/ossie.yaml` to `nem/Files/semantic_model/ossie.yaml`, its
   `{WS_ID}`/`{LH_ID}` replaced by the workspace's and lakehouse's ids (its own tick, `ossie`:
@@ -1142,12 +1152,11 @@ image, and the packages those pins pull in.
   The `iceberg` extension's binary is keyed to the duckdb build, in a folder per version, so
   the extension follows duckdb.
 - **iceberg-go is pinned to a commit of its main** (`scripts/maintain/go.mod`, table
-  maintenance only): the Azure blob listing its orphan pass needs is after the v0.7.0
-  release. Move the pin by hand (`go get github.com/apache/iceberg-go@<commit>`, then
-  `go mod tidy`; commit `go.mod` with its one `require`: the build runs `go mod tidy`
-  itself); back to a release tag once one carries it. Moved on 2026-11-09 to `94102c5c`
-  (2026-11-08), for an expiry replanned on a commit retry (#2354), a rejected commit told
-  from an unknown state (#2350), and the dangling-delete removal (#2408).
+  maintenance only), and the binary built from it is committed (`scripts/maintain/maintain`,
+  Architecture point 5 says how to rebuild it): move both together. Moved on 2026-11-09 to
+  `94102c5c` (2026-11-08), for an expiry replanned on a commit retry (#2354), a rejected
+  commit told from an unknown state (#2350), and the dangling-delete removal (#2408); on
+  2026-11-27 to `b9a9bd92` (2026-11-26, after v0.8.0-rc0).
 - **`import_data.yml`'s write venv stays on the 1.5 line (`duckdb==1.5.6`).** Different reason: it
   builds the `.duckdb` files deployed to the NemTracker dashboard, read client-side by
   DuckDB-WASM (1.5.x), so the on-disk file format must stay stable for the *already deployed*

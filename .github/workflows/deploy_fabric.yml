@@ -1,7 +1,7 @@
 name: Deploy Fabric
 
 # The whole project in one Fabric workspace: the lakehouse `nem`, the hourly dbt run and the
-# daily dbt test (the Python notebook `run`, called by the pipelines `run_pipeline` and
+# daily dbt test and the daily table maintenance (the Python notebook `run`, called by the pipelines `run_pipeline` and
 # `test_pipeline` on their schedules; the timeouts are the pipelines'), the semantic model and
 # the front end, the Fabric apps: on VertiPaq (front_end/fabric_app/vertipaq/),
 # whose connector names the model next to it, and on DuckDB-WASM over the Iceberg catalog
@@ -28,6 +28,10 @@ on:
         description: 'Data: lakehouse, notebook, pipeline (runs it once)'
         type: boolean
         default: true
+      maintain:
+        description: 'Run run_pipeline once with maintain=true (the load, then the table maintenance it does daily at 21:00 UTC) and wait for it'
+        type: boolean
+        default: false
       test:
         description: 'Run test_pipeline (dbt test) once and wait for it'
         type: boolean
@@ -117,6 +121,7 @@ jobs:
         # Always runs: the schedule is set, on or off, whatever else is ticked.
         run: >-
           python scripts/deploy_fabric.py ${{ inputs.data && 'data' || '' }}
+          ${{ inputs.maintain && 'maintain' || '' }}
           ${{ inputs.test && 'test' || '' }}
           ${{ inputs.semantic_model && 'model' || '' }}
           ${{ inputs.ossie && 'ossie' || '' }}

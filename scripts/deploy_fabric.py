@@ -1,10 +1,12 @@
 """Install the whole project into one Fabric workspace: the lakehouse, the hourly dbt run and the
 daily dbt test, the semantic model.
 
-    WS_ID=<workspace id> python scripts/deploy_fabric.py [data] [test] [model] [ossie] [schedule|noschedule]
+    WS_ID=<workspace id> python scripts/deploy_fabric.py [data] [maintain] [test] [model] [ossie] [schedule|noschedule]
 
 The arguments are the parts to deploy (data, model and ossie when none is named), deploy_fabric.yml's ticks:
   data        steps 1-3: the lakehouse, the notebook, the pipelines and a run of run_pipeline
+  maintain    step 3: the run of run_pipeline (one even without data) does the table
+              maintenance after its load, as its 21:00 UTC run does every day
   test        step 3b: a run of test_pipeline (dbt test), waited for
   model       step 4: the semantic model, on the lakehouse already there
   ossie       step 5: ossie.yaml copied to the lakehouse already there
@@ -21,11 +23,13 @@ workspace. The mechanism is the sibling repo's (fabric-medallion-dbt, .github/sc
 
   1. THE ITEMS in fabric_items/ are published with fabric-cicd: the lakehouse `nem`
      (schema-enabled), the notebook `run` and the pipelines that call it, `run_pipeline`
-     (command=run, the load) and `test_pipeline` (command=test). The timeouts are the
+     (command=run, the load; at 21:00 UTC, or with maintain=true, then command=maintain, the
+     table maintenance) and `test_pipeline` (command=test). The timeouts are the
      pipelines' activity policies. fabric-cicd rewrites the logical ids and the zero workspace
      id they name each other by.
   2. THE PROJECT goes to nem/Files/project as a folder, file by file: what the `run` notebook
-     copies and runs. HEAD and not the working tree, so a laptop and CI upload the same files.
+     copies and runs (the dbt project, and scripts/maintain/maintain, the committed binary of
+     the maintenance tool). HEAD and not the working tree, so a laptop and CI upload the same files.
      The folder is deleted first: a model removed from the repo must not survive there.
   3. RUN_PIPELINE RUNS ONCE, and the deploy waits for it: the model names tables that a
      first run creates, and the run is what proves the notebook works.
@@ -34,7 +38,7 @@ workspace. The mechanism is the sibling repo's (fabric-medallion-dbt, .github/sc
   5. OSSIE: HEAD's semantic_model/ossie.yaml is copied to nem/Files/semantic_model/ossie.yaml,
      its {WS_ID}/{LH_ID} replaced by this workspace's and lakehouse's ids. A copy, no Power BI.
   6. THE SCHEDULES, when asked: run_pipeline hourly on the hour (process_data.yml's cadence),
-     test_pipeline daily at 21:15 UTC (table_maintenance.yml's), or both off.
+     test_pipeline daily at 21:15 UTC, or both off.
 
 On power (WS_ID/LH_ID of the repository variables) this is the production pipeline, which
 process_data.yml ran from GitHub before; on any other workspace an independent copy.
@@ -60,8 +64,9 @@ REPO = Path(__file__).resolve().parent.parent
 ITEMS = REPO / "fabric_items"
 LAKEHOUSE, PIPELINE, TEST_PIPELINE = "nem", "run_pipeline", "test_pipeline"
 PROJECT = "Files/project"
-# What the `run` notebook needs of the repo: the dbt project (dbt/) and the pins it installs.
-UPLOADED = ["dbt", "requirements.txt"]
+# What the `run` notebook needs of the repo: the dbt project (dbt/), the pins it installs, and
+# the table maintenance tool, a binary committed to the repo (scripts/maintain/go.mod says how).
+UPLOADED = ["dbt", "requirements.txt", "scripts/maintain/maintain"]
 MODEL = "semantic_model/ossie.yaml"
 
 WS = os.environ["WS_ID"]
@@ -154,10 +159,11 @@ def upload_model(lakehouse):
     print(f"uploaded {MODEL} to {LAKEHOUSE}/Files/{MODEL}, naming {address.decode()}")
 
 
-def run_and_wait(name, pipeline, lakehouse, log):
+def run_and_wait(name, pipeline, lakehouse, log, parameters=None):
     """One run of a pipeline, waited for; on failure the end of the notebook's log
     (Files/logs/<log>.log) is printed, as the notebook's output stays in Fabric."""
-    _, headers, _ = fabric("POST", f"/items/{pipeline}/jobs/instances?jobType=Pipeline")
+    body = {"executionData": {"parameters": parameters}} if parameters else None
+    _, headers, _ = fabric("POST", f"/items/{pipeline}/jobs/instances?jobType=Pipeline", body)
     job = headers["Location"].split(f"/workspaces/{WS}", 1)[1]
     print(f"{name} started: {job}")
     started, status = time.monotonic(), None
@@ -177,6 +183,7 @@ def run_and_wait(name, pipeline, lakehouse, log):
         except Exception as e:  # the log is an aid: its absence must not hide the failure
             print(f"no run log ({type(e).__name__}: {e})")
         raise SystemExit(f"{name} {status}: {json.dumps(body.get('failureReason'))}")
+
 
 
 def schedule(name, pipeline, configuration):
@@ -219,8 +226,8 @@ def schedules(on):
 
 def main():
     args = set(sys.argv[1:])
-    if args - {"data", "test", "model", "ossie", "schedule", "noschedule"} or {"schedule", "noschedule"} <= args:
-        raise SystemExit("usage: deploy_fabric.py [data] [test] [model] [ossie] [schedule|noschedule], "
+    if args - {"data", "maintain", "test", "model", "ossie", "schedule", "noschedule"} or {"schedule", "noschedule"} <= args:
+        raise SystemExit("usage: deploy_fabric.py [data] [maintain] [test] [model] [ossie] [schedule|noschedule], "
                          f"not {' '.join(sys.argv[1:])}")
     scheduling = args & {"schedule", "noschedule"}
     parts = (args - scheduling) or (set() if scheduling else {"data", "model", "ossie"})
@@ -228,7 +235,15 @@ def main():
         publish()
         lakehouse = item("lakehouses", LAKEHOUSE)
         upload(lakehouse)
-        run_and_wait(PIPELINE, item("items?type=DataPipeline", PIPELINE), lakehouse, "run")
+    if parts & {"data", "maintain"}:
+        maintain = "maintain" in parts
+        lakehouse = item("lakehouses", LAKEHOUSE)
+        run_and_wait(PIPELINE, item("items?type=DataPipeline", PIPELINE), lakehouse, "run",
+                     {"maintain": True} if maintain else None)
+        if maintain:  # maintenance never fails the run: its log says what it did
+            text = onelake().get_file_client(f"{lakehouse}/Files/logs/maintain.log").download_file().readall()
+            print(f"--- {LAKEHOUSE}/Files/logs/maintain.log ---")
+            print(text.decode(errors="replace"))
     if "test" in parts:
         run_and_wait(TEST_PIPELINE, item("items?type=DataPipeline", TEST_PIPELINE),
                      item("lakehouses", LAKEHOUSE), "test")
