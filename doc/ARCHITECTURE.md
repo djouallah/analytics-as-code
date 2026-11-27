@@ -216,7 +216,7 @@ backend to run, no query service, no copy of the data.
 - **A stored value is never revised.** Until merges may update, a correction from AEMO does
   not land, `dim_duid` changes only through a rebuild, and `fct_summary` keeps the intraday
   value of an interval where the next-day files have another.
-- **Maintenance failures show only in the job's log.** There is no alert.
+- **Maintenance failures show only in its log** (`Files/logs/maintain.log`). There is no alert.
 
 The Fabric app has limits of its own:
 
@@ -238,6 +238,8 @@ The Fabric app has limits of its own:
   together, for one DuckDB version end to end.
 - DuckDB-WASM with Iceberg on Azure (below).
 - microsoft/rayfin#89: deploy the DuckDB-WASM Fabric app from CI.
+- apache/iceberg-go#2719: its orphan file cleanup deletes hidden paths, OneLake's `_delta_log/`
+  included (Java's skips them). Our maintenance tool refuses those deletes itself.
 - AEMO publishing `ROOFTOP_PV_ACTUAL_PRED`/`_RUN`: move `fct_rooftop_pv` to the 5-minute
   estimate when `ROOFTOP_PV_ACTUAL` stops.
 
