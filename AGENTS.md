@@ -150,7 +150,12 @@ Four deliberate local differences, all of which must survive a port:
       until 2026-10-27, left them behind: `fct_curtailment_region` (an hourly MERGE that
       deletes) had 534 delete files for 15 data files, 520 of them pointing at nothing, and
       every reader opened them all;
-   3. **expire**: snapshots older than a day (the current one kept), their files deleted;
+   3. **expire**: snapshots older than a day (the current one kept), their files deleted.
+      From inside Fabric, OneLake answers some Delete Blob calls with 200 OK instead of the
+      Blob API's 202 Accepted (2026-11-27; 202 from outside Fabric), which the Azure SDK
+      reports as a failure though the file is gone; iceberg-go then retries them one by one
+      and returns "file does not exist". The tool counts an expiry whose only errors are
+      missing files as done (`onlyMissing`);
    4. **orphans**: files under the table that nothing references, older than 3 days. A path
       with a `_` or `.` segment (OneLake's `_delta_log/`, what Fabric shows Direct Lake) is
       never deleted, and a listed path whose scheme or host differs from the referenced one

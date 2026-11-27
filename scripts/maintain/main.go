@@ -32,7 +32,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	iofs "io/fs"
 	"os"
 	"regexp"
 	"runtime/debug"
@@ -342,7 +344,7 @@ func expire(ctx context.Context, cat *rest.Catalog, ident table.Identifier) (int
 	if err := tx.ExpireSnapshots(table.WithOlderThan(days(expireDays)), table.WithRetainLast(1)); err != nil {
 		return 0, err
 	}
-	if _, err := tx.Commit(ctx); err != nil {
+	if committed, err := tx.Commit(ctx); err != nil && (committed == nil || !onlyMissing(err)) {
 		return 0, fmt.Errorf("commit: %w", err)
 	}
 	tbl, err = cat.LoadTable(ctx, ident)
@@ -350,6 +352,23 @@ func expire(ctx context.Context, cat *rest.Catalog, ident table.Identifier) (int
 		return 0, err
 	}
 	return before - len(tbl.Metadata().Snapshots()), nil
+}
+
+// onlyMissing: every error in err is a file that does not exist. The expiry's commit has landed
+// and its files are deleted, but OneLake answers some Delete Blob calls from inside Fabric with
+// 200 OK instead of the 202 Accepted the Blob API specifies, which the Azure SDK reports as a
+// failure. iceberg-go then deletes those files one by one, finds them gone, and returns that
+// (2026-11-27, every expiry in the Fabric notebook; from outside Fabric the answer is 202).
+func onlyMissing(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, e := range joined.Unwrap() {
+			if !onlyMissing(e) {
+				return false
+			}
+		}
+		return len(joined.Unwrap()) > 0
+	}
+	return errors.Is(err, iofs.ErrNotExist)
 }
 
 // A path under the table with a segment starting `_` or `.`: OneLake's `_delta_log/` (what
